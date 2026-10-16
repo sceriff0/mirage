@@ -538,8 +538,7 @@ def _rung(tmp_path, sacct=True, task="climb", out="out", sacct_text=SACCT, **mor
             continue
         (fake / name).write_text(text)
         (fake / name).chmod(0o755)
-    (out / "logs" / "gates").mkdir(parents=True, exist_ok=True)
-    (out / "logs" / "gates" / "initial.tsv").write_text("initial\tok\t-\t0\t-\n")
+    (out / "logs").mkdir(parents=True, exist_ok=True)
     env = {
         k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
     }

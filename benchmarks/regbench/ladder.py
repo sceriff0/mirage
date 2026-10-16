@@ -276,8 +276,8 @@ def mine(rec, submission):
 def selfcheck_submissions(out):
     """``({submission id: [runs]}, [unreadable files])`` of the selfcheck records under
     ``<out>/logs/selfcheck/<run>/selfcheck.json``, each PARSED and read with the reader
-    the gates use (``submissions_of``; a gate takes a record only when ``mine`` says
-    so). A record that names no submission (a selfcheck run by hand, outside the
+    the verdicts use (``submissions_of``; a verdict takes a record only when ``mine``
+    says so). A record that names no submission (a selfcheck run by hand, outside the
     launcher) is under ``""``. This is what ``submit_cohort.sh --score-only`` asks when
     the folder has no ``logs/submission``."""
     found, unreadable = {}, []

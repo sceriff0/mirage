@@ -100,8 +100,7 @@ class Site:
             self.layout, [(f"r{i}", 400) for i in range(rounds)]
         )
         self.rounds = rounds
-        (self.out / "logs" / "gates").mkdir(parents=True)
-        (self.out / "logs" / "gates" / "stare.tsv").write_text("stare\tok\t-\t0\t-\n")
+        (self.out / "logs").mkdir(parents=True, exist_ok=True)
         for attempt, lines in due.items():
             self.due(attempt, lines)
 
@@ -390,17 +389,7 @@ def test_only_the_answer_of_a_command_a_script_reads_is_on_stdout(
     assert sys.stdout is not sys.stderr  # put back
 
 
-# ── a blocked run, a refusal, a restart ───────────────────────────────────────
-def test_a_blocked_run_submits_no_tile(tmp_path):
-    site = Site(tmp_path, {1: range(4), 2: []})
-    (site.out / "logs" / "gates" / "stare.tsv").write_text(
-        "stare\tinconsistent\t-\t1\t-\n"
-    )
-    done = site.run()
-    assert done.returncode == 0 and site.calls() == []
-    assert "status=blocked cause=gate_blocked whose=launcher" in last(done)
-
-
+# ── a refusal, a restart ──────────────────────────────────────────────────────
 def test_a_refusal_is_recorded_as_the_launchers_and_a_later_link_goes_on(tmp_path):
     site = Site(tmp_path, {1: range(25), 2: []})
     (site.fake / "refuse_from").write_text("3")

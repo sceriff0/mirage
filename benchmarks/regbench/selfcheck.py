@@ -4,7 +4,8 @@ A method is scored through a point mapping (``mapping.PointMap``). That is only 
 mapping IS the transform of the image the method wrote. These two checks measure exactly
 that and nothing else: registration accuracy does not enter either of them.
 
-**selfcheck** (a gate; ``run``, ``python -m benchmarks.regbench selfcheck``). A synthetic
+**selfcheck** (reported, never a gate; ``run``, ``python -m benchmarks.regbench
+selfcheck``). A synthetic
 pair whose moving slide carries a second channel of dots on a jittered lattice
 (``make_pair``). The method runs natively through the normal driver, writer included. The
 dots are found blind in the method's own output (``find_dots``), and compared with where
@@ -19,21 +20,27 @@ In both directions the residual is *the point mapping minus the image*, in the f
 mapping leads to. A method whose writer is known to depart from its mapping declares that
 departure (``SELFCHECK_OFFSET``, below) and it is subtracted point by point.
 
-The gate (frozen): 95th percentile of the residual at most ``GATE_P95`` px and mean signed
+The criterion (frozen): 95th percentile of the residual at most ``GATE_P95`` px and mean signed
 residual at most ``GATE_MEAN`` px per axis, with at least ``GATE_FOUND`` of the dots found,
 on the whole image AND in every ``BLOCK`` px block that holds at least ``MIN_BLOCK_DOTS``
 dots. The lattice is jittered so that a mapping wrong by a whole lattice period cannot pass.
 
-Statuses, per variant and overall (the worst over the checked variants):
+Statuses, per variant and overall (the worst over the checked variants). The verdict is
+REPORTED: it is in ``logs/verdicts.tsv``, beside every row of the tables and in the
+summary, and it never keeps a run from starting or a row out of a table (user ruling:
+run, report, never gate):
 
-``ok``              the gate holds
-``inconsistent``    the gate fails: the points do not follow the image. BLOCKS the method
-``crashed``         the method raised. BLOCKS the method
+``ok``              the criterion holds
+``inconsistent``    the criterion fails: the points do not follow the image
+``crashed``         the method raised
 ``not_checked``     nothing could be measured (the dots were not detected, the method wrote
-                    no image, the run ran out of memory or time). BLOCKS the method, with
-                    ``cause`` saying why; it is never reported as ``inconsistent``
+                    no image, the run ran out of memory or time), with ``cause`` saying
+                    why; it is never reported as ``inconsistent``
 ``no_stage_image``  a stage the method's own writer cannot draw (``stare_rigid``): reported,
-                    never counted as checked, does not block
+                    never counted as checked
+
+``EXIT_CODE`` (0 only for ``ok``) is the exit of ``selfcheck`` run by hand; the
+launcher's batch job exits 0 whatever the verdict once the record is written.
 
 Two blind spots travel with the result: a defect the writer and the point path SHARE passes
 this check, and a stage with no image of its own is not checked.
@@ -306,7 +313,7 @@ COVER_NEAR_PX = 16.0
 #            with the adapter's own geometry (its tile grid, `tilemap.on_seam` at the
 #            adapter's 8 px dot margin, on the selfcheck's own dots, both rounds of the
 #            patient, seeds 0 to 2; no image is involved, so this needs no ASHLAR;
-#            `test_selfcheck_gate.py::
+#            `test_selfcheck_masks.py::
 #            test_the_overlap_cap_stands_above_the_measured_share` repeats it):
 #              tiles drawn where they were cut                      0.19 to 0.20
 #              each tile following the pair's true map              0.24 to 0.26
@@ -355,7 +362,8 @@ _RING = (
 OK, INCONSISTENT, CRASHED = "ok", "inconsistent", "crashed"
 NOT_CHECKED, NO_STAGE_IMAGE = "not_checked", "no_stage_image"
 WORST_FIRST = (INCONSISTENT, CRASHED, NOT_CHECKED, OK)
-BLOCKING = (INCONSISTENT, CRASHED, NOT_CHECKED)
+# the verdicts that are not a pass (reported, never a gate)
+NOT_OK = (INCONSISTENT, CRASHED, NOT_CHECKED)
 EXIT_CODE = {OK: 0, INCONSISTENT: 1, NOT_CHECKED: 2, CRASHED: 3}
 # run.json causes that say the run could not be measured, not that the method is wrong
 _RESOURCE_CAUSES = ("oom", "gpu_oom", "killed", "timeout")
@@ -1650,16 +1658,16 @@ def _in_subprocess(name, sub, size, opts, label, mask, m0_from, seed):
 def every_row(records, expected):
     """Every round's record with EVERY expected row: a row the round has no entry for
     (its process died, the method never yielded it) gets the round's own status when
-    that blocks, else ``not_checked``, and the round's status is never better than its
+    that is not ok, else ``not_checked``, and the round's status is never better than its
     rows'. So a case that was not checked can never read as checked through the rows
-    of another case (``variants.gate_status``)."""
+    of another case (``variants.selfcheck_status``)."""
     for rec in records:
         rows = rec.setdefault("variants", {})
         own = rec.get("status")
         for name in expected:
             if name not in rows:
                 rows[name] = {
-                    "status": own if own in BLOCKING else NOT_CHECKED,
+                    "status": own if own in NOT_OK else NOT_CHECKED,
                     "cause": rec.get("cause")
                     or "this round has no result for this row",
                     "filled": True,
@@ -1749,7 +1757,7 @@ def run(
         "opts": {k: str(v) for k, v in (opts or {}).items()},
         "mask": mask or "",
         "status": worst(r["status"] for r in results),
-        "blocks_the_method": worst(r["status"] for r in results) in BLOCKING,
+        "not_ok": worst(r["status"] for r in results) in NOT_OK,
         "variants": {
             k: (NO_STAGE_IMAGE if set(v) == {NO_STAGE_IMAGE} else worst(v))
             for k, v in by_variant.items()
@@ -1768,7 +1776,8 @@ def run(
             "mask_caps": [cap_name(c) for c in MASK_CAPS.get(mask, ())],
         },
         "host": {k: host.get(k) for k in ("host", "launch_id")},
-        # the launch that wrote this record: a gate refuses one of another submission
+        # the launch that wrote this record: one of another submission is reported
+        # `not_checked` by `verdict`
         "submission": submission,
         "launch_id": host.get("launch_id"),
         "log_path": host.get("log_path") or "",
@@ -1795,7 +1804,7 @@ def run(
                     f"{name}: {v.get('cause') or v.get('error') or v['status']}"
                     for res in results
                     for name, v in res["variants"].items()
-                    if v["status"] in BLOCKING
+                    if v["status"] in NOT_OK
                 ),
                 "",
             ),

@@ -39,13 +39,15 @@ def test_every_cause_has_exactly_one_owner():
         ladder.INFRASTRUCTURE,
         *fl.SELFCHECK_CAUSE.values(),
         *_literal_causes(),
-        "gate_blocked",
-        "dropped_row",
+        *fl.REALCHECK_CAUSE.values(),
         "realcheck_flagged",
         "tissue_missing",
         "unreadable_record",
     }
     assert "oom" in _literal_causes()  # the scan reads something
+    # the gate's causes are gone with the gate: reported, never a gate
+    assert "gate_blocked" not in fl.WHOSE and "dropped_row" not in fl.WHOSE
+    assert "gate" not in fl.STAGES
     missing = sorted(c for c in vocabulary if c not in fl.WHOSE)
     assert not missing, f"causes with no owner in failure_log.WHOSE: {missing}"
     assert set(fl.WHOSE.values()) <= set(fl.OWNERS)
@@ -68,8 +70,10 @@ def test_the_two_tables_of_what_is_not_the_methods_agree():
     )
 
 
-def test_every_blocking_selfcheck_status_has_a_cause():
-    assert set(selfcheck.BLOCKING) <= set(fl.SELFCHECK_CAUSE)
+def test_every_non_ok_selfcheck_status_is_an_event_of_the_benchmark():
+    assert set(selfcheck.NOT_OK) <= set(fl.SELFCHECK_CAUSE)
+    for cause in [*fl.SELFCHECK_CAUSE.values(), *fl.REALCHECK_CAUSE.values()]:
+        assert fl.classify(cause) == fl.BENCHMARK, cause
 
 
 # ── one fixture per cause of a registration attempt ──────────────────────────────────
@@ -206,36 +210,51 @@ def test_a_patient_launch_that_fails_is_one_event_per_result_name():
     assert len(fl.collapse(pair_rows)) == 2
 
 
-# ── gates, selfcheck, realcheck, tissue, the scorer's own reading ────────────────────
-def gate(run, status, blocked, dropped="", kind="selfcheck", log="/out/logs/g.log"):
-    return {
+# ── selfcheck, realcheck, tissue, the scorer's own reading ──────────────────────────
+def said(run, selfcheck="ok", realcheck="", log="", realcheck_log=""):
+    """One run's verdicts, as `score.read_verdicts` reads them from verdicts.tsv."""
+    rec = {
         "run": run,
-        "gate": kind,
-        "status": status,
-        "blocked": blocked,
-        "dropped": dropped,
+        "selfcheck": selfcheck,
+        "realcheck": realcheck,
         "reference": "",
-        "log_path": log,
+        "log": log,
+        "rows": "",
+        "realcheck_row": run if realcheck else "",
     }
+    if realcheck_log:
+        rec["realcheck_log"] = realcheck_log
+    return rec
 
 
-def test_a_blocked_run_a_dropped_row_and_a_flagged_realcheck():
-    launch = [
-        gate("valis120", "inconsistent", True),
-        gate("deeperhistreg_gpu", "ok", False, dropped="deeperhistreg_gpu"),
-        gate("valis_mirage", "realcheck_flagged", False, kind="realcheck"),
-        gate("stare", "ok", False),
+def test_a_failed_selfcheck_and_a_flagged_realcheck_are_events_not_failures():
+    verdicts = [
+        said("valis120", "inconsistent", log="/out/logs/sc.log"),
+        said("deeperhistreg_gpu"),
+        said("valis_mirage", realcheck="flagged", realcheck_log="flagged on P1_r1"),
+        said("valis120_hires", realcheck="ok"),
+        said("palom", "not_checked", log="no selfcheck record"),
+        said("stare"),
     ]
-    rows = fl.gate_events(launch, {"valis120": ["valis120_rigid", "valis120"]})
+    rows = fl.selfcheck_events(verdicts, {"valis120": ["valis120_rigid", "valis120"]})
     got = [(r["run"], r["stage"], r["cause"], r["whose"]) for r in rows]
     assert got == [
-        ("valis120", "gate", "gate_blocked", "launcher"),
-        ("deeperhistreg_gpu", "gate", "dropped_row", "launcher"),
+        ("valis120", "selfcheck", "selfcheck_inconsistent", "benchmark"),
         ("valis_mirage", "realcheck", "realcheck_flagged", "benchmark"),
+        ("palom", "selfcheck", "selfcheck_not_checked", "benchmark"),
     ]
     assert rows[0]["variant"] == "valis120_rigid;valis120"
-    assert rows[0]["final_outcome_of_unit"] == "blocked"
-    assert rows[0]["log_path"] == "/out/logs/g.log"
+    assert rows[0]["message"] == "selfcheck: inconsistent (/out/logs/sc.log)"
+    assert rows[1]["variant"] == "valis_mirage"
+    assert rows[1]["message"] == "realcheck: flagged (flagged on P1_r1)"
+    assert rows[2]["message"] == "selfcheck: not_checked (no selfcheck record)"
+    # reported, never a gate: the run went on, so no unit ENDED with any of them, and
+    # none is the method's failure
+    assert {r["final_outcome_of_unit"] for r in rows} == {fl.REPORTED}
+    assert fl.not_ok(rows) == []
+    assert all(r["whose"] != fl.METHOD for r in rows)
+    assert all(t["ended_the_unit"] == 0 for t in fl.count_table(rows))
+    assert "blocked" not in {r["final_outcome_of_unit"] for r in rows}
 
 
 @pytest.mark.parametrize("status", sorted(fl.SELFCHECK_CAUSE))
@@ -265,7 +284,7 @@ def test_each_selfcheck_outcome_that_is_not_ok_gives_its_row(tmp_path, status):
         ],
     }
     (d / "selfcheck.json").write_text(json.dumps(rec))
-    first, last = fl.selfcheck_events(tmp_path / "logs" / "selfcheck")
+    first, last = fl.selfcheck_attempt_events(tmp_path / "logs" / "selfcheck")
     assert (first["cause"], first["climbed_to"], first["message"]) == (
         "selfcheck_not_checked",
         "256 GB",
@@ -292,7 +311,7 @@ def test_a_selfcheck_that_ended_ok_leaves_only_its_failed_attempts(tmp_path):
         ],
     }
     (d / "selfcheck.json").write_text(json.dumps(rec))
-    (row,) = fl.selfcheck_events(tmp_path)
+    (row,) = fl.selfcheck_attempt_events(tmp_path)
     assert row["final_outcome_of_unit"] == "ok" and row["rung_gb"] == 64.0
     assert fl.not_ok([row]) == []
 
@@ -337,7 +356,8 @@ def test_the_log_is_written_even_when_nothing_failed(tmp_path):
     header = (out / "tables" / "failure_log.csv").read_text().strip().split(",")
     assert header == list(fl.COLUMNS)
     text = (out / "tables" / "summary.md").read_text()
-    assert "No failed, lost, blocked or dropped event." in text
+    assert "No failed or lost event, and no check that was not ok." in text
+    assert "blocked" not in text.lower()
 
 
 def test_the_scorer_logs_failures_of_every_kind_and_names_whose(tmp_path, monkeypatch):
@@ -359,16 +379,20 @@ def test_the_scorer_logs_failures_of_every_kind_and_names_whose(tmp_path, monkey
     rec.update(ok=False, cause="infrastructure", error=ladder.LOST, cause_from="none")
     write_json(lost, rec)
     (result_dir(out, "good", cases[1]) / "warped.npz").unlink()
-    gates = out / "logs" / "gates"
-    gates.mkdir(parents=True)
-    (gates / "ghost.tsv").write_text("ghost\tcrashed\t-\t1\t-\t/out/logs/gate.log\n")
+    verdicts = out / "logs" / "verdicts.tsv"
+    verdicts.parent.mkdir(parents=True, exist_ok=True)
+    verdicts.write_text(
+        "run\tcheck\tstatus\treference\trows\tlog\n"
+        "ghost\tselfcheck\tcrashed\t-\tghost\t/out/logs/sc.log\n"
+        "ghost\trealcheck\t-\t-\t-\t-\n"
+    )
     res = score.score(
         root,
         out,
         ["multiplex"],
         expected=["flaky", "good", "ghost"],
         primary=["flaky", "good", "ghost"],
-        gates=gates,
+        verdicts=verdicts,
         with_tissue=False,
     )
     rows = {(r["run"], r["cause"]): r for r in log_rows(out)}
@@ -382,10 +406,16 @@ def test_the_scorer_logs_failures_of_every_kind_and_names_whose(tmp_path, monkey
     assert "Unable to allocate" in oom["message"]
     assert rows[("good", "infrastructure")]["whose"] == "infrastructure"
     assert rows[("good", "infrastructure")]["final_outcome_of_unit"] == "lost"
-    assert rows[("ghost", "gate_blocked")]["log_path"] == "/out/logs/gate.log"
-    # the blocked run's results, folded into one row, say blocked
+    # a crashed selfcheck is the benchmark's event; the run is never said blocked
+    crashed = rows[("ghost", "selfcheck_crashed")]
+    assert (crashed["whose"], crashed["final_outcome_of_unit"]) == (
+        "benchmark",
+        fl.REPORTED,
+    )
+    assert "/out/logs/sc.log" in crashed["message"]
+    # a run nobody ran is not run, folded into one row, whatever its selfcheck said
     assert rows[("ghost", "not_run")]["case_id"] == "2 case(s)"
-    assert rows[("ghost", "not_run")]["final_outcome_of_unit"] == "blocked"
+    assert rows[("ghost", "not_run")]["final_outcome_of_unit"] == "lost"
     text = (out / "tables" / "summary.md").read_text()
     assert "## Failures: every event, and whose it is" in text
     assert "| flaky | register | oom | method | 1 | 1 |" in text
@@ -487,9 +517,9 @@ def test_a_task_names_its_own_log_as_the_launcher_does(tmp_path):
     assert 'LOG_ARRAY="--output=$REGBENCH_OUT/logs/%x-%A_%a.log"' in launcher
     assert 'LOG_ONE="--output=$REGBENCH_OUT/logs/%x-%j.log"' in launcher
     one = _run_env_function(
-        tmp_path, 'echo "$REGBENCH_LOG"', SLURM_JOB_ID="9", SLURM_JOB_NAME="rb-gate-x"
+        tmp_path, 'echo "$REGBENCH_LOG"', SLURM_JOB_ID="9", SLURM_JOB_NAME="rb-sc-x"
     ).strip()
-    assert one == f"{tmp_path}/out/logs/rb-gate-x-9.log"
+    assert one == f"{tmp_path}/out/logs/rb-sc-x-9.log"
 
 
 def test_the_batch_script_s_last_line_is_the_step_s_or_a_fallback(tmp_path):
@@ -513,7 +543,7 @@ def test_the_batch_script_s_last_line_is_the_step_s_or_a_fallback(tmp_path):
 
 @pytest.mark.parametrize(
     "name",
-    ["run_rung.sbatch", "selfcheck.sbatch", "gate.sbatch", "score_cohort.sbatch"],
+    ["run_rung.sbatch", "selfcheck.sbatch", "score_cohort.sbatch"],
 )
 def test_every_batch_script_ends_with_an_end_line(name):
     lines = [

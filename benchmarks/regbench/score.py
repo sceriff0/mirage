@@ -62,7 +62,9 @@ are a THIRD, separate one (``regbench.compute_all``): the whole pipeline per pat
 and registration backend, read from the Nextflow traces of compute-all
 (``<out>/compute/<backend>/<patient>/trace/trace.txt``), a different clock that no
 total adds to the ones above.
-``launch.csv`` lists what the launcher's gates decided (``gates``).
+``launch.csv`` lists what every run's selfcheck and realcheck said (``verdicts``,
+``regbench verdict``): reported, never a gate, so no run and no row is left out
+because of them.
 
 ``dev_*`` cases are left out of every table unless ``dev`` is given.
 
@@ -831,12 +833,10 @@ def bill_from_disk(res_rows, out, cases, accounting=None):
     return res_rows
 
 
-DROPPED_REASON = "its selfcheck failed and it does not gate its method"
-
-
-def find_variants(out, dataset, expected=None, dropped=()):
+def find_variants(out, dataset, expected=None):
     """The variants to score: ``initial``, every result folder of the dataset, and the
-    ``expected`` names that have none. A name in ``dropped`` is in neither part."""
+    ``expected`` names that have none. Nothing is left out for what its selfcheck
+    said: the verdict is beside the row (``selfcheck_status``, ``selfcheck_row``)."""
     out = Path(out)
     found = (
         [
@@ -851,7 +851,7 @@ def find_variants(out, dataset, expected=None, dropped=()):
         else []
     )
     extra = [v for v in expected or [] if v not in found and v != "initial"]
-    return ["initial", *(v for v in [*found, *extra] if v not in set(dropped))]
+    return ["initial", *found, *extra]
 
 
 # `score --submission ID`: only what that submission ran or reused is scored. In the
@@ -859,7 +859,7 @@ def find_variants(out, dataset, expected=None, dropped=()):
 SUBMISSION_ENV = "REGBENCH_SCORE_SUBMISSION"
 STALE = (
     "not run by this submission (the result on disk is another submission's and was "
-    "not reused: a blocked run, or a unit that never started)"
+    "not reused: a unit that never started)"
 )
 
 
@@ -1221,12 +1221,12 @@ def records_dir(out, case):
     return Path(out).joinpath(*RECORDS, case.dataset, str(case.case_id))
 
 
-def case_key(job, dropped=()):
+def case_key(job):
     """Everything that decides a case's rows. A case record is reused only when this is
     EQUAL: the case as prepared, the variants and their order, the bytes of every
     result the case reads (``run.json`` and ``warped.npz``; the seam masks are in the
-    owners' ``warped.npz``), the seam owners, each row's selfcheck, the dropped rows,
-    the submission being scored, the code, the libraries and the constants."""
+    owners' ``warped.npz``), the seam owners, each row's selfcheck, the submission
+    being scored, the code, the libraries and the constants."""
     out, case, variants, owners = job[:4]
     checks = job[4] if len(job) > 4 else {}
     results = {}
@@ -1251,7 +1251,6 @@ def case_key(job, dropped=()):
         "results": results,
         "seam_owners": list(owners),
         "checks": {v: checks.get(v, "") for v in variants},
-        "dropped": sorted(dropped),
         "submission": os.environ.get(SUBMISSION_ENV) or "",
     }
 
@@ -1540,7 +1539,8 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                     "frame": frame,
                     "selfcheck_status": status,
                     # THIS row's own check (variants.row_checks); selfcheck_status
-                    # above is its run's gate, which a row that was never checked
+                    # above is its run's verdict (set at score time from verdicts.tsv;
+                    # `set_selfcheck_status`), which a row that was never checked
                     # shares with its run
                     "selfcheck_row": checks.get(method.split(NON)[0], ""),
                     **{k: rec[k] for k in pairs.RECORD_KEYS},
@@ -1711,7 +1711,7 @@ def _case_task(task):
     return i, _case_record(job, key, why, None, fresh)
 
 
-def score_jobs(jobs, workers=1, dropped=(), fresh=False):
+def score_jobs(jobs, workers=1, fresh=False):
     """The rows of every job (``_score_case``), in the order of ``jobs``.
 
     A case whose record is valid (``case_key``) is read. The others are computed and
@@ -1724,7 +1724,7 @@ def score_jobs(jobs, workers=1, dropped=(), fresh=False):
     done = [None] * len(jobs)
     keys, todo = [], []
     for i, job in enumerate(jobs):
-        keys.append(case_key(job, dropped))
+        keys.append(case_key(job))
         got, why = (
             (None, "asked to compute it again")
             if fresh
@@ -1775,7 +1775,6 @@ def case_jobs(
     dataset,
     dev=False,
     expected=None,
-    dropped=(),
     owners=None,
     row_checks=None,
 ):
@@ -1789,7 +1788,7 @@ def case_jobs(
     ]
     if not cs:
         return []
-    variants = find_variants(out, dataset, expected, dropped)
+    variants = find_variants(out, dataset, expected)
     return [(str(out), c, variants, owners, dict(row_checks or {})) for c in cs]
 
 
@@ -1803,20 +1802,18 @@ def score_case(
     dev=False,
     expected=None,
     seam_owners=None,
-    dropped=None,
     row_checks=None,
     fresh=False,
 ):
     """Score ONE case and leave its record under ``<out>/cache/scores``; no table is
     written. ``score`` then reads the record instead of computing the case, provided
-    it is called with the same ``expected``, ``seam_owners``, ``dropped``,
-    ``row_checks`` and submission (``case_key``).
+    it is called with the same ``expected``, ``seam_owners``, ``row_checks`` and
+    submission (``case_key``).
 
     The case is named by ``case_id`` or by its ``index`` among ALL prepared cases of
     the dataset (``list_cases``: the order every array of the launcher uses). Returns
     ``"scored"``, ``"kept"`` (its record was valid already) or ``"skipped"`` (a
     ``dev_*`` case when ``dev`` is not given, and the reverse)."""
-    dropped = list(dict.fromkeys(dropped or []))
     everything = list_cases(cases_root, dataset)
     if case_id is None:
         if index is None or not 0 <= index < len(everything):
@@ -1828,7 +1825,7 @@ def score_case(
     jobs = [
         j
         for j in case_jobs(
-            cases_root, out, dataset, dev, expected, dropped, seam_owners, row_checks
+            cases_root, out, dataset, dev, expected, seam_owners, row_checks
         )
         if str(j[1].case_id) == str(case_id)
     ]
@@ -1842,9 +1839,9 @@ def score_case(
             return "skipped"
         raise SystemExit(f"score-case: no prepared {dataset} case named {case_id}")
     (job,) = jobs
-    key = case_key(job, dropped)
+    key = case_key(job)
     valid = _read_record(records_dir(out, job[1]) / "case.rec", key)[0] is not None
-    score_jobs(jobs, workers, dropped, fresh)
+    score_jobs(jobs, workers, fresh)
     return "kept" if valid and not fresh else "scored"
 
 
@@ -1884,27 +1881,23 @@ def _methods(rows):
 
 
 NOT_LAUNCHED = "not launched by this submission (it has no result on this dataset)"
-NO_ROW = "it has no row on this dataset (dropped, or not expected here)"
+NO_ROW = "it has no row on this dataset (not expected here)"
 
 
-def compared_rows(rows, primary=None, blocked=None):
+def compared_rows(rows, primary=None):
     """``(inside, outside)`` for the rows of ONE dataset: the rows the common block and
     the shared subsets are computed among, and ``{row: why it is not one of them}``.
 
     A row is compared when it is a primary row (every registration row when no primary
-    is named) that actually RAN in what is being scored: a gate did not block its run
-    (``blocked``: ``{row: reason}``, from the launcher's gate records) and at least one
-    of its cases has a record. A run that was never launched (a submission of some of
-    the runs) or that a gate stopped has every case ``not run``; counting it would
-    empty the block for everyone."""
-    blocked = blocked or {}
+    is named) that actually RAN in what is being scored: at least one of its cases has
+    a record. A run that was never launched (a submission of some of the runs) has
+    every case ``not run``; counting it would empty the block for everyone. What a
+    selfcheck said never takes a row out: the checks are reported, never a gate."""
     names = list(primary) if primary else [m for m in _methods(rows) if _is_run(m)]
     inside, outside = [], {}
     for name in names:
         mine = [r for r in rows if r["method"] == name]
-        if name in blocked:
-            outside[name] = blocked[name]
-        elif not mine:
+        if not mine:
             outside[name] = NO_ROW
         elif all(r.get("cause") == "not_run" for r in mine):
             outside[name] = NOT_LAUNCHED
@@ -1913,10 +1906,10 @@ def compared_rows(rows, primary=None, blocked=None):
     return inside, outside
 
 
-def common_cases(rows, primary=None, blocked=None):
+def common_cases(rows, primary=None):
     """Case ids every compared row registered (``compared_rows``). A round lost for a
     cause that is not the method's is unregistered, so it is in no common block."""
-    inside, _ = compared_rows(rows, primary, blocked)
+    inside, _ = compared_rows(rows, primary)
     judged = [r for r in rows if r["method"] in inside]
     failed = {r["case_id"] for r in judged if r["imputed_initial"]}
     return {r["case_id"] for r in rows} - failed
@@ -1945,14 +1938,14 @@ def _readable(r):
     return bool(r["displacement_readable"])
 
 
-def common_block(rows, primary=None, blocked=None):
+def common_block(rows, primary=None):
     """One row per (dataset, compared-or-not row): who is in the common block, and why
     the others are not. Written as ``common_block.csv`` and printed, always."""
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
-        inside, outside = compared_rows(of_ds, primary, blocked)
-        common = common_cases(of_ds, primary, blocked)
+        inside, outside = compared_rows(of_ds, primary)
+        common = common_cases(of_ds, primary)
         n_all = len({r["case_id"] for r in of_ds})
         for name in [*inside, *outside]:
             out.append(
@@ -1968,7 +1961,7 @@ def common_block(rows, primary=None, blocked=None):
     return out
 
 
-def summarise_cells(rows, primary=None, blocked=None):
+def summarise_cells(rows, primary=None):
     """One row per (dataset, family, method, subset): ``all`` and ``common``.
 
     ``family`` is empty on the cohort (the column stays, so a table keeps its shape).
@@ -1986,8 +1979,8 @@ def summarise_cells(rows, primary=None, blocked=None):
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
-        inside, _ = compared_rows(of_ds, primary, blocked)
-        common = common_cases(of_ds, primary, blocked)
+        inside, _ = compared_rows(of_ds, primary)
+        common = common_cases(of_ds, primary)
         for fam in ("",):  # the cohort has one stratum; `family` stays an empty column
             of_fam = of_ds
             for subset in ("all", "common"):
@@ -2224,16 +2217,16 @@ def failures(res_rows):
 
 def _owner_column(cause):
     """Which failure column a lost round is counted in, by ``failure_log.WHOSE``: the
-    method's, the benchmark's, or "not run / blocked" (the launcher's, the
+    method's, the benchmark's, or "not run / lost" (the launcher's, the
     infrastructure's, a result nobody ran). A cause the table does not know is the
     method's, as ``failures`` already treats it."""
     if cause == "not_run":
-        return "n_not_run_or_blocked"
+        return "n_not_run_or_lost"
     whose = failure_log.WHOSE.get(cause, failure_log.METHOD)
     return {
         failure_log.METHOD: "n_failed_method",
         failure_log.BENCHMARK: "n_failed_benchmark",
-    }.get(whose, "n_not_run_or_blocked")
+    }.get(whose, "n_not_run_or_lost")
 
 
 def run_failure_columns(mine):
@@ -2241,12 +2234,12 @@ def run_failure_columns(mine):
 
     A round that did not register is counted once, by who is responsible: the method
     (``n_failed_method``), the benchmark (``n_failed_benchmark``), or no one's result
-    (``n_not_run_or_blocked``: launcher, infrastructure, ``not_run``). ``top_cause`` is
+    (``n_not_run_or_lost``: launcher, infrastructure, ``not_run``). ``top_cause`` is
     the most frequent of those causes, a tie going to the earlier in ``CAUSES``.
     ``n_fallback_stage_positions`` and ``n_cycle_fully_modelled`` count rounds whose
     ASHLAR flag is true; a row that carries no flag (a failed one) counts 0."""
     rec = dict.fromkeys(
-        ("n_failed_method", "n_failed_benchmark", "n_not_run_or_blocked"), 0
+        ("n_failed_method", "n_failed_benchmark", "n_not_run_or_lost"), 0
     )
     causes = {}
     for r in mine:
@@ -2292,7 +2285,7 @@ def run_failures(res_rows):
 
 
 FAILURE_COLUMN_RULE = (
-    "`failed (method)`, `failed (benchmark)` and `not run / blocked` count CASES "
+    "`failed (method)`, `failed (benchmark)` and `not run / lost` count CASES "
     "(rounds) of the run that did not register, by whose cause it was "
     "(`failure_log.WHOSE`): the method's; the benchmark's; or the launcher's, the "
     "infrastructure's or a result nobody ran. They count the same cases as "
@@ -2617,7 +2610,7 @@ def _summary_table(rows, primary, run_fails=None):
     """Markdown rows: each headline as ``median (mean) [minimum over cases]`` with
     ``ok/cases`` on the same line, its null beside it. With ``run_fails``
     (``run_failures``), each row also carries its run's failures beside its scores: ``failed (method)``,
-    ``failed (benchmark)``, ``not run / blocked`` (rounds), ``top cause``, and for an
+    ``failed (benchmark)``, ``not run / lost`` (rounds), ``top cause``, and for an
     ASHLAR run ``fallback`` and ``fully modelled`` (rounds; empty on other rows)."""
 
     order = [p.split(NON)[0] for p in primary or []]
@@ -2683,7 +2676,7 @@ def _summary_table(rows, primary, run_fails=None):
             ashlar = bool(f.get("is_ashlar"))
             line["failed (method)"] = f.get("n_failed_method", "")
             line["failed (benchmark)"] = f.get("n_failed_benchmark", "")
-            line["not run / blocked"] = f.get("n_not_run_or_blocked", "")
+            line["not run / lost"] = f.get("n_not_run_or_lost", "")
             line["top cause"] = f.get("top_cause", "")
             line["fallback"] = f["n_fallback_stage_positions"] if ashlar else ""
             line["fully modelled"] = f["n_cycle_fully_modelled"] if ashlar else ""
@@ -2887,7 +2880,7 @@ def _paired_markdown(summary, ds):
     ]
 
 
-def summarise_nonband(rows, primary=None, blocked=None):
+def summarise_nonband(rows, primary=None):
     """One row per (dataset, owner, variant): the summary of ``summarise_cells`` on the
     off-seam rows, with the nuclei kept. Never merged with the primary summary.
 
@@ -2899,8 +2892,7 @@ def summarise_nonband(rows, primary=None, blocked=None):
     for owner in dict.fromkeys(r["owner"] for r in rows):
         mine = [r for r in rows if r["owner"] == owner]
         names = [f"{p}{NON}{owner}" for p in primary] if primary else None
-        gone = {f"{k}{NON}{owner}": v for k, v in (blocked or {}).items()}
-        for rec in summarise_cells(mine, names, gone):
+        for rec in summarise_cells(mine, names):
             if rec["subset"] != "all":
                 continue
             of = [
@@ -3077,35 +3069,69 @@ def attrition_markdown(rows):
     ]
 
 
-def read_gates(directory):
-    """What the launcher's gate jobs decided (``<out>/logs/gates/*.tsv``): one dict per
-    record with ``run``, ``gate`` (``selfcheck`` | ``realcheck``), ``status``,
-    ``dropped`` (result names), ``blocked`` and ``reference``. Empty without a
-    directory."""
-    out = []
-    if not directory or not Path(directory).is_dir():
-        return out
-    for path in sorted(Path(directory).glob("*.tsv")):
-        fields = path.read_text().strip().split("\t")
-        if len(fields) < 4:
+LAUNCH_COLUMNS = ("run", "selfcheck", "realcheck", "reference", "log")
+
+
+def read_verdicts(path):
+    """What every run's selfcheck and realcheck said (``<out>/logs/verdicts.tsv``,
+    written by ``regbench verdict``): one dict per run, ``LAUNCH_COLUMNS``, in the
+    order of the file, plus ``rows`` (the result names its selfcheck status is read
+    from) and ``realcheck_row``. Reported, never a gate. Empty without a file."""
+    out = {}
+    if not path or not Path(path).is_file():
+        return []
+    lines = Path(path).read_text().splitlines()
+    for line in lines[1:]:  # the first line is the header
+        fields = line.split("\t")
+        if len(fields) < 6:
             continue
-        run, status, dropped, blocked = fields[:4]
-        reference = fields[4] if len(fields) > 4 else "-"
-        log_path = fields[5] if len(fields) > 5 else "-"
-        out.append(
+        run, check, status, reference, rows, log = fields[:6]
+        rec = out.setdefault(
+            run,
             {
                 "run": run,
-                "gate": "realcheck"
-                if path.name.endswith(".realcheck.tsv")
-                else "selfcheck",
-                "status": status,
-                "blocked": blocked.strip() != "0",
-                "dropped": "" if dropped == "-" else dropped,
-                "reference": "" if reference == "-" else reference,
-                "log_path": "" if log_path == "-" else log_path,
-            }
+                "selfcheck": "",
+                "realcheck": "",
+                "reference": "",
+                "log": "",
+                "rows": "",
+                "realcheck_row": "",
+            },
         )
+        if check == "selfcheck":
+            rec["selfcheck"] = status
+            rec["reference"] = "" if reference == "-" else reference
+            rec["log"] = "" if log == "-" else log
+            rec["rows"] = "" if rows == "-" else rows
+        elif check == "realcheck":
+            rec["realcheck"] = "" if status == "-" else status
+            rec["realcheck_row"] = "" if rows == "-" else rows
+            if log not in ("-", ""):
+                rec["realcheck_log"] = log
+    return list(out.values())
+
+
+def verdict_status(launch, run_variants=None):
+    """``{result name: its run's selfcheck verdict}`` from ``read_verdicts``: column
+    ``selfcheck_status`` of every row. A run's name stands for itself when
+    ``run_variants`` does not list its result names."""
+    out = {}
+    for g in launch or []:
+        for v in (run_variants or {}).get(g["run"], [g["run"]]):
+            out[v] = g["selfcheck"]
     return out
+
+
+def set_selfcheck_status(rows, statuses):
+    """Column ``selfcheck_status`` of every row of a run that has a verdict: what its
+    run's selfcheck said (``verdict_status``), whatever the run's own record holds (a
+    run is never told its selfcheck's verdict: it does not wait for it)."""
+    for r in rows or []:
+        if isinstance(r, dict) and "selfcheck_status" in r:
+            got = statuses.get(str(r.get("method", "")).split(NON)[0])
+            if got is not None:
+                r["selfcheck_status"] = got
+    return rows
 
 
 def narrow_dots(selfcheck_rows):
@@ -3129,7 +3155,7 @@ def narrow_dots(selfcheck_rows):
 
 
 def narrow_lines(selfcheck_rows):
-    """What the gate block says of the narrow dots: every result that has some, by
+    """What the selfcheck block says of the narrow dots: every result that has some, by
     name and count, and how many results have none."""
     counted = narrow_dots(selfcheck_rows)
     if not counted:
@@ -3157,54 +3183,36 @@ def narrow_lines(selfcheck_rows):
     return [text]
 
 
+SELFCHECKS_SAID = "## What the selfchecks said\n"
+
+
 def launch_markdown(launch, selfcheck_rows=None):
-    """The block that names every run a gate blocked and every row a gate dropped,
-    and the narrow dots of the selfchecks behind the gates."""
+    """What every run's selfcheck and realcheck said, one line per run, and the narrow
+    dots of the selfchecks. Reported, never a gate: every run started and every row of
+    theirs is in the tables above whatever its line here says."""
     narrow = narrow_lines(selfcheck_rows)
     if not launch:
-        return ["## What the gates decided\n", *narrow] if narrow else []
-    blocked = [g for g in launch if g["blocked"]]
-    unchecked = [
-        g
-        for g in launch
-        if not g["blocked"] and g["status"] not in ("ok", "realcheck_ok")
+        return [SELFCHECKS_SAID, *narrow] if narrow else []
+    parts = [
+        SELFCHECKS_SAID,
+        "The selfcheck (do a method's points follow the image its own writer drew, on "
+        "a generated pair) and the realcheck (the same on the run's first real unit) "
+        "are REPORTED: no run waited for them and no row is left out because of them. "
+        "Every row carries its run's verdict (`selfcheck_status`) and its own "
+        "(`selfcheck_row`).\n",
     ]
-    dropped = [g for g in launch if g["dropped"]]
-    parts = ["## What the gates decided\n"]
-    if blocked:
-        parts.append(
-            "Runs that did NOT start (their rows above are `not run`, scored at the "
-            "unregistered pose, and they are not among the compared rows): "
-            + "; ".join(f"`{g['run']}` ({g['gate']}: {g['status']})" for g in blocked)
-            + ".\n"
-        )
-    else:
-        parts.append("No run was blocked.\n")
-    if unchecked:
-        parts.append(
-            "Runs that started although a check did not say ok: "
-            + "; ".join(f"`{g['run']}` ({g['gate']}: {g['status']})" for g in unchecked)
-            + ".\n"
-        )
-    if dropped:
-        parts.append(
-            "Rows a gate said to leave out: "
-            + "; ".join(f"`{g['dropped']}` (of `{g['run']}`)" for g in dropped)
-            + ".\n"
-        )
-    return [*parts, *narrow]
-
-
-def blocked_rows(launch, run_variants=None):
-    """``{result name: why}`` for every row of a run a gate blocked."""
-    out = {}
-    for g in launch or []:
-        if g["blocked"]:
-            for v in (run_variants or {}).get(g["run"], [g["run"]]):
-                out[v] = (
-                    f"its run `{g['run']}` was blocked ({g['gate']}: {g['status']})"
-                )
-    return out
+    for g in launch:
+        line = f"- `{g['run']}`: selfcheck {g['selfcheck'] or 'not_checked'}"
+        if g.get("reference"):
+            line += f" (reference comparison {g['reference']})"
+        if g.get("realcheck"):
+            line += f"; realcheck {g['realcheck']}"
+            if g.get("realcheck_log"):
+                line += f" ({g['realcheck_log']})"
+        if g.get("log"):
+            line += f"; log {g['log']}"
+        parts.append(line)
+    return [*parts, "", *narrow]
 
 
 MASK_FLAG = "selfcheck_mask_over_cap"
@@ -3285,7 +3293,6 @@ def summary_markdown(
     nonband=None,
     nonband_lost=None,
     tissue_tables=None,
-    dropped=None,
     confined="",
     end_to_end=None,
     launch=None,
@@ -3321,7 +3328,7 @@ def summary_markdown(
         "`selfcheck of this row` is what the selfcheck measured for THAT row, not for "
         "its run: `NEVER CHECKED` marks a stage the method's own writer draws no image "
         "of (its points were compared with nothing), `via <run>` a row whose run is "
-        "gated by another run's selfcheck.\n"
+        "checked by another run's selfcheck.\n"
     )
     parts += mask_section(*(masks or ({}, [])))
     parts += attrition_markdown(attrition_rows or [])
@@ -3370,19 +3377,6 @@ def summary_markdown(
     parts += _nonband_markdown(nonband or [], nonband_lost or [])
     if tissue_tables:
         parts += tissue.markdown(tissue_tables, markdown)
-    if dropped:
-        parts += [
-            "## Rows left out\n",
-            "These result rows are in no table above. Each is a row whose own selfcheck "
-            "failed (its points do not follow an image the method wrote) while the row "
-            "that gates the method passed, so the method ran and this row alone is not "
-            "reported: "
-            + ", ".join(
-                f"`{r['variant']}`" + ("" if r["had_results"] else " (no results)")
-                for r in dropped
-            )
-            + ".\n",
-        ]
     parts += launch_markdown(launch or [], (masks or ({}, []))[1])
     if events is not None:
         parts += failure_log.markdown(events, markdown)
@@ -3608,8 +3602,7 @@ def score(
     primary=None,
     seam_owners=None,
     with_tissue=True,
-    dropped=None,
-    gates=None,
+    verdicts=None,
     run_variants=None,
     row_checks=None,
     mask_flags=None,
@@ -3640,16 +3633,13 @@ def score(
     numbers. Without it the column is empty.
 
     ``run_variants`` maps a run's name to the result names it writes
-    (``variants.run_variants()``): with the gate records it says which rows belong to a
-    run a gate blocked. Without it a gate record names its run only.
+    (``variants.run_variants()``): with the verdicts it says which rows belong to a
+    run. Without it a verdict names its run only.
 
-    ``gates`` is the launcher's directory of gate records; what they decided is
-    written to ``launch.csv`` and named in the summary.
-
-    ``dropped`` names variants that are left out of every table although they may have
-    results: rows whose own selfcheck failed without blocking their method
-    (``variants.dropped_variants``). They are listed in ``dropped.csv`` and in the
-    summary, so a row is never missing without a reason.
+    ``verdicts`` is ``<out>/logs/verdicts.tsv`` (``regbench verdict``): what every
+    run's selfcheck and realcheck said, written to ``launch.csv``, named in the summary
+    and set in column ``selfcheck_status`` of every row of the run. REPORTED, never a
+    gate: no row is left out and no run is taken out of the common block for it.
 
     ``with_tissue`` adds the tissue-level block of the written images (``tissue*.csv``,
     ``regbench.tissue``): secondary, its own tables, never part of the ones above.
@@ -3660,27 +3650,16 @@ def score(
     every variant a second, off-seam row (``nonband_*``).
     """
     owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
-    dropped = list(dict.fromkeys(dropped or []))
-    dropped_rows = [
-        {
-            "variant": v,
-            "reason": DROPPED_REASON,
-            "had_results": (Path(out) / v).is_dir(),
-        }
-        for v in dropped
-    ]
     variants_of = {}
     jobs = []
     for ds in datasets or DATASETS:
-        made = case_jobs(
-            cases_root, out, ds, dev, expected, dropped, owners, row_checks
-        )
+        made = case_jobs(cases_root, out, ds, dev, expected, owners, row_checks)
         if made:
             variants_of[ds] = made[0][2]
             jobs += made
     if not jobs:
         raise SystemExit(f"no prepared cases under {cases_root}")
-    done = score_jobs(jobs, workers, dropped, fresh)
+    done = score_jobs(jobs, workers, fresh)
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
     # off the seams: tables of their own, never merged into the ones above
@@ -3688,11 +3667,13 @@ def score(
     non_lost = nonband_missing(
         [r for rows in done for r in rows[3]], jobs, owners, variants_of
     )
-    launch = read_gates(gates)
-    blocked = blocked_rows(launch, run_variants)
-    non_summary = _in_set(summarise_nonband(non_cells, primary, blocked), OUTLINES)
-    summary = _in_set(summarise_cells(cells, primary, blocked), OUTLINES)
-    common = _in_set(common_block(cells, primary, blocked), OUTLINES)
+    launch = read_verdicts(verdicts)
+    said = verdict_status(launch, run_variants)
+    for rows in (cells, non_cells):
+        set_selfcheck_status(rows, said)
+    non_summary = _in_set(summarise_nonband(non_cells, primary), OUTLINES)
+    summary = _in_set(summarise_cells(cells, primary), OUTLINES)
+    common = _in_set(common_block(cells, primary), OUTLINES)
     excluded = excluded_rounds(cells)
     paired = _in_set(paired_vs_primary(cells), OUTLINES)
     paired_summary = _in_set(summarise_paired(paired), OUTLINES)
@@ -3704,14 +3685,14 @@ def score(
         "nonband_cells": [r for rows in done for r in rows[4]["non_cells"]],
     }
     nuclei_missing = [r for rows in done for r in rows[4]["missing"]]
-    nuc["summary_cells"] = _in_set(
-        summarise_cells(nuc["cells"], primary, blocked), NUCLEI
-    )
-    nuc["common_block"] = _in_set(common_block(nuc["cells"], primary, blocked), NUCLEI)
+    for rows in (nuc["cells"], nuc["nonband_cells"]):
+        set_selfcheck_status(rows, said)
+    nuc["summary_cells"] = _in_set(summarise_cells(nuc["cells"], primary), NUCLEI)
+    nuc["common_block"] = _in_set(common_block(nuc["cells"], primary), NUCLEI)
     nuc["paired_vs_primary"] = _in_set(paired_vs_primary(nuc["cells"]), NUCLEI)
     nuc["paired_summary"] = _in_set(summarise_paired(nuc["paired_vs_primary"]), NUCLEI)
     nuc["nonband_summary"] = _in_set(
-        summarise_nonband(nuc["nonband_cells"], primary, blocked), NUCLEI
+        summarise_nonband(nuc["nonband_cells"], primary), NUCLEI
     )
     fails = failures(res)  # every run
     run_fails = run_failures(res)
@@ -3770,6 +3751,7 @@ def score(
         *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
         *tissue.TABLES,
         # removed tables, still cleared
+        "dropped",
         "truth",
         "truth_by_family",
         "nonband_truth",
@@ -3822,12 +3804,14 @@ def score(
         pipe_by_process,
         list(compute_all.BY_PROCESS_COLUMNS),
     )
-    write_csv(tables / "launch.csv", launch)
+    write_csv(
+        tables / "launch.csv",
+        [{k: g.get(k, "") for k in LAUNCH_COLUMNS} for g in launch],
+        list(LAUNCH_COLUMNS),
+    )
     write_csv(tables / "nonband_cells.csv", non_cells)
     write_csv(tables / "nonband_summary.csv", non_summary)
     write_csv(tables / "nonband_missing.csv", non_lost)
-    (tables / "dropped.csv").unlink(missing_ok=True)  # never a stale list
-    write_csv(tables / "dropped.csv", dropped_rows)
     # the written images against the reference: tables of their own, never ranked
     tis = (
         tissue.score_all([(j[0], j[1], j[2]) for j in jobs], workers)
@@ -3857,7 +3841,6 @@ def score(
         non_summary,
         non_lost,
         tis,
-        dropped_rows,
         confined,
         (e2e, e2e_summary),
         launch,
@@ -3891,7 +3874,6 @@ def score(
         "nonband_cells": non_cells,
         "nonband_summary": non_summary,
         "nonband_missing": non_lost,
-        "dropped": dropped_rows,
         "cost_end_to_end": e2e,
         "cost_end_to_end_summary": e2e_summary,
         "pipeline_cost": list(pipe),

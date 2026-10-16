@@ -486,8 +486,9 @@ def test_the_overall_status_is_the_worst_checked_one():
     assert sc.worst([sc.CRASHED, sc.NOT_CHECKED, sc.OK]) == sc.CRASHED
     assert sc.worst([sc.CRASHED, sc.INCONSISTENT]) == sc.INCONSISTENT
     assert sc.worst([sc.NO_STAGE_IMAGE]) == sc.NOT_CHECKED  # nothing was checked
-    assert set(sc.BLOCKING) == {sc.INCONSISTENT, sc.CRASHED, sc.NOT_CHECKED}
-    assert sc.EXIT_CODE[sc.OK] == 0 and all(sc.EXIT_CODE[s] for s in sc.BLOCKING)
+    assert set(sc.NOT_OK) == {sc.INCONSISTENT, sc.CRASHED, sc.NOT_CHECKED}
+    assert not hasattr(sc, "BLOCKING")  # reported, never a gate
+    assert sc.EXIT_CODE[sc.OK] == 0 and all(sc.EXIT_CODE[s] for s in sc.NOT_OK)
 
 
 # ── run(): fake methods through the real driver ───────────────────────────────
@@ -613,7 +614,7 @@ def run_small(method, tmp_path, **kw):
 def test_run_reports_a_consistent_method_as_ok(tmp_path, direction):
     rec = run_small(fake_method(direction=direction), tmp_path)
     assert rec["status"] == sc.OK and rec["variants"] == {"fake": sc.OK}
-    assert rec["blocks_the_method"] is False
+    assert rec["not_ok"] is False
     (p,) = rec["pairs"]
     assert (
         p["ref_hw"] == list(SMALL) and p["variants"]["fake"]["direction"] == direction
@@ -630,7 +631,7 @@ def test_run_reports_a_method_whose_points_leave_its_image_as_inconsistent(
     tmp_path, direction, wrong
 ):
     rec = run_small(fake_method(direction=direction, wrong=wrong), tmp_path)
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"] is True
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"] is True
 
 
 def test_run_reports_a_method_declared_in_the_wrong_direction_as_inconsistent(tmp_path):
@@ -655,7 +656,7 @@ def test_out_of_memory_is_not_checked_never_inconsistent(tmp_path):
     rec = run_small(fake_method(raises=MemoryError("Java heap space")), tmp_path)
     assert rec["status"] == sc.NOT_CHECKED
     assert rec["pairs"][0]["variants"]["fake"]["cause"] == "oom"
-    assert rec["blocks_the_method"] is True
+    assert rec["not_ok"] is True
 
 
 def test_a_final_variant_without_an_image_is_not_checked(tmp_path):
@@ -667,7 +668,7 @@ def test_a_final_variant_without_an_image_is_not_checked(tmp_path):
 def test_a_stage_without_an_image_is_reported_and_does_not_block(tmp_path):
     rec = run_small(fake_method(stage="none"), tmp_path)
     assert rec["variants"] == {"fake_rigid": sc.NO_STAGE_IMAGE, "fake": sc.OK}
-    assert rec["status"] == sc.OK and rec["blocks_the_method"] is False
+    assert rec["status"] == sc.OK and rec["not_ok"] is False
 
 
 @pytest.mark.parametrize("stage", ["yield", "hook"])
@@ -911,13 +912,13 @@ def test_a_per_patient_method_gets_every_round_in_one_run(tmp_path, direction):
     ]
 
 
-def test_a_second_round_that_is_wrong_blocks_the_method(tmp_path):
+def test_a_second_round_that_is_wrong_makes_the_method_inconsistent(tmp_path):
     """The round a pair never had: right on round 1, 0.6 px off on round 2."""
     method = fake_method(group=True, wrong=(0.6, 0.0), wrong_round=2)
     rec = sc.run(method, tmp_path / "w", {"workers": 1}, sizes=[PATIENT])
     first, second = rec["pairs"]
     assert first["status"] == sc.OK and second["status"] == sc.INCONSISTENT
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"]
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"]
     assert rec["variants"] == {"fake": sc.INCONSISTENT}
     assert rec["cases"][0]["status"] == sc.INCONSISTENT
     assert "patient_512x640" not in rec["attempts"][-1]["why"]  # names the variant

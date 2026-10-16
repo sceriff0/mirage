@@ -7,8 +7,10 @@ EVENT:
 * every failed attempt of every unit: the attempt a result ended with, and every earlier
   attempt of the memory ladder kept in its ``run.json: previous_attempts`` (those appear
   even when the unit ended ``ok`` at a higher rung);
-* every run a gate blocked, and every row a gate dropped;
-* every selfcheck attempt that did not end ``ok``, and every flagged realcheck;
+* every selfcheck attempt that did not end ``ok``;
+* every selfcheck or realcheck VERDICT that is not ok (``logs/verdicts.tsv``): reported,
+  never a gate, so the run went on and its rows are scored (``REPORTED``); such a row
+  ends no unit and is never a method failure;
 * every written image the tissue block could not score, and every record the scorer
   could not read.
 
@@ -23,8 +25,7 @@ name, with the rounds listed in ``case_id``.
                     of memory, its check of the adapter did not pass or could not run, its
                     tissue block or its scorer could not read something
 ``infrastructure``  the scheduler or the node lost the attempt
-``launcher``        the launcher decided it: a gate blocked the run, a row was dropped, a
-                    unit was never submitted
+``launcher``        the launcher decided it: a unit was never submitted
 
 ``whose`` is total by construction: ``classify`` raises on a cause that is not in the
 table, and a test walks every vocabulary in the code base against it, so a new cause
@@ -73,14 +74,13 @@ WHOSE = {
     "not_run": LAUNCHER,
     # a stage job never reached the queue: the tile submitter was refused or ended
     "not_submitted": LAUNCHER,
-    # the gates
-    "gate_blocked": LAUNCHER,
-    "dropped_row": LAUNCHER,
+    # the checks: reported, never a gate
     "selfcheck_inconsistent": BENCHMARK,
     "selfcheck_not_checked": BENCHMARK,
     "selfcheck_crashed": BENCHMARK,
     "selfcheck_lost": INFRASTRUCTURE,
     "realcheck_flagged": BENCHMARK,
+    "realcheck_not_checked": BENCHMARK,
     # the scorer's own steps
     "tissue_missing": BENCHMARK,
     "unreadable_record": BENCHMARK,
@@ -92,7 +92,6 @@ WHOSE = {
 }
 STAGES = (
     "selfcheck",
-    "gate",
     "realcheck",
     "register",
     "writer",
@@ -146,11 +145,9 @@ def stage_of(cause, phase=""):
 
 
 def outcome(ok, cause, attempt=None):
-    """``final_outcome_of_unit``: ``ok at rung N`` | ``failed`` | ``lost`` | ``blocked``."""
+    """``final_outcome_of_unit``: ``ok at rung N`` | ``failed`` | ``lost``."""
     if ok:
         return f"ok at rung {attempt if attempt is not None else '?'}"
-    if cause in ("gate_blocked", "dropped_row"):
-        return "blocked"
     return "failed" if classify(cause or "exception") == METHOD else "lost"
 
 
@@ -397,50 +394,53 @@ def result_events(out, case, variant, mine=None):
     return rows
 
 
-def gate_events(launch, run_variants=None):
-    """Rows for what the launcher's gates decided (``score.read_gates``)."""
+# what a check's verdict did to the run: nothing. It ends no unit and is never counted
+# as one that ended (``not_ok``, ``count_table``).
+REPORTED = "reported; the run went on"
+REALCHECK_CAUSE = {
+    "flagged": "realcheck_flagged",
+    "not_checked": "realcheck_not_checked",
+}
+
+
+def selfcheck_events(verdicts, run_variants=None):
+    """One row per selfcheck or realcheck VERDICT that is not ok (``score.read_verdicts``
+    of ``logs/verdicts.tsv``). ``stage`` is the check (``selfcheck`` | ``realcheck``),
+    ``whose`` the benchmark's: a check that did not pass says the benchmark cannot show
+    that ITS points follow the method's image, which is no evidence about the method.
+    Reported, never a gate: ``final_outcome_of_unit`` is ``REPORTED``, the run went on
+    and its rows are scored."""
     run_variants = run_variants or {}
     out = []
-    for g in launch:
-        if g["blocked"]:
+    for g in verdicts or []:
+        cause = SELFCHECK_CAUSE.get(g.get("selfcheck") or "not_checked")
+        if cause:
             out.append(
                 _row(
                     run=g["run"],
                     variant=";".join(run_variants.get(g["run"], [])),
-                    stage="gate" if g["gate"] == "selfcheck" else "realcheck",
-                    cause="gate_blocked",
-                    cause_from=f"the {g['gate']} gate's record ({g['status']})",
-                    message=f"{g['gate']}: {g['status']}; the run did not start",
-                    log_path=g.get("log_path", ""),
+                    stage="selfcheck",
+                    cause=cause,
+                    cause_from="verdicts.tsv",
+                    message=f"selfcheck: {g.get('selfcheck') or 'not_checked'}"
+                    + (f" ({g['log']})" if g.get("log") else ""),
                     climbed_to=NONE,
-                    final_outcome_of_unit="blocked",
+                    final_outcome_of_unit=REPORTED,
                 )
             )
-        elif g["gate"] == "realcheck" and g["status"].endswith("flagged"):
+        cause = REALCHECK_CAUSE.get(g.get("realcheck") or "")
+        if cause:
             out.append(
                 _row(
                     run=g["run"],
+                    variant=g.get("realcheck_row", ""),
                     stage="realcheck",
-                    cause="realcheck_flagged",
-                    cause_from="the realcheck gate's record; the run was allowed on",
-                    message=g["status"],
-                    log_path=g.get("log_path", ""),
+                    cause=cause,
+                    cause_from="verdicts.tsv",
+                    message=f"realcheck: {g['realcheck']}"
+                    + (f" ({g['realcheck_log']})" if g.get("realcheck_log") else ""),
                     climbed_to=NONE,
-                    final_outcome_of_unit="allowed to start unchecked",
-                )
-            )
-        for name in [v for v in g["dropped"].split(",") if v]:
-            out.append(
-                _row(
-                    run=g["run"],
-                    variant=name,
-                    stage="gate",
-                    cause="dropped_row",
-                    cause_from=f"the selfcheck gate's record ({g['status']})",
-                    message="its own selfcheck failed and it does not gate its run",
-                    log_path=g.get("log_path", ""),
-                    climbed_to=NONE,
-                    final_outcome_of_unit="blocked",
+                    final_outcome_of_unit=REPORTED,
                 )
             )
     return out
@@ -453,7 +453,7 @@ SELFCHECK_CAUSE = {
 }
 
 
-def selfcheck_events(directory, mine=None):
+def selfcheck_attempt_events(directory, mine=None):
     """Rows for every selfcheck attempt that did not end ``ok``
     (``<out>/logs/selfcheck/<run>/selfcheck.json``: ``attempts``, this one last)."""
     out = []
@@ -562,27 +562,18 @@ def _fold_not_run(rows):
     return out
 
 
-def build(out, jobs, launch=(), run_variants=None, tissue_missing=(), mine=None):
-    """Every event of what is being scored. ``jobs`` are ``(case, [result names])``."""
+def build(out, jobs, verdicts=(), run_variants=None, tissue_missing=(), mine=None):
+    """Every event of what is being scored. ``jobs`` are ``(case, [result names])``;
+    ``verdicts`` is ``score.read_verdicts`` of ``logs/verdicts.tsv``."""
     rows = []
     for case, names in jobs:
         for name in names:
             if name == "initial":
                 continue
             rows += result_events(out, case, name, mine)
-    blocked = {
-        v
-        for g in launch
-        if g["blocked"]
-        for v in (run_variants or {}).get(g["run"], [g["run"]])
-    }
-    for r in rows:
-        # a result a gate kept from starting: the gate's row says why, this one whose
-        if r["cause"] == "not_run" and r["variant"] in blocked:
-            r["final_outcome_of_unit"] = "blocked"
     rows = _fold_not_run(collapse(once_per_round(rows)))
-    rows += gate_events(launch, run_variants)
-    rows += selfcheck_events(Path(out) / "logs" / "selfcheck", mine)
+    rows += selfcheck_events(verdicts, run_variants)
+    rows += selfcheck_attempt_events(Path(out) / "logs" / "selfcheck", mine)
     rows += tissue_events(tissue_missing)
     return rows
 
@@ -604,38 +595,42 @@ def count_table(rows):
             },
         )
         rec["events"] += 1
-        rec["ended_the_unit"] += r["climbed_to"] == NONE and not str(
-            r["final_outcome_of_unit"]
-        ).startswith("ok")
+        rec["ended_the_unit"] += _ended(r)
     return list(out.values())
 
 
+def _ended(r):
+    """Did this event end its unit: not an attempt it climbed past, not an ok, and not
+    a check's verdict (``REPORTED``: the run went on)."""
+    outcome = str(r["final_outcome_of_unit"])
+    return (
+        r["climbed_to"] == NONE and not outcome.startswith("ok") and outcome != REPORTED
+    )
+
+
 def not_ok(rows):
-    """The events a unit ENDED with (not the attempts it climbed past)."""
-    return [
-        r
-        for r in rows
-        if r["climbed_to"] == NONE
-        and not str(r["final_outcome_of_unit"]).startswith("ok")
-    ]
+    """The events a unit ENDED with (not the attempts it climbed past, and not the
+    checks' verdicts, which end nothing)."""
+    return [r for r in rows if _ended(r)]
 
 
 def markdown(rows, table, limit=200):
     """The "Failures" section of ``summary.md``; ``table(rows, columns)`` renders."""
     parts = ["## Failures: every event, and whose it is\n"]
     if not rows:
-        return [*parts, "No failed, lost, blocked or dropped event.\n"]
+        return [*parts, "No failed or lost event, and no check that was not ok.\n"]
     parts.append(
         "`failure_log.csv` has one row per event: each failed attempt of each unit "
         "(earlier rungs of the memory ladder included, even when the unit ended ok), "
-        "each run a gate blocked, each row a gate dropped, each selfcheck attempt "
-        "that did not end ok, each flagged realcheck, each image the tissue block "
+        "each selfcheck attempt that did not end ok, each selfcheck or realcheck "
+        "verdict that is not ok (reported: the run went on and its rows are scored; "
+        f"`final_outcome_of_unit` = `{REPORTED}`), each image the tissue block "
         "could not score. `whose`: `method` (the package under test raised, ran out "
         "of memory or time, its writer failed, its process died); `benchmark` (the "
         "benchmark's own step or check: not evidence about the method's "
         "registration); `infrastructure` (the scheduler or node lost the attempt); "
-        "`launcher` (a gate blocked the run, a row was dropped, the unit was never "
-        "submitted). `grep REGBENCH_END` in the task logs gives the same words.\n"
+        "`launcher` (the unit was never submitted). `grep REGBENCH_END` in the task "
+        "logs gives the same words.\n"
     )
     parts += [
         table(

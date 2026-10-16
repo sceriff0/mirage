@@ -111,16 +111,6 @@ end() {  # end <status> <cause|-> : the last line of the log
     echo "REGBENCH_END kind=submitter run=$name dataset=$dataset link=$link status=$1$cause log=${REGBENCH_LOG:--}"
 }
 
-gate="$REGBENCH_OUT/logs/gates/$name.tsv"
-status=not_checked blocked=1
-if [ -s "$gate" ]; then
-    IFS=$'\t' read -r _ status _ blocked _ < "$gate"
-fi
-if [ "$blocked" != 0 ]; then
-    echo "$name: the gate says $status and the run is not allowed to start unchecked; no tile is submitted"
-    end blocked gate_blocked
-    exit 0
-fi
 if [ -e "$state.done" ]; then
     echo "$name on $dataset: every tile job was submitted and has left the queue ($state.done); nothing to do"
     end ok -

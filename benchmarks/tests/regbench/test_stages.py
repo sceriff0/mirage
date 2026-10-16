@@ -1559,8 +1559,7 @@ def test_the_batch_scripts_register_a_round_end_to_end(toy_cases, cases_root, tm
     layout = out / "logs" / "stages" / "S-1" / "stare-multiplex.tsv"
     base = ["--cases", str(cases_root), "--dataset", "multiplex", "--method", "stare"]
     assert cli.main(["stages", *base, "--layout", str(layout)]) == 0
-    (out / "logs" / "gates").mkdir(parents=True)
-    (out / "logs" / "gates" / "stare.tsv").write_text("stare\tok\t-\t0\t-\t-\n")
+    (out / "logs").mkdir(parents=True, exist_ok=True)
     env = {
         k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
     }

@@ -79,7 +79,8 @@ def copy_of(cohort, tmp, cases=None):
 def tables(out):
     """Every file under ``tables/``, as bytes."""
     got = {p.name: p.read_bytes() for p in sorted((out / "tables").iterdir())}
-    assert "summary.md" in got and "cells.csv" in got and len(got) > 20
+    # (20 at the least: dropped.csv is gone with the dropped rows)
+    assert "summary.md" in got and "cells.csv" in got and len(got) >= 20
     return got
 
 
@@ -348,11 +349,12 @@ def test_a_changed_seam_mask_recomputes_every_row_off_that_owners_seams(small):
     _rewrite_npz(result_dir(out, "tiles", case) / "warped.npz", band=lambda b: ~b)
     # `tiles` itself (its file changed: whole and off two owners, on both sets), and
     # the OUTLINES of every other source off `tiles` (the unregistered pose and the
-    # three other results). Their nuclei and their rows off the other owner are kept
-    check(small, cases=["P1_r1"], records=6 + 4)
+    # four other results: `dropme` is one since no row is dropped any more). Their
+    # nuclei and their rows off the other owner are kept
+    check(small, cases=["P1_r1"], records=6 + 5)
     # the same for an owner whose mask is on the REFERENCE nuclei
     _rewrite_npz(result_dir(out, "blocks", case) / "warped.npz", band_ref=lambda b: ~b)
-    check(small, cases=["P1_r1"], records=6 + 4)
+    check(small, cases=["P1_r1"], records=6 + 5)
 
 
 def test_what_a_result_says_changes_its_rows_and_no_pair_record(small):
@@ -387,19 +389,13 @@ def test_another_list_of_variants_is_another_record(small):
     check(small, cases=SMALL, records=0, expected=["ghost2", "ghost"])
 
 
-def test_other_seam_owners_other_checks_other_drops_are_other_records(small):
-    """One thing at a time, each from the state the one before left."""
+def test_other_seam_owners_other_checks_are_other_records(small):
+    """One thing at a time, each from the state the one before left. (No row is ever
+    dropped any more: what a selfcheck said is reported, never a gate.)"""
     root, out, spy, _ = small
     kw = {"seam_owners": ("tiles",)}
     check(small, cases=SMALL, records=0, **kw)
     kw["row_checks"] = {**KW["row_checks"], "stare": "no_stage_image"}
-    check(small, cases=SMALL, records=0, **kw)
-    # `rtm` is no longer scored; `dropme` is, on both cases, whole and off the seams
-    kw["dropped"] = ["rtm"]
-    check(small, cases=SMALL, **kw)
-    # a dropped name with no result changes no row; it is in the key all the same (the
-    # rule is: when in doubt, compute again)
-    kw["dropped"] = ["rtm", "never_ran"]
     check(small, cases=SMALL, records=0, **kw)
 
 
@@ -565,8 +561,9 @@ def test_the_key_is_written_where_a_person_can_read_it(small):
     key = said["key"]
     assert said["key_sha256"] == score_mod._key_sha256(key)
     assert key["record_version"] == score_mod.RECORD_VERSION
-    assert key["variants"][0] == "initial" and "dropme" not in key["variants"]
-    assert key["dropped"] == ["dropme"] and key["submission"] == ""
+    # the formerly dropped row is scored like any other: nothing is left out
+    assert key["variants"][0] == "initial" and "dropme" in key["variants"]
+    assert "dropped" not in key and key["submission"] == ""
     assert key["seam_owners"] == list(scored_cohort.OWNERS)
     assert set(key["results"]) == set(key["variants"]) - {"initial"}
     for name in ("stare", "rtm", "tiles", "blocks"):
@@ -687,17 +684,13 @@ def _batch(kind, *args, root, out, **env):
 
 def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path):
     """`score_cohort.sbatch case <dataset>` once per case, then `score`: both are told
-    the submission and the dropped rows the same way, so the scorer computes nothing."""
+    the submission the same way, so the scorer computes nothing."""
     root, out = copy_of(cohort, tmp_path)
     sub = "20261012T101010-5"
     for path in out.glob("*/*/*/run.json"):
         if path.parts[-4] != "rtm":  # one run this submission neither ran nor reused
             run = json.loads(path.read_text())
             write_json(path, {**run, "submissions": [sub]})
-    dropped = next(v for v in variants.expected_variants() if variants.droppable(v))
-    gates = out / "logs" / "gates"
-    gates.mkdir(parents=True)
-    (gates / "some_run.tsv").write_text(f"some_run\tinconsistent\t{dropped}\t0\t-\t-\n")
     env = {"REGBENCH_SUBMISSION": sub}
     for i in range(4):
         done = _batch(
@@ -715,8 +708,8 @@ def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path)
     assert not (out / "tables").exists()  # a case task writes no table
     said = json.loads((out / "cache/scores/multiplex/P1_r1/case.json").read_text())
     key = said["key"]
-    assert key["submission"] == sub and key["dropped"] == [dropped]
-    assert dropped not in key["variants"] and "stare" in key["variants"]
+    assert key["submission"] == sub and "dropped" not in key
+    assert "stare" in key["variants"] and "dropme" in key["variants"]
     # the same task again finds its record
     again = _batch(
         "case", "multiplex", root=root, out=out, SLURM_ARRAY_TASK_ID="0", **env
@@ -746,7 +739,16 @@ def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path)
     started = [ln for ln in done.stderr.splitlines() if ": started (" in ln]
     assert started == []
     assert done.stdout.strip().splitlines()[-1].startswith("REGBENCH_END kind=score ")
+    # the verdicts first (no runs file: every active run), then the tables that name them
+    verdicts = (out / "logs" / "verdicts.tsv").read_text().splitlines()
+    assert verdicts[0] == "run\tcheck\tstatus\treference\trows\tlog"
+    assert len(verdicts) == 1 + 2 * len(variants.active_runs())
+    assert done.stdout.index("REGBENCH_END kind=verdict ") < done.stdout.index(
+        "REGBENCH_END kind=score "
+    )
     merged = tables(out)
+    assert b"## What the selfchecks said" in merged["summary.md"]
+    assert merged["launch.csv"].startswith(b"run,selfcheck,realcheck,reference,log")
     assert b"not run by this submission" in merged["cells.csv"]
     shutil.rmtree(out / "cache" / "scores")
     whole = _batch("score", root=root, out=out, **env)

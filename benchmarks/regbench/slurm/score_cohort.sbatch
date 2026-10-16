@@ -17,9 +17,12 @@
 #                                records side by side on the task's CPUs, kept under
 #                                $REGBENCH_OUT/cache/scores. No table is written. A task
 #                                that is killed keeps the pair records it finished
-#   score_cohort.sbatch score    the tables: every row the gates dropped is left out
-#                                (`score --drop`) and every blocked run and dropped row
-#                                is named in the summary (`score --gates`). A case whose
+#   score_cohort.sbatch score    the tables. FIRST `regbench verdict`: what every run's
+#                                selfcheck and realcheck said, into
+#                                $REGBENCH_OUT/logs/verdicts.tsv; then `score
+#                                --verdicts` names them in launch.csv, in the summary and
+#                                in every row's selfcheck_status. Reported, never a
+#                                gate: no row is left out for them. A case whose
 #                                record is still valid is read; every other case is
 #                                computed here, so the tables never depend on the array
 #                                above. Every cost in them was measured by this
@@ -30,29 +33,20 @@
 #                                again here, never read from a record made before it
 #
 #
-# `case` and `score` read the gates' verdicts from $REGBENCH_OUT/logs/gates. A row is
-# dropped when its own selfcheck failed and it does not gate its method. Both are given
-# the same submission and the same dropped rows: a case's record is reused only by a
-# scorer that was (benchmarks/regbench/score.py: case_key).
+# `case` and `score` are given the same submission: a case's record is reused only by
+# a scorer that was (benchmarks/regbench/score.py: case_key). The checks' verdicts do
+# not enter a case's record: `score` sets them on the rows after reading the records.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 kind="$1" dataset="${2:-}"  # `case` is the only kind that takes a dataset
 workers="${SLURM_CPUS_PER_TASK:-1}"
-gates="$REGBENCH_OUT/logs/gates"
+verdicts="$REGBENCH_OUT/logs/verdicts.tsv"
 
-# what `score-case` and `score` are both told: the submission, and the dropped rows
+# what `score-case` and `score` are both told: the submission
 shared=()
 shared_args() {
-    local f dropped rows v
-    # only what THIS submission ran or reused: a blocked run's older folders are not scored
+    # only what THIS submission ran or reused: an older submission's folders are not scored
     [ -n "${REGBENCH_SUBMISSION:-}" ] && shared+=(--submission "$REGBENCH_SUBMISSION")
-    for f in "$gates"/*.tsv; do
-        [ -s "$f" ] || continue
-        IFS=$'\t' read -r _ _ dropped _ _ < "$f"
-        [ "${dropped:--}" = - ] && continue
-        IFS=, read -ra rows <<< "$dropped"
-        for v in "${rows[@]}"; do shared+=(--drop "$v"); done
-    done
     return 0
 }
 
@@ -143,10 +137,21 @@ else
 fi
 
 shared_args
+# what every run's selfcheck and realcheck said, FIRST: reported, never a gate. The runs
+# are those this submission selected (submit_cohort.sh leaves their names beside its job
+# ids); without that file, every active run. `verdict` always exits 0.
+verdict=(verdict --out "$REGBENCH_OUT")
+[ -n "${REGBENCH_SUBMISSION:-}" ] && verdict+=(--submission "$REGBENCH_SUBMISSION")
+runs_file="$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.runs"
+[ -s "$runs_file" ] && verdict+=(--runs "$(head -n 1 "$runs_file")")
+rm -f "$verdicts"
+regbench_py "$REGBENCH_SCORER_IMAGE" "${verdict[@]}"
+echo "verdict: python exited $? ($verdicts; the tables say no selfcheck was found for a run it does not name)"
+# its end line is not this job's: the scorer's own is the one the log ends with
+if [ -n "${REGBENCH_END_FILE:-}" ]; then rm -f "$REGBENCH_END_FILE"; fi
 args=(score --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --workers "$workers"
       ${shared[@]+"${shared[@]}"})
-# the gates' verdicts: a run a gate blocked is not a method failure
-args+=(--gates "$gates")
+args+=(--verdicts "$verdicts")
 # the cohort's manifest, for the first column of attrition.csv: REGBENCH_MANIFEST when
 # this job has it, else the copy `submit_cohort.sh --prepare` left beside the cases;
 # copied under the results (which every image can read)

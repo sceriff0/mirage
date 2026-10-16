@@ -1,6 +1,7 @@
 #!/bin/bash
-# Submit the cohort benchmark: every run of the run list behind its own check, each on a
-# four-rung memory ladder, then the scorer. From a login node, in three steps:
+# Submit the cohort benchmark: every run of the run list on a four-rung memory ladder,
+# beside the selfchecks (REPORTED, NEVER A GATE: no run waits for one), then the scorer.
+# From a login node, in three steps:
 #
 #   benchmarks/regbench/slurm/submit_cohort.sh --inputs [-- extra sbatch args]
 #   (wait for the input step: the pipeline's own preprocessing of the cohort,
@@ -37,14 +38,16 @@
 # THE RUN LIST is read from `python -m benchmarks.regbench runs` and from nowhere else:
 # this script names no method. What it submits, in order:
 #
-#   1. per run that gates a run: its selfcheck at 64 GB and its watcher (retry.sbatch),
-#      which submits it at 256 and then 512 GB only when the attempt before did not
-#      end ok. An attempt above the first runs only when the one before ended for memory. A run whose
-#      results another reads (column `after`) hands its selfcheck's work to that one
-#      (`--m0-from`), which waits for it.
-#   2. per run: a gate job (`regbench gate`). It fails when the selfcheck that gates the
-#      run is anything but ok, and then THAT run alone never starts. The rows it says to
-#      drop are collected for the scorer.
+#   1. per run that checks a selected run (column `checked_by`): its selfcheck at 64 GB
+#      and its watcher (retry.sbatch), which submits it at 256 and then 512 GB only when
+#      the attempt before did not end ok. An attempt above the first runs only when the
+#      one before ended for memory. A run whose results another reads (column `after`)
+#      hands its selfcheck's work to that one (`--m0-from`), which waits for it with
+#      `afterany`: whatever the anchor's selfcheck said. THE SELFCHECK IS REPORTED, NEVER
+#      A GATE: no ladder waits for it, no run is kept from starting and no row is left
+#      out because of it (user ruling: run, report, never gate). Its verdict is read by
+#      the scorer (`regbench verdict`, step 5).
+#   2. (there is no step 2 any more: the gate jobs are gone)
 #   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 GB at 4 CPUs. ONE
 #      array is submitted here, the 16 GB attempt, and one small job after it, the
 #      ladder's watcher (retry.sbatch). A RETRY IS SUBMITTED ONLY AFTER A FAILURE: the
@@ -70,19 +73,21 @@
 #      its share of REGBENCH_STAGE_QUEUE_MAX (a total over the launch) of them pending or
 #      running. SOLVE waits for it.
 #      `stage_chain` and `staged` below.
-#   4. for a run whose realcheck is a gate (column `realcheck`): the first unit of the
-#      first dataset goes alone, with `--realcheck`; a second gate job reads its
-#      realcheck.json; everything else of that run waits for it.
+#   4. for a run with a realcheck (column `realcheck`): the first unit of the first
+#      dataset runs with `--realcheck`, in a ladder of its own SUBMITTED BESIDE the rest
+#      of the run, which does not wait for it. Reported, never a gate.
 #   5. after everything, in the scorer's image: FIRST the settle job (`rb-settle`: every
 #      result that still says "killed" gets the cause the scheduler's accounting names;
 #      it rewrites those results' run.json, which is why every scoring job waits for
 #      it); then per dataset ONE ARRAY with a task per case (the tissue-level pieces of
 #      the case, then `score-case`: the case's rows, kept as its record under
 #      $REGBENCH_OUT/cache/scores), then the tissue job (the pieces of any case whose
-#      task did not make them), then the scorer (`score --drop ...`), which reads the
-#      records, computes whatever case has none that is still valid, and writes the
-#      tables. The tables are the same whether the array ran, half of it did, or none
-#      of it.
+#      task did not make them), then the scorer, which first writes what every run's
+#      selfcheck and realcheck said (`regbench verdict` -> logs/verdicts.tsv), then
+#      reads the records, computes whatever case has none that is still valid, and
+#      writes the tables (`score --verdicts`). The tables are the same whether the array
+#      ran, half of it did, or none of it. Everything here waits (`afterany`) for every
+#      selfcheck and every ladder.
 #
 #   6. with --compute-all, after the scorer: compute-all, the WHOLE pipeline traced per
 #      patient and registration backend (compute_all.sbatch, one Nextflow head job per
@@ -99,17 +104,17 @@
 # benchmark is done: the heads start at once (on their lanes), and the scorer scores the
 # LAST submission into REGBENCH_OUT, as --score-only does. Both need REGBENCH_INPUT.
 #
-# --score-only submits step 5 and nothing before it: no selfcheck, no gate, no
+# --score-only submits step 5 and nothing before it: no selfcheck and no
 # registration. It scores what the LAST submission into REGBENCH_OUT ran or reused
 # (its id is kept in $REGBENCH_OUT/logs/submission; REGBENCH_SUBMISSION names another),
-# with the gate records that submission left. Nothing is run again, and a case whose
+# with the selfcheck records that submission left. Nothing is run again, and a case whose
 # record is still valid is not computed again.
 #
 # Nothing waits on the login node and no job waits on `sbatch --wait`. One kind of job
 # submits jobs: the tile submitter of a run whose registration is several jobs per round.
 #
 # A SECOND SUBMISSION into a REGBENCH_OUT whose earlier jobs are still pending or running
-# is REFUSED (its gate records would replace the ones those jobs read). Wait, cancel them
+# is REFUSED (its stage files and retry plans would replace the ones those jobs read). Wait, cancel them
 # (the refusal prints the line), or use another REGBENCH_OUT. --score-only is refused
 # the same way (it would score, and settle, results whose tasks are still running):
 # REGBENCH_SCORE_WHILE_QUEUED=1 scores anyway. --prepare is not refused.
@@ -191,26 +196,14 @@
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
-#                                     nothing: not for a gate, the ladder or the scorer.
+#                                     nothing: not for a verdict, the ladder or the scorer.
 #                                     With --score-only: the submission to score. An id
 #                                     already used for a submission into REGBENCH_OUT
 #                                     is refused for another one
 #   REGBENCH_SCORE_WHILE_QUEUED=1     --score-only although jobs of an earlier call
 #                                     into REGBENCH_OUT are still pending or running
-#   REGBENCH_SELFCHECK_ADVISORY=1     the selfcheck is advice, not a gate: EVERY run
-#                                     starts whatever its selfcheck says, and the gate
-#                                     record, the end line and the summary keep the
-#                                     verdict. launch.sbatch sets it; unset, a
-#                                     selfcheck that is not ok blocks its run
-#   REGBENCH_ALLOW_INCONSISTENT       run names that start although their selfcheck
-#                                     MEASURED a disagreement (`inconsistent`): the
-#                                     owner's override. The verdict is recorded as it
-#                                     is; a crash or a missing record still blocks
-#   REGBENCH_ALLOW_UNCHECKED          run names that start although their selfcheck ran
-#                                     and could not decide (`not_checked`). Nothing
-#                                     else is let through: not `inconsistent`, not
-#                                     `crashed`, not a flagged realcheck, not a
-#                                     selfcheck that left no record
+#   (the three switches that once let a run start past its selfcheck are gone with the
+#   gate; a call that still exports one is told it is ignored)
 #   REGBENCH_INPUT                    with --inputs, --compute-all, --compute-only: the
 #                                     cohort's samplesheet (the pipeline's --input)
 #   REGBENCH_COMPUTE_LANES (2)        with --compute-all/--compute-only: compute-all heads
@@ -318,6 +311,10 @@ while [ $# -gt 0 ]; do
 done
 extra=("$@")
 [ "$DRY" = 0 ] || DRY=1
+# the switches of the selfcheck gate, which no longer exists: said, and nothing else
+for v in REGBENCH_SELFCHECK_ADVISORY REGBENCH_ALLOW_UNCHECKED REGBENCH_ALLOW_INCONSISTENT; do
+    if [ -n "${!v:-}" ]; then echo "# ignored: $v (the selfcheck no longer gates)"; fi
+done
 
 die() { echo "submit_cohort: $*" >&2; exit 2; }
 # the verdict lines of a preflight's output; none is a legitimate answer (the grep exits 1)
@@ -420,7 +417,7 @@ step_flag="--score-only"
 # unless REGBENCH_SUBMISSION names another.
 if [ "$scoring_earlier" = 1 ]; then
     # The ids the folder's selfcheck records carry, each record PARSED by the reader the
-    # gates use (`regbench submissions`, benchmarks/regbench/ladder.py): one id per line.
+    # verdicts use (`regbench submissions`, benchmarks/regbench/ladder.py): one id per line.
     found="$(regbench_py "$REGBENCH_HEAD_IMAGE" submissions --out "$REGBENCH_OUT" | cut -f1)" \
         || die "$step_flag: cannot read the selfcheck records under $REGBENCH_OUT/logs/selfcheck (python -m benchmarks.regbench submissions). Nothing was submitted."
     if [ -z "${REGBENCH_SUBMISSION:-}" ]; then
@@ -577,7 +574,7 @@ if [ "$DRY" = 1 ]; then
     scratch="$(mktemp -d)"
     scratch_is_temporary=1
 else
-    mkdir -p "$REGBENCH_OUT/logs/gates" "$REGBENCH_OUT/logs/selfcheck"
+    mkdir -p "$REGBENCH_OUT/logs/selfcheck"
     scratch="$REGBENCH_OUT/logs"
     JOBS_FILE="$REGBENCH_OUT/logs/jobs.tsv"
     mkdir -p "$REGBENCH_OUT/logs/submitted"
@@ -589,7 +586,7 @@ else
     [ "$compute_only" = 1 ] && IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.compute.ids"
     export REGBENCH_IDS_FILE="$IDS_FILE"
     # A second submission while jobs of an earlier one are still in the queue: their
-    # tasks read the gate records and the stage files this call would replace. And a
+    # tasks read the stage files and retry plans this call would replace. And a
     # scoring: it would score, and settle, results whose tasks are still running.
     if [ "$prepare" != 1 ] && [ "$preflight_only" != 1 ] && [ -s "$JOBS_FILE" ] \
         && ! { [ "$score_only" = 1 ] && [ "${REGBENCH_SCORE_WHILE_QUEUED:-0}" = 1 ]; }; then
@@ -601,7 +598,7 @@ else
         elif [ -n "$still" ] && [ "$score_only" = 1 ]; then
             die "--score-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). Scoring now would score what is there so far and settle the results of tasks that have not ended, so it is refused. Wait for them; or cancel them:  scancel $still ; or score what is there all the same with REGBENCH_SCORE_WHILE_QUEUED=1. Nothing was submitted."
         elif [ -n "$still" ]; then
-            die "$(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier submission into $REGBENCH_OUT are still pending or running ($still). A second submission would replace the gate records and stage files their tasks read, so it is refused. Wait for them; or cancel them:  scancel $still ; or submit into another REGBENCH_OUT. Nothing was submitted."
+            die "$(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier submission into $REGBENCH_OUT are still pending or running ($still). A second submission would replace the stage files their tasks read, so it is refused. Wait for them; or cancel them:  scancel $still ; or submit into another REGBENCH_OUT. Nothing was submitted."
         fi
     fi
     # An id is one submission's: the stage files, the tile submitters' lists and the job
@@ -637,8 +634,6 @@ for r in $only_runs; do has "$all_names" "$r" || die "--runs: no run named '$r' 
 for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
-for r in ${REGBENCH_ALLOW_UNCHECKED:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_UNCHECKED: no run named '$r'"; done
-for r in ${REGBENCH_ALLOW_INCONSISTENT:-}; do has "$all_names" "$r" || die "REGBENCH_ALLOW_INCONSISTENT: no run named '$r'"; done
 # --score-only: no run is selected, so nothing of steps 1 to 4 is submitted
 if [ "$scoring_earlier" = 1 ]; then
     [ -z "$only_runs" ] || echo "# $step_flag: --runs is not used (the scorer scores every run of the submission)"
@@ -861,7 +856,7 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
     has "$selected" "$name" || continue
     [ "${stages:--}" = - ] && continue
     any_staged=1
-    [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck gate: the launcher sends no first unit ahead for such a run. Nothing was submitted."
+    [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck: the launcher runs no first unit with --realcheck for such a run. Nothing was submitted."
     for stage in ${stages//,/ }; do
         case "$stage" in coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
     done
@@ -941,13 +936,20 @@ if [ "$N_FEEDING" -gt 0 ]; then
     echo "# tile queue: REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX split over $N_FEEDING tile submitter(s) feeding at once ($N_TILE_RUNS run(s) with one, REGBENCH_RUN_LANES=$REGBENCH_RUN_LANES): $STAGE_QUEUE_RUN each"
 fi
 export REGBENCH_STAGE_QUEUE_RUN="$STAGE_QUEUE_RUN"
-# ── 1. selfchecks: the runs that gate a selected run, and the runs they are anchored on
+# the runs this submission selected, for the scorer's `regbench verdict`: one line,
+# beside the submission's job ids (score_cohort.sbatch reads it)
+if [ "$DRY" != 1 ] && [ -n "$selected" ]; then
+    echo "${selected# }" > "$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.runs" \
+        || die "cannot write $REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.runs. Nothing was submitted."
+fi
+# ── 1. selfchecks: the runs that check a selected run, and the runs they are anchored on.
+# REPORTED, NEVER A GATE: no ladder below waits for one.
 needed=""
-while IFS=$'\t' read -r name _ _ _ _ _ _ after gated_by _; do
+while IFS=$'\t' read -r name _ _ _ _ _ _ after checked_by _; do
     has "$selected" "$name" || continue
-    has "$needed" "$gated_by" || needed="$needed $gated_by"
+    has "$needed" "$checked_by" || needed="$needed $checked_by"
 done < "$table"
-# a gating run that reads another's results needs that one's selfcheck too
+# a checking run that reads another's results needs that one's selfcheck too
 while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     has "$needed" "$name" || continue
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
@@ -985,10 +987,9 @@ plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
     fi
 }
 # plan_watch <job prefix> <first job id> <first job name> <array range|-> <dependencies
-# of the first job> [<run whose gate it obeys|->]: the chain's watcher; sets JOB_ID. It
-# has the first job's own dependencies too, so a chain a gate stops has no watcher
-# either. A range of `-` is a chain of single jobs (a selfcheck), and a run of `-` a
-# chain that runs BEFORE its run's gate.
+# of the first job> [<run|->]: the chain's watcher; sets JOB_ID. It has the first job's
+# own dependencies too. A range of `-` is a chain of single jobs (a selfcheck), and a
+# run of `-` a selfcheck's chain.
 plan_watch() {
     local dep="afterany:$2"
     [ -z "$5" ] || dep="$5,$dep"
@@ -1004,8 +1005,6 @@ retry_root="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION"
 [ "$DRY" = 1 ] && retry_root="$scratch/retry"
 mkdir -p "$retry_root" 2>/dev/null && [ -w "$retry_root" ] \
     || die "cannot write the retry plans to $retry_root. Nothing was submitted."
-# read here, before the first sbatch, like every other variable of the caller
-ADVISORY="${REGBENCH_SELFCHECK_ADVISORY:-0}"
 sc_time="$(limit "$sc_s")"
 while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     has "$needed" "$name" || continue
@@ -1013,14 +1012,15 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     [ "$gpu" = 1 ] && gres=(${GPU_ARGS[@]+"${GPU_ARGS[@]}"})
     base="" anchor=-
     if [ "$after" != - ]; then
+        # it reads the anchor's selfcheck work (`--m0-from`): after it, WHATEVER the
+        # anchor's selfcheck said (afterany): one selfcheck's verdict never stops another
         anchor="$after"
         last="SC_LAST_$after"
-        base="afterok:${!last}"
+        base="afterany:${!last}"
     fi
     # the first rung is submitted; the others are steps of the selfcheck's watcher,
     # submitted only when the attempt before did not end ok (and such a job still runs
-    # the selfcheck only when that attempt ended for memory). The watcher ends ok only
-    # when the selfcheck did: a run anchored on this one waits for it with `afterok`.
+    # the selfcheck only when that attempt ended for memory).
     attempt=0 first_id="" first_name=""
     plan_open "rb-sc-$name"
     for gb in $SELFCHECK_RUNGS_GB; do
@@ -1044,24 +1044,16 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     printf -v "SC_LAST_$name" '%s' "$JOB_ID"
 done < "$table"
 
-# ── 2. one gate per run ───────────────────────────────────────────────────────────────
+# the small jobs: the settle job
 small=(--cpus-per-task=1 --mem=4G --time=0-01:00:00)
-while IFS=$'\t' read -r name _ _ _ _ _ _ _ gated_by _; do
-    has "$selected" "$name" || continue
-    allowed=0
-    has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
-    has "${REGBENCH_ALLOW_INCONSISTENT:-}" "$name" && allowed=2
-    [ "$ADVISORY" = 1 ] && allowed=3
-    # an earlier submission's verdict must not be what a task of this one finds
-    [ "$DRY" = 1 ] || rm -f "$REGBENCH_OUT/logs/gates/$name.tsv" "$REGBENCH_OUT/logs/gates/$name.realcheck.tsv"
-    last="SC_LAST_$gated_by"
-    submit "rb-gate-$name" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:${!last}" "${small[@]}" \
-        "$HERE/gate.sbatch" selfcheck "$name" "$gated_by" "$allowed"
-    printf -v "GATE_$name" '%s' "$JOB_ID"
-done < "$table"
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
-# ladder <job prefix> <array range> <realcheck 0|1> <dependencies> <time>: the first
+# deps_and <a> <b>: two --dependency lists joined with `,` (all of them), either empty
+deps_and() {
+    if [ -z "$1" ]; then echo "$2"; elif [ -z "$2" ]; then echo "$1"; else echo "$1,$2"; fi
+}
+
+# ladder <job prefix> <array range> <realcheck 0|1> <dependencies|""> <time>: the first
 # rung's array, then the plan of the others (per rung the attempt, then the same rung
 # again for a unit the scheduler lost) and the watcher; sets LADDER_LAST to the watcher.
 # Reads the current row's variables. Every later task is given the ids of all the
@@ -1091,7 +1083,7 @@ ladder() {
             fi
             if [ "$task" = first ]; then
                 # the one array of the chain that is submitted here
-                submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$base" \
+                submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" ${base:+--dependency="$base"} \
                     --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
                     --time="$time" ${gres[@]+"${gres[@]}"} \
                     "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
@@ -1140,7 +1132,7 @@ stage_chain() {
     for attempt in 1 2 3 4; do
         alloc="ALLOC_${stage}_$attempt"; read -r cpus gb time <<< "${!alloc}"
         if [ "$attempt" = 1 ]; then
-            submit "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" --dependency="$dep" \
+            submit "rb-$name-$ds-$stage-a$attempt" "${COMMON[@]}" "$LOG_ARRAY" ${dep:+--dependency="$dep"} \
                 --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" --time="$time" \
                 "$HERE/stage.sbatch" "$name" "$method" "$label" "$opts" "$image" "$ds" "$stage" \
                 "$attempt" "$gb" "$time"
@@ -1166,7 +1158,7 @@ staged() {
         case "$stage" in
             coarse|solve)
                 stage_chain "$stage" "0-$((n_rounds - 1))" "$dep"
-                dep="$base,afterany:$JOB_ID" ;;
+                dep="$(deps_and "$base" "afterany:$JOB_ID")" ;;
             tile)
                 per_attempt=()
                 for attempt in 1 2 3 4; do
@@ -1174,11 +1166,11 @@ staged() {
                     per_attempt+=("$cpus:$gb:$time")
                 done
                 for link in $(seq 1 "$REGBENCH_STAGE_FEEDERS"); do
-                    submit "rb-$name-$ds-feed-$link" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
+                    submit "rb-$name-$ds-feed-$link" "${COMMON[@]}" "$LOG_ONE" ${dep:+--dependency="$dep"} \
                         --cpus-per-task=1 --mem=1G --time="$feed_time" "$HERE/feed_tiles.sbatch" \
                         "$name" "$method" "$label" "$opts" "$image" "$ds" "$layout" \
                         "$n_rounds" "$n_tiles" "$link" "${per_attempt[@]}"
-                    dep="$base,afterany:$JOB_ID"
+                    dep="$(deps_and "$base" "afterany:$JOB_ID")"
                 done
                 N_FED=$((N_FED + n_tiles))
                 has "$FED_RUNS" "$name" || FED_RUNS="$FED_RUNS $name" ;;
@@ -1203,12 +1195,12 @@ for ds in $sized; do
         else
             n="${!n_cases}"; time="$(limit "$round_s")"
         fi
-        gate="GATE_$name"
-        base="afterok:${!gate}"
+        # no selfcheck is waited for: reported, never a gate
+        base=""
         if [ "$after" != - ]; then
             last="LAST_${ds}_$after"
             if [ -n "${!last:-}" ]; then
-                base="$base,afterany:${!last}"
+                base="$(deps_and "$base" "afterany:${!last}")"
             else
                 echo "# $name reads the results of $after, which is not submitted here: they must already be under $REGBENCH_OUT"
             fi
@@ -1217,7 +1209,7 @@ for ds in $sized; do
         # the same run starts on the next dataset
         if [ -n "$prev_ds" ]; then
             last="LAST_${prev_ds}_$name"
-            [ -n "${!last:-}" ] && base="$base,afterany:${!last}"
+            [ -n "${!last:-}" ] && base="$(deps_and "$base" "afterany:${!last}")"
         fi
         # at most REGBENCH_RUN_LANES runs at once: the selected runs are dealt onto that
         # many lanes in the order of the run list, and a run starts only when the run
@@ -1229,7 +1221,7 @@ for ds in $sized; do
                 n_laned=$((n_laned + 1))
             fi
             lane="LANE_LAST_${!lane}"
-            [ -n "${!lane:-}" ] && base="$base,afterany:${!lane}"
+            [ -n "${!lane:-}" ] && base="$(deps_and "$base" "afterany:${!lane}")"
         fi
         if [ "${stages:--}" != - ]; then
             staged "$base"
@@ -1241,30 +1233,23 @@ for ds in $sized; do
             fi
             continue
         fi
-        start=0
-        if [ "${realcheck:--}" != - ]; then
-            real="REAL_$name"
-            if [ "$ds" = "$first_dataset" ]; then
-                allowed=0
-                has "${REGBENCH_ALLOW_UNCHECKED:-}" "$name" && allowed=1
-                ladder "rb-$name-$ds-first" "0-0" 1 "$base" "$time"
-                finals="$finals $LADDER_LAST"
-                submit "rb-realgate-$name" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$LADDER_LAST" \
-                    "${small[@]}" "$HERE/gate.sbatch" realcheck "$name" "$method" "$label" \
-                    "$ds" "$realcheck" "$allowed"
-                printf -v "$real" '%s' "$JOB_ID"
-                start=1
-            fi
-            base="$base,afterok:${!real}"
+        # a run with a realcheck: its first unit of the first dataset runs with
+        # --realcheck in a ladder of its own, SUBMITTED BESIDE the rest of the run, which
+        # does not wait for it (reported, never a gate). What waits for the run waits for
+        # both (LAST_ holds both watchers).
+        start=0 ends=""
+        if [ "${realcheck:--}" != - ] && [ "$ds" = "$first_dataset" ]; then
+            ladder "rb-$name-$ds-first" "0-0" 1 "$base" "$time"
+            finals="$finals $LADDER_LAST"
+            ends="$LADDER_LAST"
+            start=1
         fi
         if [ "$n" -gt "$start" ]; then
             ladder "rb-$name-$ds" "$start-$((n - 1))" 0 "$base" "$time"
-            printf -v "LAST_${ds}_$name" '%s' "$LADDER_LAST"
             finals="$finals $LADDER_LAST"
-        elif [ "$start" = 1 ]; then
-            real="REAL_$name"
-            printf -v "LAST_${ds}_$name" '%s' "${!real}"
+            ends="${ends:+$ends:}$LADDER_LAST"
         fi
+        [ -n "$ends" ] && printf -v "LAST_${ds}_$name" '%s' "$ends"
         last="LAST_${ds}_$name"
         if [ "$REGBENCH_RUN_LANES" -gt 0 ] && [ -n "${!last:-}" ]; then
             lane="LANE_OF_$name"
@@ -1279,11 +1264,11 @@ SCORER_JOB=""
 if [ "$compute_only" != 1 ]; then
 dep=""
 for j in $finals; do dep="${dep:+$dep:}$j"; done
-while IFS=$'\t' read -r name _; do
-    has "$selected" "$name" || continue
-    gate="GATE_$name"
-    dep="${dep:+$dep:}${!gate}"
-done < "$table"
+# and every selfcheck (its watcher): the scorer reports their verdicts
+for r in $needed; do
+    last="SC_LAST_$r"
+    [ -n "${!last:-}" ] && dep="${dep:+$dep:}${!last}"
+done
 # after everything this call submitted (--score-only submitted nothing before this)
 after_all=()
 [ -n "$dep" ] && after_all=(--dependency="afterany:$dep")
@@ -1360,10 +1345,7 @@ else
     echo "# submission  -> $REGBENCH_SUBMISSION (a unit already ok under $REGBENCH_OUT is reused$([ "$REGBENCH_FORCE" = 1 ] && echo ': NO, REGBENCH_FORCE=1 runs everything again'))"
 fi
 echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
-echo "# gates       -> $REGBENCH_OUT/logs/gates/<run>.tsv (run, status, rows dropped, blocked)"
-echo "# results     -> $REGBENCH_OUT/tables/summary.md: it names every blocked run and dropped row"
-[ -n "${REGBENCH_ALLOW_UNCHECKED:-}" ] && echo "# allowed to start unchecked: $REGBENCH_ALLOW_UNCHECKED"
-[ "$ADVISORY" = 1 ] && echo "# the selfchecks are ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): no run is blocked by one; each verdict is in $REGBENCH_OUT/logs/gates/<run>.tsv and in the summary"
-[ -n "${REGBENCH_ALLOW_INCONSISTENT:-}" ] && echo "# OVERRIDE: allowed to start although the selfcheck is inconsistent: $REGBENCH_ALLOW_INCONSISTENT (the gate record and the summary keep the verdict)"
+echo "# verdicts    -> $REGBENCH_OUT/logs/verdicts.tsv (written by the scorer: what every run's selfcheck and realcheck said; reported, never a gate)"
+echo "# results     -> $REGBENCH_OUT/tables/summary.md: it says what every selfcheck said, beside rows that are all scored"
 FINISHED=1
 exit 0

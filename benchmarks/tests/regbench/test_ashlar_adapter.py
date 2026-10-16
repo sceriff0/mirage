@@ -352,7 +352,7 @@ def test_the_map_follows_the_mosaic_at_ashlars_own_tile_size(tmp_path):
     slivers: `test_sliver_tiles_on_both_axes`.)"""
     assert (am.TILE, retile._stride(am.TILE, am.OVERLAP)) == (1950, 1755)
     rec, v = _selfcheck(tmp_path, [(sc.LARGE_HW, None)])
-    assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
+    assert rec["status"] == sc.OK and not rec["not_ok"], v
     assert v["direction"] == MOV_TO_REF and v["n_masked"] > 0
     assert v["n_found"] == v["n_dots"] > 300 and v["err_px_p95"] < 0.2
     # both comparisons read ASHLAR's own file, not the per-cycle copy
@@ -422,7 +422,7 @@ def test_sliver_tiles_on_both_axes(tmp_path, hw):
     assert last_h < am.TILE // 4 and last_w < am.TILE // 2  # slivers
 
     rec, v = _selfcheck(tmp_path, [(hw, None)], keep_work=True)
-    assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
+    assert rec["status"] == sc.OK and not rec["not_ok"], v
     assert v["n_found"] == v["n_dots"] > 50 and v["err_px_p95"] < 0.2
     native, ref = v["native"], v["reference"]
     assert ref["status"] == sc.OK and ref["n_found"] == ref["n_dots"] > 50
@@ -658,7 +658,7 @@ def test_a_wrong_map_is_inconsistent(tmp_path, small, monkeypatch, mutate, where
     """Each of these is a mistake the adapter could contain; the selfcheck must object."""
     mutate(monkeypatch)
     rec, v = _selfcheck(tmp_path, small)
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"], v
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"], v
     if where == "reference":
         assert v["reference"]["status"] == sc.INCONSISTENT
         assert "the reference as redrawn" in v["failed"]
@@ -911,7 +911,7 @@ def _patient(small):
 
 def test_a_patient_of_three_slides_is_one_ashlar_command(tmp_path, small):
     rec = sc.run("ashlar", tmp_path, mask="overlap", sizes=_patient(small))
-    assert rec["status"] == sc.OK and not rec["blocks_the_method"], rec["pairs"]
+    assert rec["status"] == sc.OK and not rec["not_ok"], rec["pairs"]
     h, w = SMALL
     assert [p["case_id"] for p in rec["pairs"]] == [
         f"patient_{h}x{w}_round1",
@@ -956,7 +956,7 @@ def test_a_second_cycle_drawn_elsewhere_than_its_map_is_inconsistent(
     rec = sc.run("ashlar", tmp_path, mask="overlap", sizes=_patient(small))
     assert len(seen) == 2
     assert [p["status"] for p in rec["pairs"]] == [sc.OK, sc.INCONSISTENT]
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"]
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"]
 
 
 def test_the_anchored_row_reads_each_rounds_matrix_of_the_patient(tmp_path, small):

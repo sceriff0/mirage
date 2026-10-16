@@ -31,7 +31,8 @@ SCRIPT = SLURM / "submit_cohort.sh"
 GPU = "--gres=gpu:nvidia_h200:1"
 # the cohort's list: its regime's runs (the bf-only STARE runs are not submitted for it)
 RUNS = {variants.run_name(r): r for r in variants.runs_for(None)}
-GATING = sorted({variants.gated_by(n) for n in RUNS})
+# the runs whose selfcheck checks a run (reported, never a gate)
+CHECKERS = sorted({variants.checked_by(n) for n in RUNS})
 # the runs whose registration is several jobs per round: their last job (the writer) has
 # the four attempts of the pipeline's allocation for STITCH where the others have the
 # memory ladder
@@ -44,19 +45,19 @@ STAGED_ALL = {
 }
 FEEDERS = 2  # tile submitters chained per staged run and dataset
 # the default submission on the fixture (the cohort, `multiplex`),
-# derived from the run list: per run its gate and, per dataset, the ladder's first array and
-# its watcher; per distinct gate a selfcheck and its watcher; per run with a realcheck its
-# unit sent ahead (3 jobs); the settle job, an array per dataset, tissue and the scorer; and
+# derived from the run list: per run and dataset the ladder's first array and its watcher;
+# per distinct checker a selfcheck and its watcher; per run with a realcheck the ladder of
+# its first unit (2 jobs, beside the rest); the settle job, an array per dataset, tissue
+# and the scorer; and
 # per staged run the stages' extra jobs per dataset (two feeders, the last job's pair, and
 # the preprocessing's pair where it has one)
 COHORT_DATASETS = ("multiplex",)
 MORE = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
-N_REALCHECKED = len([n for n in RUNS if variants.realcheck_gate(n)])
+N_REALCHECKED = len([n for n in RUNS if variants.realcheck_row(n)])
 N_JOBS = (
-    len(RUNS)
-    + 2 * len(GATING)
+    2 * len(CHECKERS)
     + len(RUNS) * 2 * len(COHORT_DATASETS)
-    + 3 * N_REALCHECKED
+    + 2 * N_REALCHECKED
     + 1
     + len(COHORT_DATASETS)
     + 2
@@ -284,7 +285,7 @@ def last_job(run, dataset="multiplex"):
 
 
 def launch_jobs(spec):
-    """How many jobs the launcher submits for one run on one dataset, after its gate:
+    """How many jobs the launcher submits for one run on one dataset:
     the ladder's first array and its watcher, or for a run in several jobs per round
     the first attempt and the watcher of each stage that is an array over the rounds,
     its tile submitters, and the last job's first array and watcher. No retry is
@@ -490,10 +491,10 @@ def test_the_script_names_no_method():
     """Every run comes from `python -m benchmarks.regbench runs`."""
     shell = [SCRIPT, *SLURM.glob("*.sbatch")]
     shell = [p for p in shell if p.name in (
-        "submit_cohort.sh", "run_rung.sbatch", "selfcheck.sbatch", "gate.sbatch",
+        "submit_cohort.sh", "run_rung.sbatch", "selfcheck.sbatch",
         "score_cohort.sbatch",
     )]  # fmt: skip
-    assert len(shell) == 5
+    assert len(shell) == 4
     names = {r.method for r in variants.RUNS} | set(RUNS)
     for path in shell:
         code = code_of(path)
@@ -506,8 +507,9 @@ def test_every_run_of_the_list_is_submitted_and_nothing_else(dry):
     jobs, _, _ = dry
     laddered = {j.args[0] for j in jobs.values() if j.script == "run_rung.sbatch"}
     assert laddered == set(RUNS) and len(RUNS) == len(variants.runs_for(None))
-    gated = {j.args[1] for j in jobs.values() if j.args[:1] == ["selfcheck"]}
-    assert gated == set(RUNS)
+    checked = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
+    assert checked == set(CHECKERS)
+    assert not [j for j in jobs.values() if j.script == "gate.sbatch"]
 
 
 def test_a_run_the_list_leaves_out_is_not_submitted(site, monkeypatch, tmp_path):
@@ -598,7 +600,7 @@ def test_every_rung_is_tried_again_once_at_the_same_memory(dry):
         watcher = jobs[last_job(run)]
         assert watcher.script == "retry.sbatch" and watcher.opt("--array") is None
         assert ("afterany", f"<{seq[0].name}>") in watcher.deps
-        # a chain a gate stops has no watcher either
+        # the watcher has the first array's own dependencies too
         assert {d for d in seq[0].deps} <= watcher.deps
         assert (watcher.opt("--cpus-per-task"), watcher.opt("--mem")) == ("1", "1G")
         assert watcher.args[0] == run and watcher.args[2:4] == [
@@ -682,10 +684,10 @@ def test_pair_runs_are_arrays_over_cases_and_patient_runs_over_patients(dry):
     jobs, _, _ = dry
     for run, spec in RUNS.items():
         per_patient = variants.scope(spec.method) == "group"
-        gated = variants.realcheck_gate(run) is not None
+        real = variants.realcheck_row(run) is not None
         first = rungs(jobs, run)[0].opt("--array")
         want = {(True, False): "0-1", (True, True): "1-1", (False, False): "0-3"}
-        assert first == want[(per_patient, gated)] + "%20", run
+        assert first == want[(per_patient, real)] + "%20", run
 
 
 def test_arrays_are_throttled(site):
@@ -694,7 +696,7 @@ def test_arrays_are_throttled(site):
     assert arrays and all(j.opt("--array").endswith("%7") for j in arrays)
 
 
-# ── the selfcheck, and the gate ───────────────────────────────────────────────
+# ── the selfcheck: reported, never a gate ───────────────────────────────────────────────
 def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
     """REGBENCH_RUN_LANES=N: the runs are dealt onto N lanes in the order of the list and
     a run starts only after the run before it on its lane has ended, so at most N are in
@@ -727,13 +729,13 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
             assert not (waits(head(plain, variants.run_name(r))) & (arrays - own)), r
 
 
-def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
+def test_every_checking_run_has_a_selfcheck_that_climbs_in_memory(dry):
     jobs, _, _ = dry
     checks = [j for j in jobs.values() if j.script == "selfcheck.sbatch"]
-    assert {j.args[0] for j in checks} == set(GATING) and set(GATING) <= set(RUNS)
-    # one selfcheck per distinct gate, and a gate stands behind its own selfcheck
-    assert all(variants.gated_by(g) == g for g in GATING)
-    for run in GATING:
+    assert {j.args[0] for j in checks} == set(CHECKERS) and set(CHECKERS) <= set(RUNS)
+    # one selfcheck per distinct checker, and a checker is checked by its own selfcheck
+    assert all(variants.checked_by(g) == g for g in CHECKERS)
+    for run in CHECKERS:
         got = [_any(jobs, f"rb-sc-{run}-{gb}g") for gb in ladder.SELFCHECK_RUNGS_GB]
         # the first is submitted; the others are steps of the selfcheck's watcher
         assert [j.name in jobs for j in got] == [True, False, False], run
@@ -741,7 +743,7 @@ def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
         watcher = jobs[f"rb-sc-{run}-retry"]
         assert watcher.script == "retry.sbatch"
         assert ("afterany", f"<{got[0].name}>") in watcher.deps
-        # no run's gate to obey yet, and a chain of single jobs, not arrays
+        # a selfcheck's chain (no run of its own), of single jobs, not arrays
         assert watcher.args[0] == "-" and watcher.args[4] == "-"
         assert [j.opt("--mem") for j in got] == ["64G", "256G", "512G"], run
         assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 3, run
@@ -756,7 +758,7 @@ def test_every_gating_run_has_a_selfcheck_that_climbs_in_memory(dry):
 
 def test_each_selfcheck_is_given_its_runs_own_options_and_mask(dry):
     jobs, _, _ = dry
-    for run in GATING:
+    for run in CHECKERS:
         spec, job = RUNS[run], jobs[f"rb-sc-{run}-64g"]
         name, method, label, opts, image, gpu, mask, anchor = job.args[:8]
         assert (name, method, label) == (run, spec.method, spec.label or "-")
@@ -768,76 +770,102 @@ def test_each_selfcheck_is_given_its_runs_own_options_and_mask(dry):
     assert jobs["rb-sc-palom-64g"].args[6] == "seams"
 
 
-def test_an_anchored_selfcheck_waits_for_the_anchors_and_reads_its_work(dry):
+def test_an_anchored_selfcheck_waits_afterany(dry):
+    """It reads the anchor's selfcheck work (`--m0-from`), so it waits for it: with
+    `afterany`, whatever the anchor's selfcheck said. One selfcheck's verdict never
+    stops another (it did with `afterok`: a failed STARE selfcheck left affine_ashlar's
+    pending for ever)."""
     jobs, _, _ = dry
     job = jobs["rb-sc-affine_ashlar-64g"]
     assert job.args[7] == "stare"
-    assert ("afterok", "<rb-sc-stare-retry>") in job.deps
+    assert job.deps == {("afterany", "<rb-sc-stare-retry>")}
+    # its watcher has the same dependency, and so does nothing else of a selfcheck's
+    assert ("afterany", "<rb-sc-stare-retry>") in jobs["rb-sc-affine_ashlar-retry"].deps
+    for name, j in jobs.items():
+        if name.startswith("rb-sc-"):
+            assert {k for k, _ in j.deps} <= {"afterany"}, name
     code = code_of(SLURM / "selfcheck.sbatch")
     assert '[ "$anchor" != - ] && args+=(--m0-from "$root/$anchor")' in code
 
 
-def test_every_run_waits_for_its_own_gate_and_the_gate_for_the_selfcheck(dry):
+def test_no_run_waits_for_a_selfcheck(dry):
+    """The selfcheck is REPORTED, NEVER A GATE: no gate job exists, no ladder, stage or
+    tile job waits for a selfcheck, and nothing in the whole graph waits `afterok`."""
     jobs, _, _ = dry
-    for run in RUNS:
-        gate = jobs[f"rb-gate-{run}"]
-        gating = variants.gated_by(run)
-        assert gate.script == "gate.sbatch"
-        assert gate.args == ["selfcheck", run, gating, "0"]
-        assert gate.deps == {("afterany", f"<rb-sc-{gating}-retry>")}
-        mine = [
-            j
-            for j in jobs.values()
-            if j.script == "run_rung.sbatch" and j.args[0] == run
-        ]
-        assert len(mine) >= 1  # the first rung of the cohort
-        for job in mine:  # every submitted array (a later rung is the watcher's)
-            assert ("afterok", f"<rb-gate-{run}>") in job.deps, job.name
-            others = {n for k, n in job.deps if "gate" in n and k == "afterok"}
-            assert others <= {f"<rb-gate-{run}>", f"<rb-realgate-{run}>"}, job.name
-    # every other ASHLAR cell stands behind the selfcheck of the run named for its affine
-    # level, and every generated STARE cell behind `stare`'s
+    assert not [n for n in jobs if n.startswith(("rb-gate-", "rb-realgate-"))]
+    assert not [n for n in getattr(jobs, "later", {}) if "gate" in n]
+    for name, job in jobs.items():
+        assert "afterok" not in {k for k, _ in job.deps}, name
+        if job.script in ("run_rung.sbatch", "stage.sbatch", "feed_tiles.sbatch") or (
+            job.script == "retry.sbatch" and not name.startswith("rb-sc-")
+        ):
+            assert not [n for _, n in job.deps if n.startswith("<rb-sc-")], name
+    # a run that reads no other run's results and is on no lane waits for nothing
+    for run, spec in RUNS.items():
+        if spec.after is None and run not in STAGED:
+            assert rungs(jobs, run)[0].deps == set(), run
+    # every other ASHLAR cell is checked by the selfcheck of the run named for its
+    # affine level, and every generated STARE cell by `stare`'s
     from benchmarks.regbench.methods import ashlar as ashlar_adapter
 
     for name, (affine, _, _) in ashlar_adapter.ASHLAR_CELLS.items():
         want = "affine_ashlar" if affine == "stare" else "ashlar"
-        assert jobs[f"rb-gate-{name}"].args[2] == want
+        assert variants.checked_by(name) == want
     for name in RUNS:
         if RUNS[name].method == "stare":
-            assert jobs[f"rb-gate-{name}"].args[2] == "stare"
+            assert variants.checked_by(name) == "stare"
 
 
-def test_a_failed_gate_blocks_that_run_only(dry):
-    """No job of one run waits `afterok` on another run's gate."""
-    jobs, _, _ = dry
-    for job in jobs.values():
-        if job.script != "run_rung.sbatch":
-            continue
-        for kind, name in job.deps:
-            if kind == "afterok":
-                assert name.strip("<>").split("gate-")[-1] == job.args[0], job.line
-    assert '[ "$allowed" = 1 ] && args+=(--allow-unchecked)' in code_of(
-        SLURM / "gate.sbatch"
-    )
-    # and the task itself refuses, should the scheduler let it through
-    assert 'if [ "$blocked" != 0 ]; then' in code_of(SLURM / "run_rung.sbatch")
+def test_a_failed_selfcheck_starts_the_run_and_is_in_the_verdicts(
+    tmp_path, monkeypatch
+):
+    """The tasks of a run never read a verdict: with a selfcheck record that says
+    inconsistent beside it, a ladder's watcher still submits the retries its units
+    need. And `regbench verdict` reports the record."""
+    from benchmarks.regbench import cli
 
-
-def test_an_allowed_run_is_told_so_and_no_other(site):
-    done, _, _ = launch(
-        site, env={"REGBENCH_ALLOW_UNCHECKED": "valis120 palom"}, log="allow"
-    )
-    jobs = jobs_of(done)
-    allowed = {
-        j.args[1]
-        for j in jobs.values()
-        if j.args[:1] == ["selfcheck"] and j.args[3] == "1"
+    for name in (
+        "run_rung.sbatch",
+        "stage.sbatch",
+        "retry.sbatch",
+        "feed_tiles.sbatch",
+    ):
+        code = code_of(SLURM / name)
+        assert "logs/gates" not in code and "blocked" not in code, name
+    ends = {
+        0: "REGBENCH_END kind=run status=ok cause= whose=",
+        1: "REGBENCH_END kind=run status=failed cause=oom whose=method",
     }
-    assert allowed == {"valis120", "palom"}
-    assert "allowed to start unchecked: valis120 palom" in done.stdout
-    bad, _, _ = launch(site, env={"REGBENCH_ALLOW_UNCHECKED": "valis"}, log="allowbad")
-    assert bad.returncode == 2 and "no run named 'valis'" in bad.stderr
-    assert not _sbatch_lines(bad.stdout)
+    out = tmp_path / "out"
+    rec = out / "logs" / "selfcheck" / "stare" / "selfcheck.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(
+        json.dumps({"variants": {"stare_rigid": "ok", "stare": "inconsistent"}})
+    )
+    done, sent, _ = _watch(tmp_path, ends, STEPS, range_="0-1")
+    assert done.returncode == 0, done.stdout + done.stderr
+    # the unit that ran out of memory climbs, as it would without any selfcheck
+    assert [line.split()[1] for line in sent] == [
+        "--job-name=rb-x-64g",
+        "--job-name=rb-x-64g-again",
+    ]
+    assert "blocked" not in done.stdout
+    monkeypatch.delenv("REGBENCH_SUBMISSION", raising=False)
+    assert cli.main(["verdict", "--out", str(out), "--runs", "stare"]) == 0
+    lines = (out / "logs" / "verdicts.tsv").read_text().splitlines()
+    assert lines[1].split("\t")[:3] == ["stare", "selfcheck", "inconsistent"]
+
+
+def test_the_old_gate_switches_are_said_to_be_ignored(site, dry):
+    env = {
+        "REGBENCH_SELFCHECK_ADVISORY": "1",
+        "REGBENCH_ALLOW_UNCHECKED": "valis120 palom",
+        "REGBENCH_ALLOW_INCONSISTENT": "nope",  # once refused as no run's name
+    }
+    done, _, _ = launch(site, env=env, log="ignored")
+    for var in env:
+        assert f"# ignored: {var} (the selfcheck no longer gates)" in done.stdout
+    assert sorted(jobs_of(done)) == sorted(dry[0])  # and nothing else changes
 
 
 def test_every_dependent_job_is_killed_on_an_invalid_dependency(dry):
@@ -876,12 +904,10 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
     _, done, _ = dry
     order = [Job(ln).name for ln in _sbatch_lines(done.stdout)]
     last_selfcheck = max(i for i, n in enumerate(order) if n.startswith("rb-sc-"))
-    first_gate = min(i for i, n in enumerate(order) if n.startswith("rb-gate-"))
-    last_gate = max(i for i, n in enumerate(order) if n.startswith("rb-gate-"))
     first_array = min(
         i for i, n in enumerate(order) if re.search(r"-\d+g$", n) and "-sc-" not in n
     )
-    assert last_selfcheck < first_gate <= last_gate < first_array
+    assert last_selfcheck < first_array
     assert order[-2:] == ["rb-tissue", "rb-score"]
     # settle, then the case arrays, then tissue, then the tables
     assert order[-4:-2] == ["rb-settle", "rb-score-case-multiplex"]
@@ -895,8 +921,8 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
 
 def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     """`regbench settle` rewrites the run.json of a result the scheduler ended. It is a
-    job of its own that waits for every registration and every gate, and every scoring
-    job waits for it: no case is scored from a result that is about to change."""
+    job of its own that waits for every registration and every selfcheck, and every
+    scoring job waits for it: no case is scored from a result that is about to change."""
     jobs, _, _ = dry
     settle = jobs["rb-settle"]
     assert settle.script == "score_cohort.sbatch" and settle.args == ["settle"]
@@ -904,7 +930,8 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     assert {k for k, _ in settle.deps} == {"afterany"}  # whatever became of them
     waited = {n.strip("<>") for _, n in settle.deps}
     for run in RUNS:
-        assert f"rb-gate-{run}" in waited
+        # the scorer reports every selfcheck's verdict: it waits for each of them
+        assert f"rb-sc-{variants.checked_by(run)}-retry" in waited
         for dataset in COHORT_DATASETS:
             assert last_job(run, dataset) in waited, (run, dataset)
     # every array of the per-case scoring waits for it, and for nothing else directly
@@ -917,7 +944,7 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     for name in ("rb-tissue", "rb-score"):
         assert {n.strip("<>") for _, n in jobs[name].deps} <= after | {"rb-tissue"}
         assert {n.strip("<>") for _, n in jobs[name].deps} >= {j.name for j in arrays}
-    # no job that registers, checks or gates anything waits for the settle job
+    # no job that registers or checks anything waits for the settle job
     for name, job in jobs.items():
         if name not in ("rb-tissue", "rb-score") and job not in arrays:
             assert ("afterany", "<rb-settle>") not in job.deps, name
@@ -964,14 +991,35 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     }
     assert tissue.deps == {("afterany", "<rb-score-case-multiplex>")}
     code = code_of(SLURM / "score_cohort.sbatch")
-    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 5
-    # only what this submission ran or reused is scored
+    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 6
+    # only what this submission ran or reused is scored, and nothing is dropped
     assert 'shared+=(--submission "$REGBENCH_SUBMISSION")' in code
-    assert 'shared+=(--drop "$v")' in code and '--gates "$gates"' in code
+    assert "--drop" not in code and "--gates" not in code
     assert "pipeline" not in code.lower()  # no cost is read from another run
 
 
 # ── one scoring task per case, then the tables ────────────────────────────────
+def test_the_scorer_runs_verdict_before_score():
+    """The `score` kind first writes what every run's selfcheck and realcheck said
+    (`regbench verdict`, always exit 0), then scores with `--verdicts` that file."""
+    code = code_of(SLURM / "score_cohort.sbatch")
+    scorer = code[code.index("if already_settled; then") :]
+    verdict = scorer.index('regbench_py "$REGBENCH_SCORER_IMAGE" "${verdict[@]}"')
+    score = scorer.index('regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"')
+    assert verdict < score
+    assert 'verdict=(verdict --out "$REGBENCH_OUT")' in scorer
+    assert 'verdicts="$REGBENCH_OUT/logs/verdicts.tsv"' in code
+    assert 'args+=(--verdicts "$verdicts")' in scorer[verdict:score]
+    # the runs of the submission, from the file the launcher left beside its job ids
+    assert '.runs"' in scorer and '--runs "$(head -n 1 "$runs_file")"' in scorer
+    assert ".runs" in code_of(SCRIPT)
+    # a case task gets no drop list and no verdict: its record does not rest on them
+    case = code[
+        code.index('if [ "$kind" = case ]') : code.index('if [ "$kind" = tissue ]')
+    ]
+    assert "verdict" not in case and "--drop" not in case
+
+
 def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     """One array per dataset, a task per case; it waits for the settle job (and so for
     everything before it), and the scorer waits for it whatever becomes of it."""
@@ -1005,10 +1053,9 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
         len(jobs)
         == N_JOBS
         == (
-            len(RUNS)
-            + 2 * len(GATING)
+            2 * len(CHECKERS)
             + len(RUNS) * 2 * len(sizes)
-            + 3 * N_REALCHECKED
+            + 2 * N_REALCHECKED
             + 1
             + len(sizes)
             + 2
@@ -1036,8 +1083,8 @@ def test_the_case_arrays_have_their_own_allocation_and_are_throttled(site):
 
 
 def test_the_case_task_and_the_scorer_are_told_the_same_things():
-    """A case's record is reused only by a scorer given the same submission and the same
-    dropped rows: both read them from ONE place in the batch script."""
+    """A case's record is reused only by a scorer given the same submission: both read
+    it from ONE place in the batch script."""
     code = code_of(SLURM / "score_cohort.sbatch")
     assert code.count("shared_args\n") == 2  # the case task, and the scorer
     case = code[
@@ -1072,7 +1119,7 @@ def _records_site(site, tmp_path, name, ids=("20261011T220000-77",), last=None):
 
 def test_score_only_submits_the_scoring_and_nothing_before_it(site, tmp_path):
     """For a folder whose registrations are done: the settle job, the case arrays,
-    tissue, the scorer. No selfcheck, no gate, no ladder, and nothing waits for a job
+    tissue, the scorer. No selfcheck, no ladder, and nothing waits for a job
     that is not there."""
     _records_site(site, tmp_path, "so", ids=("20261012T010203-9",))
     (site[0] / "out-so" / "logs" / "submission").write_text("20261012T010203-9\n")
@@ -1160,7 +1207,7 @@ def _real_record(out, run, submission, monkeypatch):
 def test_score_only_reads_the_id_from_records_the_selfcheck_itself_wrote(
     site, monkeypatch
 ):
-    """The id is PARSED out of each record by the reader the gates use
+    """The id is PARSED out of each record by the reader the verdicts use
     (`ladder.submissions_of` through `regbench submissions`), not searched for as text."""
     out = site[0] / "out-real"
     path = _real_record(out, "stare", "20261012T090909-41", monkeypatch)
@@ -1377,9 +1424,9 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
     assert sorted(jobs) == sorted(dry[0])  # the same jobs as without an order
     assert _ladder_order(jobs) == wanted != list(RUNS)
     assert f"# run order: {' '.join(wanted)}" in done.stdout
-    # the selfchecks and the gates are submitted in that order too
+    # the selfchecks are submitted in that order too
     checks = [j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"]
-    assert list(dict.fromkeys(checks)) == [n for n in wanted if n in GATING]
+    assert list(dict.fromkeys(checks)) == [n for n in wanted if n in CHECKERS]
     # every job waits only for jobs submitted before it: nothing can wait for ever
     seen = set()
     for job in jobs.values():
@@ -1396,12 +1443,12 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
             first = rungs(jobs, run, dataset)[0]
             assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps
     anchored = jobs["rb-sc-affine_ashlar-64g"]
-    assert ("afterok", "<rb-sc-stare-retry>") in anchored.deps
+    assert ("afterany", "<rb-sc-stare-retry>") in anchored.deps
     # on lanes, each run starts behind the run dealt onto its lane before it
     if lanes:
         for i, run in enumerate(wanted):
             waits = {n.strip("<>") for _, n in rungs(jobs, run)[0].deps}
-            suffix = "-first" if variants.realcheck_gate(run) else ""
+            suffix = "-first" if variants.realcheck_row(run) else ""
             if suffix:
                 waits = {
                     n.strip("<>") for _, n in rungs(jobs, run, suffix=suffix)[0].deps
@@ -1410,7 +1457,6 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
             ends = {
                 w for w in waits if before and w.startswith(f"rb-{before}-multiplex")
             }
-            ends |= {w for w in waits if before and w == f"rb-realgate-{before}"}
             assert bool(ends) is (before is not None), (run, before, waits)
 
 
@@ -1516,7 +1562,6 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     }
     for run, names in STAGED.items():
         spec = RUNS[run]
-        gate = ("afterok", f"<rb-gate-{run}>")
         before = None  # the last job of the stage before
         for stage in names[:-1]:
             if stage == "tile":
@@ -1524,7 +1569,7 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
                 # are, one after the other, between COARSE and SOLVE
                 assert not [n for n in jobs if n.startswith(f"rb-{run}-multiplex-tile")]
                 for link, job in enumerate(feeders(jobs, run), 1):
-                    assert job.script == "feed_tiles.sbatch" and gate in job.deps
+                    assert job.script == "feed_tiles.sbatch"
                     assert after(job) == {before}, job.name
                     assert job.opt("--array") is None and "--wait" not in job.words
                     assert (job.opt("--cpus-per-task"), job.opt("--mem")) == ("1", "1G")
@@ -1556,7 +1601,6 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
             for attempt, job in enumerate(chained, 1):
                 want = stages.allocation(stage, attempt)
                 assert job.script == "stage.sbatch"
-                assert (gate in job.deps) == (attempt == 1)
                 assert job.opt("--cpus-per-task") == str(want["cpus"]), (stage, attempt)
                 assert job.opt("--mem") == f"{want['mem_gb']}G", (stage, attempt)
                 assert job.opt("--time") == want["time"], (stage, attempt)
@@ -1577,7 +1621,7 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
             # the watcher after the first attempt, and the next stage after the watcher
             assert after(chained[0]) == ({before} if before else set()), stage
             watcher = jobs[f"rb-{run}-multiplex-{stage}-retry"]
-            assert watcher.script == "retry.sbatch" and gate in watcher.deps
+            assert watcher.script == "retry.sbatch"
             assert after(watcher) == after(chained[0]) | {chained[0].name}
             before = watcher.name
         # the writer: the round's last job, after SOLVE's last attempt
@@ -2215,8 +2259,9 @@ def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tm
     n = len(log.read_text().splitlines())
     ids = (out / "logs" / "jobs.tsv").read_text().splitlines()
     one = ids[3].split("\t")[2]
-    record = out / "logs" / "gates" / "palom.tsv"
-    record.write_text("palom\tok\t-\t0\t-\n")
+    # the runs the first submission selected, for its scorer's verdicts
+    (record,) = (out / "logs" / "submitted").glob("*.runs")
+    assert record.read_text() == "palom\n"
     queue = tmp_path / "queue"
     # an array task of the first submission is still running; another user's job is not ours
     queue.write_text(f"{one} {one}_4\n999999 999999\n")
@@ -2236,8 +2281,9 @@ def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tm
     assert (
         f"scancel {one} ;" in again.stderr and "Nothing was submitted." in again.stderr
     )
-    # the gate record the first submission's tasks read is as its gate job left it
-    assert record.read_text() == "palom\tok\t-\t0\t-\n"
+    # the first submission's record is as it left it, and the refused call left none
+    assert record.read_text() == "palom\n"
+    assert list((out / "logs" / "submitted").glob("*.runs")) == [record]
     # a queue that cannot be read is not an empty queue
     blind, _, _ = launch(
         site,
@@ -2292,7 +2338,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     assert 'args+=(--flat "$((offset + task))" --layout "$layout")' in code
     assert 'args+=(--index "$task")' in code
     assert '--stage "$stage" --attempt "$attempt"' in code
-    assert 'if [ "$blocked" != 0 ]; then' in code  # the second lock behind the gate job
+    assert "blocked" not in code and "logs/gates" not in code  # no gate, no lock
     assert code.rstrip().endswith("exit 0")
     assert "sbatch " not in code and "--wait" not in code  # a tile job submits none
     rung = code_of(SLURM / "run_rung.sbatch")
@@ -2306,32 +2352,30 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     assert ': "${REGBENCH_STAGE_QUEUE_MAX:=200}"' in launcher
 
 
-# ── the realcheck as a gate ───────────────────────────────────────────────────
-def test_a_realcheck_gated_run_sends_one_unit_ahead(dry):
+# ── the realcheck: reported, never a gate ─────────────────────────────────────
+def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
     jobs, _, _ = dry
-    gated = {n: variants.realcheck_gate(n) for n in RUNS if variants.realcheck_gate(n)}
-    assert gated == {"valis_mirage": "valis_mirage", "valis120_hires": "valis120_hires"}
-    for run, variant in gated.items():
+    real = {n: variants.realcheck_row(n) for n in RUNS if variants.realcheck_row(n)}
+    assert real == {"valis_mirage": "valis_mirage", "valis120_hires": "valis120_hires"}
+    settle = {n.strip("<>") for _, n in jobs["rb-settle"].deps}
+    for run in real:
         first = rungs(jobs, run, suffix="-first")
         assert [j.opt("--array") for j in first] == ["0-0%20", None, None, None]
         assert all(j.args[9] == "1" for j in first)  # --realcheck
-        gate = jobs[f"rb-realgate-{run}"]
-        assert gate.args[:2] == ["realcheck", run] and gate.args[4:6] == [
-            "multiplex",
-            variant,
-        ]
-        assert gate.deps == {("afterany", f"<rb-{run}-multiplex-first-retry>")}
         for dataset in COHORT_DATASETS:
-            ladder_of = rungs(jobs, run, dataset)
-            # the submitted array and its watcher wait for the realcheck's gate; a
-            # later rung is the watcher's to submit
-            for job in (ladder_of[0], jobs[last_job(run, dataset)]):
-                assert ("afterok", f"<rb-realgate-{run}>") in job.deps
-            assert all(job.args[9] == "0" for job in ladder_of)
+            rest = rungs(jobs, run, dataset)
+            assert rest[0].opt("--array") == "1-1%20"
+            assert all(job.args[9] == "0" for job in rest)
+            # side by side: the rest waits for nothing of the first unit
+            for job in (rest[0], jobs[last_job(run, dataset)]):
+                assert not [n for _, n in job.deps if "-first-" in n], job.name
+            assert rest[0].deps == first[0].deps
+            # and what waits for the run waits for both
+            assert {last_job(run, dataset), f"rb-{run}-{dataset}-first-retry"} <= settle
     others = [
         j
         for j in jobs.values()
-        if j.script == "run_rung.sbatch" and j.args[0] not in gated
+        if j.script == "run_rung.sbatch" and j.args[0] not in real
     ]
     assert others and all(j.args[9] == "0" for j in others)
 
@@ -2739,7 +2783,7 @@ def test_a_subset_brings_the_selfchecks_it_stands_behind(site):
         "affine_ashlar_clean"
     }
     checks = {j.args[0] for j in jobs.values() if j.script == "selfcheck.sbatch"}
-    assert checks == {"affine_ashlar", "stare"}  # its gate, and that gate's anchor
+    assert checks == {"affine_ashlar", "stare"}  # its checker, and that one's anchor
     assert "reads the results of stare, which is not submitted here" in done.stdout
     bad, _, _ = launch(site, "--runs", "nope", log="subset-bad")
     assert bad.returncode == 2 and "no run named 'nope'" in bad.stderr
@@ -2954,15 +2998,12 @@ def test_extra_sbatch_arguments_reach_every_job(site):
 
 
 # ── the watcher: a retry is submitted after a failure, for the units that failed ──
-def _watch(
-    tmp_path, ends, steps, range_="0-4", gate="ok\t0\t0", run="stare", single=None
-):
+def _watch(tmp_path, ends, steps, range_="0-4", run="stare", single=None):
     """Run retry.sbatch against stand-in sbatch and squeue. ``ends``: {index: end line
     of the unit's task in the first array, or None for no end line}."""
     out, bin_, plan = tmp_path / "out", tmp_path / "bin", tmp_path / "plan"
-    for d in (out / "logs" / "end", out / "logs" / "gates", bin_, plan):
-        d.mkdir(parents=True)
-    (out / "logs" / "gates" / "stare.tsv").write_text(f"stare\t{gate}\t-\n")
+    for d in (out / "logs" / "end", bin_, plan):
+        d.mkdir(parents=True, exist_ok=True)
     for idx, line in ends.items():
         if line is not None:
             (out / "logs" / "end" / f"rb-x-16g-50_{idx}.end").write_text(line + "\n")
@@ -3038,17 +3079,11 @@ def test_the_watcher_submits_a_step_only_for_the_units_that_failed_that_way(tmp_
     ]
 
 
-def test_the_watcher_of_a_blocked_run_submits_nothing(tmp_path):
-    done, sent, _ = _watch(tmp_path, {}, STEPS, gate="inconsistent\t0\t1")
-    assert done.returncode == 0 and sent == []
-    assert "status=blocked cause=gate_blocked" in done.stdout
-
-
 def test_the_watcher_of_single_jobs_ends_as_the_chains_last_job_did(tmp_path):
     """A selfcheck's chain: jobs, not arrays. Nothing is submitted when the first ended
     ok; otherwise the next rung is, without --array and with the id of the job before
-    it, and the watcher ends ok only when the chain's last job did (a selfcheck anchored
-    on this one waits for the watcher with `afterok`)."""
+    it, and the watcher ends ok only when the chain's last job did (nothing waits for it
+    with `afterok`: the selfcheck is reported, never a gate)."""
     steps = [
         ["notok", "rb-sc-x-256g", "--mem=256G", "selfcheck.sbatch", "2", "@PREVIOUS@"],
         ["notok", "rb-sc-x-512g", "--mem=512G", "selfcheck.sbatch", "3", "@PREVIOUS@"],
@@ -3057,8 +3092,8 @@ def test_the_watcher_of_single_jobs_ends_as_the_chains_last_job_did(tmp_path):
     ok = "REGBENCH_END kind=selfcheck status=ok cause= whose="
     done, sent, _ = _watch(tmp_path / "ok", {}, steps, single=ok, **kw)
     assert done.returncode == 0 and sent == [], done.stdout + done.stderr
-    # a selfcheck that ended inconsistent stands: nothing reads the gate (there is none
-    # yet), the next rungs are submitted and decide for themselves
+    # a selfcheck that did not end ok: the next rungs are submitted and decide for
+    # themselves
     bad = "REGBENCH_END kind=selfcheck status=not_checked cause=selfcheck_not_checked"
     done, sent, _ = _watch(tmp_path / "bad", {}, steps, single=bad, **kw)
     assert sent == [

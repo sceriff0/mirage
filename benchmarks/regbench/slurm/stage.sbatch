@@ -26,18 +26,6 @@ export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU=0
 export REGBENCH_TIME_LIMIT="$limit"
 
 task="${SLURM_ARRAY_TASK_ID:-0}"
-# the second lock behind the dependency on the gate job, as in run_rung.sbatch
-gate="$REGBENCH_OUT/logs/gates/$name.tsv"
-status=not_checked blocked=1
-if [ -s "$gate" ]; then
-    IFS=$'\t' read -r _ status _ blocked _ < "$gate"
-fi
-if [ "$blocked" != 0 ]; then
-    echo "$name: the gate says $status and the run is not allowed to start unchecked; nothing run"
-    echo "REGBENCH_END kind=stage run=$name dataset=$dataset unit=task_$task stage=$stage attempt=$attempt status=blocked cause=gate_blocked whose=launcher log=${REGBENCH_LOG:--}"
-    exit 0
-fi
-
 args=(stage --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "$dataset"
       --method "$method" --stage "$stage" --attempt "$attempt")
 [ "$label" != - ] && args+=(--label "$label")

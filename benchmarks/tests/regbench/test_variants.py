@@ -285,20 +285,20 @@ def test_the_anchored_rows_share_a_family_that_is_not_ashlars():
     assert variants.members("affine_ashlar") == anchored
 
 
-def test_ashlar_rows_are_gated_by_the_row_of_their_affine_level_and_stare_cells_by_stare():
-    gated = variants.GATED_BY
+def test_ashlar_rows_are_checked_by_the_row_of_their_affine_level_and_stare_cells_by_stare():
+    checked = variants.CHECKED_BY
     for name, (affine, _, _) in ashlar.ASHLAR_CELLS.items():
-        gate = "affine_ashlar" if affine == "stare" else "ashlar"
-        assert variants.gated_by(name) == gate
-        if name != gate:
-            assert gated[name] == gate
+        checker = "affine_ashlar" if affine == "stare" else "ashlar"
+        assert variants.checked_by(name) == checker
+        if name != checker:
+            assert checked[name] == checker
     for name in _stare_names():
-        assert variants.gated_by(name) == "stare"
+        assert variants.checked_by(name) == "stare"
     names = set(by_name())
-    assert set(gated) <= names and set(gated.values()) <= names
-    # every other run stands behind its own selfcheck
-    for name in names - set(gated):
-        assert variants.gated_by(name) == name
+    assert set(checked) <= names and set(checked.values()) <= names
+    # every other run is checked by its own selfcheck
+    for name in names - set(checked):
+        assert variants.checked_by(name) == name
 
 
 def test_selfcheck_masks_come_from_the_adapters():
@@ -392,12 +392,12 @@ COLUMNS = (
     "gpu",
     "scope",
     "after",
-    "gated_by",
+    "checked_by",
     "selfcheck_mask",
     "primary",
     "variants",
     "active",
-    "gate_variants",
+    "checked_rows",
     "realcheck",
     "stages",
 )
@@ -449,12 +449,12 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "gpu": "0",
         "scope": "pair",
         "after": "-",
-        "gated_by": "stare",
+        "checked_by": "stare",
         "selfcheck_mask": "-",
         "primary": "stare",
         "variants": "stare_rigid,stare",
         "active": "1",
-        "gate_variants": "stare_rigid,stare",
+        "checked_rows": "stare_rigid,stare",
         "realcheck": "-",
         "stages": "coarse,tile,solve,stitch",
     }
@@ -467,12 +467,12 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
         "gpu": "0",
         "scope": "group",
         "after": "stare",
-        "gated_by": "affine_ashlar",
+        "checked_by": "affine_ashlar",
         "selfcheck_mask": "overlap",
         "primary": "-",
         "variants": "affine_ashlar_clean",
         "active": "1",
-        "gate_variants": "affine_ashlar_clean",
+        "checked_rows": "affine_ashlar_clean",
         "realcheck": "-",
         "stages": "-",
     }
@@ -481,7 +481,7 @@ def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
     assert hr["gpu"] == "1" and hr["scope"] == "pair" and hr["primary"] == "-"
     assert got["palom"]["opts"] == "-"
     assert got["palom"]["selfcheck_mask"] == "seams"
-    assert got["palom"]["gated_by"] == "palom"
+    assert got["palom"]["checked_by"] == "palom"
     assert got["valis120"]["primary"] == "-"
     assert got["valis120_hires"]["primary"] == "valis120_hires"
     assert got["valis120_hires"]["opts"] == "hires=1"
@@ -642,12 +642,12 @@ def test_reactivating_is_one_field(monkeypatch):
     [
         ("valis120_hires", "primary"),  # writes the primary row valis120_hires
         ("deeperhistreg_hr_gpu", "primary"),  # writes deeperhistreg_hr_gpu_asdrawn
-        ("ashlar", "primary"),  # (and gates ashlar_clean)
-        ("affine_ashlar", "selfcheck gates"),  # gates the active affine_ashlar_clean
+        ("ashlar", "primary"),  # (and checks ashlar_clean)
+        ("affine_ashlar", "selfcheck checks"),  # checks the active affine_ashlar_clean
         ("stare", "primary"),  # (and the anchored ASHLAR rows wait for it)
     ],
 )
-def test_a_paused_run_cannot_write_a_primary_row_or_gate_an_active_run(
+def test_a_paused_run_cannot_write_a_primary_row_or_check_an_active_run(
     monkeypatch, name, why
 ):
     pause(monkeypatch, name)
@@ -662,7 +662,7 @@ def test_a_paused_run_cannot_write_a_primary_row_or_gate_an_active_run(
 
 def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
-    # every STARE cell is gated by `stare`, so they are paused with it
+    # every STARE cell is checked by `stare`, so they are paused with it
     stare_cells = [n for n in _stare_names()]
     pause(monkeypatch, *stare_cells)
     monkeypatch.setattr(
@@ -682,53 +682,56 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     )
 
 
-def test_a_gated_run_may_be_paused_while_its_gate_runs(monkeypatch):
+def test_a_checked_run_may_be_paused_while_its_checker_runs(monkeypatch):
     pause(monkeypatch, "ashlar_clean", "affine_ashlar_clean")
     variants.check()
     plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
     assert variants.members("ashlar") == [n for n in plain if n != "ashlar_clean"]
 
 
-# ── which rows a run's selfcheck gate reads (R3.12 b) ─────────────────────────
-def test_gate_variants_are_all_of_a_runs_rows_except_for_deeperhistreg():
+# ── which rows a run's reported selfcheck status is read from (R3.12 b) ──────────
+def test_checked_rows_are_all_of_a_runs_rows_except_for_deeperhistreg():
     for name, run in by_name().items():
         names = tuple(variants.variants_of(run))
         if run.method == "deeperhistreg":
-            assert variants.gate_variants(name) == (f"{name}_asdrawn",)
-            assert name not in variants.gate_variants(name)  # the estimated field
+            assert variants.checked_rows(name) == (f"{name}_asdrawn",)
+            assert name not in variants.checked_rows(name)  # the estimated field
         else:
-            assert variants.gate_variants(name) == names
-        assert set(variants.gate_variants(name)) <= set(names)
-    assert variants.gate_variants("valis120") == (
+            assert variants.checked_rows(name) == names
+        assert set(variants.checked_rows(name)) <= set(names)
+    assert variants.checked_rows("valis120") == (
         "valis120_rigid",
         "valis120",
         "valis120_micro",
     )
     with pytest.raises(KeyError):
-        variants.gate_variants("no_such_run")
+        variants.checked_rows("no_such_run")
 
 
-def test_the_gate_column_is_what_gate_variants_says(capsys):
+def test_the_checked_rows_column_is_what_checked_rows_says(capsys):
     got = {r[0]: dict(zip(COLUMNS, r)) for r in rows(capsys)}
     for name, row in got.items():
-        assert row["gate_variants"] == ",".join(variants.gate_variants(name))
-    assert (
-        got["deeperhistreg_hr_gpu"]["gate_variants"] == "deeperhistreg_hr_gpu_asdrawn"
-    )
+        assert row["checked_rows"] == ",".join(variants.checked_rows(name))
+        assert row["checked_by"] == variants.checked_by(name)
+    assert got["deeperhistreg_hr_gpu"]["checked_rows"] == "deeperhistreg_hr_gpu_asdrawn"
     assert got["deeperhistreg_hr_gpu"]["variants"] == (
         "deeperhistreg_hr_gpu,deeperhistreg_hr_gpu_asdrawn"
     )
-    assert got["palom"]["gate_variants"] == "palom_affine,palom"
+    assert got["palom"]["checked_rows"] == "palom_affine,palom"
 
 
 def record(**statuses):
-    """The part of `selfcheck.json` the gate reads: `variants` = name -> status."""
+    """The part of `selfcheck.json` the verdict reads: `variants` = name -> status."""
     return {"variants": dict(statuses)}
 
 
-def test_the_gate_reads_the_record_selfcheck_really_writes(tmp_path):
+def status(name, rec):
+    return variants.selfcheck_status(name, rec)[0]
+
+
+def test_the_verdict_reads_the_record_selfcheck_really_writes(tmp_path):
     """`selfcheck.run` writes `variants: {name: status}` at the top of selfcheck.json
-    (and a dict per variant inside each pair): the gate must read the top one."""
+    (and a dict per variant inside each pair): the verdict must read the top one."""
     from benchmarks.regbench import selfcheck
 
     src = selfcheck.__file__
@@ -736,100 +739,94 @@ def test_the_gate_reads_the_record_selfcheck_really_writes(tmp_path):
     assert '"variants": {' in text and "k: (NO_STAGE_IMAGE if" in text
     name = "deeperhistreg_hr_gpu"
     top = {"variants": {name: "inconsistent", f"{name}_asdrawn": "ok"}}
-    assert variants.gate_status(name, top) == "ok"
+    assert status(name, top) == "ok"
     # a per-variant dict (the shape inside `pairs`) is read the same way
     nested = {"variants": {k: {"status": v} for k, v in top["variants"].items()}}
-    assert variants.gate_status(name, nested) == "ok"
-    assert variants.dropped_variants(name, nested) == [name]
-    # a stage with no image of its own is reported, never counted, never dropped
+    assert status(name, nested) == "ok"
+    # a stage with no image of its own is reported, never counted
     rec = record(stare_rigid="no_stage_image", stare="ok")
-    assert variants.gate_status("stare", rec) == "ok"
-    assert variants.dropped_variants("stare", rec) == []
+    assert status("stare", rec) == "ok"
+    # the rows it was read from and the reference comparison come with it
+    assert variants.selfcheck_status("stare", rec) == (
+        "ok",
+        ("stare_rigid", "stare"),
+        "",
+    )
+    # no record at all is not checked, and nothing is raised
+    assert status("stare", {}) == "not_checked"
 
 
-def test_gate_status_reads_the_gating_rows_only_and_names_the_rows_to_drop():
+def test_selfcheck_status_reads_the_checked_rows_only():
+    """No row is ever dropped: the estimated-field row of DeeperHistReg stays in every
+    table whatever its own selfcheck says (user ruling, option A)."""
     name = "deeperhistreg_hr_gpu"
     field, drawn = name, f"{name}_asdrawn"
-    # the estimated-field row fails: the method is NOT blocked, that row is dropped
+    # the estimated-field row fails: the run's status is the written image's row's
     rec = record(**{field: "inconsistent", drawn: "ok"})
-    assert variants.gate_status(name, rec) == "ok"
-    assert variants.dropped_variants(name, rec) == [field]
-    # the written image's row fails: the method is blocked, nothing is "dropped"
+    assert status(name, rec) == "ok"
+    # the written image's row fails: the run is inconsistent (reported, it still runs)
     rec = record(**{field: "ok", drawn: "inconsistent"})
-    assert variants.gate_status(name, rec) == "inconsistent"
-    assert variants.dropped_variants(name, rec) == []
-    # a gating row the record does not have was not checked
-    assert variants.gate_status(name, record(**{field: "ok"})) == "not_checked"
-    # a non-gating row that could not be compared at all is dropped too, never passed
+    assert status(name, rec) == "inconsistent"
+    # a checked row the record does not have was not checked
+    assert status(name, record(**{field: "ok"})) == "not_checked"
     rec = record(**{field: "crashed", drawn: "ok"})
-    assert variants.dropped_variants(name, rec) == [field]
-    rec = record(**{field: "ok", drawn: "ok"})
-    assert variants.gate_status(name, rec) == "ok"
-    assert variants.dropped_variants(name, rec) == []
+    assert status(name, rec) == "ok"
+    assert not hasattr(variants, "dropped_variants")
+    assert not hasattr(variants, "droppable")
 
 
-def test_for_every_other_method_one_failed_row_blocks_the_run():
+def test_for_every_other_method_one_failed_row_makes_the_run_inconsistent():
     rec = record(palom_affine="inconsistent", palom="ok")
-    assert variants.gate_status("palom", rec) == "inconsistent"
-    assert variants.dropped_variants("palom", rec) == []
+    assert status("palom", rec) == "inconsistent"
     rec = record(stare_rigid="ok", stare="ok")
-    assert variants.gate_status("stare", rec) == "ok"
+    assert status("stare", rec) == "ok"
 
 
-# ── `gate`: what the launcher asks before it submits a run ────────────────────
-def gate(capsys, tmp_path, name, rec):
+# ── `verdict`: what the scorer asks before it scores ──────────────────────────
+def verdict(capsys, tmp_path, name, rec):
     import json
 
-    path = tmp_path / f"{name}.json"
+    path = tmp_path / "logs" / "selfcheck" / name / "selfcheck.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rec))
-    code = cli.main(["gate", "--name", name, "--selfcheck", str(path)])
-    # the first line is the gate's verdict; the task's REGBENCH_END line follows it
-    first, end = capsys.readouterr().out.rstrip("\n").split("\n")
-    assert end.startswith("REGBENCH_END kind=gate ")
-    return code, first.split("\t")
+    code = cli.main(["verdict", "--out", str(tmp_path), "--runs", name])
+    # the selfcheck's line, the realcheck's, then the task's REGBENCH_END line
+    first, _, end = capsys.readouterr().out.rstrip("\n").split("\n")
+    assert end.startswith("REGBENCH_END kind=verdict ")
+    return code, first.split("\t")[2]
 
 
-def test_gate_prints_the_status_and_the_rows_to_drop(capsys, tmp_path):
+def test_verdict_prints_the_status(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("REGBENCH_SUBMISSION", raising=False)
     name = "deeperhistreg_hr_gpu"
-    code, out = gate(
+    got = verdict(
         capsys, tmp_path, name, record(**{name: "ok", f"{name}_asdrawn": "ok"})
     )
-    assert (code, out) == (0, ["ok", "-"])
+    assert got == (0, "ok")
     rec = record(**{name: "inconsistent", f"{name}_asdrawn": "ok"})
-    code, out = gate(capsys, tmp_path, name, rec)
-    assert (code, out) == (0, ["ok", name])  # the method runs; that row is dropped
+    assert verdict(capsys, tmp_path, name, rec) == (0, "ok")
     rec = record(**{name: "ok", f"{name}_asdrawn": "inconsistent"})
-    code, out = gate(capsys, tmp_path, name, rec)
-    assert (code, out) == (
-        1,
-        ["inconsistent", "-"],
-    )  # blocked: selfcheck's own exit code
-    code, out = gate(
-        capsys, tmp_path, "palom", record(palom_affine="crashed", palom="ok")
-    )
-    assert (code, out) == (3, ["crashed", "-"])
-    code, out = gate(capsys, tmp_path, "palom", {"variants": {}})
-    assert (code, out) == (2, ["not_checked", "-"])
-    with pytest.raises(SystemExit):
-        cli.main(
-            ["gate", "--name", "nope", "--selfcheck", str(tmp_path / "palom.json")]
-        )
+    # reported, never a gate: the exit is 0 whatever the verdict
+    assert verdict(capsys, tmp_path, name, rec) == (0, "inconsistent")
+    rec = record(palom_affine="crashed", palom="ok")
+    assert verdict(capsys, tmp_path, "palom", rec) == (0, "crashed")
+    assert verdict(capsys, tmp_path, "palom", {"variants": {}}) == (0, "not_checked")
 
 
-def test_the_realcheck_gates_the_primary_rows_of_the_two_valis_adapters(capsys):
-    """Column 15: which row's realcheck.json the launcher reads before it starts the
-    rest of a run. Only a run with a primary row has one."""
-    gated = {
-        variants.run_name(r): variants.realcheck_gate(variants.run_name(r))
+def test_the_realcheck_reports_on_the_primary_rows_of_the_two_valis_adapters(capsys):
+    """Column 15: which row's realcheck.json the scorer reports for a run. Only a run
+    with a primary row has one."""
+    real = {
+        variants.run_name(r): variants.realcheck_row(variants.run_name(r))
         for r in variants.runs_for(None)
     }
-    assert {k: v for k, v in gated.items() if v} == {
+    assert {k: v for k, v in real.items() if v} == {
         "valis_mirage": "valis_mirage",
         "valis120_hires": "valis120_hires",
     }
-    assert gated["valis120"] is None  # the same adapter, no primary row
+    assert real["valis120"] is None  # the same adapter, no primary row
     got = {r[0]: r[14] for r in rows(capsys)}
-    assert got == {k: v or "-" for k, v in gated.items()}
+    assert got == {k: v or "-" for k, v in real.items()}
     assert set(variants.REALCHECK_METHODS) <= set(METHODS)
 
 
@@ -981,13 +978,13 @@ def test_ashlar_cells_tell_the_adapter_what_a_label_means():
         assert got == (float(cell[1]), cell[0], float(cell[2]))
 
 
-def test_ashlar_gates_and_families_follow_the_affine_factor():
+def test_ashlar_checkers_and_families_follow_the_affine_factor():
     for r in variants.RUNS:
         if r.method != "ashlar":
             continue
         name = variants.run_name(r)
         anchored = r.opts["affine"] == "stare"
-        assert variants.gated_by(name) in (
+        assert variants.checked_by(name) in (
             "affine_ashlar" if anchored else "ashlar",
             name,
         )

@@ -12,7 +12,7 @@
 # column `image`); the path of image X is REGBENCH_SIF_X:
 #
 #   REGBENCH_SIF_STARE_REGBENCH   containers/stare-regbench: STARE, and where `prepare`,
-#                                 `gate`, `tissue` and `score` run (variants.SCORER_IMAGE)
+#                                 `verdict`, `tissue` and `score` run (variants.SCORER_IMAGE)
 #   REGBENCH_SIF_VALIS_MIRAGE     containers/valis100 (the pipeline's VALIS 1.0.0 image + codecs)
 #   REGBENCH_SIF_VALIS120         containers/valis120 (VALIS 1.2.0)
 #   REGBENCH_SIF_DEEPERHISTREG    containers/deeperhistreg
@@ -73,12 +73,12 @@
 # pools saw is recorded.
 #
 # REGBENCH_SUBMISSION is the id of one call of submit_cohort.sh. Every record a job
-# writes carries it (run.json: submissions; selfcheck.json: submission), and a gate, the
+# writes carries it (run.json: submissions; selfcheck.json: submission), and the verdict, the
 # ladder and the scorer take no record of another submission as evidence. REGBENCH_FORCE=1
 # re-runs units whose results are all ok already (the default reuses them).
 #
 # REGBENCH_CPUS (4) and REGBENCH_MEM (16G) are the defaults of jobs outside the ladder
-# (prepare, gate, score).
+# (prepare, verdict, score).
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
@@ -135,8 +135,9 @@ _regbench_var() {  # _regbench_var SIF valis120 -> value of REGBENCH_SIF_VALIS12
 
 # ── the task's log, and its last line ────────────────────────────────────────────────
 # REGBENCH_LOG is this task's scheduler log, as submit_cohort.sh names it (%x-%A_%a.log
-# for an array task, %x-%j.log otherwise). It goes into run.json, selfcheck.json and the
-# gate records (`log_path`), so the scorer's failure log can point at it.
+# for an array task, %x-%j.log otherwise). It goes into run.json and selfcheck.json
+# (`log_path`), and from there into logs/verdicts.tsv, so the scorer's failure log can
+# point at it.
 # REGBENCH_END_FILE is where the Python step leaves its end line; regbench_end prints it
 # as the LAST line of the log, or a fallback when the step died before writing one:
 #   REGBENCH_END kind=... run=... status=... cause=... whose=... log=...

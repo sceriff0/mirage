@@ -95,8 +95,6 @@ export REGBENCH_REPO="$repo"
 # the input step. Export it to take a rounds.csv as it is.
 # how much runs at once
 : "${REGBENCH_RUN_LANES:=4}"          # runs in flight (0: all of them)
-# the selfchecks say what they found and block nothing (0: one that is not ok blocks)
-: "${REGBENCH_SELFCHECK_ADVISORY:=1}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
 : "${REGBENCH_STAGE_QUEUE_MAX:=100}"  # tile tasks pending or running, in the whole launch (a total)
 # ... split over the runs feeding at once, at most the lanes: 100 over 4 lanes is 25 each
@@ -200,7 +198,7 @@ fi
 export REGBENCH_ROOT REGBENCH_INPUTS REGBENCH_NF_PROFILE REGBENCH_CASES REGBENCH_OUT REGBENCH_SITE_CONFIG
 [ -z "${REGBENCH_MANIFEST:-}" ] || export REGBENCH_MANIFEST
 [ -z "${REGBENCH_INPUT:-}" ] || export REGBENCH_INPUT
-export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX REGBENCH_SELFCHECK_ADVISORY
+export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
 # the benchmark's own folder is read inside the images too (REGBENCH_INPUTS is bound
 # by env.sh wherever it is)

@@ -1,4 +1,4 @@
-"""The selfcheck gate is as strict one way as the other, and a mask cannot hide a defect
+"""The selfcheck criterion is as strict one way as the other, and a mask cannot hide a defect
 (review item 4). Dots are drawn directly, so no method runs: these are seconds."""
 
 import json
@@ -181,13 +181,13 @@ def test_the_three_dot_sets_are_recorded_whatever_the_mask_hides(dots):
     assert plain["mask_over_cap"] is False
 
 
-def test_a_measured_failure_still_blocks_whatever_the_cap_says(dots):
+def test_a_measured_failure_is_inconsistent_whatever_the_cap_says(dots):
     """The accuracy thresholds on the unmasked dots are unchanged, and no cap passes."""
     off = PointMap(lambda xy: to_ref(xy) + [1.0, 0.0], MOV_TO_REF)
     res = sc.compare(
         off, dots, image(to_ref(dots)), drop=band(0, 400), mask_max=0.5, mask="overlap"
     )
-    assert res["status"] == sc.INCONSISTENT and sc.INCONSISTENT in sc.BLOCKING
+    assert res["status"] == sc.INCONSISTENT and sc.INCONSISTENT in sc.NOT_OK
     assert not any(res["caps"].values()) and res["mask_over_cap"] is False
 
 
@@ -486,7 +486,7 @@ def test_a_stage_without_an_image_is_marked_in_every_table(tmp_path):
         (checks / run / "selfcheck.json").write_text(json.dumps(rec))
     rows = variants.row_checks(checks)
     assert rows["stare_rigid"] == "no_stage_image" and rows["stare"] == "ok"
-    assert rows["ashlar_clean"] == "via ashlar: ok"  # gated by another run's check
+    assert rows["ashlar_clean"] == "via ashlar: ok"  # checked by another run's check
     assert rows["palom"] == variants.NO_RECORD
     assert set(rows) == set(variants.expected_variants())
     res = score.score(root, out, ["multiplex"], row_checks=rows, with_tissue=False)
@@ -526,7 +526,7 @@ def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(tmp_path, 
     records = {
         "stare": {"status": "ok", "variants": {"stare": "ok"}, "pairs": []},
         "ashlar": {
-            "status": "ok",  # over the cap, and NOT blocked
+            "status": "ok",  # over the cap: flagged, and the status is ok
             "method": "ashlar",
             "variants": {"ashlar": "ok"},
             "pairs": [
@@ -538,20 +538,11 @@ def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(tmp_path, 
     for run, rec in records.items():
         (checks / run).mkdir(parents=True)
         (checks / run / "selfcheck.json").write_text(json.dumps(rec))
-    # the gate lets the run start: the cap is no status
-    assert variants.gate_status("ashlar", records["ashlar"]) == sc.OK
-    assert (
-        cli.main(
-            [
-                "gate",
-                "--name",
-                "ashlar",
-                "--selfcheck",
-                str(checks / "ashlar" / "selfcheck.json"),
-            ]
-        )
-        == 0
-    )
+    # the verdict says ok: the cap is no status
+    assert variants.selfcheck_status("ashlar", records["ashlar"])[0] == sc.OK
+    assert cli.main(["verdict", "--out", str(out), "--runs", "ashlar"]) == 0
+    verdicts = (out / "logs" / "verdicts.tsv").read_text().splitlines()
+    assert verdicts[1].split("\t")[:3] == ["ashlar", "selfcheck", "ok"]
     flags = variants.mask_flags(checks)
     assert flags["ashlar"] == "yes: 0.57 masked, cap 0.50"
     assert flags["ashlar_clean"] == "yes: 0.57 masked, cap 0.50 (via ashlar)"

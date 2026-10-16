@@ -19,19 +19,18 @@
                        paused runs
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
-``gate``               from one run's ``selfcheck.json``: the status that decides whether
-                       the run may start, and the rows to leave out of the results
-                       (``score --drop``). Exit code as ``selfcheck``
-``realgate``           from the realcheck of a run's first unit: may the rest of the run
-                       start. Exit 1 when the gating row is flagged
+``verdict``            what every run's selfcheck and realcheck said, one line each per
+                       run, into ``<out>/logs/verdicts.tsv`` (``score --verdicts`` reads
+                       it). Always exits 0: the checks are REPORTED, never a gate
 ``selfcheck``          check that a method's points follow the image its own writer produced,
                        on a generated pair; exit 0 ``ok``, 1 ``inconsistent``, 2
-                       ``not_checked``, 3 ``crashed``. Anything but 0 blocks the method
+                       ``not_checked``, 3 ``crashed`` (for a run by hand; nothing waits for
+                       it and no run or row is kept out because of it)
 
 ``run --realcheck`` does the same kind of check on the real case it has just registered
-and exits 3 when it is flagged. ``run --retry-oom`` and ``selfcheck --retry-memory`` are
-what a later rung of the memory ladder runs: they do nothing unless the attempt before
-ran out of memory (``benchmarks/regbench/ladder.py``).
+and exits 3 when it is flagged (reported, never a gate). ``run --retry-oom`` and
+``selfcheck --retry-memory`` are what a later rung of the memory ladder runs: they do
+nothing unless the attempt before ran out of memory (``benchmarks/regbench/ladder.py``).
 
 A method whose registration is several stage processes per round (``runs``, column
 ``stages``) is never run without a statement of who starts them, ``REGBENCH_STAGES``
@@ -361,28 +360,20 @@ def build_parser():
     )
 
     sc.add_argument(
-        "--drop",
-        action="append",
-        default=[],
-        metavar="VARIANT",
-        help="leave this result row out of every table and name it in dropped.csv: a "
-        "row whose own selfcheck failed without blocking its method (`gate` prints "
-        "them). Repeatable",
-    )
-    sc.add_argument(
         "--submission",
         default=None,
         metavar="ID",
         help="score only what this submission ran or reused (run.json: submissions; "
-        "the launcher's REGBENCH_SUBMISSION). A result another submission left, of a "
-        "run this one blocked for instance, is `not run`",
+        "the launcher's REGBENCH_SUBMISSION). A result another submission left is "
+        "`not run`",
     )
     sc.add_argument(
-        "--gates",
+        "--verdicts",
         default=None,
-        metavar="DIR",
-        help="the launcher's gate records (<out>/logs/gates): every run a gate blocked "
-        "is named in the summary and in launch.csv",
+        metavar="TSV",
+        help="what every run's selfcheck and realcheck said (`verdict`, "
+        "<out>/logs/verdicts.tsv): in launch.csv, in the summary and in the "
+        "selfcheck_status column of every row. Nothing is left out because of it",
     )
     sc.add_argument(
         "--no-tissue",
@@ -431,13 +422,6 @@ def build_parser():
     so.add_argument("--dev", action="store_true", help="as `score --dev`")
     so.add_argument("--only-run", action="store_true", help="as `score --only-run`")
     so.add_argument(
-        "--drop",
-        action="append",
-        default=[],
-        metavar="VARIANT",
-        help="as `score --drop`; the record is reused by a `score` given the same ones",
-    )
-    so.add_argument(
         "--submission",
         default=None,
         metavar="ID",
@@ -464,63 +448,25 @@ def build_parser():
     ts.add_argument("--dev", action="store_true")
     ts.add_argument("--only-run", action="store_true")
 
-    gt = sub.add_parser(
-        "gate",
-        help="from a run's selfcheck.json: may the run start, and which of its rows "
-        "are left out of the results",
+    vd = sub.add_parser(
+        "verdict",
+        help="what every run's selfcheck and realcheck said, one line each per run, "
+        "into <out>/logs/verdicts.tsv. Always exits 0: reported, never a gate",
     )
-    gt.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
-    gt.add_argument("--selfcheck", required=True, help="the run's selfcheck.json")
-    gt.add_argument(
-        "--for",
-        dest="run",
+    vd.add_argument("--out", required=True)
+    vd.add_argument(
+        "--runs",
         default=None,
-        help="the run that is gated, when it stands behind another run's selfcheck "
-        "(default: --name)",
+        help="run names (`runs`, column 1), separated by spaces or commas (default: "
+        "every active run)",
     )
-    gt.add_argument(
-        "--record",
-        default=None,
-        help="also write the verdict here, one tab-separated line: run, status, rows "
-        "to drop (or -), blocked 0|1, the reference comparison (or -)",
+    vd.add_argument(
+        "--submission",
+        default=os.environ.get("REGBENCH_SUBMISSION") or "",
+        metavar="ID",
+        help="the submission whose records are read (default: REGBENCH_SUBMISSION); a "
+        "record of another one is reported not_checked",
     )
-    gt.add_argument(
-        "--allow-unchecked",
-        action="store_true",
-        help="let the run start when its selfcheck ran and could not decide "
-        "(not_checked); every other verdict still blocks (REGBENCH_ALLOW_UNCHECKED)",
-    )
-    gt.add_argument(
-        "--advisory",
-        action="store_true",
-        help="the selfcheck is advice, not a gate: the run starts whatever the verdict "
-        "(inconsistent, crashed, not_checked, no record), and the verdict is recorded "
-        "as it is (REGBENCH_SELFCHECK_ADVISORY=1)",
-    )
-    gt.add_argument(
-        "--allow-inconsistent",
-        action="store_true",
-        help="let the run start although its selfcheck MEASURED a disagreement "
-        "(inconsistent): the owner's override, per run (REGBENCH_ALLOW_INCONSISTENT). "
-        "The verdict is recorded as it is; a crash or a missing record still blocks",
-    )
-
-    rg = sub.add_parser(
-        "realgate",
-        help="from the realcheck of a run's first unit: may the rest of the run start",
-    )
-    rg.add_argument("--cases", required=True)
-    rg.add_argument("--out", required=True)
-    rg.add_argument("--dataset", required=True, choices=DATASETS)
-    rg.add_argument("--name", required=True, help="a run name (`runs`, column 1)")
-    rg.add_argument("--method", required=True, choices=METHODS)
-    rg.add_argument("--label", default=None)
-    rg.add_argument(
-        "--variant", required=True, help="the row whose realcheck gates the run"
-    )
-    rg.add_argument("--index", type=int, default=0, help="the unit that went ahead")
-    rg.add_argument("--record", default=None, help="as `gate --record`")
-    rg.add_argument("--allow-unchecked", action="store_true")
 
     sg = sub.add_parser(
         "stage",
@@ -603,7 +549,7 @@ def build_parser():
     rn.add_argument(
         "--scorer-image",
         action="store_true",
-        help="print only the image `prepare`, `gate`, `tissue` and `score` run in",
+        help="print only the image `prepare`, `verdict`, `tissue` and `score` run in",
     )
     rn.add_argument(
         "--dataset",
@@ -1109,214 +1055,92 @@ def _runs(a):
     return 0
 
 
-def _write_gate(path, run, status, dropped, blocked, reference):
-    """One line a shell can read: run, status, rows to drop, blocked, reference, and
-    the log of the gate job that wrote it (for the failure log)."""
-    from pathlib import Path
-
-    from . import variants
-
-    if not path:
-        return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(
-        "\t".join(
-            [
-                run,
-                status,
-                ",".join(dropped) or variants.NONE,
-                "1" if blocked else "0",
-                reference or variants.NONE,
-                os.environ.get("REGBENCH_LOG") or variants.NONE,
-            ]
-        )
-        + "\n"
-    )
+VERDICT_COLUMNS = ("run", "check", "status", "reference", "rows", "log")
+NO_RECORD = "no selfcheck record"
 
 
-def _reference_status(record, names):
-    """The worst status of the second comparison a method that redraws the reference
-    has (ASHLAR): ``pairs[].variants.<row>.reference.status``. It is already folded
-    into each row's own status; it is recorded apart so the summary can name it."""
-    from . import selfcheck
-
-    found = [
-        ((pair.get("variants") or {}).get(v) or {}).get("reference", {}).get("status")
-        for pair in record.get("pairs") or []
-        for v in names
-    ]
-    found = [f for f in found if f]
-    return selfcheck.worst(found) if found else ""
-
-
-def _gate(a):
-    """One line, tab-separated: the status that decides whether the run may start (the
-    worst over its gating rows), and the rows to leave out of the results (``-`` for
-    none). The exit code is that status's, as ``selfcheck`` returns it: 0 only for ok.
-
-    A selfcheck that left no record (its job was cancelled, or killed before it could
-    write) is ``not_checked``: the run is blocked, and the record says why.
-
-    ``--allow-unchecked`` (a run named in ``REGBENCH_ALLOW_UNCHECKED``) lets a run start
-    whose selfcheck RAN and could not decide (``not_checked``), and nothing else: not a
-    measured disagreement (``inconsistent``), not a crash, and not a record that is
-    missing, unreadable or another submission's."""
+def _selfcheck_line(out, name, submission):
+    """The ``verdicts.tsv`` line of a run's selfcheck: never raises; a record that is
+    missing, unreadable or another submission's is ``not_checked`` with the reason in
+    ``log``."""
     import json
     from pathlib import Path
 
-    from . import selfcheck, variants
+    from . import ladder, selfcheck, variants
 
-    run = a.run or a.name
+    checker = variants.checked_by(name)
+    path = Path(out) / "logs" / "selfcheck" / checker / "selfcheck.json"
     try:
-        variants.run_of(a.name)
-        variants.run_of(run)
-    except KeyError as exc:
-        raise SystemExit(f"gate: {exc.args[0]}; see `runs --all`") from None
-    from . import ladder, resources
-
-    try:
-        record = json.loads(Path(a.selfcheck).read_text())
-    except (OSError, ValueError) as exc:
-        print(f"gate: no selfcheck record at {a.selfcheck} ({type(exc).__name__})")
-        record = {}
-    submission = resources.host_info()["submission"]
+        record = json.loads(path.read_text())
+        log = record.get("log_path") or variants.NONE
+    except (OSError, ValueError):
+        record, log = {}, NO_RECORD
     if record and not ladder.mine(record, submission):
         # an older launch's verdict says nothing about this one's images and code
-        print(
-            f"gate: the selfcheck record at {a.selfcheck} is of another submission "
-            f"({record.get('submission') or 'none recorded'}), not of {submission}: "
-            "refused, the run is not checked"
+        log = (
+            f"selfcheck record of another submission "
+            f"({record.get('submission') or 'none recorded'})"
         )
         record = {}
-    status = variants.gate_status(a.name, record)
-    # rows are dropped from the run whose selfcheck this is, and from no other
-    dropped = variants.dropped_variants(a.name, record) if run == a.name else []
-    reference = _reference_status(record, variants.gate_variants(a.name))
-    allowed = a.allow_unchecked and status == selfcheck.NOT_CHECKED and bool(record)
-    # the owner's override of a MEASURED disagreement, named per run: the verdict stays
-    # `inconsistent` in the record, in the end line and in the summary
-    overridden = (
-        getattr(a, "allow_inconsistent", False)
-        and status == selfcheck.INCONSISTENT
-        and bool(record)
-    )
-    allowed = allowed or overridden
-    advisory = getattr(a, "advisory", False) and status in selfcheck.BLOCKING
-    allowed = allowed or advisory
-    blocked = status in selfcheck.BLOCKING and not allowed
-    print(f"{status}\t{','.join(dropped) or variants.NONE}")
-    _write_gate(a.record, run, status, dropped, blocked, reference)
-    from . import failure_log
-
-    failure_log.emit_end(
-        "gate",
-        "blocked" if blocked else "may_start",
-        "gate_blocked" if blocked else "",
-        run=run,
-        gate="selfcheck",
-        verdict=status,
-        dropped=",".join(dropped) or "-",
-    )
-    if advisory:
-        print(
-            f"gate: the selfcheck is ADVISORY (REGBENCH_SELFCHECK_ADVISORY=1): {run} "
-            f"starts although its verdict is {status}. The record keeps the verdict"
-        )
-        return 0
-    if overridden:
-        print(
-            f"gate: {run} is named in REGBENCH_ALLOW_INCONSISTENT: it starts ALTHOUGH "
-            f"its selfcheck measured a disagreement ({status}). Its point mapping does "
-            "not follow the image its writer draws on the selfcheck's pairs"
-        )
-        return 0
-    if allowed:
-        print(f"gate: {run} is allowed to start unchecked ({status})")
-        return 0
-    if blocked and a.allow_unchecked:
-        print(
-            f"gate: {run} is named in REGBENCH_ALLOW_UNCHECKED, which lets through a "
-            f"selfcheck that ran and could not decide (not_checked) and nothing else: "
-            + ("there is no record of this submission" if not record else status)
-            + "; blocked"
-        )
-    return selfcheck.EXIT_CODE[status]
+    if not isinstance(record, dict):
+        record, log = {}, NO_RECORD
+    # read with the rows of the run whose selfcheck it is (for a run checked by another)
+    status, rows, reference = variants.selfcheck_status(checker, record)
+    if not record:
+        status = selfcheck.NOT_CHECKED
+    if checker != name:
+        log = f"via {checker}: {log}"
+    return [name, "selfcheck", status, reference or variants.NONE, ",".join(rows), log]
 
 
-REAL_OK, REAL_FLAGGED, REAL_NOT_CHECKED = "ok", "flagged", "not_checked"
-
-
-def _realgate(a):
-    """May the rest of a run start, from the realcheck of the unit that went ahead.
-
-    Reads ``realcheck.json`` of the gating row for every case of that unit. ``flagged``
-    (exit 1) when one is flagged; ``not_checked`` when there is none (the unit failed,
-    or wrote no image), which does NOT block: only a measured disagreement does, and
-    ``--allow-unchecked`` does not let that one through."""
-    import json
-
-    from .cases import groups, list_cases, result_dir
-    from .methods import scope_of
-
-    cases = list_cases(a.cases, a.dataset)
-    by_group = groups(cases)
-    units = (
-        list(by_group.values())
-        if scope_of(a.method) == "group"
-        else [[c] for c in cases]
-    )
-    from . import ladder, resources
-
-    submission = resources.host_info()["submission"]
-    picked = units[a.index] if a.index < len(units) else []
-    found, flagged = 0, []
-    for case in picked:
-        d = result_dir(a.out, a.variant, case)
-        try:
-            run = json.loads((d / "run.json").read_text())
-            check = json.loads((d / "realcheck.json").read_text())
-        except (OSError, ValueError):
-            continue
-        if not run.get("ok") or not ladder.mine(run, submission):
-            continue  # a realcheck an earlier launch left answers for nothing here
-        found += 1
-        if check.get("flag"):
-            flagged.append(case.case_id)
-    status = REAL_FLAGGED if flagged else REAL_OK if found else REAL_NOT_CHECKED
-    blocked = bool(flagged)
-    print(
-        f"{status}\t{a.variant}\t{found} of {len(picked)} realcheck(s)"
-        + (f"\tflagged: {','.join(flagged)}" if flagged else "")
-    )
-    _write_gate(a.record, a.name, f"realcheck_{status}", [], blocked, "")
-    from . import failure_log
-
-    failure_log.emit_end(
-        "gate",
-        "blocked" if blocked else "may_start",
-        "gate_blocked" if blocked else ("realcheck_flagged" if flagged else ""),
-        run=a.name,
-        gate="realcheck",
-        verdict=status,
-    )
-    return 1 if blocked else 0
-
-
-def _dropped(names):
-    """The ``--drop`` names, refused when one is a typo or a row that gates a run."""
+def _realcheck_line(out, name, submission):
+    """The ``verdicts.tsv`` line of a run's realcheck (``-`` for a run without one)."""
     from . import variants
 
-    for name in names:
+    status, row, flagged = variants.realcheck_status(name, out, submission)
+    log = variants.NONE
+    if flagged:
+        log = "flagged on " + ",".join(flagged)
+    elif status == variants.REAL_NOT_CHECKED:
+        log = "no realcheck of this submission beside an ok result"
+    return [name, "realcheck", status, variants.NONE, row, log]
+
+
+def _verdict(a):
+    """``<out>/logs/verdicts.tsv``: per run one ``selfcheck`` line and one ``realcheck``
+    line (``VERDICT_COLUMNS``). REPORTED, never a gate: it always exits 0, and nothing
+    of a run or of a table waits for it or is left out because of it. A run whose
+    selfcheck left no record is ``not_checked``, ``log`` = ``no selfcheck record``."""
+    from pathlib import Path
+
+    from . import failure_log, variants
+
+    names = (a.runs or "").replace(",", " ").split()
+    if not names:
+        names = [variants.run_name(r) for r in variants.active_runs()]
+    lines = []
+    for name in dict.fromkeys(names):
         try:
-            ok = variants.droppable(name)
-        except KeyError as exc:
-            raise SystemExit(f"--drop: {exc.args[0]}") from None
-        if not ok:
-            raise SystemExit(
-                f"--drop {name}: that row gates its run (`runs`, last column); when "
-                "its selfcheck fails the method is blocked, the row is not dropped"
-            )
-    return list(names)
+            variants.run_of(name)
+        except KeyError:
+            print(f"verdict: no run named {name!r}; nothing to report for it")
+            continue
+        lines.append(_selfcheck_line(a.out, name, a.submission))
+        lines.append(_realcheck_line(a.out, name, a.submission))
+    path = Path(a.out) / "logs" / "verdicts.tsv"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tsv.tmp")
+        tmp.write_text(
+            "".join("\t".join(row) + "\n" for row in [VERDICT_COLUMNS, *lines])
+        )
+        tmp.replace(path)
+    except OSError as exc:
+        print(f"verdict: could not write {path}: {exc}")
+    for row in lines:
+        print("\t".join(row))
+    failure_log.emit_end("verdict", "ok", runs=len(lines) // 2)
+    return 0
 
 
 def _score_one(a):
@@ -1334,7 +1158,6 @@ def _score_one(a):
         workers=a.workers,
         dev=a.dev,
         expected=None if a.only_run else variants.expected_variants(),
-        dropped=_dropped(a.drop),
         row_checks=variants.row_checks(
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
         ),
@@ -1477,10 +1300,8 @@ def _main(a):
         return _stage(a)
     if a.cmd == "stages":
         return _stages(a)
-    if a.cmd == "gate":
-        return _gate(a)
-    if a.cmd == "realgate":
-        return _realgate(a)
+    if a.cmd == "verdict":
+        return _verdict(a)
     if a.cmd == "tissue":
         return _tissue(a)
     if a.cmd == "score-case":
@@ -1528,8 +1349,7 @@ def _main(a):
         expected=expected,
         primary=primary,
         with_tissue=not a.no_tissue,
-        dropped=_dropped(a.drop),
-        gates=a.gates,
+        verdicts=a.verdicts,
         run_variants=variants.run_variants(),
         row_checks=variants.row_checks(
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission

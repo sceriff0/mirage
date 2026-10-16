@@ -89,9 +89,77 @@ def test_the_arms_and_sweep_layers_are_gone():
     import subprocess
 
     tracked = subprocess.run(
-        ["git", "ls-files", "benchmarks"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "benchmarks"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split()
     allowed = ("benchmarks/__init__.py", "benchmarks/README.md")
     allowed_dirs = ("benchmarks/ashlar/", "benchmarks/regbench/", "benchmarks/tests/")
     stray = [f for f in tracked if f not in allowed and not f.startswith(allowed_dirs)]
-    assert not stray, f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,regbench,tests}}: {stray}"
+    assert not stray, (
+        f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,regbench,tests}}: {stray}"
+    )
+
+
+# ── the selfcheck and the realcheck run and report, and never gate (user ruling) ──────
+GATE_SWITCHES = (
+    "REGBENCH_SELFCHECK_ADVISORY",
+    "REGBENCH_ALLOW_UNCHECKED",
+    "REGBENCH_ALLOW_INCONSISTENT",
+)
+# the one place that still names them: the notice that they are ignored
+IGNORED_LOOP = f"for v in {' '.join(GATE_SWITCHES)}; do"
+IGNORED_SAID = 'echo "# ignored: $v (the selfcheck no longer gates)"'
+
+
+def test_nothing_gates():
+    """Comment-blind: what the batch scripts and the launcher RUN, and what the Python
+    package's strings say. A comment may tell the story of the gate; code may not
+    bring it back."""
+    slurm = sorted((RB / "slurm").glob("*"))
+    assert slurm and not (RB / "slurm" / "gate.sbatch").exists()
+    needles = (
+        "afterok:${!gate}",
+        "afterok:${!real}",
+        "status=blocked",
+        "cause=gate_blocked",
+        "logs/gates",
+        "rb-gate-",
+        "rb-realgate-",
+        "gate.sbatch",
+    )
+    for path in slurm:
+        lines = [x for x in _code(path).splitlines() if x.strip()]
+        code = "\n".join(lines)
+        for needle in needles:
+            assert needle not in code, f"{path.name} runs {needle}"
+        for var in GATE_SWITCHES:
+            naming = [x.strip() for x in lines if var in x]
+            if path.name == "submit_cohort.sh":
+                # the switches are only ever said to be ignored, and read for nothing else
+                assert naming == [IGNORED_LOOP], naming
+                at = [x.strip() for x in lines].index(IGNORED_LOOP)
+                assert IGNORED_SAID in lines[at + 1], lines[at + 1]
+            else:
+                assert not naming, f"{path.name} reads {var}"
+    for path in sorted(RB.rglob("*.py")):
+        said = _code(path)
+        assert "gate_blocked" not in said, path.relative_to(ROOT)
+        assert "dropped_row" not in said, path.relative_to(ROOT)
+    from benchmarks.regbench import cli, failure_log, selfcheck, variants
+
+    assert not hasattr(selfcheck, "BLOCKING")
+    assert "gate" not in failure_log.STAGES and "gate_blocked" not in failure_log.WHOSE
+    for gone in ("gate_status", "gate_variants", "dropped_variants", "droppable"):
+        assert not hasattr(variants, gone), gone
+    import argparse
+
+    (commands,) = [
+        a
+        for a in cli.build_parser()._actions
+        if isinstance(a, argparse._SubParsersAction)
+    ]
+    assert "verdict" in commands.choices
+    assert not {"gate", "realgate"} & set(commands.choices)

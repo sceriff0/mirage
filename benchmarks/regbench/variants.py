@@ -17,8 +17,8 @@ its entry) stays implemented and tested, and its names still resolve, but it is 
 launched, not expected by ``score``, not counted and not printed by ``runs`` (``runs
 --all`` prints it, with ``0`` in column 13). Taking the flag off again is the whole
 re-activation. No run is paused today. ``check()`` refuses a list in which a paused run
-writes a primary row, gates an active run's selfcheck, or is what an active run waits
-for; it runs at import and before every list this module hands out.
+writes a primary row, makes the selfcheck an active run is checked by, or is what an
+active run waits for; it runs at import and before every list this module hands out.
 
 ``runs`` prints one line per active run, tab-separated, in the order of ``RUNS``, with
 these columns in this order (``RUNS_COLUMNS``). No field is ever empty: ``-`` stands for
@@ -26,7 +26,7 @@ these columns in this order (``RUNS_COLUMNS``). No field is ever empty: ``-`` st
 only ever added at the end, so a position never changes.
 
 1. ``name``            the label, or the method when the run has no label. Result
-                       directories, job names and ``REGBENCH_ALLOW_UNCHECKED`` use it.
+                       directories and job names use it.
 2. ``method``          goes back as ``--method``.
 3. ``label``           goes back as ``--label``; ``-`` when the run has none.
 4. ``opts``            ``key=value`` items joined by commas, each going back as one
@@ -37,21 +37,23 @@ only ever added at the end, so a position never changes.
 7. ``scope``           ``pair`` (one array task per case) or ``group`` (one per patient).
 8. ``after``           the ``name`` of the run whose results this one reads (the anchored
                        ASHLAR rows read STARE's rigid matrix); ``-`` when none.
-9. ``gated_by``        the ``name`` of the run whose selfcheck gates this run: its own,
-                       except for the rows of ``GATED_BY``.
+9. ``checked_by``      the ``name`` of the run whose selfcheck checks this run: its own,
+                       except for the rows of ``CHECKED_BY``. The selfcheck is
+                       REPORTED, never a gate: no job of a run waits for it.
 10. ``selfcheck_mask`` what ``selfcheck --mask`` must be given for this method
                        (``overlap`` for ASHLAR, ``seams`` for PALOM); ``-`` when none.
 11. ``primary``        the run's primary result name when it has one, else ``-``.
 12. ``variants``       the result names the run writes, joined by commas.
 13. ``active``         ``1``, or ``0`` for a paused run (seen only with ``runs --all``).
-14. ``gate_variants``  the result names whose selfcheck status gates the run, joined by
-                       commas (``gate_variants()``): all of the run's names, except for
-                       DeeperHistReg, whose gate is the row of the written image
-                       (``<label>_asdrawn``) alone.
-15. ``realcheck``      the result name whose realcheck gates the run, or ``-``
-                       (``realcheck_gate()``): the launcher sends the run's first unit
-                       ahead with ``run --realcheck`` and starts the rest only when
-                       that row's ``realcheck.json`` is not flagged.
+14. ``checked_rows``   the result names the run's reported selfcheck status is read
+                       from, joined by commas (``checked_rows()``): all of the run's
+                       names, except for DeeperHistReg, whose status is read from the
+                       row of the written image (``<label>_asdrawn``) alone. Every row
+                       stays in every table whatever its selfcheck says.
+15. ``realcheck``      the result name whose realcheck is reported for the run, or ``-``
+                       (``realcheck_row()``): the run's first unit runs with ``run
+                       --realcheck``, beside the rest of the run, which never waits
+                       for it.
 16. ``stages``         for a run whose registration is several scheduler jobs per round
                        (``stages_of()``): their names in order, joined by commas
                        (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit.
@@ -271,10 +273,10 @@ FAMILY = {
 
 FAMILY.update(plugins.get("FAMILY", {}) or {})
 
-# Which run's selfcheck gates a run, when it is not its own.
-GATED_BY = {
-    # every ASHLAR cell is gated by the selfcheck of the cell that matches it in `affine`;
-    # every generated STARE cell by `stare`'s (one adapter, one pointing path)
+# Which run's selfcheck checks a run, when it is not its own. Reported, never a gate.
+CHECKED_BY = {
+    # every ASHLAR cell is checked by the selfcheck of the cell that matches it in
+    # `affine`; every generated STARE cell by `stare`'s (one adapter, one pointing path)
     **{
         n: ("affine_ashlar" if c[0] == "stare" else "ashlar")
         for n, c in _ashlar.ASHLAR_CELLS.items()
@@ -283,18 +285,20 @@ GATED_BY = {
     **{run_label: "stare" for r in _stare_runs() if (run_label := r.label) is not None},
 }
 
-GATED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
+# the private plug-in's key keeps its older name
+CHECKED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
 
-# Method -> the suffixes of the result names whose selfcheck status gates its runs, when
-# that is not all of them. DeeperHistReg (ruling R3.12 b): only the row of the image its
-# writer puts on disk. Its estimated-field row is checked and reported all the same; when
-# it fails, that row is dropped from the results and the method still runs.
-GATE_SUFFIXES = {"deeperhistreg": ("_asdrawn",)}
+# Method -> the suffixes of the result names a run's reported selfcheck status is read
+# from, when that is not all of them. DeeperHistReg (ruling R3.12 b): only the row of the
+# image its writer puts on disk. Its estimated-field row is checked and reported all the
+# same, and stays in every table whatever its selfcheck says (user ruling, option A): its
+# own verdict is beside its numbers (`selfcheck_row`).
+CHECKED_BY_SUFFIX = {"deeperhistreg": ("_asdrawn",)}
 
-# The methods whose realcheck is a GATE (Task 5 and Task 7 of the port's plan): the two
-# VALIS adapters. Their point path is derived by the benchmark, not handed over by the
-# package, so it is also checked on a real case before the cohort is spent on it. The
-# gate reads the run's PRIMARY row; a run of these methods without one has none.
+# The methods whose realcheck is run and REPORTED (never a gate): the two VALIS adapters.
+# Their point path is derived by the benchmark, not handed over by the package, so it is
+# also checked on a real case. It reads the run's PRIMARY row; a run of these methods
+# without one has none.
 REALCHECK_METHODS = ("valis_mirage", "valis")
 
 # Image -> the build context under containers/ (images.json) for the ones this repository
@@ -327,12 +331,12 @@ RUNS_COLUMNS = (
     "gpu",
     "scope",
     "after",
-    "gated_by",
+    "checked_by",
     "selfcheck_mask",
     "primary",
     "variants",
     "active",
-    "gate_variants",
+    "checked_rows",
     "realcheck",
     "stages",
 )
@@ -360,14 +364,14 @@ NO_RECORD = "no selfcheck record"
 def row_checks(selfcheck_dir, mine=None):
     """``{result name: what the selfcheck says of THAT row}`` for every run.
 
-    A run's gate reads the rows that gate it; the others may never have been compared
-    with an image (``no_stage_image``: a stage the method's writer cannot draw, such
-    as ``stare_rigid``), and a run gated by another run's selfcheck has no check of
-    its own at all. Tables carry this beside every number (column ``selfcheck_row``):
+    A run's reported status is read from its checked rows; the others may never have
+    been compared with an image (``no_stage_image``: a stage the method's writer cannot
+    draw, such as ``stare_rigid``), and a run checked by another run's selfcheck has no
+    check of its own at all. Tables carry this beside every number (column ``selfcheck_row``):
 
     ``ok`` / ``inconsistent`` / ``not_checked`` / ``crashed``   this row's own comparison
     ``no_stage_image``            NEVER CHECKED: no image of this stage exists
-    ``via <run>: <status>``       not checked itself: its run is gated by ``<run>``'s
+    ``via <run>: <status>``       not checked itself: its run is checked by ``<run>``'s
     ``no selfcheck record``       nothing was found (a run outside the launcher)
 
     ``mine(record)`` says whether a record belongs to what is being scored."""
@@ -378,11 +382,11 @@ def row_checks(selfcheck_dir, mine=None):
     root = Path(selfcheck_dir) if selfcheck_dir else None
     for run in runs_for(None):
         name = run_name(run)
-        gate = gated_by(name)
+        checker = checked_by(name)
         record = None
         if root is not None:
             try:
-                record = json.loads((root / gate / "selfcheck.json").read_text())
+                record = json.loads((root / checker / "selfcheck.json").read_text())
             except (OSError, ValueError):
                 record = None
         if record is not None and mine is not None and not mine(record):
@@ -391,16 +395,16 @@ def row_checks(selfcheck_dir, mine=None):
         for variant in variants_of(run):
             if record is None:
                 out[variant] = NO_RECORD
-            elif gate != name:
-                out[variant] = f"via {gate}: {record.get('status', 'not_checked')}"
+            elif checker != name:
+                out[variant] = f"via {checker}: {record.get('status', 'not_checked')}"
             else:
                 out[variant] = statuses.get(variant, NO_RECORD)
     return out
 
 
-def _gate_records(selfcheck_dir, mine=None):
-    """``[(run, name, gate name, record or None)]`` for every run: the selfcheck record
-    that gates it, when one is there and ``mine`` accepts it."""
+def _check_records(selfcheck_dir, mine=None):
+    """``[(run, name, checking run, record or None)]`` for every run: the selfcheck
+    record that checks it, when one is there and ``mine`` accepts it."""
     import json
     from pathlib import Path
 
@@ -408,16 +412,16 @@ def _gate_records(selfcheck_dir, mine=None):
     out = []
     for run in runs_for(None):
         name = run_name(run)
-        gate = gated_by(name)
+        checker = checked_by(name)
         record = None
         if root is not None:
             try:
-                record = json.loads((root / gate / "selfcheck.json").read_text())
+                record = json.loads((root / checker / "selfcheck.json").read_text())
             except (OSError, ValueError):
                 record = None
         if record is not None and mine is not None and not mine(record):
             record = None
-        out.append((run, name, gate, record))
+        out.append((run, name, checker, record))
     return out
 
 
@@ -426,26 +430,26 @@ MASK_NOT_OVER = "no"
 
 def mask_flags(selfcheck_dir, mine=None):
     """``{result name: flag}`` for every run: did the selfcheck's mask hide more of the
-    dots than its cap (``selfcheck.MASK_MAX``) on some case of the selfcheck that gates
+    dots than its cap (``selfcheck.MASK_MAX``) on some case of the selfcheck that checks
     the row's run. Column ``selfcheck_mask_over_cap`` of every table (ruling R3.22: over
     the cap a run is flagged, never blocked):
 
     ``no``                         checked, and the mask stayed under its cap (or the
                                    method has no mask)
     ``yes: 0.57 masked, cap 0.50`` over the cap on the worst case; ``(via <run>)`` when
-                                   the row's run is gated by another run's selfcheck
+                                   the row's run is checked by another run's selfcheck
     empty                          no selfcheck record was found"""
     from . import selfcheck
 
     out = {}
-    for run, name, gate, record in _gate_records(selfcheck_dir, mine):
+    for run, name, checker, record in _check_records(selfcheck_dir, mine):
         over = selfcheck.over_cap(record) if record is not None else {}
         for variant in variants_of(run):
             if record is None:
                 out[variant] = ""
                 continue
-            hit = over.get(variant) if gate == name else None
-            if gate != name and over:
+            hit = over.get(variant) if checker == name else None
+            if checker != name and over:
                 hit = max(over.values(), key=lambda v: v["masked_frac"])
             if not hit:
                 out[variant] = MASK_NOT_OVER
@@ -454,23 +458,23 @@ def mask_flags(selfcheck_dir, mine=None):
             out[variant] = (
                 f"yes: {hit['masked_frac']:.2f} masked, cap "
                 + ("?" if cap is None else f"{cap:.2f}")
-                + (f" (via {gate})" if gate != name else "")
+                + (f" (via {checker})" if checker != name else "")
             )
     return out
 
 
 def selfcheck_mask_rows(selfcheck_dir, mine=None):
     """The rows of ``selfcheck_masks.csv``: every selfcheck record of the run list, per
-    case, result name and dot set (``selfcheck.mask_rows``). A record that gates several
+    case, result name and dot set (``selfcheck.mask_rows``). A record that checks several
     runs is listed once, under the run that made it."""
     from . import selfcheck
 
     rows, seen = [], set()
-    for _, _, gate, record in _gate_records(selfcheck_dir, mine):
-        if record is None or gate in seen:
+    for _, _, checker, record in _check_records(selfcheck_dir, mine):
+        if record is None or checker in seen:
             continue
-        seen.add(gate)
-        rows += selfcheck.mask_rows(record, gate)
+        seen.add(checker)
+        rows += selfcheck.mask_rows(record, checker)
     return rows
 
 
@@ -496,8 +500,8 @@ def check():
     """Refuse a list whose paused runs are still needed by what runs.
 
     A paused run writes no results. So it cannot write a primary row (the summary would
-    open on a row that does not exist), it cannot be the run whose selfcheck gates an
-    active run (that run would start unchecked or never start), and it cannot be what an
+    open on a row that does not exist), it cannot be the run whose selfcheck checks an
+    active run (that run would have no verdict), and it cannot be what an
     active run waits for (the anchored ASHLAR rows read STARE's matrix).
     """
     active = {run_name(r) for r in active_runs()}
@@ -512,10 +516,10 @@ def check():
             )
     for run in active_runs():
         name = run_name(run)
-        if gated_by(name) not in active:
+        if checked_by(name) not in active:
             raise ValueError(
-                f"the run {gated_by(name)!r} is paused and its selfcheck gates the "
-                f"active run {name!r}: pause that one too, or change GATED_BY"
+                f"the run {checked_by(name)!r} is paused and its selfcheck checks the "
+                f"active run {name!r}: pause that one too, or change CHECKED_BY"
             )
         if run.after is not None and run.after not in active:
             raise ValueError(
@@ -600,30 +604,31 @@ def primary_of(family_name):
     return None
 
 
-def gated_by(name):
-    """The name of the run whose selfcheck gates the run ``name``."""
-    return GATED_BY.get(name, name)
+def checked_by(name):
+    """The name of the run whose selfcheck checks the run ``name`` (reported, never a
+    gate)."""
+    return CHECKED_BY.get(name, name)
 
 
-def gate_variants(name):
-    """The result names whose selfcheck status gates the run ``name``: all the names it
-    writes, unless its method is in ``GATE_SUFFIXES``. For a run gated by another run's
-    selfcheck (``gated_by``), ask for THAT run's names."""
+def checked_rows(name):
+    """The result names a run's reported selfcheck status is read from: all the names it
+    writes, unless its method is in ``CHECKED_BY_SUFFIX``. For a run checked by another
+    run's selfcheck (``checked_by``), ask for THAT run's names."""
     run = run_of(name)
     names = tuple(variants_of(run))
-    suffixes = GATE_SUFFIXES.get(run.method)
+    suffixes = CHECKED_BY_SUFFIX.get(run.method)
     if not suffixes:
         return names
-    gate = tuple(v for v in names if v.endswith(tuple(suffixes)))
-    if not gate:
+    rows = tuple(v for v in names if v.endswith(tuple(suffixes)))
+    if not rows:
         raise ValueError(f"{name}: none of {names} ends in one of {suffixes}")
-    return gate
+    return rows
 
 
-def realcheck_gate(name):
-    """The result name whose ``realcheck.json`` gates the run ``name``, or None: the
-    run's primary row, for a method in ``REALCHECK_METHODS``. Not the exit code of ``run
-    --realcheck``, which is also 3 when a non-primary row of the run is flagged."""
+def realcheck_row(name):
+    """The result name whose ``realcheck.json`` is reported for the run ``name``, or
+    None: the run's primary row, for a method in ``REALCHECK_METHODS``. Not the exit
+    code of ``run --realcheck``, which is also 3 when a non-primary row is flagged."""
     run = run_of(name)
     if run.method not in REALCHECK_METHODS:
         return None
@@ -631,7 +636,7 @@ def realcheck_gate(name):
     return primary[0] if primary else None
 
 
-def _statuses(name, record, names):
+def _statuses(record, names):
     """The status of each name in a selfcheck record. ``selfcheck.json`` has
     ``variants: {name: status}``; the dict per variant inside ``pairs`` is read too."""
     from . import selfcheck
@@ -645,52 +650,90 @@ def _statuses(name, record, names):
             if isinstance(entry, dict)
             else entry
         )
-    return out, selfcheck
+    return out
 
 
-def gate_status(name, record):
-    """The status that decides whether the run ``name`` may start, from the record a
-    selfcheck wrote (``selfcheck.json``): the worst over ``gate_variants(name)``, read
-    TWICE: from the record's summary (``variants``) and from every round of every case
+def _reference_status(record, names):
+    """The worst status of the second comparison a method that redraws the reference
+    has (ASHLAR): ``pairs[].variants.<row>.reference.status``. It is already folded
+    into each row's own status; it is reported apart so the summary can name it."""
+    from . import selfcheck
+
+    found = [
+        ((pair.get("variants") or {}).get(v) or {}).get("reference", {}).get("status")
+        for pair in record.get("pairs") or []
+        if isinstance(pair, dict)
+        for v in names
+    ]
+    found = [f for f in found if f]
+    return selfcheck.worst(found) if found else ""
+
+
+def selfcheck_status(name, record):
+    """``(status, rows, reference)``: what the selfcheck record (``selfcheck.json``) says
+    of the run ``name``. REPORTED, never a gate: nothing waits for it and no row is left
+    out because of it.
+
+    ``status`` is the worst over ``checked_rows(name)`` (``rows``), read TWICE: from the
+    record's summary (``variants``) and from every round of every case
     (``pairs[].variants``), a name missing anywhere counting as ``not_checked`` (as that
-    round's own status when it blocks). So the verdict is never better than what any
-    case of the record says of a gating row. It is the record's own ``status`` except
-    where a method's gate reads only some of its rows."""
-    names = gate_variants(name)
-    statuses, selfcheck = _statuses(name, record, names)
+    round's own status when it is not ok). So the verdict is never better than what any
+    case of the record says of a checked row. It is the record's own ``status`` except
+    where a method's status is read from only some of its rows. An empty record (none
+    was found) is ``not_checked``. ``reference`` is the worst reference comparison
+    (``_reference_status``), or ``""``."""
+    from . import selfcheck
+
+    names = checked_rows(name)
+    record = record or {}
+    statuses = _statuses(record, names)
     for pair in record.get("pairs") or []:
         rows = pair.get("variants") if isinstance(pair, dict) else None
         rows = rows if isinstance(rows, dict) else {}
         own = pair.get("status") if isinstance(pair, dict) else None
-        missing = own if own in selfcheck.BLOCKING else selfcheck.NOT_CHECKED
+        missing = own if own in selfcheck.NOT_OK else selfcheck.NOT_CHECKED
         for v in names:
             entry = rows.get(v)
             if isinstance(entry, dict):
                 statuses.append(entry.get("status", selfcheck.NOT_CHECKED))
             else:
                 statuses.append(entry or missing)
-    return selfcheck.worst(statuses)
+    return selfcheck.worst(statuses), names, _reference_status(record, names)
 
 
-def dropped_variants(name, record):
-    """The result names of the run ``name`` that are left out of the results because
-    their own selfcheck failed while the gate held: the non-gating rows whose status
-    blocks. Empty when the gate itself blocks (then the run does not start at all)."""
-    statuses, selfcheck = _statuses(name, record, gate_variants(name))
-    if selfcheck.worst(statuses) in selfcheck.BLOCKING:
-        return []
-    others = [v for v in variants_of(run_of(name)) if v not in gate_variants(name)]
-    theirs, _ = _statuses(name, record, others)
-    return [v for v, s in zip(others, theirs) if s in selfcheck.BLOCKING]
+REAL_OK, REAL_FLAGGED, REAL_NOT_CHECKED = "ok", "flagged", "not_checked"
 
 
-def droppable(variant):
-    """True for a result name of the run list that gates no run: the only rows a failed
-    selfcheck may leave out of the results (a gating row's failure blocks the method)."""
-    for run in RUNS:
-        if variant in variants_of(run):
-            return variant not in gate_variants(run_name(run))
-    raise KeyError(f"{variant!r} is no result name of the run list")
+def realcheck_status(name, out, submission=""):
+    """``(status, row, flagged case ids)``: what the realchecks of the run ``name`` say,
+    from every ``realcheck.json`` of its realcheck row under ``out`` (only the run's
+    first unit writes one). REPORTED, never a gate.
+
+    ``flagged`` when one is flagged; ``not_checked`` when there is none of this
+    submission beside an ``ok`` result (the unit failed, or wrote no image); else
+    ``ok``. Status and row are ``-`` for a run that has no realcheck."""
+    import json
+    from pathlib import Path
+
+    from . import ladder
+
+    row = realcheck_row(name)
+    if row is None:
+        return NONE, NONE, []
+    found, flagged = 0, []
+    for path in sorted(Path(out, row).glob("*/*/realcheck.json")):
+        try:
+            run = json.loads((path.parent / "run.json").read_text())
+            check = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not run.get("ok") or not ladder.mine(run, submission):
+            continue  # a realcheck an earlier launch left answers for nothing here
+        found += 1
+        if check.get("flag"):
+            flagged.append(path.parent.name)
+    status = REAL_FLAGGED if flagged else REAL_OK if found else REAL_NOT_CHECKED
+    return status, row, flagged
 
 
 def selfcheck_mask(method):
@@ -782,13 +825,13 @@ def runs_table(paused=False, dataset=None, order=None):
                 "1" if run.gpu else "0",
                 scope(run.method),
                 run.after or NONE,
-                gated_by(run_name(run)),
+                checked_by(run_name(run)),
                 selfcheck_mask(run.method) or NONE,
                 primary[0] if primary else NONE,
                 ",".join(names),
                 "1" if run.active else "0",
-                ",".join(gate_variants(run_name(run))),
-                realcheck_gate(run_name(run)) or NONE,
+                ",".join(checked_rows(run_name(run))),
+                realcheck_row(run_name(run)) or NONE,
                 ",".join(stages_of(run)) or NONE,
             )
         )

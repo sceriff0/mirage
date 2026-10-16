@@ -160,25 +160,23 @@ def test_the_common_block_is_among_the_primary_rows_that_ran():
         rows.append(
             cell("c", f"P{k}_r1", f"P{k}", imputed_initial=True, cause="not_run")
         )
-        # d ran, and a gate blocked its run (older results would still be on disk)
-        rows.append(cell("d", f"P{k}_r1", f"P{k}"))
+        # d ran, whatever its selfcheck said: reported, never a gate
+        rows.append(cell("d", f"P{k}_r1", f"P{k}", selfcheck_status="inconsistent"))
     primary = ["a", "b", "c", "d", "e"]
-    blocked = {"d": "its run `d` was blocked (selfcheck: inconsistent)"}
-    inside, outside = score.compared_rows(rows, primary, blocked)
-    assert inside == ["a", "b"]
+    inside, outside = score.compared_rows(rows, primary)
+    assert inside == ["a", "b", "d"]
     assert outside["c"] == score.NOT_LAUNCHED and outside["e"] == score.NO_ROW
-    assert "blocked" in outside["d"]
-    assert score.common_cases(rows, primary, blocked) == {"P0_r1", "P1_r1"}
-    summary = score.summarise_cells(rows, primary, blocked)
+    assert score.common_cases(rows, primary) == {"P0_r1", "P1_r1"}
+    summary = score.summarise_cells(rows, primary)
     assert by(summary, method="a", subset="common")["n_cases"] == 2
     # the rule before: one primary that did not run emptied the block for everyone
     assert score.common_cases(rows, ["a", "b"]) != set()
-    block = score.common_block(rows, primary, blocked)
-    assert [r["method"] for r in block if r["in_common_block"]] == ["a", "b"]
+    block = score.common_block(rows, primary)
+    assert [r["method"] for r in block if r["in_common_block"]] == ["a", "b", "d"]
     text = score.summary_markdown(summary, [], [], primary, common=block)
     assert "### Cases every compared row registered" in text
     assert "`c` (not launched by this submission" in text
-    assert "`d` (its run `d` was blocked" in text
+    assert "blocked" not in text
 
 
 def test_the_block_is_named_even_when_no_primary_ran():
@@ -201,28 +199,35 @@ def test_a_submission_of_some_runs_scores_without_only_run(tmp_path):
     for c in cases:
         methods.run_case(good("stare"), c, out)
         methods.run_case(good("ashlar"), c, out)
-    gates = out / "logs" / "gates"
-    gates.mkdir(parents=True)
-    (gates / "stare.tsv").write_text("stare\tok\t-\t0\t-\t/logs/rb-gate-stare-7.log\n")
-    (gates / "valis120.tsv").write_text("valis120\tinconsistent\t-\t1\t-\n")
+    verdicts = out / "logs" / "verdicts.tsv"
+    verdicts.parent.mkdir(parents=True)
+    verdicts.write_text(
+        "run\tcheck\tstatus\treference\trows\tlog\n"
+        "stare\tselfcheck\tok\t-\tstare\t/logs/rb-sc-stare-7.log\n"
+        "ashlar\tselfcheck\tinconsistent\t-\tashlar\t-\n"
+        "valis120\tselfcheck\tinconsistent\t-\tvalis120\t-\n"
+    )
     res = score.score(
         root,
         out,
         ["multiplex"],
         expected=["stare", "ashlar", "valis120", "palom"],
         primary=["stare", "ashlar", "valis120", "palom"],
-        gates=gates,
+        verdicts=verdicts,
         run_variants={"valis120": ["valis120_rigid", "valis120"]},
         with_tissue=False,
     )
     block = {r["method"]: r for r in res["common_block"]}
+    # an inconsistent selfcheck takes no row out of the block: reported, never a gate
     assert block["stare"]["in_common_block"] and block["ashlar"]["in_common_block"]
-    assert "blocked" in block["valis120"]["why_not"]
+    assert block["valis120"]["why_not"] == score.NOT_LAUNCHED
     assert block["palom"]["why_not"] == score.NOT_LAUNCHED
     assert block["stare"]["n_cases_common"] == 2
     common = by(res["summary_cells"], method="stare", subset="common")
     assert common["n_cases"] == 2 and common["n_dice_shared"] == 2
-    assert res["launch"][0]["log_path"] == "/logs/rb-gate-stare-7.log"
+    assert res["launch"][0]["log"] == "/logs/rb-sc-stare-7.log"
+    status = {r["method"]: r["selfcheck_status"] for r in res["cells"]}
+    assert status["stare"] == "ok" and status["ashlar"] == "inconsistent"
     # where the rounds went, as a table: three of the manifest's rounds were prepared
     # into two cases, both with outlines and neither with bare nuclei
     manifest = tmp_path / "rounds.csv"
@@ -324,7 +329,7 @@ def test_the_cohorts_caption_names_the_rows_tuned_on_it():
     assert score.in_sample_lines("elsewhere", ["stare"]) == []
 
 
-def test_the_gate_block_counts_the_narrow_dots_of_each_selfcheck():
+def test_the_selfcheck_block_counts_the_narrow_dots_of_each_selfcheck():
     def row(run, variant, case_id, dots, detected, narrow):
         return {
             "run": run,
@@ -383,11 +388,18 @@ def test_the_gate_block_counts_the_narrow_dots_of_each_selfcheck():
         "None in the 1 checked result(s).\n"
     )
     assert score.narrow_lines([]) == [] and score.narrow_lines(rows[-1:]) == []
-    # in the block of the gates, with or without a gate record
-    gate = {"run": "stare", "gate": "selfcheck", "status": "ok", "blocked": False}
-    block = score.launch_markdown([{**gate, "dropped": ""}], rows)
-    assert block[0] == "## What the gates decided\n" and block[-1] == line
-    assert score.launch_markdown([], rows) == ["## What the gates decided\n", line]
+    # in the block of the selfchecks, with or without a verdict
+    said = {
+        "run": "stare",
+        "selfcheck": "ok",
+        "realcheck": "",
+        "reference": "",
+        "log": "",
+    }
+    block = score.launch_markdown([said], rows)
+    assert block[0] == "## What the selfchecks said\n" and block[-1] == line
+    assert "- `stare`: selfcheck ok" in block
+    assert score.launch_markdown([], rows) == ["## What the selfchecks said\n", line]
     assert score.launch_markdown([], []) == []
 
 

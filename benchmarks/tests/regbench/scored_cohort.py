@@ -3,8 +3,9 @@ score records (``test_score_records.py``).
 
 Four ``multiplex`` rounds of three patients (one prepared before the bare nuclei
 existed). Results: a map in each direction, two seam owners (a mask on moving nuclei, a
-mask on reference nuclei), a method that raises, a method that never ran, a dropped row, and a
-case one method was not run on.
+mask on reference nuclei), a method that raises, a method that never ran, a row that
+was once dropped when its selfcheck failed (``dropme``: scored like any other since the
+selfcheck stopped gating), and a case one method was not run on.
 
 Nothing here reads the clock: the same call builds the same cases. The results carry
 their run's timings, so two BUILDS differ in ``resources.csv``; every comparison in the
@@ -32,7 +33,6 @@ SCORE_KW = dict(
     expected=["ghost"],
     primary=["stare", "rtm"],
     seam_owners=OWNERS,
-    dropped=["dropme"],
     row_checks={"stare": "ok", "rtm": "no_stage_image", "tiles": "ok"},
 )
 

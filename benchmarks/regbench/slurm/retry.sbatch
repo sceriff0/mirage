@@ -15,9 +15,8 @@
 #
 # A range of `-`: the chain is of SINGLE jobs, not arrays (a selfcheck). Then a step is
 # submitted without --array, the end line is <job name>-<job id>.end, and this job
-# exits 0 only when the chain's last job ended ok (what waits for a selfcheck with
-# `afterok` waits for this job). A run of `-`: the chain runs before its run's gate
-# (a selfcheck), so there is no verdict to obey yet.
+# exits 0 only when the chain's last job ended ok. Nothing waits for it with `afterok`:
+# the selfcheck is reported, never a gate. A run of `-`: the chain is a selfcheck's.
 #
 # THE PLAN is written by submit_cohort.sh: <plan folder>/step-<k>, one per step in the
 # order the chain runs, one item per line:
@@ -63,19 +62,6 @@ end() {  # end <status> <cause|-> : the last line of the log
     [ "$2" = - ] || cause=" cause=$2 whose=launcher"
     echo "REGBENCH_END kind=retry run=$name chain=$first_name status=$1$cause log=${REGBENCH_LOG:--}"
 }
-
-# the second lock behind the dependency on the gate job, as in run_rung.sbatch
-gate="$REGBENCH_OUT/logs/gates/$name.tsv"
-status=not_checked blocked=1
-if [ -s "$gate" ]; then
-    IFS=$'\t' read -r _ status _ blocked _ < "$gate"
-fi
-[ "$name" = - ] && blocked=0
-if [ "$blocked" != 0 ]; then
-    echo "$name: the gate says $status and the run is not allowed to start unchecked; no retry is submitted"
-    end blocked gate_blocked
-    exit 0
-fi
 
 # last: "<index> <job name>-<job id>" per unit, the last job that held the unit
 last="$plan/last"

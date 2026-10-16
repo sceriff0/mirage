@@ -630,7 +630,7 @@ def test_a_round_whose_image_is_another_rounds_is_inconsistent(tmp_path, monkeyp
     )
     first, second = rec["pairs"]
     assert first["status"] == sc.OK and second["status"] == sc.INCONSISTENT
-    assert rec["blocks_the_method"]
+    assert rec["not_ok"]
 
 
 def test_the_default_row_is_written_before_micro_runs(tmp_path, pair):

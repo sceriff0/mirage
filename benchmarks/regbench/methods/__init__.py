@@ -373,7 +373,10 @@ def parse_opts(pairs, method=None):
 
 
 def selfcheck_status():
-    """The status the launcher hands a cohort run (``REGBENCH_SELFCHECK_STATUS``)."""
+    """The selfcheck status a run was handed (``REGBENCH_SELFCHECK_STATUS``), kept in its
+    ``run.json``. The cohort launcher hands none any more (a run never waits for its
+    selfcheck), so it reads ``not_checked`` there; the scorer sets the tables' column
+    ``selfcheck_status`` from ``logs/verdicts.tsv`` instead (``score.set_selfcheck_status``)."""
     return os.environ.get("REGBENCH_SELFCHECK_STATUS") or "not_checked"
 
 
@@ -642,7 +645,7 @@ def _run(
     def fail(case, variant, error, cause, cost=None, tb="", info=None, no_rerun=False):
         d = result_dir(out, names[variant], case)
         (d / "warped.npz").unlink(missing_ok=True)
-        # nothing an earlier attempt left may answer for this one (a gate reads it)
+        # nothing an earlier attempt left may answer for this one (the verdict reads it)
         (d / "realcheck.json").unlink(missing_ok=True)
         rec = {**head(case, variant), "ok": False, "error": error, "cause": cause}
         if cost is not None:

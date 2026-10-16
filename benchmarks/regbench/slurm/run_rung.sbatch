@@ -45,20 +45,8 @@ retry=0
 export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU="$gpu"
 export REGBENCH_RETRY="$retry" REGBENCH_TIME_LIMIT="$limit"
 
-# The gate's verdict for this run, as the gate job left it. The dependency on that job
-# already keeps a blocked run from starting; this is the second lock, for a scheduler
-# that lets a dependent job through.
-gate="$REGBENCH_OUT/logs/gates/$name.tsv"
-status=not_checked blocked=1
-if [ -s "$gate" ]; then
-    IFS=$'\t' read -r _ status _ blocked _ < "$gate"
-fi
-if [ "$blocked" != 0 ]; then
-    echo "$name: the gate says $status and the run is not allowed to start unchecked; nothing run"
-    echo "REGBENCH_END kind=run run=$name dataset=$dataset unit=index_${SLURM_ARRAY_TASK_ID:-0} rung=$attempt status=blocked cause=gate_blocked whose=launcher log=${REGBENCH_LOG:--}"
-    exit 0
-fi
-export REGBENCH_SELFCHECK_STATUS="$status"
+# The selfcheck is REPORTED, never a gate: this task does not wait for it and does not
+# read its verdict (the scorer reads it from logs/verdicts.tsv).
 
 index="${SLURM_ARRAY_TASK_ID:-0}"
 work="${REGBENCH_WORK:-${TMPDIR:-/tmp}}/regbench-$name-${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}-$index"

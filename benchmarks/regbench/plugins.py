@@ -17,7 +17,8 @@ What ``plugin.py`` may define, every name optional:
 ``SELFCHECK_SIZES``    ``{method or label: an entry of selfcheck.SIZES}``
 ``SELFCHECK_OPTS``     ``{run name: {option: value}}`` added to the run's options for
                        its selfcheck only
-``SELFCHECK_GATED_BY`` ``{run name: the run whose selfcheck gates it}``
+``SELFCHECK_GATED_BY`` ``{run name: the run whose selfcheck checks it}``: reported,
+                       never a gate (the key keeps its older name)
 ``COST_COLUMNS``       ``{column: key of run.json's info}``: extra columns of
                        ``resources.csv``
 

@@ -485,7 +485,7 @@ def test_opencv_draws_what_the_emulated_writer_draws():
 # ── the selfcheck: dots found in the written image ────────────────────────────
 def test_the_unmutated_adapter_passes_both_rows(tmp_path):
     rec, variants = _selfcheck(tmp_path)
-    assert rec["status"] == sc.OK and not rec["blocks_the_method"], rec
+    assert rec["status"] == sc.OK and not rec["not_ok"], rec
     assert rec["variants"] == {"palom_affine": sc.OK, "palom": sc.OK}
     assert rec["pairs"][0]["tile"] == TILE and rec["mask"] == "seams"
     final, stage = variants["palom"], variants["palom_affine"]
@@ -512,7 +512,7 @@ def test_a_wrong_block_map_is_inconsistent(tmp_path, monkeypatch, name):
     rec, variants = _selfcheck(tmp_path)
     assert variants["palom"]["status"] == sc.INCONSISTENT, (name, variants["palom"])
     assert variants["palom_affine"]["status"] == sc.OK
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"]
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"]
 
 
 def test_a_reversed_affine_stage_is_inconsistent(tmp_path, monkeypatch):
@@ -547,7 +547,7 @@ def test_all_zero_shifts_are_not_checked(tmp_path, monkeypatch):
     assert variants["palom"]["status"] == sc.NOT_CHECKED
     assert "a shift of at least 0.5 px" in variants["palom"]["cause"]
     assert variants["palom"]["n_found"] == variants["palom"]["n_dots"]  # numbers kept
-    assert rec["status"] == sc.NOT_CHECKED and rec["blocks_the_method"]
+    assert rec["status"] == sc.NOT_CHECKED and rec["not_ok"]
     # with all shifts at zero a wrong sign would indeed have passed
     assert pa.SELFCHECK_NOT_CHECKED({"shift_meaningful_fraction": 0.09}, "palom")
     assert (

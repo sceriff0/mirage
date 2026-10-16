@@ -664,7 +664,7 @@ check (1) only:
     geometry: its tile grid, `tilemap.on_seam` at its 8 px dot margin, on the
     selfcheck's own dots, both rounds of the patient. No image enters, so ASHLAR is not
     needed
-    (`test_selfcheck_gate.py::test_the_overlap_cap_stands_above_the_measured_share`
+    (`test_selfcheck_masks.py::test_the_overlap_cap_stands_above_the_measured_share`
     repeats it).
 
     | where ASHLAR draws the moving tiles | share of the dots masked |
@@ -761,7 +761,7 @@ The rows of this second table were measured on 2026-10-09 and not re-run: every 
 `mov_to_ref` comparison without a mask, which the change of 2026-10-11 does not touch
 (the first table, re-run, is the evidence). What that change adds is not measurable on
 STARE, which is `mov_to_ref`; it is shown on drawn dots, where the image is known exactly
-(`test_selfcheck_gate.py`, a 1024 x 1536 image, the points right wherever something is
+(`test_selfcheck_masks.py`, a 1024 x 1536 image, the points right wherever something is
 drawn):
 
 | image | `mov_to_ref` | `ref_to_mov`, before | `ref_to_mov`, now |
@@ -2102,7 +2102,7 @@ run whose registration is several jobs per round (`feed_tiles.sbatch`, below). *
 never been submitted**: what is tested is the job graph its dry run prints, the same
 graph through a stand-in `sbatch` (`test_submit_cohort.py`), the tile submitter against
 a stand-in `sbatch` and `squeue` that keep a queue (`test_feed_tiles.py`), and the rules
-its jobs apply (`test_ladder.py`, `test_failures.py`, `test_gates.py`).
+its jobs apply (`test_ladder.py`, `test_failures.py`, `test_verdicts.py`).
 
 ### What it submits
 

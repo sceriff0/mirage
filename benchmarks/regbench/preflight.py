@@ -52,7 +52,7 @@ NEEDS = {
     "deeperhistreg": ("torch", "SimpleITK"),
     "palom": ("psutil",),
 }
-# the scorer's image (variants.SCORER_IMAGE): prepare, gate, tissue, score
+# the scorer's image (variants.SCORER_IMAGE): prepare, verdict, tissue, score
 SCORER = ("numpy", "scipy", "skimage", "tifffile", "zarr", "stare.slide_io", "cv2")
 # imported by the harness where present, and only reported where absent
 OPTIONAL = ("psutil",)

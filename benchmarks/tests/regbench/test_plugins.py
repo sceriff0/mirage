@@ -55,7 +55,7 @@ out = {
     "seam_owners": list(score.SEAM_OWNERS),
     "sizes": "fakeprivate" in selfcheck.SIZES,
     "family": variants.family("fakeprivate_r2"),
-    "gated_by": variants.gated_by("fakeprivate_r2") if "fakeprivate_r2" in names else None,
+    "checked_by": variants.checked_by("fakeprivate_r2") if "fakeprivate_r2" in names else None,
     "cohort": [variants.run_name(r) for r in variants.runs_for("multiplex")],
     "loaded": plugins.load() is not None,
 }
@@ -144,7 +144,7 @@ def test_an_enabled_plugin_is_picked_up_everywhere(tmp_path):
     assert got["table_rows"] == cohort + 2
     assert got["cli_methods"][-1] == "fakeprivate"
     assert got["seam_owners"][-1] == "fakeprivate" and got["sizes"]
-    assert got["family"] == "fakeprivate" and got["gated_by"] == "fakeprivate"
+    assert got["family"] == "fakeprivate" and got["checked_by"] == "fakeprivate"
     assert "fakeprivate" in got["cohort"]
     assert got["scope"] == "pair" and got["variants"] == ["fakeprivate_r2"]
     assert got["cost"] == 2.5

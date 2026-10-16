@@ -443,7 +443,7 @@ def test_stage_times_are_read_from_the_packages_log():
 # ── the run, against the emulated writer ──────────────────────────────────────
 def test_the_unmutated_adapter_passes_both_rows(tmp_path):
     rec, v = _selfcheck(tmp_path)
-    assert rec["status"] == sc.OK and not rec["blocks_the_method"], v
+    assert rec["status"] == sc.OK and not rec["not_ok"], v
     assert rec["variants"] == {"deeperhistreg": sc.OK, "deeperhistreg_asdrawn": sc.OK}
     drawn, field = v["deeperhistreg_asdrawn"], v["deeperhistreg"]
     assert drawn["declared_offset"] is False and field["declared_offset"] is True
@@ -508,7 +508,7 @@ def test_a_wrong_asdrawn_map_is_inconsistent(tmp_path, monkeypatch, mutate):
     on the row that can be primary."""
     mutate(monkeypatch)
     rec, v = _selfcheck(tmp_path)
-    assert rec["status"] == sc.INCONSISTENT and rec["blocks_the_method"], v
+    assert rec["status"] == sc.INCONSISTENT and rec["not_ok"], v
     assert v["deeperhistreg_asdrawn"]["status"] == sc.INCONSISTENT
     assert "whole image" in v["deeperhistreg_asdrawn"]["failed"]
 

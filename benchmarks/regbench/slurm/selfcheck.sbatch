@@ -7,15 +7,19 @@
 #                    <name of the run whose selfcheck gives the anchor|->
 #                    <attempt> <memory GB> <previous attempt's job id|->
 #
-# The record is $REGBENCH_OUT/logs/selfcheck/<name>/selfcheck.json. It is kept: the gate
-# job reads it, and an anchored run's selfcheck reads the anchor run's (`--m0-from`).
+# The record is $REGBENCH_OUT/logs/selfcheck/<name>/selfcheck.json. It is kept: the
+# scorer's `regbench verdict` reports it (logs/verdicts.tsv), and an anchored run's
+# selfcheck reads the anchor run's (`--m0-from`). REPORTED, NEVER A GATE: no run waits
+# for this job.
 # One job covers every case of the run (`selfcheck.SIZES`): its pairs, and for a method
 # that registers a patient together (VALIS, ASHLAR) one patient of three slides, under
 # <work>/patient_<H>x<W>; the anchor run (`stare`) has that patient too, round by round.
 # The selfcheck climbs in memory like a run: an attempt above the first runs only when
 # the one before ended for memory (`selfcheck --retry-memory`), and otherwise leaves the
-# record as it is and exits with its status. Exit: 0 ok, 1 inconsistent, 2 not checked,
-# 3 crashed.
+# record as it is. Exit: 0 whenever a verdict record was written (status ok,
+# inconsistent, not_checked or crashed: the verdict is in the record and the end line,
+# not in the exit code); non-zero only when the process died without one (killed, out
+# of memory), so the scheduler shows that attempt as failed.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" gpu="$6" mask="$7" anchor="$8"
@@ -41,9 +45,11 @@ fi
 regbench_py "$image" "${args[@]}"
 code=$?
 if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
+    # the selfcheck wrote its verdict (whatever it is): reported, never a gate
     cat "$REGBENCH_END_FILE"
-else
-    # no record line: the selfcheck process died. Not evidence about the method.
-    echo "REGBENCH_END kind=selfcheck run=$name rung=$attempt status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+    exit 0
 fi
+# no record line: the selfcheck process died. Not evidence about the method.
+echo "REGBENCH_END kind=selfcheck run=$name rung=$attempt status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+[ "$code" = 0 ] && code=1
 exit "$code"

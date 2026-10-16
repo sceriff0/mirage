@@ -434,7 +434,7 @@ def test_the_cost_header_counts_the_runs_without_a_watcher():
 
 
 # ── stale records (review item 13) ────────────────────────────────────────────
-def test_an_attempt_removes_what_an_earlier_one_left_for_a_gate(toy):
+def test_an_attempt_removes_what_an_earlier_one_left_for_the_verdict(toy):
     _, case, out = toy
     d = result_dir(out, "m", case)
     d.mkdir(parents=True)
@@ -450,7 +450,7 @@ def test_an_attempt_removes_what_an_earlier_one_left_for_a_gate(toy):
 
 
 def test_the_scorer_takes_no_result_of_another_submission(toy, monkeypatch):
-    """A blocked run's old folders must not be scored as if it had run."""
+    """A run's old folders of another submission must not be scored as if it had run."""
     _, case, out = toy
     monkeypatch.setenv("REGBENCH_SUBMISSION", "old")
     methods.run_case(two_stage(), case, out)
@@ -467,7 +467,7 @@ def test_the_scorer_takes_no_result_of_another_submission(toy, monkeypatch):
 
 def test_selfcheck_removes_the_old_record_before_it_runs(tmp_path, monkeypatch):
     """The record is written last. If the old one stayed while the new attempt ran, a
-    killed attempt would leave the OLD verdict for the gate."""
+    killed attempt would leave the OLD verdict for the scorer to report."""
     from benchmarks.regbench import selfcheck
 
     work = tmp_path / "w"
@@ -747,26 +747,24 @@ def test_the_failure_columns_count_rounds_by_owner_and_name_the_top_cause():
     rows = [_res("a", "", str(i), ok=True) for i in range(3)] + [
         _res("a", "oom", "4"),
         _res("a", "identical_overlap", "5"),
-        _res("a", "gate_blocked", ""),
+        _res("a", "not_submitted", ""),
         _res("a", "not_run", ""),
     ]
     (rec,) = score.failures(rows)
     assert rec["n_failed_method"] == 1
     assert rec["n_failed_benchmark"] == 1
-    assert rec["n_not_run_or_blocked"] == 2
+    assert rec["n_not_run_or_lost"] == 2
     # a tie of one each: the earlier in CAUSES
     assert rec["top_cause"] == "oom"
     assert (rec["n_fallback_stage_positions"], rec["n_cycle_fully_modelled"]) == (0, 0)
 
 
-def test_a_not_run_or_blocked_row_is_never_a_method_failure():
-    rows = [
-        _res("a", c, "")
-        for c in ("not_run", "gate_blocked", "dropped_row", "infrastructure")
-    ]
+def test_a_not_run_row_is_never_a_method_failure():
+    rows = [_res("a", c, "") for c in ("not_run", "not_submitted", "infrastructure")]
     (rec,) = score.failures(rows)
     assert rec["n_failed_method"] == 0 and rec["n_failed_benchmark"] == 0
-    assert rec["n_not_run_or_blocked"] == 4
+    assert rec["n_not_run_or_lost"] == 3
+    assert "n_not_run_or_blocked" not in rec  # there is no blocked run any more
     assert score.failures([_res("a", "", "1", ok=True)])[0]["top_cause"] == ""
 
 
@@ -804,7 +802,7 @@ def test_resource_row_carries_the_flags_and_an_absent_one_is_none():
 def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ashlar():
     rows = (
         [_res("a", "", "1", ok=True), _res("a", "oom", "2"),
-         _res("a", "identical_overlap", "3"), _res("a", "gate_blocked", ""),
+         _res("a", "identical_overlap", "3"), _res("a", "not_submitted", ""),
          _res("a", "not_run", ""),
          _res("ashlar", "", "9", ok=True, fallback_stage_positions=True,
               cycle_fully_modelled=True)]
@@ -823,7 +821,7 @@ def test_the_headline_table_carries_the_failure_columns_ashlar_cells_only_on_ash
     assert all(len(c) == len(header) for c in cells)
     col = lambda row, name: row[header.index(name)]  # noqa: E731
     got = [col(cells[0], n) for n in (
-        "failed (method)", "failed (benchmark)", "not run / blocked", "top cause",
+        "failed (method)", "failed (benchmark)", "not run / lost", "top cause",
         "fallback", "fully modelled")]  # fmt: skip
     assert got == ["1", "1", "2", "oom", "", ""]
     got = [col(cells[1], n) for n in ("failed (method)", "fallback", "fully modelled")]
