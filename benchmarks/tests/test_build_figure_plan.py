@@ -470,7 +470,10 @@ def test_the_summary_counts_reused_segmentations_apart_from_runs():
 
 
 # --- the shipped configs draw from the arms benchmark, they do not recompute it ------
-ARM_FIGURE_CONFIGS = [SHIPPED, REPO / "benchmarks" / "configs" / "figures_arm_crosses.yaml"]
+ARM_FIGURE_CONFIGS = [
+    SHIPPED,
+    REPO / "benchmarks" / "configs" / "figures_arm_crosses.yaml",
+]
 
 
 @pytest.mark.parametrize("path", ARM_FIGURE_CONFIGS, ids=lambda p: p.name)
@@ -498,3 +501,31 @@ def test_every_figure_draws_the_same_ashlar_arm_and_the_arm_plan_produces_it():
         assert Path(dirs["ashlar"]).name == want, path.name
     supp = yaml.safe_load((REPO / "benchmarks/configs/supplementary.yaml").read_text())
     assert all(tier["ashlar"] == want for tier in (supp[c] for c in supp["configs"]))
+
+
+def test_every_figure_draws_the_stare_arm_at_the_shipped_stride():
+    """The STARE twin of the ASHLAR rule above. The "high" STARE arm every figure draws is
+    tiled_high_s<reg_tiled_stride>, the pipeline's default stride read from nextflow.config:
+    the default moved 128 -> 64 on 2026-10-06 and figures, figures_arm_crosses and
+    supplementary kept drawing s128 labelled "(shipped)", so the manuscript's Dice and its
+    method description (a 64 px lattice) named different configurations."""
+    import re
+
+    from benchmarks import build_arm_plan as bap
+
+    m = re.search(
+        r"^\s*reg_tiled_stride\s*=\s*(\d+)",
+        (REPO / "nextflow.config").read_text(),
+        re.M,
+    )
+    assert m, "no reg_tiled_stride default in nextflow.config"
+    want = bap.tiled_arm_name("high", int(m.group(1)))
+    arms_cfg = yaml.safe_load((REPO / "benchmarks/configs/arms.yaml").read_text())
+    assert want in {r["arm"] for r in bap._registration_arms(arms_cfg)}, (
+        "the arm plan does not build it"
+    )
+    for path in ARM_FIGURE_CONFIGS:
+        stare = [a for a in bfp.arm_names(bfp.load(path)) if a.startswith("tiled_")]
+        assert stare == [want], (path.name, stare)
+    supp = yaml.safe_load((REPO / "benchmarks/configs/supplementary.yaml").read_text())
+    assert all(supp[c]["stare"] == want for c in supp["configs"])
