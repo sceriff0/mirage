@@ -211,18 +211,41 @@ def test_the_pinned_params_are_real_and_at_their_shipped_default():
             assert key in types, f"{key} is not a param of nextflow_schema.json"
             want = JSON_TYPE[type(value)]
             assert want in types[key], f"{key}={value!r}: the schema says {types[key]}"
-            if "enum" in entries[key]:
-                assert value in entries[key]["enum"], f"{key}={value!r} not in its enum"
+            _schema_valid(key, value, entries[key])
     assert set(compute_all.BACKENDS) <= set(entries["registration_method"]["enum"])
     for key, value in compute_all.PINNED.items():
         assert _as_config(value) == _default(key), (
             f"{key}: compute-all restates {value!r}, nextflow.config ships {_default(key)}"
         )
     assert _default("registration_method") in compute_all.BACKENDS
-    # the user's ruling (2026-10-15): StarDist, the benchmark's own nuclei; NOT the
-    # shipped default, so it is a ruling and not a restatement
-    assert compute_all.RULED == {"seg_method": "stardist"}
+    # the rulings (2026-10-15): StarDist, the benchmark's own nuclei, and the input
+    # step's pixel size. NOT the shipped defaults: rulings, not restatements
+    assert compute_all.RULED == {"seg_method": "stardist", "pixel_size": 0.325}
     assert not set(compute_all.RULED) & set(compute_all.PINNED)
+    for key, value in compute_all.RULED.items():
+        assert _as_config(value) != _default(key), f"{key} is a restatement: PINNED"
+    # the same scale as the inputs the benchmark scores (slurm/inputs.sbatch)
+    inputs = (REPO / "benchmarks/regbench/slurm/inputs.sbatch").read_text()
+    (scale,) = re.findall(r"\spixel_size=([0-9.]+)", inputs)
+    assert float(scale) == compute_all.RULED["pixel_size"]
+
+
+def _schema_valid(key, value, entry):
+    """The checks nextflow_schema.json declares for one value: enum, pattern (on its
+    text, as nf-schema reads a number given for a string-or-number param), bounds."""
+    if "enum" in entry:
+        assert value in entry["enum"], f"{key}={value!r} not in its enum"
+    if "pattern" in entry and not isinstance(value, bool):
+        assert re.fullmatch(entry["pattern"], str(value)), (
+            f"{key}={value!r} does not match {entry['pattern']}"
+        )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "exclusiveMinimum" in entry:
+            assert value > entry["exclusiveMinimum"], f"{key}={value!r} too small"
+        if "minimum" in entry:
+            assert value >= entry["minimum"], f"{key}={value!r} too small"
+        if "maximum" in entry:
+            assert value <= entry["maximum"], f"{key}={value!r} too large"
 
 
 def test_compute_all_pins_nothing_else():
@@ -246,6 +269,7 @@ def test_the_params_file_is_typed_through_params_json(tmp_path):
     doc = json.loads(out.read_text())
     assert doc == compute_all.params("tiled")
     assert doc["enable_trace"] is True
+    assert doc["pixel_size"] == 0.325 and isinstance(doc["pixel_size"], float)
 
 
 # ── the launcher: never resumed, every typed param in the params file ─────────
@@ -281,7 +305,13 @@ def test_the_launcher_never_resumes_and_types_every_param():
     ):
         assert re.search(rf"(^|\s){re.escape(flag)}\s", nf), flag
     assert set(re.findall(r"\s--([a-z_]+)", nf)) == {"input", "outdir", "trace_dir"}
-    for typed in ("enable_trace", "cleanup_work", "registration_method", "seg_method"):
+    for typed in (
+        "enable_trace",
+        "cleanup_work",
+        "registration_method",
+        "seg_method",
+        "pixel_size",
+    ):
         assert f"--{typed}" not in code, typed
     assert "env -u PYTHONPATH nextflow" in nf
     assert "compute-all params" in code and "compute-all sheet" in code

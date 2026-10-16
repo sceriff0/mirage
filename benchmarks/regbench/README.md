@@ -2013,18 +2013,46 @@ submission, like `--score-only`.
 - **What is pinned**, through `-params-file` (`regbench compute-all params`, typed by
   `nextflow_schema.json`): `registration_method`; `enable_trace=true`, its shipped
   default restated so a site profile cannot switch the measurement off; and
-  `seg_method=stardist` (the user's ruling of 2026-10-15: the benchmark's nuclei are
-  StarDist's, as the arms' compute run was), which is NOT the shipped default
-  (`instantseg`). Everything else is the shipped default and the site profile
-  (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`); `pixel_size` stays `auto`.
+  two rulings that are NOT the shipped defaults: `seg_method=stardist` (the user's
+  ruling of 2026-10-15: the benchmark's nuclei are StarDist's, as the arms' compute run
+  was; shipped `instantseg`) and `pixel_size=0.325` (the input step's ruling, extended
+  to compute-all: the scale of the inputs the benchmark scores, and no run stopped by a
+  slide without metadata; shipped `auto`, which the pipeline's preflight refuses when it
+  cannot read a scale). Everything else is the shipped default and the site profile
+  (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`).
   `test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default`
-  fails when a pinned name is not a schema param, a value is not of its schema type or
-  enum, or a restated value is no longer the shipped default.
+  fails when a pinned name is not a schema param, a value is not of its schema type,
+  enum, pattern or bounds, a restated value is no longer the shipped default, or the
+  pixel size is not the one `slurm/inputs.sbatch` pins.
 - **One folder per run**: `<out>/compute/<backend>/<patient>/` holds its samplesheet
   (the header and that patient's rows), `params.json`, `work/`, `trace/`, `results/`,
   `input_gb.txt` and Nextflow's logs; its run name is unique (submission and job id).
   It is never resumed: a folder that is there is moved to `<out>/compute/.replaced/`
   (never deleted), with its end line `<out>/logs/compute/<backend>/<patient>.end`.
+
+- **Where the files must be.** `compute-all plan` and `compute-all sheet` (the patient's
+  samplesheet, and `input_gb.txt` from the sizes of its slide files) run inside the
+  `STARE_REGBENCH` image, as every `regbench_py` call does (`slurm/env.sh`,
+  `regbench_exec`). That image sees only the folders bound into it: `REGBENCH_REPO`,
+  `REGBENCH_CASES`, `REGBENCH_OUT`, `REGBENCH_WORK`, `REGBENCH_INPUTS` and every folder
+  of `REGBENCH_BIND` (comma-separated; `launch.sbatch` fills it from the site config's
+  `singularity.runOptions` `--bind` folders and adds `REGBENCH_ROOT`). So
+  `REGBENCH_INPUT` and the slides it names must sit under one of those folders: if the
+  samplesheet is not, the launch stops before the first sbatch; if a slide is not,
+  `input_gb` is blank (NaN). Nextflow itself reads them through the site profile's own
+  binds.
+- **Disk, per run (an ESTIMATE from the published layout, not measured).** The shipped
+  publish behaviour is kept, because publishing is part of what the run costs:
+  `cleanup_level` stays `none`, so each run publishes every kind of `lib/Layout.groovy`.
+  About six of them are image-sized copies of the patient's slides (`converted/`,
+  `preprocessed/`, `registered/`, `split_channels/`, `pyramid/` with its lower levels,
+  and the SpatialData `.zarr`), the rest (masks, quantification, GeoJSON, QC) smaller.
+  Count on the order of 6 to 7 times the patient's `input_gb.txt` under `results/`, per
+  backend, plus up to about as much again in `work/` while the run lasts
+  (`cleanup_work` stays on: the work folder is emptied when a run succeeds and kept when
+  it fails). Compression differs between the stages, so the real figure can be off
+  either way; the first run's `du -sh <out>/compute/<backend>/<patient>` is the number.
+  The traces sit outside `work/` and are always kept.
 
 `pipeline_cost.csv`, one row per task (`compute_all.COLUMNS`): `backend, patient,
 process` (the last `:` segment), `process_path` (the full name), `task_id, tag, status,

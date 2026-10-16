@@ -15,9 +15,12 @@ caused itself is not a cost (the arms' precedent, run_arms.sh's "timed ALONE").
   move them (``enable_trace``: tracing off would remove the measurement). The guard
   ``test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default``
   fails when one is not a schema param, not of its type, or not the default any more;
-* ``RULED``: the user's ruling of 2026-10-15, ``seg_method=stardist`` (the benchmark's
-  own nuclei are StarDist's, and so was the arms' compute run). NOT the shipped default
-  (``instantseg``): a deliberate difference, checked against the schema's enum.
+* ``RULED``: rulings, NOT the shipped defaults, each checked against the schema (type,
+  enum, pattern, bounds): ``seg_method=stardist`` (the user's ruling of 2026-10-15: the
+  benchmark's own nuclei are StarDist's, and so was the arms' compute run; shipped
+  ``instantseg``) and ``pixel_size=0.325`` (the user's input-step ruling of 2026-10-15,
+  extended to compute-all by the controller: the scale of the scored inputs, and no
+  launch failure on slides without metadata; shipped ``auto``).
 
 Every one of them reaches Nextflow through ``-params-file`` (typed by
 ``params_json.build`` against ``nextflow_schema.json``): Nextflow 26 delivers a
@@ -63,9 +66,11 @@ from . import trace
 BACKENDS = ("valis", "tiled")
 # restated AT the shipped default (nextflow.config), so a site profile cannot remove it
 PINNED = {"enable_trace": True}
-# the user's ruling (2026-10-15): the benchmark's nuclei and the arms' compute run were
-# StarDist's. Not the shipped default (instantseg): a ruling, not a restatement
-RULED = {"seg_method": "stardist"}
+# rulings, not restatements: StarDist (the user's ruling, 2026-10-15: the benchmark's
+# nuclei and the arms' compute run were StarDist's; shipped instantseg), and the input
+# step's pixel size (the user's ruling for the inputs, extended to compute-all: the
+# scale of the scored inputs, so no slide without metadata stops a run; shipped auto)
+RULED = {"seg_method": "stardist", "pixel_size": 0.325}
 REGISTRATION_PROCESSES = {
     "valis": ("REGISTER",),
     "tiled": ("TILED_COARSE", "TILED_REG_TILE", "TILED_SOLVE", "TILED_STITCH"),
@@ -624,8 +629,8 @@ def markdown(task_rows, summary) -> list[str]:
         "failed task that was not retried to success, a cached task, or no `status=ok` "
         "end line (`logs/compute/<backend>/<patient>.end`) is listed but kept out of "
         "the `all` row. Each run was alone on its lane, after the benchmark's own jobs "
-        "(`submit_cohort.sh --compute-all`); `seg_method=stardist` (ruling 2026-10-15), "
-        "everything else at the pipeline's shipped defaults and the site profile.",
+        "(`submit_cohort.sh --compute-all`); `seg_method=stardist` and "
+        "`pixel_size=0.325` (rulings of 2026-10-15), everything else at the pipeline's shipped defaults and the site profile.",
         "",
     ]
     return parts

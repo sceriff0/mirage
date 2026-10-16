@@ -20,7 +20,8 @@
 #
 # The params file (`regbench compute-all params`, typed by nextflow_schema.json) holds
 # registration_method, enable_trace (restated at its shipped default) and
-# seg_method=stardist (the user's ruling of 2026-10-15); everything else is the shipped
+# seg_method=stardist and pixel_size=0.325 (the rulings of 2026-10-15: StarDist's nuclei
+# and the input step's scale); everything else is the shipped
 # default and the site profile's. On the command line only paths: --input, --outdir,
 # --trace_dir (Nextflow 26 delivers a command-line param as a String).
 #
