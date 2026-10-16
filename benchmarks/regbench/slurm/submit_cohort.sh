@@ -1,7 +1,10 @@
 #!/bin/bash
 # Submit the cohort benchmark: every run of the run list behind its own check, each on a
-# four-rung memory ladder, then the scorer. From a login node, in two steps:
+# four-rung memory ladder, then the scorer. From a login node, in three steps:
 #
+#   benchmarks/regbench/slurm/submit_cohort.sh --inputs [-- extra sbatch args]
+#   (wait for the input step: the pipeline's own preprocessing of the cohort,
+#   slurm/inputs.sbatch, one Nextflow head job)
 #   benchmarks/regbench/slurm/submit_cohort.sh --prepare [-- extra sbatch args]
 #   (wait for the prepare jobs; look at their logs)
 #   benchmarks/regbench/slurm/submit_cohort.sh [--dry-run] [--runs "a b"] \
@@ -193,16 +196,32 @@
 #                                     else is let through: not `inconsistent`, not
 #                                     `crashed`, not a flagged realcheck, not a
 #                                     selfcheck that left no record
-#   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv
+#   REGBENCH_INPUT                    with --inputs: the cohort's samplesheet (the
+#                                     pipeline's --input)
+#   REGBENCH_INPUTS                   the input folder: the input step writes
+#                                     preprocess/ into it, --prepare writes rounds.csv
+#                                     and outlines/ there (launch.sbatch: inputs/ of
+#                                     REGBENCH_ROOT)
+#   REGBENCH_INPUTS_TIME (2-00:00:00) with --inputs: the head job's time limit
+#   REGBENCH_INPUTS_FORCE=1           with --inputs: run it again, the earlier one moved
+#                                     to preprocess.replaced/ (never deleted)
+#   REGBENCH_NF_PROFILE               with --inputs: the pipeline's -profile (default
+#                                     singularity,ieo, as the arms ran)
+#   REGBENCH_MANIFEST                 with --prepare: the cohort's rounds.csv. Unset, it
+#                                     is $REGBENCH_INPUTS/rounds.csv, written here from
+#                                     the input step's preprocessed.csv
+#                                     (python -m benchmarks.regbench.manifest). Set, the
+#                                     file is taken as it is (one written from the arms'
+#                                     results before 2026-10-16 is read as before)
 #   REGBENCH_PREPARE_ARGS             with --prepare: more `prepare multiplex` options
 #   REGBENCH_PREPARE_FORCE=1          with --prepare: redo cases that exist
 #   REGBENCH_NUCLEI                   with --prepare: where each slide's BARE nuclei are
 #                                     kept (default $REGBENCH_CASES/_nuclei). An array
 #                                     over the manifest's slides runs before `prepare
-#                                     multiplex`: an existing label image is checked,
-#                                     and only a slide without one is segmented again
+#                                     multiplex`: StarDist segments each slide, and its
+#                                     cell mask is traced to the slide's outlines
 #   REGBENCH_STARDIST_MODEL, REGBENCH_STARDIST_MODEL_DIR
-#                                     the StarDist model the arms ran (the pipeline's
+#                                     the site's StarDist model (the pipeline's
 #                                     segmentation_model and segmentation_model_dir).
 #                                     Unset, both are read from the site config; set,
 #                                     they win. One of the two routes is REQUIRED for
@@ -223,8 +242,6 @@
 #                                     redone by itself when its settings no longer
 #                                     resolve to the same values, or when its slide is
 #                                     no longer the file it was computed from.)
-#   REGBENCH_NUCLEI_SKIP=1            prepare without that step: cases whose slides have
-#                                     no nuclei are scored on the outlines alone
 #   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline
 #                                     shrunk by 10 px (labelled, never exact). Off unless set
 #   REGBENCH_NUCLEI_CPUS (8), REGBENCH_NUCLEI_MEM (128G), REGBENCH_NUCLEI_TIME (08:00:00)
@@ -263,10 +280,11 @@ export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the only dataset.
 DEFAULT_DATASETS="multiplex"
-prepare=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
+prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
+        --inputs) inputs=1; shift ;;
         --prepare) prepare=1; shift ;;
         --score-only) score_only=1; shift ;;
         --preflight) preflight_only=1; shift ;;
@@ -349,6 +367,7 @@ for pair in REGBENCH_STAGE_STALL_S:1 REGBENCH_STAGE_STALL_MAX_S:1 REGBENCH_STAGE
 done
 [ "$preflight_only" = 1 ] && DRY=0   # it starts the images; it submits nothing
 [ "$prepare" = 1 ] && [ "$score_only" = 1 ] && die "--prepare and --score-only are two different steps; name one. Nothing was submitted."
+[ "$inputs" = 1 ] && [ "$prepare$score_only$preflight_only" != 000 ] && die "--inputs and --prepare/--score-only/--preflight are two different steps; name one. Nothing was submitted."
 
 # one id per call: every record of this submission carries it. --score-only makes no
 # record of its own: it scores an EARLIER submission, the last one into REGBENCH_OUT
@@ -439,7 +458,7 @@ submit() {
     # the last submission that ran anything into this folder: what --score-only scores.
     # Written with the first job the scheduler took: a call that queued nothing (stopped
     # by the preflight, a check, or a refused first sbatch) is not a submission.
-    if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$score_only" != 1 ]; then
+    if [ "$N_QUEUED" = 1 ] && [ "$prepare" != 1 ] && [ "$inputs" != 1 ] && [ "$score_only" != 1 ]; then
         echo "$REGBENCH_SUBMISSION" > "$REGBENCH_OUT/logs/submission"
     fi
     printf '%s\t%s\n' "$name" "$JOB_ID"
@@ -481,6 +500,32 @@ score_s="$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")"
 nuclei_s="$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")"
 # shellcheck disable=SC2206  # the site's GPU request is several words on purpose
 GPU_ARGS=(${REGBENCH_SBATCH_GPU:-})
+
+# ── the input step, on its own: one Nextflow head job, nothing of the benchmark ───────
+if [ "$inputs" = 1 ]; then
+    [ -n "${REGBENCH_INPUT:-}" ] || die "--inputs needs REGBENCH_INPUT: the cohort's samplesheet (the pipeline's --input). Nothing was submitted."
+    [ -f "$REGBENCH_INPUT" ] || die "--inputs: REGBENCH_INPUT=$REGBENCH_INPUT is not there. Nothing was submitted."
+    [ -n "${REGBENCH_INPUTS:-}" ] || die "--inputs needs REGBENCH_INPUTS: the folder the input step writes into (launch.sbatch: inputs/ of REGBENCH_ROOT). Nothing was submitted."
+    : "${REGBENCH_NF_PROFILE:=singularity,ieo}"
+    export REGBENCH_INPUT REGBENCH_INPUTS REGBENCH_NF_PROFILE
+    if [ -e "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" ]; then
+        [ "${REGBENCH_INPUTS_FORCE:-0}" = 1 ] || die "--inputs: $REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv already exists: the input step has run (next: --prepare). REGBENCH_INPUTS_FORCE=1 runs it again; the earlier one is moved aside to $REGBENCH_INPUTS/preprocess.replaced/, never deleted. Nothing was submitted."
+        echo "# REGBENCH_INPUTS_FORCE=1: the input step runs again; $REGBENCH_INPUTS/preprocess is moved aside to preprocess.replaced/ when the job starts"
+        export REGBENCH_INPUTS_FORCE
+    fi
+    inputs_s="$(seconds "${REGBENCH_INPUTS_TIME:-2-00:00:00}")"
+    if [ "$DRY" != 1 ]; then
+        mkdir -p "$REGBENCH_OUT/logs/submitted" || die "cannot write $REGBENCH_OUT/logs. Nothing was submitted."
+        JOBS_FILE="$REGBENCH_OUT/logs/jobs.tsv"
+        IDS_FILE="$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.inputs.ids"
+    fi
+    echo "# the input step: $REGBENCH_INPUT -> $REGBENCH_INPUTS/preprocess (profile $REGBENCH_NF_PROFILE, site config ${REGBENCH_SITE_CONFIG:-conf/ieo.config})"
+    submit "rb-inputs" "${COMMON[@]}" "$LOG_ONE" --cpus-per-task=2 --mem=8G \
+        --time="$(limit "$inputs_s")" "$HERE/inputs.sbatch"
+    echo "inputs: 1 job. When it is done (REGBENCH_END kind=inputs status=ok in its log), run this script again with --prepare."
+    FINISHED=1
+    exit 0
+fi
 
 if [ "$DRY" = 1 ]; then
     scratch="$(mktemp -d)"
@@ -551,7 +596,21 @@ if [ "$score_only" = 1 ]; then
 fi
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
-    [ -n "${REGBENCH_MANIFEST:-}" ] || die "--prepare needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.arms_manifest)"
+    if [ -z "${REGBENCH_MANIFEST:-}" ]; then
+        # the rounds of the cohort, from regbench's own input step (launch.sbatch --inputs)
+        [ -n "${REGBENCH_INPUTS:-}" ] || die "--prepare needs REGBENCH_INPUTS (the input folder, whose rounds.csv is written from the input step) or REGBENCH_MANIFEST (a rounds.csv to take as it is). Nothing was submitted."
+        checkpoint="$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv"
+        [ -s "$checkpoint" ] || die "--prepare: $checkpoint is not there: run the input step first (launch.sbatch --inputs) and wait for it. Nothing was submitted."
+        REGBENCH_MANIFEST="$REGBENCH_INPUTS/rounds.csv"
+        echo "# the rounds: $checkpoint -> $REGBENCH_MANIFEST (outlines traced into $REGBENCH_INPUTS/outlines by the nuclei step)"
+        regbench_exec "$REGBENCH_HEAD_IMAGE" sh -c "$REGBENCH_PYTHON" regbench-python \
+            -m benchmarks.regbench.manifest --preprocessed "$checkpoint" \
+            --outlines "$REGBENCH_INPUTS/outlines" --out "$REGBENCH_MANIFEST" \
+            || die "--prepare: the rounds could not be written from $checkpoint (see above). Nothing was submitted."
+    else
+        echo "# the rounds: REGBENCH_MANIFEST=$REGBENCH_MANIFEST, taken as it is"
+    fi
+    [ -s "$REGBENCH_MANIFEST" ] || die "--prepare: the rounds file $REGBENCH_MANIFEST is not there. Nothing was submitted."
     force=()
     [ "${REGBENCH_PREPARE_FORCE:-0}" = 1 ] && force=(--force)
     alloc=(--cpus-per-task="$CPUS" --mem="${REGBENCH_PREPARE_MEM:-64G}"
@@ -570,41 +629,41 @@ if [ "$prepare" = 1 ]; then
                     { mkdir -p "$REGBENCH_CASES" && { [ "$REGBENCH_MANIFEST" -ef "$REGBENCH_CASES/manifest.csv" ] || cp "$REGBENCH_MANIFEST" "$REGBENCH_CASES/manifest.csv"; }; } \
                         || die "--prepare: cannot copy the manifest $REGBENCH_MANIFEST to $REGBENCH_CASES/manifest.csv. Nothing was submitted."
                 fi
-                # the bare nuclei of every native slide first: what exists is checked,
-                # StarDist runs again only for a slide that has none (nuclei.sbatch)
-                if [ "${REGBENCH_NUCLEI_SKIP:-0}" != 1 ]; then
-                    : "${REGBENCH_NUCLEI:=$REGBENCH_CASES/_nuclei}"
-                    export REGBENCH_NUCLEI REGBENCH_MANIFEST
-                    # the model and settings of the re-run, and where each is from: the
-                    # environment, else the site config (conf/ieo.config, REGBENCH_SITE_CONFIG)
-                    stardist="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
-                        --out "$REGBENCH_NUCLEI" --settings)" || die "--prepare: the bare nuclei need the StarDist model the arms ran (the pipeline's segmentation_model and segmentation_model_dir): export REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR, or point REGBENCH_SITE_CONFIG at the site config that sets them (default: conf/ieo.config of this checkout). REGBENCH_NUCLEI_SKIP=1 prepares without them: nuclei numbers are then absent wherever no label image exists. Nothing was submitted."
-                    while IFS= read -r said; do echo "# StarDist re-run: $said"; done <<< "$stardist"
-                    nuc_gpu=()
-                    if [ "${REGBENCH_STARDIST_CPU:-0}" = 0 ]; then
-                        [ -n "${REGBENCH_SBATCH_GPU:-}" ] || die "--prepare: the StarDist re-run of the bare nuclei asks for a GPU, as the arms did, and REGBENCH_SBATCH_GPU is not set. Export the site's request, or REGBENCH_STARDIST_CPU=1 to run it on CPUs. Nothing was submitted."
-                        nuc_gpu=("${GPU_ARGS[@]}")
-                    fi
-                    if [ -z "$(_regbench_var SIF STARDIST)$(_regbench_var CONDA STARDIST)$(_regbench_var VENV STARDIST)" ]; then
-                        if [ "$DRY" = 1 ] || [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" = 1 ]; then
-                            echo "# not set: REGBENCH_SIF_STARDIST (the StarDist re-run would use the python on PATH)"
-                        else
-                            die "not set: REGBENCH_SIF_STARDIST (the pipeline's StarDist image, bolt3x/mirage-stardist:1.0.0), needed to segment the slides that have no nuclear mask. Nothing was submitted."
-                        fi
-                    fi
-                    n_slides="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
-                        --out "$REGBENCH_NUCLEI" --count)" || die "cannot size the nuclei array from $REGBENCH_MANIFEST"
-                    [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && echo "# REGBENCH_NUCLEI_FORCE=1: every slide is checked and segmented again (--export=ALL carries it to the array)"
-                    submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
-                        --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
-                        --time="$(limit "$nuclei_s")" \
-                        ${nuc_gpu[@]+"${nuc_gpu[@]}"} \
-                        --array="0-$((n_slides - 1))%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
-                    # afterany: a slide whose re-run failed leaves its cases without
-                    # nuclei, with the reason; they are still prepared on the outlines
-                    after=(--dependency="afterany:$JOB_ID")
-                    what+=(--nuclei-dir "$REGBENCH_NUCLEI")
+                # the nuclei and the outlines of every native slide first: StarDist on
+                # each slide, its cell mask traced to the outlines (nuclei.sbatch).
+                # Without outlines there is no case: this step is never left out
+                [ -z "${REGBENCH_NUCLEI_SKIP:-}" ] || echo "# REGBENCH_NUCLEI_SKIP is no longer read: the nuclei step traces the outlines every case needs"
+                : "${REGBENCH_NUCLEI:=$REGBENCH_CASES/_nuclei}"
+                export REGBENCH_NUCLEI REGBENCH_MANIFEST
+                # the model and settings of the re-run, and where each is from: the
+                # environment, else the site config (conf/ieo.config, REGBENCH_SITE_CONFIG)
+                stardist="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
+                    --out "$REGBENCH_NUCLEI" --settings)" || die "--prepare: the nuclei and outlines need the site's StarDist model (the pipeline's segmentation_model and segmentation_model_dir): export REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR, or point REGBENCH_SITE_CONFIG at the site config that sets them (default: conf/ieo.config of this checkout). Nothing was submitted."
+                while IFS= read -r said; do echo "# StarDist re-run: $said"; done <<< "$stardist"
+                nuc_gpu=()
+                if [ "${REGBENCH_STARDIST_CPU:-0}" = 0 ]; then
+                    [ -n "${REGBENCH_SBATCH_GPU:-}" ] || die "--prepare: the StarDist re-run of the bare nuclei asks for a GPU, as the pipeline does (seg_gpu), and REGBENCH_SBATCH_GPU is not set. Export the site's request, or REGBENCH_STARDIST_CPU=1 to run it on CPUs. Nothing was submitted."
+                    nuc_gpu=("${GPU_ARGS[@]}")
                 fi
+                if [ -z "$(_regbench_var SIF STARDIST)$(_regbench_var CONDA STARDIST)$(_regbench_var VENV STARDIST)" ]; then
+                    if [ "$DRY" = 1 ] || [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" = 1 ]; then
+                        echo "# not set: REGBENCH_SIF_STARDIST (the StarDist re-run would use the python on PATH)"
+                    else
+                        die "not set: REGBENCH_SIF_STARDIST (the pipeline's StarDist image, bolt3x/mirage-stardist:1.0.0), needed to segment the slides. Nothing was submitted."
+                    fi
+                fi
+                n_slides="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
+                    --out "$REGBENCH_NUCLEI" --count)" || die "cannot size the nuclei array from $REGBENCH_MANIFEST"
+                [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && echo "# REGBENCH_NUCLEI_FORCE=1: every slide is segmented and traced again (--export=ALL carries it to the array)"
+                submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
+                    --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
+                    --time="$(limit "$nuclei_s")" \
+                    ${nuc_gpu[@]+"${nuc_gpu[@]}"} \
+                    --array="0-$((n_slides - 1))%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
+                # afterany: a slide whose run failed has no outlines, and `prepare
+                # multiplex` drops its rounds with the reason
+                after=(--dependency="afterany:$JOB_ID")
+                what+=(--nuclei-dir "$REGBENCH_NUCLEI")
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
             *) die "--datasets: '$ds' is not multiplex" ;;

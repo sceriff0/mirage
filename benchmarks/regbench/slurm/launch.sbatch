@@ -7,13 +7,23 @@
 #SBATCH --output=regbench-launch-%j.log
 # The launch as ONE job, everything set in here. From the repository:
 #
+#   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --inputs    (once; wait for its job)
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --prepare   (once; wait for its jobs)
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch             (the launch)
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --dry-run   (prints, submits nothing)
 #
 # FROM ANY FOLDER: the folder it is submitted from is where the benchmark lives
-# (regbench/ under it: cases, results, rounds.csv) and where the arms' results are
-# looked for (arm_results/); the repository is found from the path given to sbatch.
+# (regbench/ under it: inputs, cases, results); the repository is found from the path
+# given to sbatch.
+#
+# THE INPUTS are regbench's own. --inputs submits ONE Nextflow head job
+# (slurm/inputs.sbatch): the pipeline's preprocessing of the cohort's samplesheet
+# REGBENCH_INPUT into $REGBENCH_INPUTS/preprocess. --prepare then writes the rounds
+# ($REGBENCH_INPUTS/rounds.csv, python -m benchmarks.regbench.manifest) from its
+# preprocessed.csv, and the nuclei step traces each slide's outlines from its own
+# StarDist run into $REGBENCH_INPUTS/outlines. A REGBENCH_MANIFEST exported by hand is
+# taken as it is instead (a rounds.csv written from the arms' results before
+# 2026-10-16 is read as before).
 #
 # THE IMAGES are looked for where the site keeps its own (the cacheDir of the site
 # config), under the name Nextflow gives a pulled image; one that is not there is pulled
@@ -59,16 +69,20 @@ launcher="$repo/benchmarks/regbench/slurm/submit_cohort.sh"
 export REGBENCH_REPO="$repo"
 
 # ------------------------------- SETTINGS: edit here -------------------------------
-# one folder for everything of the benchmark: cases/, out/ and rounds.csv.
+# one folder for everything of the benchmark: inputs/, cases/ and out/.
 # Default: regbench/ in the folder the job is submitted from
 : "${REGBENCH_ROOT:=$here/regbench}"
-# the arms' results the cohort is made of (rounds.csv is written from them by
-# --prepare when it is not there yet). Default: arm_results/ where submitted from
-: "${REGBENCH_ARMS:=$here/arm_results}"
+# the input folder: the input step's preprocessing (preprocess/), the rounds
+# (rounds.csv) and the outlines the nuclei step traces (outlines/)
+: "${REGBENCH_INPUTS:=$REGBENCH_ROOT/inputs}"
+# --inputs: the cohort's samplesheet (the pipeline's --input; required for --inputs)
+# REGBENCH_INPUT=/path/to/input.csv
+# --inputs: the pipeline's profile (the arms' ARMS_PROFILE)
+: "${REGBENCH_NF_PROFILE:=singularity,ieo}"
 : "${REGBENCH_CASES:=$REGBENCH_ROOT/cases}"
 : "${REGBENCH_OUT:=$REGBENCH_ROOT/out}"
-# the cohort's rounds.csv (python -m benchmarks.regbench.arms_manifest)
-: "${REGBENCH_MANIFEST:=$REGBENCH_ROOT/rounds.csv}"
+# REGBENCH_MANIFEST is NOT set here: --prepare writes $REGBENCH_INPUTS/rounds.csv from
+# the input step. Export it to take a rounds.csv as it is.
 # how much runs at once
 : "${REGBENCH_RUN_LANES:=4}"          # runs in flight (0: all of them)
 # the selfchecks say what they found and block nothing (0: one that is not ok blocks)
@@ -118,13 +132,16 @@ case "$REGBENCH_SITE_CONFIG" in
         site_images="$(site_value cacheDir)"
         ;;
 esac
-mkdir -p "$REGBENCH_ROOT" "$REGBENCH_CASES" "$REGBENCH_OUT" || exit 2
+mkdir -p "$REGBENCH_ROOT" "$REGBENCH_INPUTS" "$REGBENCH_CASES" "$REGBENCH_OUT" || exit 2
 : "${REGBENCH_IMAGES:=${site_images:-$REGBENCH_ROOT/images}}"
 
 # Every image has a file before anything is asked of it: the launcher would otherwise
 # start with the python on PATH, which has not what the harness imports.
 # REGBENCH_ALLOW_PATH_PYTHON=1 (the launcher's own switch) leaves the images alone.
-if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ]; then
+# --inputs needs none of them: Nextflow pulls the pipeline's own images.
+inputs_only=0
+case " $* " in *" --inputs "*) inputs_only=1 ;; esac
+if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ] && [ "$inputs_only" = 0 ]; then
     runtime="$(command -v apptainer || command -v singularity || true)"
     if [ -z "$runtime" ]; then
         echo "regbench-launch: neither apptainer nor singularity is on PATH here ($(hostname)). Load the site's container module before sbatch (--export=ALL carries the PATH into the job). Nothing was submitted." >&2
@@ -160,40 +177,22 @@ if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ]; then
         echo "regbench-launch: $image -> $file"
     done <<< "$IMAGES"
 fi
-export REGBENCH_ROOT REGBENCH_CASES REGBENCH_OUT REGBENCH_MANIFEST REGBENCH_SITE_CONFIG
+export REGBENCH_ROOT REGBENCH_INPUTS REGBENCH_NF_PROFILE REGBENCH_CASES REGBENCH_OUT REGBENCH_SITE_CONFIG
+[ -z "${REGBENCH_MANIFEST:-}" ] || export REGBENCH_MANIFEST
+[ -z "${REGBENCH_INPUT:-}" ] || export REGBENCH_INPUT
 export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX REGBENCH_SELFCHECK_ADVISORY
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
-# the arms' results and the benchmark's own folder are read inside the images too
-for more in "$REGBENCH_ARMS" "$REGBENCH_ROOT"; do
-    [ -d "$more" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$more"
-done
+# the benchmark's own folder is read inside the images too (REGBENCH_INPUTS is bound
+# by env.sh wherever it is)
+[ -d "$REGBENCH_ROOT" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$REGBENCH_ROOT"
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
 echo "regbench-launch: repository $repo, cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
 n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c . || true)"
 echo "regbench-launch: bound: ${REGBENCH_BIND:-nothing}"
-echo "regbench-launch: arms $REGBENCH_ARMS ($([ -d "$REGBENCH_ARMS" ] && echo found || echo NOT THERE)), rounds file $REGBENCH_MANIFEST ($([ -s "$REGBENCH_MANIFEST" ] && echo there || echo not written yet))"
+rounds="${REGBENCH_MANIFEST:-$REGBENCH_INPUTS/rounds.csv}"
+echo "regbench-launch: inputs $REGBENCH_INPUTS (preprocessing $([ -s "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" ] && echo done || echo "not run yet: --inputs")), rounds file $rounds ($([ -s "$rounds" ] && echo there || echo "not written yet: --prepare"))"
 echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
 cd "$repo" || exit 2
-# --prepare with no rounds.csv yet: write it from the arms' results, in the image the
-# launcher itself runs its Python in
-case " $* " in
-    *" --prepare "*)
-        if [ ! -s "$REGBENCH_MANIFEST" ] && [ ! -d "$REGBENCH_ARMS" ]; then
-            echo "regbench-launch: --prepare needs the cohort's rounds file and there is none at $REGBENCH_MANIFEST, nor an arms' results folder at $REGBENCH_ARMS to write it from. Export REGBENCH_ARMS (the arm results folder) or REGBENCH_MANIFEST. Nothing was submitted." >&2
-            exit 2
-        fi
-        if [ ! -s "$REGBENCH_MANIFEST" ] && [ -d "$REGBENCH_ARMS" ]; then
-            # shellcheck disable=SC1091
-            source "$repo/benchmarks/regbench/slurm/env.sh"
-            echo "regbench-launch: writing $REGBENCH_MANIFEST from $REGBENCH_ARMS"
-            if ! regbench_exec STARE_REGBENCH sh -c "$REGBENCH_PYTHON" regbench-python \
-                -m benchmarks.regbench.arms_manifest --root "$REGBENCH_ARMS" --out "$REGBENCH_MANIFEST"; then
-                echo "regbench-launch: the manifest could not be written from $REGBENCH_ARMS (see above). Nothing was submitted." >&2
-                rm -f "$REGBENCH_MANIFEST"
-                exit 2
-            fi
-        fi
-        ;;
-esac
+# --prepare writes the rounds itself (submit_cohort.sh), from the input step
 exec bash "$launcher" "$@"

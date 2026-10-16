@@ -189,8 +189,22 @@ regbench_exec() (
         # otherwise ("mount source ... doesn't exist"), also for the first call of all,
         # which is the one that fills the cases folder
         mkdir -p "$REGBENCH_CASES" "$REGBENCH_OUT" ${REGBENCH_WORK:+"$REGBENCH_WORK"} \
-            ${REGBENCH_NUCLEI:+"$REGBENCH_NUCLEI"} 2>/dev/null || true
+            ${REGBENCH_NUCLEI:+"$REGBENCH_NUCLEI"} ${REGBENCH_INPUTS:+"$REGBENCH_INPUTS"} 2>/dev/null || true
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
+        # the input folder: the preprocessed slides, rounds.csv and the outlines the
+        # nuclei step traces (launch.sbatch --inputs / --prepare). Not twice: under a
+        # folder that is bound already (launch.sbatch binds REGBENCH_ROOT) it is there
+        if [ -n "${REGBENCH_INPUTS:-}" ]; then
+            local held=0 b
+            local -a binds
+            IFS=, read -r -a binds <<< "$bind"
+            for b in "${binds[@]}"; do
+                b="${b%%:*}"
+                [ -n "$b" ] || continue
+                case "${REGBENCH_INPUTS%/}/" in "${b%/}/"*) held=1 ;; esac
+            done
+            [ "$held" = 1 ] || bind="$bind,$REGBENCH_INPUTS"
+        fi
         # the StarDist re-run of the bare nuclei reads the site's model and writes here
         bind="$bind${REGBENCH_STARDIST_MODEL_DIR:+,$REGBENCH_STARDIST_MODEL_DIR}${REGBENCH_NUCLEI:+,$REGBENCH_NUCLEI}"
         # a site config outside the checkout (the model and settings of that re-run)

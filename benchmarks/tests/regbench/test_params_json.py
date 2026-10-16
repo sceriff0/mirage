@@ -12,10 +12,12 @@ sweep passes ~40 such axes, so the entire experiment was unlaunchable on the
 engine the pipeline is verified on -- and it would have failed on the cluster,
 at launch, after the input matrix had already been generated.
 
-benchmarks/params_json.py builds a -params-file instead, which carries JSON
-types and works on both engines.
+benchmarks/regbench/params_json.py builds a -params-file instead, which carries JSON
+types and works on both engines. The arms and the sweep are gone; regbench's own
+pipeline runs (the input step, slurm/inputs.sbatch) are the runners now.
 """
 
+import importlib
 import json
 import subprocess
 import sys
@@ -23,9 +25,12 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks import params_json
+from benchmarks.regbench import params_json
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
+if str(ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tests"))
+ci_actions = importlib.import_module("ci_actions")
 TYPES = params_json.schema_types()
 
 
@@ -92,13 +97,29 @@ def test_an_undeclared_param_is_reported_not_dropped(capsys):
     assert "not declared" in capsys.readouterr().err
 
 
+def test_the_old_module_path_still_works_until_the_arms_are_removed(tmp_path):
+    """run_arms.sh / run_sweep.sh call `python3 -m benchmarks.params_json`: a shim."""
+    from benchmarks import params_json as old
+
+    assert old.build is params_json.build and old.main is params_json.main
+    out = tmp_path / "p.json"
+    done = subprocess.run(
+        [sys.executable, "-m", "benchmarks.params_json", "--out", str(out), "reg_qc=1"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert json.loads(out.read_text()) == {"reg_qc": 1}
+
+
 def test_the_cli_writes_a_usable_params_file(tmp_path):
     out = tmp_path / "p.json"
     rc = subprocess.run(
         [
             sys.executable,
             "-m",
-            "benchmarks.params_json",
+            "benchmarks.regbench.params_json",
             "--out",
             str(out),
             "reg_qc=1",
@@ -117,7 +138,7 @@ def test_the_cli_writes_a_usable_params_file(tmp_path):
     assert doc["cleanup_work"] is False
 
 
-RUNNERS = ("benchmarks/run_sweep.sh", "benchmarks/run_arms.sh")
+RUNNERS = ("benchmarks/regbench/slurm/inputs.sbatch",)
 
 # Path-like flags that stay on the command line. They are `"type": "string"` in
 # the schema, so a String IS the right type for them, and they are per-run
@@ -126,10 +147,12 @@ CLI_ALLOWED = {"input", "outdir", "trace_dir"}
 
 
 def _code_lines(rel):
+    """The lines of a runner with their comments taken off (CLAUDE.md, rule 7: a check
+    of what RUNS reads the comment-blind text)."""
     for i, line in enumerate((ROOT / rel).read_text().splitlines(), 1):
-        if line.lstrip().startswith("#"):
-            continue
-        yield i, line
+        line = ci_actions.strip_line_comment(line)
+        if line.strip():
+            yield i, line
 
 
 def test_no_runner_passes_a_typed_param_on_the_command_line():
@@ -151,7 +174,7 @@ def test_no_runner_passes_a_typed_param_on_the_command_line():
         "these pass a typed pipeline param on the command line; NF26 delivers it "
         "as a String and validateParameters() rejects the run:\n  "
         + "\n  ".join(offenders)
-        + "\n\nBuild a -params-file with benchmarks/params_json.py instead."
+        + "\n\nBuild a -params-file with benchmarks/regbench/params_json.py instead."
     )
 
 
@@ -181,13 +204,13 @@ def test_no_runner_builds_a_param_flag_dynamically():
     )
 
 
-def test_both_runners_actually_use_the_params_file():
+def test_every_runner_actually_uses_the_params_file():
     """The positive half. Without this, deleting the param plumbing entirely
-    would satisfy both checks above while silently running every arm at the
-    pipeline defaults -- a benchmark that measures one configuration N times."""
+    would satisfy both checks above while silently running at the pipeline
+    defaults -- a benchmark that measures one configuration N times."""
     for rel in RUNNERS:
-        text = (ROOT / rel).read_text()
-        assert "benchmarks.params_json" in text, (
+        text = "\n".join(line for _, line in _code_lines(rel))
+        assert "benchmarks.regbench.params_json" in text, (
             f"{rel} no longer builds a typed params file"
         )
         assert "-params-file" in text, f"{rel} no longer passes -params-file"

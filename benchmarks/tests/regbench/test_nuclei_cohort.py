@@ -1,8 +1,9 @@
-"""Bare nuclei for the cohort: an existing label image is reused when it fits its slide,
-StarDist is run again only for a slide that has none, the shrunk outline is a fallback
-that is never used unasked, and a slide with nothing is prepared and scored on outlines.
+"""Nuclei and outlines for the cohort: regbench's own StarDist run of each slide, its
+cell mask traced to the slide's outlines, the nuclei checked against them; the shrunk
+outline is a fallback that is never used unasked, and a slide without nuclei is prepared
+and scored on outlines.
 
-StarDist is not installed here: the re-run is driven with a stand-in ``segment.py`` that
+StarDist is not installed here: the run is driven with a stand-in ``segment.py`` that
 writes the two masks the real one writes, under the names the real one gives them.
 """
 
@@ -17,10 +18,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import tifffile
 
-from benchmarks.regbench import arms_manifest, cells, nuclei, pairs, site_config
 from benchmarks.regbench import cases as cases_mod
+from benchmarks.regbench import cells, nuclei, outlines, pairs, site_config
 from benchmarks.regbench.cases import list_cases, load_points, polys
 from benchmarks.regbench.datasets import multiplex
 from benchmarks.regbench.imageio import write_nuclear
@@ -54,7 +54,7 @@ def labels_of(shift=(0, 0), drop=0, hw=HW):
 
 
 def geojson_of(labels, path):
-    """The outlines of a label image as the pipeline publishes them: one Polygon each."""
+    """The outlines of a label image as a pipeline arm published them: one Polygon each."""
     ps = cells.label_polys(labels)
     features = []
     for k in range(len(ps)):
@@ -71,23 +71,15 @@ def geojson_of(labels, path):
     return path
 
 
-def mask_file(path, labels):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tifffile.imwrite(path, labels, compression="zlib", tile=(128, 128))
-    return path
-
-
 @pytest.fixture
 def cohort(tmp_path):
-    """Two rounds of one patient: slides, published outlines, and a manifest row."""
+    """Two rounds of one patient: slides and a manifest row as ``regbench.manifest``
+    writes it, its outlines named under ``outlines/`` and not traced yet."""
     lab = labels_of()
-    slides, outlines = {}, {}
+    slides = {}
     for name in ("P1.r1", "P1.r2"):
         slides[name] = write_nuclear(
             tmp_path / "slides" / f"{name}.ome.tif", (lab > 0).astype(np.uint16), 0.325
-        )
-        outlines[name] = geojson_of(
-            cells.grow(lab), tmp_path / "geojson" / f"{name}.geojson"
         )
     row = {
         "case_id": "P1_P1.r2",
@@ -97,10 +89,21 @@ def cohort(tmp_path):
         "ref_channel": 0,
         "mov_channel": 0,
         "pixel_size_um": 0.325,
-        "ref_cells": str(outlines["P1.r1"]),
-        "mov_cells": str(outlines["P1.r2"]),
+        "ref_cells": str(tmp_path / "outlines" / "P1" / "P1.r1.geojson"),
+        "mov_cells": str(tmp_path / "outlines" / "P1" / "P1.r2.geojson"),
     }
     return tmp_path, lab, row
+
+
+def published(tmp, lab, row):
+    """The row of a manifest written from the arms' results before 2026-10-16: its
+    outlines are the arm's PUBLISHED GeoJSON (no ``.traced.json`` beside them)."""
+    out = dict(row)
+    for side, name in (("ref", "P1.r1"), ("mov", "P1.r2")):
+        out[f"{side}_cells"] = str(
+            geojson_of(cells.grow(lab), tmp / "arm" / "geojson" / f"{name}.geojson")
+        )
+    return out
 
 
 def manifest_of(tmp_path, row, **more):
@@ -225,106 +228,6 @@ def test_the_outline_check_scales_with_the_number_of_nuclei():
     assert took[500] < 8.0 * max(took[250], 0.05), took
 
 
-# ── an existing label image ───────────────────────────────────────────────────
-def test_a_label_image_of_the_slide_is_used_and_called_exact(cohort):
-    tmp, lab, row = cohort
-    mask = mask_file(tmp / "work" / "P1.r1.ome_nuclei_mask.tif", lab)
-    (ref, mov) = nuclei.slides([{**row, "ref_nuclei": str(mask)}])
-    assert (ref["key"], mov["key"]) == ("P1/P1.r1", "P1/P1.r2")
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    assert rec["usable"] and rec["exact"] and not rec["needs_rerun"]
-    assert rec["source"] == f"label_image:{mask}"
-    assert rec["agreement"]["one_nucleus_frac"] == 1.0
-    assert rec["agreement"]["n_nuclei"] == rec["agreement"]["n_outlines"]
-    assert nuclei.read_polys(nuclei.store_of(tmp / "nuc", ref)).n_features == lab.max()
-    # the other slide has none: it waits for the re-run, with the reason
-    rec = nuclei.resolve(mov, tmp / "nuc", args())
-    assert not rec["usable"] and rec["needs_rerun"]
-    assert rec["reason"] == nuclei.NEEDS_RERUN
-
-
-def test_a_label_image_of_another_size_is_refused_with_the_reason(cohort):
-    tmp, lab, row = cohort
-    mask = mask_file(tmp / "work" / "wrong.tif", labels_of(hw=(HW[0] + 8, HW[1])))
-    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(mask)}])
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    assert not rec["usable"] and rec["needs_rerun"]
-    assert "not a mask of this native slide" in rec["reason"]
-    assert "368" in rec["reason"] and "360" in rec["reason"]
-
-
-def test_a_label_image_that_does_not_sit_in_the_outlines_is_refused(cohort):
-    """The seg-arm route's risk: the right size, another frame."""
-    tmp, lab, row = cohort
-    mask = mask_file(tmp / "seg" / "P1_nuclei_mask.tif", labels_of(shift=(20, 20)))
-    (ref, _) = nuclei.slides(
-        [{**row, "ref_nuclei": str(mask), "ref_nuclei_from": "seg_arm:seg_stardist"}]
-    )
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    assert not rec["usable"]
-    assert rec["candidate_refused"].startswith(str(mask))
-    assert "at least 0.9 is required" in rec["reason"]
-    assert not (nuclei.store_of(tmp / "nuc", ref) / "nuclei.npz").exists()
-
-
-def test_the_cell_mask_offered_as_nuclei_is_refused(cohort):
-    """Review item 3: the grown cell mask puts exactly one centroid in every outline
-    and has the right count, and so does a nuclear mask a few pixels off. Neither is
-    the bare nuclei of the slide."""
-    tmp, lab, row = cohort
-    grown = mask_file(tmp / "seg" / "P1_cell_mask.tif", cells.grow(lab))
-    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(grown)}])
-    outlines = nuclei._outlines(ref)
-    got = nuclei.label_agreement(outlines, cells.label_polys(cells.grow(lab)))
-    assert got["one_nucleus_frac"] == 1.0 and got["n_nuclei"] == got["n_outlines"]
-    assert got["exact"] is False and got["identity"]["is_nuclei"] is False
-    assert got["identity"]["area_ratio_med"] > 0.95
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    assert not rec["usable"] and rec["needs_rerun"]
-    assert "looks like the cell mask" in rec["candidate_refused"]
-    assert "median area ratio" in rec["candidate_refused"]
-    assert not (nuclei.store_of(tmp / "nuc", ref) / "nuclei.npz").exists()
-    # the true nuclei: clearly smaller than, centred in, and inside their outlines
-    same = nuclei.identity(outlines, cells.label_polys(lab))
-    assert same["is_nuclei"] and same["why"] == ""
-    assert same["area_ratio_med"] < 0.25  # 9 px squares in outlines 29 px across
-    assert same["vertices_inside_frac"] == 1.0
-    assert max(abs(v) for v in same["centroid_offset_px"]) < 0.5
-    assert same["n_paired"] == lab.max()
-
-
-def test_a_nuclear_mask_a_few_pixels_off_is_refused(cohort):
-    tmp, lab, row = cohort
-    moved = labels_of(shift=(3, 3))  # still one centroid in every outline
-    mask = mask_file(tmp / "seg" / "P1_nuclei_mask.tif", moved)
-    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(mask)}])
-    got = nuclei.label_agreement(nuclei._outlines(ref), cells.label_polys(moved))
-    assert got["one_nucleus_frac"] == 1.0 and not got["identity"]["is_nuclei"]
-    assert got["identity"]["centroid_offset_px"] == pytest.approx([3.0, 3.0], abs=0.3)
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    assert not rec["usable"]
-    assert "a mask in a shifted frame" in rec["candidate_refused"]
-    assert "(+3.0, +3.0) px" in rec["candidate_refused"]
-    # further off (centroid still inside): not contained in the outlines either
-    far = nuclei.identity(
-        nuclei._outlines(ref), cells.label_polys(labels_of(shift=(13, 0)))
-    )
-    assert far["n_paired"] == lab.max() and not far["is_nuclei"]
-    assert far["vertices_inside_frac"] < nuclei.IDENTITY_INSIDE_MIN
-    assert "not contained in the outlines" in far["why"]
-
-
-def test_a_few_missing_nuclei_are_usable_but_not_exact(cohort):
-    tmp, lab, row = cohort
-    fewer = labels_of(drop=3)  # 3 of 56 outlines have no nucleus: 0.946
-    mask = mask_file(tmp / "work" / "P1.r1.ome_nuclei_mask.tif", fewer)
-    (ref, _) = nuclei.slides([{**row, "ref_nuclei": str(mask)}])
-    rec = nuclei.resolve(ref, tmp / "nuc", args())
-    frac = rec["agreement"]["one_nucleus_frac"]
-    assert nuclei.ACCEPT_ONE_NUCLEUS <= frac < nuclei.EXACT_ONE_NUCLEUS
-    assert rec["usable"] and not rec["exact"]
-
-
 # ── the re-run ────────────────────────────────────────────────────────────────
 ENV = {
     "REGBENCH_STARDIST_MODEL": "site_model",
@@ -412,17 +315,25 @@ ap.add_argument("--expand-distance", type=int)
 a, rest = ap.parse_known_args()
 Path(a.output_dir, "argv.txt").write_text(" ".join(sys.argv[1:]))
 lab = np.load({labels!r})
+grown = np.load({cells!r})
 stem = Path(a.image).stem
 tifffile.imwrite(Path(a.output_dir) / f"{{stem}}_nuclei_mask.tif", lab)
 tifffile.imwrite(Path(a.output_dir) / f"{{stem}}_cell_mask.tif",
-                 expand_labels(lab, distance=a.expand_distance).astype(np.uint32))
+                 expand_labels(grown, distance=a.expand_distance).astype(np.uint32))
 """
 
 
-def fake_segment(tmp, labels, monkeypatch):
+def fake_segment(tmp, labels, monkeypatch, cells_from=None):
+    """A stand-in ``segment.py``: ``labels`` are its nuclei and its cell mask is
+    ``cells_from`` (default: the same nuclei) grown by ``--expand-distance``. A cell mask
+    grown from OTHER labels is what makes the traced outlines disagree with the
+    nuclei: the self-consistency check must catch it."""
     np.save(tmp / "labels.npy", labels)
+    np.save(tmp / "cells.npy", labels if cells_from is None else cells_from)
     script = tmp / "fake_segment.py"
-    script.write_text(FAKE.format(labels=str(tmp / "labels.npy")))
+    script.write_text(
+        FAKE.format(labels=str(tmp / "labels.npy"), cells=str(tmp / "cells.npy"))
+    )
     monkeypatch.setattr(nuclei, "SEGMENT_PY", script)
     for k, v in ENV.items():
         monkeypatch.setenv(k, v)
@@ -432,18 +343,29 @@ def test_a_slide_without_a_mask_is_segmented_and_checked(cohort, monkeypatch, ca
     tmp, lab, row = cohort
     fake_segment(tmp, lab, monkeypatch)
     manifest = manifest_of(tmp, row)
+    assert not Path(row["ref_cells"]).exists()  # nothing is traced before the run
     a = args(manifest=manifest, out=tmp / "nuc", segment=True)
     assert nuclei.main(a) == 0
     for slide in nuclei.slides(multiplex.read_manifest(manifest)):
         rec = nuclei.load(nuclei.store_of(tmp / "nuc", slide))
         assert rec["source"] == "stardist_rerun" and rec["usable"] and rec["exact"]
+        assert rec["outlines_from"] == "stardist_rerun_cell_mask"
+        assert rec["tolerance"] == 1.0 and rec["outlines"] == slide["outlines"]
         assert rec["agreement"]["centroid_match_frac"] == 1.0
         assert rec["agreement"]["n_cells_rerun"] == rec["agreement"]["n_outlines"]
+        assert rec["agreement"]["n_outlines"] == lab.max()
         stem = Path(slide["image"]).stem  # the name bin/segment.py gives its masks
         rerun = nuclei.store_of(tmp / "nuc", slide) / "rerun"
         assert (rerun / f"{stem}_nuclei_mask.tif").is_file() and stem.endswith(".ome")
         assert "--expand-distance 10" in (rerun / "argv.txt").read_text()
         assert shlex.split(rec["command"])[1] == str(nuclei.SEGMENT_PY)
+        # the outlines: the run's own cell mask through the pipeline's own tracer
+        made = nuclei.traced_record(slide["outlines"])
+        assert made["cell_mask"] == str(rerun / f"{stem}_cell_mask.tif")
+        assert made["image_fingerprint"] == rec["image_fingerprint"]
+        theirs = tmp / "theirs.geojson"
+        outlines.trace(made["cell_mask"], theirs, 1.0)
+        assert Path(slide["outlines"]).read_text() == theirs.read_text()
     assert "DISAGREEMENT" not in capsys.readouterr().out
 
 
@@ -451,22 +373,25 @@ def test_a_rerun_that_disagrees_with_the_outlines_is_loud_and_not_exact(
     cohort, monkeypatch, capsys
 ):
     tmp, lab, row = cohort
-    # another model's nuclei, 5 of 56 missing: 0.911, kept (under 0.90 it is refused)
-    fake_segment(tmp, labels_of(drop=5), monkeypatch)
+    # nuclei 5 short of the cell mask they were said to grow: 51 of 56 traced outlines
+    # hold one (0.911), kept, not exact (under 0.90 it is refused)
+    fake_segment(tmp, labels_of(drop=5), monkeypatch, cells_from=lab)
     a = args(manifest=manifest_of(tmp, row), out=tmp / "nuc", segment=True, index=0)
     assert nuclei.main(a) == 0
     (ref, _) = nuclei.slides(multiplex.read_manifest(a.manifest))
     rec = nuclei.load(nuclei.store_of(tmp / "nuc", ref))
     assert rec["usable"] and not rec["exact"]
-    assert rec["agreement"]["centroid_match_frac"] < nuclei.EXACT_MATCH
-    assert "DISAGREEMENT P1/P1.r1" in capsys.readouterr().out
+    assert not rec["agreement"]["exact"] and rec["agreement"]["n_outlines"] == lab.max()
+    said = capsys.readouterr().out
+    assert "DISAGREEMENT P1/P1.r1" in said and "a tracing bug" in said
 
 
 def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     """User ruling 2026-10-11: under 0.90 of the outlines with exactly one nucleus the
-    re-run is another segmentation. It is not used, and everything says so."""
+    nuclei are not used, and everything says so. Against their own trace it can only
+    be a tracing bug: made here with a cell mask shifted by 20 px."""
     tmp, lab, row = cohort
-    fake_segment(tmp, labels_of(shift=(20, 20)), monkeypatch)  # nuclei of elsewhere
+    fake_segment(tmp, lab, monkeypatch, cells_from=labels_of(shift=(20, 20)))
     manifest = manifest_of(tmp, row)
     base = dict(manifest=manifest, out=tmp / "nuc")
     assert nuclei.main(args(**base, segment=True, index=0)) == 1  # the task fails
@@ -479,13 +404,12 @@ def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     assert rec["source"] == "" and not rec["needs_rerun"]
     assert not (store / "nuclei.npz").exists()
     n_out, n_nuc = rec["agreement"]["n_outlines"], rec["agreement"]["n_nuclei"]
-    assert (
-        f"only {frac:.3f} of this slide's {n_out} published outlines" in (rec["reason"])
-    )
+    assert f"only {frac:.3f} of this slide's {n_out} outlines" in rec["reason"]
     assert f"{n_nuc} nuclei (at least 0.9 is required)" in rec["reason"]
+    assert "a tracing bug" in rec["reason"]
     said = capsys.readouterr().out
     assert f"REFUSED P1/P1.r1: {rec['reason']}" in said
-    assert "DISAGREEMENT" not in said  # that line is for a re-run that is KEPT
+    assert "DISAGREEMENT" not in said  # that line is for nuclei that are KEPT
     # the list: its own status, the share and the reason
     assert nuclei.main(args(**base, list=True)) == 0
     listed = capsys.readouterr()
@@ -500,12 +424,15 @@ def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     capsys.readouterr()
     assert nuclei.main(args(**base, command=True, index=0)) == 0
     assert capsys.readouterr().out == ""
-    # forced: the refused re-run is set aside and StarDist runs again (the same model
-    # here, so the same verdict)
+    # forced: the refused run is set aside with the outlines traced from it, and
+    # StarDist runs again (the same stand-in here, so the same verdict)
     assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 1
     assert len(calls) == 1 and (store / "rerun_stale").is_dir()
+    assert Path(ref["outlines"] + ".stale").is_file()
     assert nuclei.load(store)["refused"]
     # the case is prepared on its outlines, without nuclei, with that reason
+    fake_segment(tmp, lab, monkeypatch)
+    assert nuclei.main(args(**base, segment=True, index=1)) == 0
     cases_root = tmp / "cases"
     a = mx_args(cases_root, manifest, nuclei_dir=str(tmp / "nuc"))
     assert multiplex.prepare(a) == 0
@@ -523,7 +450,7 @@ def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
     """Review item 6a: the record holds what the masks were PRODUCED with; when the
     model or a setting resolves to something else, the kept re-run is not reused."""
     tmp, lab, row = cohort
-    fake_segment(tmp, labels_of(drop=5), monkeypatch)  # kept, exact: false
+    fake_segment(tmp, labels_of(drop=5), monkeypatch, cells_from=lab)  # not exact
     manifest = manifest_of(tmp, row)
     base = dict(manifest=manifest, out=tmp / "nuc")
     assert nuclei.main(args(**base, segment=True, index=0)) == 0
@@ -551,6 +478,9 @@ def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
     ]
     assert not (store / "nuclei.npz").exists()
     assert (store / "rerun_stale").is_dir() and not (store / "rerun").exists()
+    # the outlines traced from the run that is set aside go with it
+    assert not Path(ref["outlines"]).exists()
+    assert Path(ref["outlines"] + ".stale").is_file()
     # the command is printed for it again, and the new run records the new model
     assert nuclei.main(args(**base, command=True, index=0)) == 0
     assert "--model-name corrected_model" in capsys.readouterr().out
@@ -561,12 +491,13 @@ def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
     assert new["usable"] and new["exact"]
     assert new["settings"]["values"]["segmentation_model"]["value"] == "corrected_model"
     assert nuclei.settings_changed(new) == []
+    assert Path(ref["outlines"]).is_file()
 
 
-def _one_slide(cohort, monkeypatch, labels):
+def _one_slide(cohort, monkeypatch, labels, cells_from=None):
     """The first slide of the cohort, segmented by the stand-in with ``labels``."""
     tmp, _, row = cohort
-    fake_segment(tmp, labels, monkeypatch)
+    fake_segment(tmp, labels, monkeypatch, cells_from)
     manifest = manifest_of(tmp, row)
     base = dict(manifest=manifest, out=tmp / "nuc")
     assert nuclei.main(args(**base, segment=True, index=0)) == 0
@@ -577,11 +508,11 @@ def _one_slide(cohort, monkeypatch, labels):
 def test_force_replaces_the_nuclei_of_a_slide_that_looks_usable(
     cohort, monkeypatch, capsys
 ):
-    """A re-run that is kept and usable (five nuclei short) is not what --force leaves
-    in place: it is set aside, StarDist runs again, and the record and the polygons
-    are the new run's."""
+    """A run that is kept and usable (five nuclei short) is not what --force leaves in
+    place: it is set aside, StarDist runs again, and the record, the polygons and the
+    outlines are the new run's."""
     tmp, lab, _ = cohort
-    base, ref, store = _one_slide(cohort, monkeypatch, labels_of(drop=5))
+    base, ref, store = _one_slide(cohort, monkeypatch, labels_of(drop=5), lab)
     first = nuclei.load(store)
     n_all = int(lab.max())
     assert first["usable"] and not first["exact"] and first["n_nuclei"] == n_all - 5
@@ -608,28 +539,9 @@ def test_force_replaces_the_nuclei_of_a_slide_that_looks_usable(
     assert str(nuclei.SEGMENT_PY) in capsys.readouterr().out  # the line to run
 
 
-def test_force_checks_a_usable_label_image_again_and_runs_no_stardist(cohort, capsys):
-    tmp, lab, row = cohort
-    mask = mask_file(tmp / "masks" / "r1.tif", lab)
-    manifest = manifest_of(tmp, row, ref_nuclei=str(mask), ref_nuclei_from="glob")
-    base = dict(manifest=manifest, out=tmp / "nuc")
-    assert nuclei.main(args(**base, index=0)) == 0
-    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
-    store = nuclei.store_of(tmp / "nuc", ref)
-    first = nuclei.load(store)
-    assert first["usable"] and first["source"] == f"label_image:{mask}"
-    (store / "nuclei.npz").write_bytes(b"not what the label image holds")
-    assert nuclei.main(args(**base, index=0, force=True)) == 0
-    assert nuclei.load(store) == first  # the same files give the same record
-    assert pairs.n_cells(nuclei.read_polys(store)) == int(lab.max())  # written again
-    capsys.readouterr()
-    assert nuclei.main(args(**base, command=True, index=0, force=True)) == 0
-    assert capsys.readouterr().out == ""
-
-
 def test_a_record_is_of_the_image_it_was_computed_from(cohort, monkeypatch, capsys):
-    """The slide is replaced by another file under the same name: its kept re-run is
-    not this file's nuclei. Said aloud, set aside, segmented again."""
+    """The slide is replaced by another file under the same name: its kept run is not
+    this file's nuclei, nor its outlines. Said aloud, set aside, segmented again."""
     tmp, lab, row = cohort
     base, ref, store = _one_slide(cohort, monkeypatch, lab)
     rec = nuclei.load(store)
@@ -640,27 +552,29 @@ def test_a_record_is_of_the_image_it_was_computed_from(cohort, monkeypatch, caps
     assert "STALE" not in capsys.readouterr().out
     write_nuclear(Path(ref["image"]), (labels_of(drop=7) > 0).astype(np.uint16), 0.325)
     assert cases_mod.file_fingerprint(ref["image"]) != rec["image_fingerprint"]
-    # prepare does not take the nuclei of the file that was there before
+    # prepare does not take the outlines traced from the file that was there before
+    fake_segment(tmp, lab, monkeypatch)
+    assert nuclei.main(args(**base, segment=True, index=1)) == 0
     cases_root = tmp / "cases"
     a = mx_args(cases_root, base["manifest"], nuclei_dir=str(tmp / "nuc"))
-    assert multiplex.prepare(a) == 0
-    (case,) = list_cases(cases_root, "multiplex")
-    assert polys(load_points(case), "ref", "nuclei") is None
-    why = cases_mod.set_info(case, "ref", "nuclei")["reason"]
-    assert "is not the file its nuclei were computed from" in why
-    assert "Run the nuclei step again" in why
+    assert multiplex.prepare(a) == 1
+    said = capsys.readouterr().out
+    assert "DROPPED the outlines" in said and "traced from another file" in said
+    assert list_cases(cases_root, "multiplex") == []
     # the nuclei step: stale, set aside, and the slide needs its re-run again
     again = nuclei.resolve(ref, tmp / "nuc", args())
     said = capsys.readouterr().out
     assert "STALE P1/P1.r1" in said and "not the file its nuclei were computed" in said
     assert not again["usable"] and again["needs_rerun"]
     assert again["stale_image"] and "set aside" in again["reason"]
-    assert "the StarDist re-run has not run" in again["reason"]
+    assert "has not run yet" in again["reason"]
     assert (store / "rerun_stale").is_dir() and not (store / "nuclei.npz").exists()
+    assert not Path(ref["outlines"]).exists()
     assert nuclei.main(args(**base, segment=True, index=0)) == 0
     new = nuclei.load(store)
     assert new["usable"]
     assert new["image_fingerprint"] == cases_mod.file_fingerprint(ref["image"])
+    assert multiplex.prepare(a) == 0
 
 
 def test_a_record_that_names_no_image_is_checked_again_and_not_recomputed(
@@ -711,27 +625,35 @@ def test_setting_aside_never_leaves_a_usable_record_over_missing_polygons(
 
     monkeypatch.setattr(Path, "rename", ended)
     with pytest.raises(KeyboardInterrupt):
-        nuclei.set_aside(store)
+        nuclei.set_aside(store, ref["outlines"])
     monkeypatch.setattr(Path, "rename", real)
     assert nuclei.load(store) is None  # the record went first
     assert (store / "nuclei.stale.json").is_file()
-    nuclei.set_aside(store)
+    nuclei.set_aside(store, ref["outlines"])
     assert not (store / "nuclei.npz").exists() and (store / "rerun_stale").is_dir()
+    assert not Path(ref["outlines"]).exists()
 
 
-def test_a_label_image_that_was_replaced_is_checked_again(cohort, capsys):
+def test_outlines_that_are_gone_are_traced_again_without_stardist(
+    cohort, monkeypatch, capsys
+):
+    """A usable record whose outlines are not there (or not where the manifest now
+    names them) reads the kept run again and traces it: no GPU."""
     tmp, lab, row = cohort
-    mask = mask_file(tmp / "masks" / "r1.tif", lab)
-    manifest = manifest_of(tmp, row, ref_nuclei=str(mask), ref_nuclei_from="glob")
-    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
-    first = nuclei.resolve(ref, tmp / "nuc", args())
-    assert first["usable"] and first["label_image_fingerprint"] == (
-        cases_mod.file_fingerprint(mask)
-    )
-    mask_file(mask, labels_of(shift=(20, 20)))  # another mask under the same name
-    again = nuclei.resolve(ref, tmp / "nuc", args())
-    assert "is not the file its nuclei were traced from" in capsys.readouterr().out
-    assert not again["usable"] and "published outlines" in again["reason"]
+    base, ref, store = _one_slide(cohort, monkeypatch, lab)
+    first = Path(ref["outlines"]).read_text()
+    Path(ref["outlines"]).unlink()
+    calls, real = [], nuclei.segment
+    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or real(*a))
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0 and not calls
+    assert Path(ref["outlines"]).read_text() == first
+    assert nuclei.load(store)["exact"]
+    # the manifest names another folder for the outlines: traced there
+    moved = {**row, "ref_cells": str(tmp / "elsewhere" / "P1" / "P1.r1.geojson")}
+    manifest = manifest_of(tmp, moved)
+    assert nuclei.main(args(manifest=manifest, out=tmp / "nuc", index=0)) == 0
+    assert not calls and (tmp / "elsewhere" / "P1" / "P1.r1.geojson").is_file()
+    assert nuclei.load(store)["outlines"] == moved["ref_cells"]
 
 
 def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
@@ -743,7 +665,7 @@ def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
     import os
 
     tmp, lab, row = cohort
-    fake_segment(tmp, labels_of(shift=(20, 20)), monkeypatch)
+    fake_segment(tmp, lab, monkeypatch, cells_from=labels_of(shift=(20, 20)))
     manifest = manifest_of(tmp, row)
     assert (
         nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True, index=0))
@@ -802,7 +724,8 @@ def test_a_rerun_between_the_thresholds_is_still_kept_and_not_exact(
     cohort, monkeypatch, capsys
 ):
     tmp, lab, row = cohort
-    fake_segment(tmp, labels_of(drop=3), monkeypatch)  # 0.946: over 0.90, under 0.99
+    # 0.946: over 0.90, under 0.99
+    fake_segment(tmp, labels_of(drop=3), monkeypatch, cells_from=lab)
     a = args(manifest=manifest_of(tmp, row), out=tmp / "nuc", segment=True, index=0)
     assert nuclei.main(a) == 0
     (ref, _) = nuclei.slides(multiplex.read_manifest(a.manifest))
@@ -812,6 +735,37 @@ def test_a_rerun_between_the_thresholds_is_still_kept_and_not_exact(
     assert rec["usable"] and not rec["exact"] and not rec.get("refused")
     said = capsys.readouterr().out
     assert "DISAGREEMENT P1/P1.r1" in said and "REFUSED" not in said
+
+
+# ── a manifest written from the arms' results (before 2026-10-16) ─────────────
+def test_an_old_manifests_published_outlines_are_read_and_never_overwritten(
+    cohort, monkeypatch, capsys
+):
+    """Backward compatibility: a rounds.csv of the arms' results names the arm's
+    published outlines. They are not this module's: never rewritten; the StarDist run
+    is compared with them as before, and the round is prepared from them as before."""
+    tmp, lab, row = cohort
+    old = published(tmp, lab, row)
+    before = {s: Path(old[f"{s}_cells"]).read_bytes() for s in ("ref", "mov")}
+    fake_segment(tmp, lab, monkeypatch)
+    manifest = manifest_of(tmp, old)
+    assert nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True)) == 0
+    for s in ("ref", "mov"):
+        assert Path(old[f"{s}_cells"]).read_bytes() == before[s]
+        assert not Path(old[f"{s}_cells"] + nuclei.TRACED).exists()
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    rec = nuclei.load(nuclei.store_of(tmp / "nuc", ref))
+    assert rec["outlines_from"] == "manifest" and rec["usable"] and rec["exact"]
+    # forced: what is set aside is the run, never the arm's outlines
+    assert (
+        nuclei.main(args(manifest=manifest, out=tmp / "nuc", index=0, force=True)) == 0
+    )
+    assert Path(old["ref_cells"]).read_bytes() == before["ref"]
+    cases_root = tmp / "cases"
+    assert multiplex.prepare(mx_args(cases_root, manifest, nuclei_dir=tmp / "nuc")) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    assert cases_mod.set_info(case, "ref", "outlines") == {"source": "arm_geojson"}
+    assert polys(load_points(case), "ref").n_features == lab.max()
 
 
 # ── the model and the settings come from the site config ──────────────────────
@@ -983,23 +937,24 @@ def test_the_list_says_which_slides_have_nuclei_and_which_need_the_rerun(
     cohort, monkeypatch, capsys
 ):
     tmp, lab, row = cohort
-    mask = mask_file(tmp / "work" / "P1.r1.ome_nuclei_mask.tif", lab)
-    manifest = manifest_of(tmp, row, ref_nuclei=str(mask), mov_nuclei="")
+    manifest = manifest_of(tmp, row)
     base = dict(manifest=manifest, out=tmp / "nuc")
     assert nuclei.main(args(**base, count=True)) == 0
     assert capsys.readouterr().out.strip() == "2"
-    assert nuclei.main(args(**base)) == 0  # resolve: nothing is segmented unasked
+    fake_segment(tmp, lab, monkeypatch)
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    assert (
+        nuclei.main(args(**base, index=1)) == 0
+    )  # resolve: nothing is segmented unasked
     capsys.readouterr()
     assert nuclei.main(args(**base, list=True)) == 0
     said = capsys.readouterr()
     lines = [ln.split("\t") for ln in said.out.splitlines()]
     assert lines[0] == list(nuclei.COLUMNS)
-    assert lines[1][:5] == ["0", "P1/P1.r1", "usable", f"label_image:{mask}", "True"]
+    assert lines[1][:5] == ["0", "P1/P1.r1", "usable", "stardist_rerun", "True"]
     assert lines[2][:3] == ["1", "P1/P1.r2", "needs_rerun"]
     assert "1 with usable nuclei, 1 needing the StarDist re-run" in said.err
     # the command is printed only for the slide that needs it
-    for k, v in ENV.items():
-        monkeypatch.setenv(k, v)
     assert nuclei.main(args(**base, command=True, index=0)) == 0
     assert capsys.readouterr().out == ""
     assert nuclei.main(args(**base, command=True, index=1)) == 0
@@ -1017,8 +972,7 @@ def test_prepare_takes_the_nuclei_of_each_slide_and_records_their_source(
     cohort, monkeypatch
 ):
     tmp, lab, row = cohort
-    mask = mask_file(tmp / "work" / "P1.r1.ome_nuclei_mask.tif", lab)
-    manifest = manifest_of(tmp, row, ref_nuclei=str(mask))
+    manifest = manifest_of(tmp, row)
     fake_segment(tmp, lab, monkeypatch)
     assert nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True)) == 0
     cases_root = tmp / "cases"
@@ -1030,46 +984,45 @@ def test_prepare_takes_the_nuclei_of_each_slide_and_records_their_source(
         assert polys(points, side).n_features == lab.max()
         assert cases_mod.set_info(case, side, "outlines") == {"source": "arm_geojson"}
         assert f"nuclei_{side}_outline" not in points  # not aligned by construction
-    ref, mov = (cases_mod.set_info(case, s, "nuclei") for s in ("ref", "mov"))
-    assert ref["source"] == f"label_image:{mask}" and ref["exact"] is True
-    assert mov["source"] == "stardist_rerun" and mov["exact"] is True
-    assert mov["agreement"]["one_nucleus_frac"] == 1.0
+        info = cases_mod.set_info(case, side, "nuclei")
+        assert info["source"] == "stardist_rerun" and info["exact"] is True
+        assert info["outlines_from"] == "stardist_rerun_cell_mask"
+        assert info["tolerance"] == 1.0
+        assert info["agreement"]["one_nucleus_frac"] == 1.0
     assert cases_mod.nuclei_reason(case, points) == ""
 
 
 def test_a_slide_with_no_nuclei_is_still_prepared_with_the_reason(cohort):
+    """Outlines without nuclei (an old manifest's published outlines, no nuclei step):
+    prepared and scored on the outlines, the reason kept."""
     tmp, lab, row = cohort
     cases_root = tmp / "cases"
-    assert multiplex.prepare(mx_args(cases_root, manifest_of(tmp, row))) == 0
+    old = published(tmp, lab, row)
+    assert multiplex.prepare(mx_args(cases_root, manifest_of(tmp, old))) == 0
     (case,) = list_cases(cases_root, "multiplex")
     points = load_points(case)
     assert polys(points, "mov").n_features == lab.max()
     assert polys(points, "mov", "nuclei") is None
     info = cases_mod.set_info(case, "mov", "nuclei")
-    assert info["source"] == "" and "no nuclear label image" in info["reason"]
-    assert "ref: no nuclear label image" in cases_mod.nuclei_reason(case, points)
+    assert info["source"] == "" and "no StarDist run of this slide" in info["reason"]
+    assert "ref: no StarDist run" in cases_mod.nuclei_reason(case, points)
 
 
-def test_a_label_image_in_the_manifest_is_checked_without_the_nuclei_step(cohort):
+def test_a_round_whose_outlines_were_not_traced_is_dropped(cohort, capsys):
     tmp, lab, row = cohort
-    good = mask_file(tmp / "work" / "a.tif", lab)
-    bad = mask_file(tmp / "work" / "b.tif", labels_of(shift=(20, 20)))
-    manifest = manifest_of(tmp, row, ref_nuclei=str(good), mov_nuclei=str(bad))
     cases_root = tmp / "cases"
-    assert multiplex.prepare(mx_args(cases_root, manifest)) == 0
-    (case,) = list_cases(cases_root, "multiplex")
-    points = load_points(case)
-    assert polys(points, "ref", "nuclei").n_features == lab.max()
-    assert polys(points, "mov", "nuclei") is None
+    assert multiplex.prepare(mx_args(cases_root, manifest_of(tmp, row))) == 1
+    said = capsys.readouterr().out
     assert (
-        "at least 0.9 is required"
-        in cases_mod.set_info(case, "mov", "nuclei")["reason"]
+        f"multiplex/P1_P1.r2: DROPPED {multiplex.NOT_TRACED}: {row['ref_cells']}"
+        in said
     )
+    assert list_cases(cases_root, "multiplex") == []
 
 
 def test_the_shrunk_outline_is_used_only_when_asked_and_is_never_exact(cohort):
     tmp, lab, row = cohort
-    manifest = manifest_of(tmp, row)
+    manifest = manifest_of(tmp, published(tmp, lab, row))
     cases_root = tmp / "cases"
     a = mx_args(cases_root, manifest, nuclei_fallback="shrink")
     assert multiplex.prepare(a) == 0
@@ -1108,59 +1061,6 @@ def test_the_builtin_segmenter_gives_nuclei_and_grown_outlines(tmp_path):
     }
     assert cases_mod.set_info(case, "ref", "outlines")["expand_px"] == cells.EXPAND_PX
     assert (points["nuclei_ref_outline"] == np.arange(lab.max())).all()
-
-
-# ── the manifest: masks that already exist ────────────────────────────────────
-def _arms_tree(root):
-    from .test_arms_manifest import P1, _tree
-
-    _tree(root, P1)
-    return root
-
-
-def test_the_manifest_finds_masks_kept_in_a_work_directory(tmp_path):
-    root = _arms_tree(tmp_path)
-    work = tmp_path / "work" / "ab" / "cdef"
-    work.mkdir(parents=True)
-    (work / "P1.r2.ome_nuclei_mask.tif").touch()
-    (work / "P1.r2.ome_cell_mask.tif").touch()
-    older = tmp_path / "work" / "00" / "1111"
-    older.mkdir(parents=True)
-    (older / "P1.r2.ome_nuclei_mask.tif").touch()
-    import os
-
-    os.utime(older / "P1.r2.ome_nuclei_mask.tif", (1, 1))
-    pattern = str(tmp_path / "work" / "*" / "*" / "{stem}_nuclei_mask.tif")
-    rows, problems = arms_manifest.build(root, nuclei_globs=[pattern])
-    assert problems == []
-    by = {r["case_id"]: r for r in rows}
-    assert by["P1_P1.r2"]["mov_nuclei"] == str(work / "P1.r2.ome_nuclei_mask.tif")
-    assert by["P1_P1.r2"]["mov_nuclei_from"] == "glob (newest of 2)"
-    assert by["P1_P1.r3"]["mov_nuclei"] == "" and by["P1_P1.r3"]["ref_nuclei"] == ""
-    assert set(arms_manifest.NUCLEI_COLUMNS) <= set(arms_manifest.COLUMNS)
-
-
-def test_the_manifest_takes_a_segmentation_arms_mask_for_the_reference_only(tmp_path):
-    root = _arms_tree(tmp_path)
-    mask = root / "seg_stardist" / "P1" / "segmentation" / "P1_nuclei_mask.tif"
-    mask.parent.mkdir(parents=True)
-    mask.touch()
-    checkpoint = root / "seg_stardist" / "csv" / "segmented.csv"
-    checkpoint.parent.mkdir(parents=True)
-    with open(checkpoint, "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["patient_id", "id", "is_reference", "nuclei_mask"])
-        w.writerow(["P1", "P1.r1", "true", str(mask)])
-        w.writerow(["P1", "P1.r2", "false", str(mask)])
-    rows, _ = arms_manifest.build(root, seg_arm="seg_stardist")
-    assert {r["ref_nuclei"] for r in rows} == {str(mask)}
-    assert {r["ref_nuclei_from"] for r in rows} == {"seg_arm:seg_stardist"}
-    assert {r["mov_nuclei"] for r in rows} == {""}
-    out = tmp_path / "rounds.csv"
-    arms_manifest.write(rows, out)
-    assert multiplex.read_manifest(out)[0]["ref_nuclei"] == str(mask)
-    with pytest.raises(SystemExit, match="segmented.csv"):
-        arms_manifest.build(root, seg_arm="no_such_arm")
 
 
 # ── the command line and the launcher ─────────────────────────────────────────

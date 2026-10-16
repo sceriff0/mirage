@@ -1,30 +1,35 @@
 #!/bin/bash
 #SBATCH --job-name=regbench-nuclei
 #SBATCH --output=regbench-nuclei-%A_%a.log
-# The bare nuclei of ONE native slide of the cohort (an array over slides):
+# The nuclei and the outlines of ONE native slide of the cohort (an array over slides):
 #   sbatch --array=0-$((N - 1)) -c 8 --mem=128G -t 8:00:00 <gpu request> nuclei.sbatch
 # with N = `python -m benchmarks.regbench nuclei --manifest "$REGBENCH_MANIFEST" --out "$REGBENCH_NUCLEI" --count`.
 #
-# 1. In the scorer's image: an existing label image of the slide (the manifest's
-#    ref_nuclei / mov_nuclei) is checked against the slide and its published outlines.
-# 2. Only for a slide left without usable nuclei: the pipeline's bin/segment.py, unchanged,
-#    in the pipeline's StarDist image (REGBENCH_SIF_STARDIST), with the arguments the
-#    pipeline renders for the arms (`regbench nuclei --command` prints the line).
-# 3. In the scorer's image again: the re-run is compared with the published outlines and
-#    the slide's record is written. A disagreement is printed and recorded (exact: false).
+# 1. In the scorer's image: what is kept for the slide is looked at (a finished run is
+#    reused when it is of this slide and of the settings that resolve now).
+# 2. For a slide without one: the pipeline's bin/segment.py, unchanged, in the
+#    pipeline's StarDist image (REGBENCH_SIF_STARDIST), with the arguments the pipeline
+#    renders for --seg_method stardist (`regbench nuclei --command` prints the line).
+# 3. In the scorer's image again (it has scikit-image and scipy): the run's cell mask is
+#    traced to the slide's outlines (the manifest's ref_cells / mov_cells, under
+#    $REGBENCH_INPUTS/outlines) by bin/mask_to_geojson.py at simplify_tolerance, the
+#    nuclei are checked against them (a self-consistency check: exact must come out
+#    true) and the slide's record is written. A disagreement is printed and recorded
+#    (exact: false).
 #
-#    A re-run under 0.90 of the outlines with exactly one nucleus is REFUSED: the slide
+#    Nuclei under 0.90 of the outlines with exactly one nucleus are REFUSED: the slide
 #    gets no nuclei, a `REFUSED <slide>` line says why, and this task exits 1.
 #
-# Needs REGBENCH_MANIFEST and REGBENCH_NUCLEI, and the site's model (the pipeline's
-# segmentation_model and segmentation_model_dir): REGBENCH_STARDIST_MODEL and
-# REGBENCH_STARDIST_MODEL_DIR, or, when they are unset, a site config that sets the two
-# keys (REGBENCH_SITE_CONFIG, else conf/ieo.config of the checkout; any StarDist setting
-# it overrides is rendered too). REGBENCH_STARDIST_CPU=1 runs StarDist without a GPU.
+# Needs REGBENCH_MANIFEST (the rounds.csv of python -m benchmarks.regbench.manifest) and
+# REGBENCH_NUCLEI, and the site's model (the pipeline's segmentation_model and
+# segmentation_model_dir): REGBENCH_STARDIST_MODEL and REGBENCH_STARDIST_MODEL_DIR, or,
+# when they are unset, a site config that sets the two keys (REGBENCH_SITE_CONFIG, else
+# conf/ieo.config of the checkout; any StarDist setting and simplify_tolerance it
+# overrides is used too). REGBENCH_STARDIST_CPU=1 runs StarDist without a GPU.
 set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
-: "${REGBENCH_MANIFEST:?export REGBENCH_MANIFEST (the rounds.csv of arms_manifest)}"
+: "${REGBENCH_MANIFEST:?export REGBENCH_MANIFEST (the rounds.csv of benchmarks.regbench.manifest)}"
 : "${REGBENCH_NUCLEI:?export REGBENCH_NUCLEI (the folder that keeps the nuclei of each slide)}"
 : "${SLURM_ARRAY_TASK_ID:?this task is one slide of an array: submit with --array}"
 scorer="${REGBENCH_PREPARE_IMAGE:-STARE_REGBENCH}"

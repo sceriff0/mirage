@@ -2753,26 +2753,32 @@ def test_unprepared_cases_are_refused(site, tmp_path):
 
 def test_prepare_is_a_step_of_its_own(site, tmp_path):
     env = {
-        "REGBENCH_MANIFEST": "/data/rounds.csv",
-        # the bare-nuclei step has its own test below
-        "REGBENCH_NUCLEI_SKIP": "1",
+        "REGBENCH_MANIFEST": str(_manifest(tmp_path)),
+        "REGBENCH_STARDIST_MODEL": "site_model",
     }
     done, _, _ = launch(site, "--prepare", env=env, log="prepare")
     jobs = jobs_of(done)
-    assert set(jobs) == {"rb-prepare-multiplex"}
-    assert jobs["rb-prepare-multiplex"].args == [
+    # the nuclei step is never left out: it traces the outlines every case needs
+    assert set(jobs) == {"rb-nuclei", "rb-prepare-multiplex"}
+    assert jobs["rb-prepare-multiplex"].args[:3] == [
         "multiplex",
         "--manifest",
-        "/data/rounds.csv",
+        env["REGBENCH_MANIFEST"],
     ]
     assert "run this script again without --prepare" in done.stdout
+    assert "taken as it is" in done.stdout  # a REGBENCH_MANIFEST named by hand
     gone, _, _ = launch(
         site, "--prepare", "--datasets", "synthetic", env=env, log="gone"
     )
     assert gone.returncode == 2 and "the only dataset is multiplex" in gone.stderr
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
-    assert none.returncode == 2 and "REGBENCH_MANIFEST" in none.stderr
+    assert none.returncode == 2 and "REGBENCH_INPUTS" in none.stderr
+    assert "REGBENCH_MANIFEST" in none.stderr
     assert not _sbatch_lines(none.stdout)
+    skip, _, _ = launch(
+        site, "--prepare", env={**env, "REGBENCH_NUCLEI_SKIP": "1"}, log="skip"
+    )
+    assert "rb-nuclei" in jobs_of(skip) and "no longer read" in skip.stdout
 
 
 def _manifest(tmp_path):
@@ -2803,7 +2809,7 @@ def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
     assert nuc.script == "nuclei.sbatch" and nuc.args == []
     assert nuc.opt("--array") == "0-2%20"
     assert (nuc.opt("--cpus-per-task"), nuc.opt("--mem")) == ("8", "128G")
-    assert GPU in nuc.line  # StarDist asks for the GPU the arms had
+    assert GPU in nuc.line  # StarDist asks for the GPU, as the pipeline does
     assert prep.deps == {("afterany", "<rb-nuclei>")}
     nuclei_dir = str(site[1] / "_nuclei")
     assert prep.args == [
@@ -2850,7 +2856,7 @@ def test_prepare_leaves_the_manifest_where_the_score_job_finds_it(site, tmp_path
     env = {
         "REGBENCH_MANIFEST": str(manifest),
         "REGBENCH_CASES": str(cases),
-        "REGBENCH_NUCLEI_SKIP": "1",
+        "REGBENCH_STARDIST_MODEL": "site_model",
         "REGBENCH_ALLOW_PATH_PYTHON": "1",
     }
     done, _, _ = launch(
@@ -2888,7 +2894,7 @@ def test_the_nuclei_step_is_refused_without_its_model_or_its_gpu(site, tmp_path)
     env = {"REGBENCH_MANIFEST": str(_manifest(tmp_path))}
     none, _, _ = launch(site, "--prepare", "--datasets", "multiplex", env=env, log="n3")
     assert none.returncode == 2 and "REGBENCH_STARDIST_MODEL" in none.stderr
-    assert "REGBENCH_NUCLEI_SKIP=1" in none.stderr and not _sbatch_lines(none.stdout)
+    assert "the site's StarDist model" in none.stderr and not _sbatch_lines(none.stdout)
     env["REGBENCH_STARDIST_MODEL"] = "site_model"
     no_gpu, _, _ = launch(
         site,

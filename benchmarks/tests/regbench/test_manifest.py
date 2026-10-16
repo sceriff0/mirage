@@ -1,59 +1,52 @@
-"""The cohort's rounds as manifest rows, from a tree laid out like the arms' results."""
+"""The cohort's rounds as manifest rows, from regbench's own preprocessing checkpoint
+(``launch.sbatch --inputs``: ``<inputs>/preprocess/results/csv/preprocessed.csv``)."""
 
 import csv
-import json
 
 import pytest
 
-from benchmarks.regbench import arms_manifest
+from benchmarks.regbench import manifest
 from benchmarks.regbench.datasets import multiplex
 
 HEADER = ("patient_id", "id", "preprocessed_image", "is_reference", "channels")
-SQUARE = [[10, 10], [20, 10], [20, 20], [10, 20], [10, 10]]
 
 
-def _geojson(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    feature = {
-        "type": "Feature",
-        "properties": {"label": 1},
-        "geometry": {"type": "Polygon", "coordinates": [SQUARE]},
-    }
-    path.write_text(json.dumps({"type": "FeatureCollection", "features": [feature]}))
-    return path
+def _outline(root, patient, slide):
+    return root / "outlines" / patient / f"{slide}.geojson"
 
 
-def _nuclei(root, patient, slide, arm="valis_high_micro2"):
-    return root / arm / patient / "qc" / "registration" / "geojson" / f"{slide}.geojson"
-
-
-def _tree(root, slides, pixel_size="0.325", nuclei=True, header=None):
-    """``slides``: ``(patient, file name, is_reference, channels)``, in checkpoint order."""
+def _tree(root, slides, pixel_size="0.325", header=None):
+    """``slides``: ``(patient, file name, is_reference, channels)``, in checkpoint order.
+    The slides are published under ``results/<patient>/converted/``, as the pipeline's
+    preprocessing step publishes them."""
     header = header or (*HEADER, "pixel_size")
     lines = []
     for patient, name, is_ref, channels in slides:
-        image = root / "preprocess_shared" / patient / "converted" / name
+        image = root / "results" / patient / "converted" / name
         image.parent.mkdir(parents=True, exist_ok=True)
         image.touch()
-        slide = arms_manifest.slide_name(name)
-        if nuclei:
-            _geojson(_nuclei(root, patient, slide))
         row = {
             "patient_id": patient,
-            "id": slide,
+            "id": manifest.slide_name(name),
             "preprocessed_image": str(image),
             "is_reference": "true" if is_ref else "false",
             "channels": channels,
             "pixel_size": pixel_size,
         }
         lines.append({k: row[k] for k in header})
-    path = root / "preprocess_shared" / "csv" / "preprocessed.csv"
+    path = root / "results" / "csv" / "preprocessed.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=header)
         w.writeheader()
         w.writerows(lines)
     return path
+
+
+def _build(root, **kw):
+    return manifest.build(
+        root / "results" / "csv" / "preprocessed.csv", root / "outlines", **kw
+    )
 
 
 P1 = [
@@ -68,42 +61,47 @@ def test_one_row_per_moving_round(tmp_path):
         tmp_path,
         [*P1, ("P2", "a.ome.tif", True, "DAPI"), ("P2", "b.tif", False, "DAPI")],
     )
-    rows, problems = arms_manifest.build(tmp_path)
+    rows, problems = _build(tmp_path)
     assert problems == []
     assert [r["case_id"] for r in rows] == ["P1_P1.r2", "P1_P1.r3", "P2_b"]
     assert [r["group"] for r in rows] == ["P1", "P1", "P2"]
     first = rows[0]
     assert first["reference"].endswith("P1/converted/P1.r1.ome.tif")
     assert first["moving"].endswith("P1/converted/P1.r2.ome.tif")
-    assert first["ref_cells"] == str(_nuclei(tmp_path, "P1", "P1.r1"))
-    assert first["mov_cells"] == str(_nuclei(tmp_path, "P1", "P1.r2"))
+    # where the nuclei step will trace each slide's outlines: not there yet, and that
+    # is not a reason to drop the round
+    assert first["ref_cells"] == str(_outline(tmp_path, "P1", "P1.r1"))
+    assert first["mov_cells"] == str(_outline(tmp_path, "P1", "P1.r2"))
+    assert not _outline(tmp_path, "P1", "P1.r1").exists()
     assert first["channels_ref"] == "DAPI|CD3" and first["channels_mov"] == "CD8|DAPI"
     assert first["pixel_size_um"] == pytest.approx(0.325)
     assert first["pixel_size_source"] == "preprocessed.csv"
-    assert set(arms_manifest.COLUMNS) == set(first)
+    assert set(manifest.COLUMNS) == set(first)
+    # the bare-nuclei columns stay in the schema, empty
+    assert {first[c] for c in manifest.NUCLEI_COLUMNS} == {""}
 
 
 def test_nuclear_channel_is_found_by_name(tmp_path):
-    assert arms_manifest.nuclear_index(["CD3", "DAPI"]) == 1
-    assert arms_manifest.nuclear_index(["cd3", " dapi "]) == 1  # case-insensitive
+    assert manifest.nuclear_index(["CD3", "DAPI"]) == 1
+    assert manifest.nuclear_index(["cd3", " dapi "]) == 1  # case-insensitive
     # the pipeline's rule is a SUBSTRING match of DAPI or CELLTOX (lib/MarkerUtils.groovy)
-    assert arms_manifest.nuclear_index(["CD8", "PANCK", "CELLTOX Green"]) == 2
-    assert arms_manifest.nuclear_index(["CD8", "DAPI_R2"]) == 1
-    assert arms_manifest.nuclear_index(["DAPI", "CELLTOX"], nuclear="CELLTOX") == 1
+    assert manifest.nuclear_index(["CD8", "PANCK", "CELLTOX Green"]) == 2
+    assert manifest.nuclear_index(["CD8", "DAPI_R2"]) == 1
+    assert manifest.nuclear_index(["DAPI", "CELLTOX"], nuclear="CELLTOX") == 1
     with pytest.raises(ValueError, match="no channel"):
-        arms_manifest.nuclear_index(["CD3", "CD8"])
+        manifest.nuclear_index(["CD3", "CD8"])
     with pytest.raises(ValueError, match="2 channels"):
-        arms_manifest.nuclear_index(["DAPI", "CD3", "CELLTOX Green"])
+        manifest.nuclear_index(["DAPI", "CD3", "CELLTOX Green"])
 
     _tree(tmp_path, P1)
-    rows, _ = arms_manifest.build(tmp_path)
+    rows, _ = _build(tmp_path)
     assert [(r["ref_channel"], r["mov_channel"]) for r in rows] == [(0, 1), (0, 0)]
 
 
 def test_a_slide_with_two_nuclear_channels_is_refused_with_the_reason(tmp_path):
     slides = [*P1, ("P1", "P1.r4.ome.tif", False, "DAPI|CELLTOX Green|CD4")]
     _tree(tmp_path, slides)
-    rows, problems = arms_manifest.build(tmp_path)
+    rows, problems = _build(tmp_path)
     assert [r["case_id"] for r in rows] == ["P1_P1.r2", "P1_P1.r3"]
     (p,) = problems
     assert p["patient"] == "P1" and p["slide"] == "P1.r4"
@@ -113,7 +111,7 @@ def test_a_slide_with_two_nuclear_channels_is_refused_with_the_reason(tmp_path):
 
 def test_a_slide_without_the_nuclear_name_is_dropped(tmp_path):
     _tree(tmp_path, [*P1, ("P1", "P1.r4.ome.tif", False, "CD4|CD8")])
-    rows, problems = arms_manifest.build(tmp_path)
+    rows, problems = _build(tmp_path)
     assert len(rows) == 2
     assert [p["slide"] for p in problems] == ["P1.r4"]
     assert "no channel" in problems[0]["reason"]
@@ -121,51 +119,14 @@ def test_a_slide_without_the_nuclear_name_is_dropped(tmp_path):
 
 def test_slide_names_follow_the_pipeline_rule():
     # subworkflows/local/seg_qc.nf: strip .ome.tif / .ome.tiff, then .tif / .tiff
-    assert arms_manifest.slide_name("P1.r2.ome.tif") == "P1.r2"
-    assert arms_manifest.slide_name("/x/y/P1.r2.ome.tiff") == "P1.r2"
-    assert arms_manifest.slide_name("P1.r2.tif") == "P1.r2"
-    assert arms_manifest.slide_name("P1.r2.tiff") == "P1.r2"
-    assert arms_manifest.slide_name("P1.ome.r2.tif") == "P1.ome.r2"
-    assert (
-        arms_manifest.slide_name("P1.r2.OME.TIF") == "P1.r2.OME.TIF"
-    )  # case-sensitive
+    assert manifest.slide_name("P1.r2.ome.tif") == "P1.r2"
+    assert manifest.slide_name("/x/y/P1.r2.ome.tiff") == "P1.r2"
+    assert manifest.slide_name("P1.r2.tif") == "P1.r2"
+    assert manifest.slide_name("P1.r2.tiff") == "P1.r2"
+    assert manifest.slide_name("P1.ome.r2.tif") == "P1.ome.r2"
+    assert manifest.slide_name("P1.r2.OME.TIF") == "P1.r2.OME.TIF"  # case-sensitive
     # the two replacements run one after the other, as in the workflow
-    assert arms_manifest.slide_name("P1.r2.ome.tif.ome.tif") == "P1.r2.ome"
-
-
-def test_missing_nuclei_drop_the_round_and_name_the_path(tmp_path):
-    _tree(tmp_path, P1)
-    gone = _nuclei(tmp_path, "P1", "P1.r2")
-    gone.unlink()
-    rows, problems = arms_manifest.build(tmp_path)
-    assert [r["case_id"] for r in rows] == [
-        "P1_P1.r3"
-    ]  # the other round is still a row
-    (p,) = problems
-    assert p["path"] == str(gone) and "nuclei" in p["reason"]
-
-
-def test_missing_reference_nuclei_drop_every_round_of_the_patient(tmp_path):
-    _tree(
-        tmp_path,
-        [*P1, ("P2", "a.ome.tif", True, "DAPI"), ("P2", "b.tif", False, "DAPI")],
-    )
-    gone = _nuclei(tmp_path, "P1", "P1.r1")
-    gone.unlink()
-    rows, problems = arms_manifest.build(tmp_path)
-    assert [r["case_id"] for r in rows] == ["P2_b"]
-    assert {p["path"] for p in problems} == {str(gone)}
-    assert sorted(p["slide"] for p in problems) == ["P1.r2", "P1.r3"]
-
-
-def test_nuclei_come_from_the_named_arm(tmp_path):
-    _tree(tmp_path, P1, nuclei=False)
-    for slide in ("P1.r1", "P1.r2", "P1.r3"):
-        _geojson(_nuclei(tmp_path, "P1", slide, arm="other_arm"))
-    assert arms_manifest.build(tmp_path)[0] == []
-    rows, problems = arms_manifest.build(tmp_path, from_arm="other_arm")
-    assert len(rows) == 2 and problems == []
-    assert "/other_arm/" in rows[0]["ref_cells"]
+    assert manifest.slide_name("P1.r2.ome.tif.ome.tif") == "P1.r2.ome"
 
 
 def test_patient_without_reference_is_dropped_with_a_reason(tmp_path):
@@ -178,7 +139,7 @@ def test_patient_without_reference_is_dropped_with_a_reason(tmp_path):
         ("P3", "b.ome.tif", True, "DAPI"),
     ]
     path = _tree(tmp_path, slides)
-    rows, problems = arms_manifest.build(tmp_path)
+    rows, problems = _build(tmp_path)
     assert [r["case_id"] for r in rows] == ["P2_b"]
     by = {p["patient"]: p for p in problems}
     assert "no reference" in by["P1"]["reason"] and by["P1"]["path"] == str(path)
@@ -186,13 +147,12 @@ def test_patient_without_reference_is_dropped_with_a_reason(tmp_path):
 
 
 def test_a_missing_slide_drops_the_round_but_a_converted_copy_is_found(tmp_path):
-    _tree(tmp_path, P1)
-    path = tmp_path / "preprocess_shared" / "csv" / "preprocessed.csv"
+    path = _tree(tmp_path, P1)
     # rows written before the passthrough fix name <pid>/preprocessed/ for a file that was
     # published under <pid>/converted/ (benchmarks/reg_mosaic.py: published_file)
     path.write_text(path.read_text().replace("/converted/P1.r2", "/preprocessed/P1.r2"))
-    (tmp_path / "preprocess_shared" / "P1" / "converted" / "P1.r3.ome.tiff").unlink()
-    rows, problems = arms_manifest.build(tmp_path)
+    (tmp_path / "results" / "P1" / "converted" / "P1.r3.ome.tiff").unlink()
+    rows, problems = _build(tmp_path)
     assert [r["case_id"] for r in rows] == ["P1_P1.r2"]
     assert rows[0]["moving"].endswith("/converted/P1.r2.ome.tif")
     (p,) = problems
@@ -200,18 +160,31 @@ def test_a_missing_slide_drops_the_round_but_a_converted_copy_is_found(tmp_path)
     assert p["path"].endswith("P1.r3.ome.tiff")
 
 
+def test_a_missing_reference_drops_every_round_of_the_patient(tmp_path):
+    _tree(
+        tmp_path,
+        [*P1, ("P2", "a.ome.tif", True, "DAPI"), ("P2", "b.tif", False, "DAPI")],
+    )
+    gone = tmp_path / "results" / "P1" / "converted" / "P1.r1.ome.tif"
+    gone.unlink()
+    rows, problems = _build(tmp_path)
+    assert [r["case_id"] for r in rows] == ["P2_b"]
+    assert {p["path"] for p in problems} == {str(gone)}
+    assert sorted(p["slide"] for p in problems) == ["P1.r2", "P1.r3"]
+
+
 def test_pixel_size_falls_back_to_the_cohorts_documented_value(tmp_path):
     _tree(tmp_path, P1, pixel_size="")
-    rows, _ = arms_manifest.build(tmp_path)
+    rows, _ = _build(tmp_path)
     assert {r["pixel_size_um"] for r in rows} == {0.325}
     assert {r["pixel_size_source"] for r in rows} == {"fallback"}
 
     _tree(tmp_path, P1, header=HEADER)  # a checkpoint older than the pixel_size column
-    rows, _ = arms_manifest.build(tmp_path)
+    rows, _ = _build(tmp_path)
     assert {r["pixel_size_source"] for r in rows} == {"fallback"}
 
     _tree(tmp_path, P1, pixel_size="0.5")
-    rows, _ = arms_manifest.build(tmp_path)
+    rows, _ = _build(tmp_path)
     assert {r["pixel_size_um"] for r in rows} == {0.5}
 
 
@@ -221,32 +194,38 @@ def test_quoted_fields_are_read_as_csv(tmp_path):
         [("P1", "a, b.ome.tif", True, "DAPI"), ("P1", "c.ome.tif", False, "DAPI")],
     )
     assert '"' in path.read_text()  # RFC 4180 quoting, as the checkpoint writer does
-    rows, problems = arms_manifest.build(tmp_path)
+    rows, problems = _build(tmp_path)
     assert problems == []
     assert rows[0]["reference"].endswith("a, b.ome.tif")
 
 
 def test_a_missing_checkpoint_or_column_stops_with_the_path(tmp_path):
-    with pytest.raises(SystemExit, match="preprocessed.csv"):
-        arms_manifest.build(tmp_path)
+    with pytest.raises(SystemExit, match="preprocessed.csv.*launch.sbatch --inputs"):
+        _build(tmp_path)
     _tree(tmp_path, P1, header=("patient_id", "id", "preprocessed_image", "channels"))
     with pytest.raises(SystemExit, match="is_reference"):
-        arms_manifest.build(tmp_path)
+        _build(tmp_path)
 
 
 def test_cli_writes_the_good_rows(tmp_path, capsys):
-    _tree(tmp_path, P1)
-    gone = _nuclei(tmp_path, "P1", "P1.r2")
+    checkpoint = _tree(tmp_path, P1)
+    gone = tmp_path / "results" / "P1" / "converted" / "P1.r2.ome.tif"
     gone.unlink()
     out = tmp_path / "made" / "rounds.csv"
-    assert arms_manifest.main(["--root", str(tmp_path), "--out", str(out)]) == 0
+    argv = ["--preprocessed", str(checkpoint), "--outlines", str(tmp_path / "outlines")]
+    assert manifest.main([*argv, "--out", str(out)]) == 0
     assert str(gone) in capsys.readouterr().out  # the problems are printed
     rows = multiplex.read_manifest(out)  # what `prepare multiplex` reads
     assert [r["case_id"] for r in rows] == ["P1_P1.r3"]
     assert rows[0]["group"] == "P1" and rows[0]["mov_channel"] == "0"
     assert rows[0]["channels_mov"] == "DAPI|PANCK|KI67"
+    assert rows[0]["mov_cells"] == str(_outline(tmp_path, "P1", "P1.r3"))
 
-    _nuclei(tmp_path, "P1", "P1.r3").unlink()
+    (tmp_path / "results" / "P1" / "converted" / "P1.r3.ome.tiff").unlink()
     none = tmp_path / "none.csv"
-    assert arms_manifest.main(["--root", str(tmp_path), "--out", str(none)]) == 1
+    assert manifest.main([*argv, "--out", str(none)]) == 1
     assert not none.exists()  # no row is left: nothing is written
+    # both inputs are required; the arms' options are gone
+    for bad in (["--out", str(none)], ["--root", str(tmp_path), "--out", str(none)]):
+        with pytest.raises(SystemExit):
+            manifest.main(bad)

@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 import tifffile
 
-from benchmarks.regbench import arms_manifest, methods, pairs, scene
+from benchmarks.regbench import manifest as rounds_manifest
+from benchmarks.regbench import methods, pairs, scene
 from benchmarks.regbench.cases import list_cases, load_points, polys
 from benchmarks.regbench.datasets import multiplex
 from benchmarks.regbench.score import score
@@ -267,29 +268,40 @@ def test_sampling_is_refused_for_nuclei_given_as_geojson(tmp_path, capsys):
     assert "--max-cells" in capsys.readouterr().out
 
 
-def test_case_points_at_the_original_slide(tmp_path):
-    """From a tree laid out like the arms' results, through the manifest, to the case."""
+def test_case_points_at_the_original_slide(tmp_path, capsys):
+    """From regbench's own input step (the pipeline's preprocessing, laid out as it
+    publishes it), through the manifest and the traced outlines, to the case."""
     (r1, r2), _ = _two_rounds(tmp_path)
-    root = tmp_path / "arm_results"
-    slides = root / "preprocess_shared" / "P1" / "converted"
+    root = tmp_path / "inputs" / "preprocess" / "results"
+    slides = root / "P1" / "converted"
     slides.mkdir(parents=True)
     ref, mov = slides / "P1.r1.ome.tif", slides / "P1.r2.ome.tif"
     r1.rename(ref)
     r2.rename(mov)
-    nuclei = root / "valis_high_micro2" / "P1" / "qc" / "registration" / "geojson"
-    _grid_cells(nuclei / "P1.r1.geojson")
-    _grid_cells(nuclei / "P1.r2.geojson", shift=(6.0, -4.0))
-    checkpoint = root / "preprocess_shared" / "csv" / "preprocessed.csv"
+    checkpoint = root / "csv" / "preprocessed.csv"
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_text(
         "patient_id,id,preprocessed_image,is_reference,channels,pixel_size\n"
         f"P1,P1.r1,{ref},true,CD3|DAPI,0.325\n"
         f"P1,P1.r2,{mov},false,CD8|DAPI,0.325\n"
     )
+    outlines = tmp_path / "inputs" / "outlines"
     manifest = tmp_path / "rounds.csv"
-    assert arms_manifest.main(["--root", str(root), "--out", str(manifest)]) == 0
+    argv = ["--preprocessed", str(checkpoint), "--outlines", str(outlines)]
+    assert rounds_manifest.main([*argv, "--out", str(manifest)]) == 0
 
+    # the outlines are not traced yet: the round is DROPPED with the reason, never
+    # prepared on an empty set
     cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest)) == 1
+    said = capsys.readouterr().out
+    assert (
+        f"DROPPED {multiplex.NOT_TRACED}: {outlines / 'P1' / 'P1.r1.geojson'}" in said
+    )
+    assert list_cases(cases_root, "multiplex") == []
+    # what the nuclei step leaves (its own trace of each slide's StarDist cell mask)
+    _grid_cells(outlines / "P1" / "P1.r1.geojson")
+    _grid_cells(outlines / "P1" / "P1.r2.geojson", shift=(6.0, -4.0))
     assert multiplex.prepare(_mx_args(cases_root, manifest)) == 0
     (case,) = list_cases(cases_root, "multiplex")
     assert case.case_id == "P1_P1.r2" and case.group == "P1"
@@ -330,3 +342,22 @@ def test_channel_names_come_from_the_slide_when_the_manifest_has_none(tmp_path):
     assert case.extra["channels_ref"] == ["CD3", "DAPI"]
     assert case.extra["channel_names"] == ["CD3", "DAPI"]
     assert case.extra["pixel_size_source"] == "OME header"
+
+
+def test_a_case_prepared_from_other_inputs_is_refused_not_kept(tmp_path, capsys):
+    """A cases folder prepared from the arms' manifest, then prepared from regbench's
+    own: the old case is neither kept silently nor replaced unasked."""
+    good = _grid_cells(tmp_path / "good.geojson")
+    manifest, _ = _cohort_manifest(tmp_path, [("a", good, good)])
+    cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    # the same row again: the case is kept
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 0
+    other = _grid_cells(tmp_path / "other" / "good.geojson")
+    manifest.write_text(manifest.read_text().replace(str(good), str(other)))
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 1
+    said = capsys.readouterr().out
+    assert "was prepared from ref_cells" in said and "--force" in said
+    assert multiplex.prepare(_mx_args(cases_root, manifest, force=True)) == 0
+    (case,) = list_cases(cases_root, "multiplex")
+    assert case.extra["ref_cells"] == str(other)

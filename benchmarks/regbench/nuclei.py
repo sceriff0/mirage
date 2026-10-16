@@ -1,74 +1,72 @@
-"""Bare nuclei for the cohort's slides: reuse what exists, segment only what has none.
+"""Bare nuclei and outlines for the cohort's slides: regbench's own StarDist run.
 
-The cohort's published outlines are StarDist nuclei grown by 10 px (README, "What the
-cohort's nuclei are"); the nuclei themselves are not among an arm's published files. This
-module finds or makes, for each NATIVE slide of a ``prepare multiplex`` manifest, a label
-image of its bare nuclei, checks it against that slide's published outlines, and leaves
-one record per slide that ``prepare multiplex --nuclei-dir`` reads::
+For each NATIVE slide of a ``prepare multiplex`` manifest (``regbench.manifest``) this
+runs the pipeline's ``bin/segment.py``, unchanged, with the arguments the pipeline renders
+for ``--seg_method stardist`` (:func:`command`), traces the cell mask it writes to the
+slide's outlines (``outlines.trace``: ``bin/mask_to_geojson.py`` at
+``simplify_tolerance``, into the manifest's ``ref_cells`` / ``mov_cells`` path) and keeps
+the nuclei mask as the slide's bare nuclei. One record per slide is left for ``prepare
+multiplex --nuclei-dir``::
 
     <out>/<group>/<slide>/nuclei.json   where the nuclei came from, whether they may be
                                         used, how well they agree with the outlines
     <out>/<group>/<slide>/nuclei.npz    the nuclei as polygons (when usable)
-    <out>/<group>/<slide>/rerun/        the masks of a StarDist re-run of that slide
+    <out>/<group>/<slide>/rerun/        the masks of the StarDist run of that slide
+    <outlines>/<group>/<slide>.geojson  the outlines (+ ``.traced.json``: what they were
+                                        traced from, at which tolerance)
+
+The outlines are DEFINED to be what the arms' QC published (``outlines.py``;
+``benchmarks/tests/regbench/test_outline_definition.py`` pins every link): the StarDist
+nuclei grown by ``seg_expand_distance`` and traced by the pipeline's own function. The
+nuclei are then by construction the ones the outlines were grown from, and the comparison
+below is a SELF-CONSISTENCY check: a mismatch is a tracing bug, not another segmentation.
+``exact`` must come out true; false is printed loudly and kept.
+
+A manifest written from the arms' results before 2026-10-16 names the arm's PUBLISHED
+outlines; those are never overwritten (a GeoJSON without the ``.traced.json`` beside it is
+not this module's), and the StarDist run is compared with them as it always was
+(``outlines_from: "manifest"``).
 
 **A record is of one image.** It holds the fingerprint of the slide it was computed from
 (``image_fingerprint``: size, modification time and sampled bytes,
-``cases.file_fingerprint``) and, for a label image, that file's too
-(``label_image_fingerprint``). A record whose fingerprint is not the file's now, or
-that has none, is not used: the slide is decided again, and a re-run kept for it is set
-aside (``rerun_stale/``) and run again. ``--force`` (``REGBENCH_NUCLEI_FORCE=1``) decides
-EVERY slide again the same way, whatever its record says: a label image is traced and
-checked again, a kept re-run is set aside and StarDist runs again.
+``cases.file_fingerprint``). A record whose fingerprint is not the file's now, or that has
+none, is not used: the slide is decided again, and a run kept for it is set aside
+(``rerun_stale/``, its traced outlines with it) and run again. ``--force``
+(``REGBENCH_NUCLEI_FORCE=1``) does that for EVERY slide, whatever its record says.
 
-Sources, tried in this order for each slide:
-
-1. **an existing label image** named by the manifest (``ref_nuclei`` / ``mov_nuclei``;
-   ``arms_manifest --nuclei-glob`` finds masks kept in a Nextflow work directory,
-   ``--seg-arm`` takes a segmentation arm's per-patient mask for the reference slide). It
-   is refused unless its shape is the slide's and ``ACCEPT_ONE_NUCLEUS`` of the slide's
-   outlines hold exactly one of its nuclei's centroids (:func:`one_nucleus_fraction`);
-2. **a StarDist re-run**: the pipeline's ``bin/segment.py``, unchanged, on the native
-   slide with the arguments the pipeline renders for the arms (:func:`command`). It
-   writes the nuclei mask and the cell mask it grows from it; the cell mask is compared
-   with the published outlines (:func:`rerun_agreement`). The model and any setting
-   the site overrides come from the environment, else from the site config
-   (:mod:`site_config`). A re-run under ``ACCEPT_ONE_NUCLEUS`` is REFUSED like any
-   other label image (user ruling 2026-10-11): the slide has no nuclei and its record
-   says why; between that and the exact thresholds it is kept as ``exact: false``.
-
-Anything else (shrinking the outlines) is ``prepare multiplex --nuclei-fallback shrink``
-and is never chosen here. ``exact`` in a record means: these nuclei are, within the stated
-tolerances, the ones the published outlines were grown from.
+A run under ``ACCEPT_ONE_NUCLEUS`` is REFUSED (user ruling 2026-10-11): the slide has no
+nuclei and its record says why; between that and the exact thresholds it is kept as
+``exact: false``. Anything else (shrinking the outlines) is ``prepare multiplex
+--nuclei-fallback shrink`` and is never chosen here.
 
 The thresholds, and why:
 
-``ACCEPT_ONE_NUCLEUS`` 0.90  a label image is USED only above this. An outline is its
-    nucleus grown outwards, so the true nuclei put exactly one centroid in (nearly) every
-    outline; a mask of another slide, or of the same slide in another frame, puts centroids
-    at random, which in tissue gives exactly one in well under half of the outlines.
+``ACCEPT_ONE_NUCLEUS`` 0.90  nuclei are USED only above this. An outline is its nucleus
+    grown outwards, so the true nuclei put exactly one centroid in (nearly) every outline;
+    a mask of another slide, or of the same slide in another frame, puts centroids at
+    random, which in tissue gives exactly one in well under half of the outlines.
 ``EXACT_ONE_NUCLEUS`` 0.99, ``EXACT_COUNT_TOL`` 0.01  ``exact`` needs 99 % of outlines with
     exactly one nucleus and the two counts within 1 %: what is left for concave nuclei
-    (centroid outside the outline), the 1 px simplification of the published polygons and
-    a GPU's run-to-run differences. Stated before any cohort run; not tuned on results.
-``IDENTITY_*``  a label image must also BE nuclei, not the cell mask grown from them
-    and not a mask in a shifted frame; one centroid per outline cannot tell (the cell
-    mask itself, or the nuclei moved by a few pixels, pass it). Over the nuclei that sit
-    alone in an outline (:func:`identity`): the median area ratio nucleus / outline at
-    most ``IDENTITY_AREA_RATIO_MAX`` 0.90 (an outline is its nucleus grown by up to
-    10 px: a nucleus of radius 12 px gives 0.30, and only a nucleus hemmed in on all
-    sides approaches 1; the cell mask gives 1.00); at least ``IDENTITY_INSIDE_MIN`` 0.90
-    of the nuclei's vertices inside their own outline (a nucleus is contained in the
-    outline grown from it; the published outlines are simplified to 1 px, hence not
-    1.00); and the median offset of the nucleus's centroid from its outline's at most
-    ``IDENTITY_OFFSET_MAX_PX`` 1.0 px on each axis (growing is isotropic, so the two
-    centroids coincide but for neighbours in the way; a mask shifted by 3 px keeps one
-    centroid per outline and fails here). Fixed before any cohort run.
-``RERUN_MATCH_PX`` 1.0, ``EXACT_MATCH`` 0.99  a re-run's own cell mask must put a
-    centroid within 1 px of 99 % of the published outlines' centroids (the published
-    polygons are simplified to 1 px, which moves a centroid by a fraction of a pixel).
+    (centroid outside the outline) and the 1 px simplification of the traced polygons.
+    Stated before any cohort run; not tuned on results.
+``IDENTITY_*``  the nuclei must also BE nuclei, not the cell mask grown from them and not
+    a mask in a shifted frame; one centroid per outline cannot tell (the cell mask itself,
+    or the nuclei moved by a few pixels, pass it). Over the nuclei that sit alone in an
+    outline (:func:`identity`): the median area ratio nucleus / outline at most
+    ``IDENTITY_AREA_RATIO_MAX`` 0.90 (an outline is its nucleus grown by up to 10 px: a
+    nucleus of radius 12 px gives 0.30, and only a nucleus hemmed in on all sides
+    approaches 1; the cell mask gives 1.00); at least ``IDENTITY_INSIDE_MIN`` 0.90 of the
+    nuclei's vertices inside their own outline (a nucleus is contained in the outline grown
+    from it; the outlines are simplified to 1 px, hence not 1.00); and the median offset of
+    the nucleus's centroid from its outline's at most ``IDENTITY_OFFSET_MAX_PX`` 1.0 px on
+    each axis (growing is isotropic, so the two centroids coincide but for neighbours in
+    the way). Fixed before any cohort run.
+``RERUN_MATCH_PX`` 1.0, ``EXACT_MATCH`` 0.99  the run's own cell mask must put a centroid
+    within 1 px of 99 % of the outlines' centroids (the polygons are simplified to 1 px,
+    which moves a centroid by a fraction of a pixel).
 
-Nothing here was run on the cohort: StarDist is not installed where this was written, the
-site's model is not in the repository, and no arm's files were read.
+Nothing here was run on the cohort: StarDist is not installed where this was written and
+the site's model is not in the repository.
 """
 
 from __future__ import annotations
@@ -83,7 +81,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import arms_manifest, cells, pairs, site_config
+from . import cells, manifest, outlines, pairs, site_config
 from .cases import file_fingerprint, polys, polyset_arrays, write_json, write_npz
 
 REPO = Path(__file__).resolve().parents[2]
@@ -113,9 +111,10 @@ IDENTITY_INSIDE_MIN = 0.90
 IDENTITY_OFFSET_MAX_PX = 1.0
 EXACT_MATCH = 0.99
 NEEDS_RERUN = (
-    "no usable nuclear label image for this slide; the StarDist re-run has not run "
+    "the StarDist run of this slide has not run yet "
     "(python -m benchmarks.regbench nuclei, slurm/nuclei.sbatch)"
 )
+TRACED = ".traced.json"  # beside an outlines GeoJSON this module traced
 NOT_RESOLVED = "not looked at yet (python -m benchmarks.regbench nuclei)"
 SOURCE_COLUMNS = {"ref": ("reference", "ref"), "mov": ("moving", "mov")}
 
@@ -124,15 +123,16 @@ SOURCE_COLUMNS = {"ref": ("reference", "ref"), "mov": ("moving", "mov")}
 def slides(rows):
     """Every native slide of a manifest once, in a stable order: the unit of this step.
 
-    A slide is ``{"key", "group", "slide", "image", "channel", "outlines", "candidate",
-    "candidate_from"}``; ``key`` is ``<group>/<slide>`` and names its folder.
+    A slide is ``{"key", "group", "slide", "image", "channel", "outlines"}``; ``key`` is
+    ``<group>/<slide>`` and names its folder; ``outlines`` is where its outlines are
+    traced (the manifest's ``ref_cells`` / ``mov_cells``).
     """
     found = {}
     for row in rows:
         group = row.get("group") or row["case_id"]
         for image_col, side in SOURCE_COLUMNS.values():
             image = row[image_col]
-            name = arms_manifest.slide_name(image)
+            name = manifest.slide_name(image)
             one = {
                 "key": f"{group}/{name}",
                 "group": group,
@@ -140,18 +140,12 @@ def slides(rows):
                 "image": image,
                 "channel": int(row.get(f"{side}_channel") or 0),
                 "outlines": row.get(f"{side}_cells") or "",
-                "candidate": row.get(f"{side}_nuclei") or "",
-                "candidate_from": row.get(f"{side}_nuclei_from") or "",
             }
             seen = found.setdefault(one["key"], one)
             if seen["image"] != image:
                 raise SystemExit(
                     f"two slides of {group} are both named {name}: {seen['image']} "
                     f"and {image}. A slide's nuclei are kept under <group>/<slide>."
-                )
-            if not seen["candidate"] and one["candidate"]:
-                seen.update(
-                    candidate=one["candidate"], candidate_from=one["candidate_from"]
                 )
     return [found[k] for k in sorted(found)]
 
@@ -172,7 +166,7 @@ def read_polys(store):
         return polys({k: z[k] for k in z.files}, "ref")
 
 
-# ── agreement with the published outlines ─────────────────────────────────────
+# ── agreement with the outlines ───────────────────────────────────────────────
 def one_nucleus_fraction(outlines, centroids):
     """The share of outlines that hold exactly one of ``centroids``.
 
@@ -288,7 +282,7 @@ def _counts_agree(a, b):
 
 
 def label_agreement(outlines, nuclei):
-    """How a set of nuclei sits in a slide's published outlines."""
+    """How a set of nuclei sits in a slide's outlines."""
     area, cent = pairs.cp.feature_area_centroid(pairs.as_polyset(nuclei))
     n_out, n_nuc = pairs.n_cells(outlines), pairs.n_cells(nuclei)
     frac = one_nucleus_fraction(outlines, cent)
@@ -310,7 +304,7 @@ def label_agreement(outlines, nuclei):
 
 
 def rerun_agreement(outlines, regrown):
-    """How the cell mask a re-run grew sits on the published outlines: the two counts,
+    """How the cell mask a re-run grew sits on the outlines: the two counts,
     and the share of published centroids with a re-grown one within ``RERUN_MATCH_PX``."""
     from scipy.spatial import cKDTree
 
@@ -352,14 +346,15 @@ def command(slide, dest, env=None):
     site config's two keys (:func:`settings`). The segmentation settings are the
     repository's defaults unless the site config overrides one, and then the site's
     value is rendered. The pipeline passes ``--dapi-channel 0`` because its
-    preprocessing puts the nuclear channel first; this passes the manifest's index of
-    the nuclear channel, which is 0 on the arms' slides."""
+    preprocessing puts the nuclear channel first (and refuses a slide whose channel 0
+    is not nuclear); this passes the manifest's index of the nuclear channel, which is
+    0 on every slide the pipeline would segment."""
     env = os.environ if env is None else env
     got = settings(env)["values"]
     model = got["segmentation_model"]["value"]
     if not model:
         raise SystemExit(
-            f"{ENV_MODEL} is not set: the name of the StarDist model the arms ran "
+            f"{ENV_MODEL} is not set: the name of the site's StarDist model "
             f"(the pipeline's segmentation_model), with {ENV_MODEL_DIR} for its "
             "folder (segmentation_model_dir). Neither is in a site config either "
             f"({site_config.ENV_SITE_CONFIG}, else conf/ieo.config of this checkout)."
@@ -417,69 +412,59 @@ def _trace(path, a):
     )
 
 
-def check_label_image(slide, path, store, a, outlines=None, origin=""):
-    """Try one existing label image as a slide's nuclei; the record says whether it may
-    be used and why not. ``origin`` is how the manifest came by it."""
-    rec = {
-        **{k: slide[k] for k in ("key", "group", "slide", "image", "channel")},
-        "image_fingerprint": file_fingerprint(slide["image"]),
-        "label_image": str(path),
-        "label_image_fingerprint": file_fingerprint(path),
-        "origin": origin,
-        "usable": False,
-        "exact": False,
-        "source": "",
-        "needs_rerun": True,
-    }
-    path = Path(path)
-    if not path.is_file():
-        rec["reason"] = f"the label image is not on disk: {path}"
-        return rec
+def traced_record(path):
+    """What an outlines GeoJSON this module traced was traced from (its
+    ``.traced.json``), or None: a GeoJSON without one is someone else's (an arm's
+    published outlines, named by a manifest written before 2026-10-16)."""
+    side = Path(str(path) + TRACED)
+    if not path or not side.is_file():
+        return None
     try:
-        shape, want = _shape(path), _shape(slide["image"])
-    except Exception as exc:  # an unreadable file is a refusal, not a crash
-        rec["reason"] = f"{path}: cannot be read ({type(exc).__name__}: {exc})"
-        return rec
-    if shape != want:
-        rec["reason"] = (
-            f"{path} is {shape[1]} x {shape[0]} px and its slide {want[1]} x "
-            f"{want[0]} px: not a mask of this native slide"
-        )
-        return rec
-    nuclei = _trace(path, a)
-    if not len(nuclei):
-        rec["reason"] = f"{path}: no label"
-        return rec
-    outlines = _outlines(slide) if outlines is None else outlines
-    if outlines is None:
-        # nothing to check against: the mask is taken as given, and said to be unchecked
-        rec.update(agreement=None, exact=False)
-    else:
-        got = label_agreement(outlines, nuclei)
-        rec["agreement"] = got
-        if not got["one_nucleus_frac"] >= ACCEPT_ONE_NUCLEUS:
-            rec["reason"] = (
-                f"{path}: only {got['one_nucleus_frac']:.3f} of this slide's "
-                f"{got['n_outlines']} published outlines hold exactly one of its "
-                f"{got['n_nuclei']} nuclei (at least {ACCEPT_ONE_NUCLEUS} is "
-                "required): not the nuclei of this slide in its native frame"
-            )
-            return rec
-        if not got["identity"]["is_nuclei"]:
-            # one centroid per outline is also what the CELL mask gives, and a mask a
-            # few pixels off: a label image has to be the nuclei themselves
-            rec["reason"] = (
-                f"{path}: not the bare nuclei of this slide: {got['identity']['why']}"
-            )
-            return rec
-        rec["exact"] = got["exact"]
-    rec.update(usable=True, needs_rerun=False, source=f"label_image:{path}")
-    _keep(store, rec, nuclei)
-    return rec
+        return json.loads(side.read_text())
+    except ValueError:
+        return None
+
+
+def is_ours(path):
+    """Are these outlines this module's to (re)write: not there yet, or traced here."""
+    return bool(path) and (not Path(path).exists() or traced_record(path) is not None)
+
+
+def trace_outlines(slide, cell_mask):
+    """Trace a run's cell mask to the slide's outlines (``outlines.trace``) and leave
+    beside them what they were traced from; returns that record."""
+    tol = outlines.tolerance()
+    n = outlines.trace(cell_mask, slide["outlines"], tol)
+    made = {
+        "outlines_from": "stardist_rerun_cell_mask",
+        "cell_mask": str(cell_mask),
+        "cell_mask_fingerprint": file_fingerprint(cell_mask),
+        "image": slide["image"],
+        "image_fingerprint": file_fingerprint(slide["image"]),
+        "tolerance": tol,
+        "n_outlines": n,
+        "traced_by": str(outlines.MASK_TO_GEOJSON),
+    }
+    write_json(Path(str(slide["outlines"]) + TRACED), made)
+    return made
+
+
+def set_outlines_aside(path):
+    """Move outlines THIS module traced out of the way (``<name>.stale``), with their
+    record: they belong to a run that is set aside. Anyone else's are left alone."""
+    if not path or traced_record(path) is None:
+        return
+    import os
+
+    for p in (Path(path), Path(str(path) + TRACED)):
+        if p.exists():
+            os.replace(p, p.with_name(p.name + ".stale"))
 
 
 def check_rerun(slide, store, a):
-    """Read a finished re-run of one slide and compare it with the published outlines."""
+    """Read a finished StarDist run of one slide: trace its cell mask to the slide's
+    outlines (unless the manifest names someone else's), and check the nuclei against
+    them."""
     dest = Path(store) / "rerun"
     nuc_mask, cell_mask = expected_masks(slide, dest)
     rec = {
@@ -487,6 +472,7 @@ def check_rerun(slide, store, a):
         "image_fingerprint": file_fingerprint(slide["image"]),
         "label_image": str(nuc_mask),
         "origin": "stardist_rerun",
+        "outlines": slide["outlines"],
         "usable": False,
         "exact": False,
         "source": "",
@@ -504,18 +490,35 @@ def check_rerun(slide, store, a):
         rec["reason"] = f"{nuc_mask}: StarDist found no nucleus"
         rec["needs_rerun"] = False
         return rec
-    outlines = _outlines(slide)
+    own = is_ours(slide["outlines"])
+    if own:
+        if not cell_mask.is_file():
+            rec["reason"] = (
+                f"the StarDist run wrote no cell mask ({cell_mask}): the slide's "
+                "outlines cannot be traced. Run it again (REGBENCH_NUCLEI_FORCE=1)"
+            )
+            return rec
+        made = trace_outlines(slide, cell_mask)
+        rec.update(outlines_from=made["outlines_from"], tolerance=made["tolerance"])
+    elif slide["outlines"]:
+        rec["outlines_from"] = "manifest"
+    outlines_ = _outlines(slide)
     exact, agreement = False, None
-    if outlines is not None:
-        agreement = label_agreement(outlines, nuclei)
+    if outlines_ is not None:
+        agreement = label_agreement(outlines_, nuclei)
         if cell_mask.is_file():
-            agreement.update(rerun_agreement(outlines, _trace(cell_mask, a)))
+            agreement.update(rerun_agreement(outlines_, _trace(cell_mask, a)))
         exact = bool(agreement["exact"] and agreement.get("cells_agree"))
         agreement["exact"] = exact
+        what = (
+            "the outlines traced from its own cell mask"
+            if own
+            else "the outlines the manifest names"
+        )
         if not agreement["one_nucleus_frac"] >= ACCEPT_ONE_NUCLEUS:
-            # user ruling 2026-10-11: a re-run this far from the published outlines is
-            # another segmentation (another model, channel or setting). It is REFUSED:
-            # the slide has no nuclei, and says why wherever nuclei are missing.
+            # user ruling 2026-10-11: nuclei this far from the outlines are another
+            # segmentation (or, against their own trace, a tracing bug). REFUSED: the
+            # slide has no nuclei, and says why wherever nuclei are missing.
             rec.update(
                 refused=True,
                 needs_rerun=False,
@@ -524,11 +527,17 @@ def check_rerun(slide, store, a):
                 reason=(
                     f"the StarDist re-run was REFUSED: only "
                     f"{agreement['one_nucleus_frac']:.3f} of this slide's "
-                    f"{agreement['n_outlines']} published outlines hold exactly one "
+                    f"{agreement['n_outlines']} outlines ({what}) hold exactly one "
                     f"of its {agreement['n_nuclei']} nuclei (at least "
-                    f"{ACCEPT_ONE_NUCLEUS} is required): not the segmentation the "
-                    "outlines were made with. Check the model, the channel and the "
-                    "site's segmentation settings"
+                    f"{ACCEPT_ONE_NUCLEUS} is required)"
+                    + (
+                        ": the trace does not reproduce the mask it was traced "
+                        "from, a tracing bug"
+                        if own
+                        else ": not the segmentation the outlines were made with. "
+                        "Check the model, the channel and the site's segmentation "
+                        "settings"
+                    )
                 ),
             )
             (Path(store) / "nuclei.npz").unlink(missing_ok=True)
@@ -536,10 +545,16 @@ def check_rerun(slide, store, a):
             return rec
         if not exact:
             print(
-                f"DISAGREEMENT {slide['key']}: the re-run does not reproduce the "
-                f"published outlines ({json.dumps(agreement)}). Its nuclei are kept "
-                "and marked exact: false. Check the model, the channel and the "
-                "pipeline's segmentation settings before reading nuclei numbers.",
+                f"DISAGREEMENT {slide['key']}: the StarDist run does not reproduce "
+                f"{what} ({json.dumps(agreement)}). Its nuclei are kept and marked "
+                "exact: false. "
+                + (
+                    "The outlines are its own trace, so this is a tracing bug: check "
+                    "outlines.trace before reading nuclei numbers."
+                    if own
+                    else "Check the model, the channel and the pipeline's "
+                    "segmentation settings before reading nuclei numbers."
+                ),
                 flush=True,
             )
     rec.update(
@@ -633,12 +648,13 @@ def settings_changed(rec):
     ]
 
 
-def set_aside(store):
+def set_aside(store, traced=""):
     """Move a re-run that is no longer the one to use out of the way (``rerun_stale/``,
-    the one before it removed) and drop its polygons. The record goes FIRST, in one
-    rename (``nuclei.stale.json``): a task that is ended anywhere after that leaves a
-    slide without a record, which is decided again, never a record that says "usable"
-    over polygons that are gone."""
+    the one before it removed) and drop its polygons, and the outlines ``traced`` from
+    it when this module traced them (:func:`set_outlines_aside`). The record goes
+    FIRST, in one rename (``nuclei.stale.json``): a task that is ended anywhere after
+    that leaves a slide without a record, which is decided again, never a record that
+    says "usable" over polygons that are gone."""
     import os
     import shutil
 
@@ -650,6 +666,16 @@ def set_aside(store):
         shutil.rmtree(stale, ignore_errors=True)
         (store / "rerun").rename(stale)
     (store / "nuclei.npz").unlink(missing_ok=True)
+    set_outlines_aside(traced)
+
+
+def outlines_moved(rec, slide):
+    """A usable record whose outlines are not there any more, or not where the manifest
+    names them now: the kept run is read again (and traced again where it is ours)."""
+    path = slide["outlines"]
+    if not path:
+        return False
+    return not Path(path).is_file() or rec.get("outlines", path) != path
 
 
 def _keep(store, rec, nuclei):
@@ -680,19 +706,21 @@ def other_image(rec, slide):
 
 
 def resolve(slide, out, a):
-    """Decide one slide and write its record: a usable existing label image, else a
-    finished re-run, else ``needs_rerun``.
+    """Decide one slide and write its record: a finished StarDist run (its outlines
+    traced, its nuclei checked), else ``needs_rerun``.
 
     What is kept is used only when it is of the files that are there now
-    (:func:`other_image`) and its re-run was made with the settings that resolve now.
-    ``a.force`` decides the slide again whatever is kept. In all three cases nothing
-    kept answers: a re-run is set aside (``rerun_stale/``), so the slide needs its
-    re-run again unless a label image of the manifest is usable.
+    (:func:`other_image`), its run was made with the settings that resolve now, and the
+    outlines it was checked against are still where the manifest names them.
+    ``a.force`` decides the slide again whatever is kept. In the first two cases and
+    under ``force`` nothing kept answers: the run is set aside (``rerun_stale/``, the
+    outlines traced from it with it), so the slide needs its StarDist run again. When
+    only the outlines are missing (or the manifest names another place for them), the
+    kept run is read again and traced there (no GPU).
 
     A record that does not say which image it was computed from is neither used as it
-    is nor thrown away: the label image or the re-run's masks kept for it are checked
-    again against the slide that is there now (no GPU: they are read and compared with
-    the published outlines), and a record that passes carries the fingerprint from
+    is nor thrown away: the run's masks kept for it are checked again against the slide
+    that is there now (no GPU), and a record that passes carries the fingerprint from
     then on. Only what fails that check is set aside."""
     store = store_of(out, slide)
     old = load(store)
@@ -731,24 +759,13 @@ def resolve(slide, out, a):
             flush=True,
         )
     if changed or moved or force:
-        set_aside(store)
+        set_aside(store, slide["outlines"])
         old = None
     if unstamped:
         old = None
-    if old and old.get("usable"):
+    if old and old.get("usable") and not outlines_moved(old, slide):
         return old
-    rec = None
-    if slide["candidate"]:
-        rec = check_label_image(
-            slide, slide["candidate"], store, a, origin=slide["candidate_from"]
-        )
-    if rec is None or not rec["usable"]:
-        refused = rec["reason"] if rec else ""
-        rec = check_rerun(slide, store, a)
-        if refused:
-            rec["candidate_refused"] = refused
-            if not rec["usable"]:
-                rec["reason"] = f"{refused}; {rec['reason']}"
+    rec = check_rerun(slide, store, a)
     if changed and rec.get("needs_rerun"):
         rec["stale_settings"] = changed
         rec["reason"] = (
@@ -760,7 +777,7 @@ def resolve(slide, out, a):
         rec["reason"] = f"{moved}: what was kept for it is set aside; {rec['reason']}"
     elif unstamped and rec.get("needs_rerun") and (Path(store) / "rerun").is_dir():
         # checked again, and it is not this slide's: a real mismatch
-        set_aside(store)
+        set_aside(store, slide["outlines"])
         rec["reason"] = (
             "the record kept for this slide did not say which image it was computed "
             f"from, and what was kept does not fit the slide: set aside; {rec['reason']}"
@@ -800,11 +817,7 @@ def table(all_slides, out):
     for i, slide in enumerate(all_slides):
         rec = load(store_of(out, slide))
         if rec is None:
-            status, rec = (
-                ("candidate", {"reason": NOT_RESOLVED})
-                if slide["candidate"]
-                else ("needs_rerun", {"reason": NOT_RESOLVED})
-            )
+            status, rec = "needs_rerun", {"reason": NOT_RESOLVED}
         elif rec.get("usable"):
             status = "usable"
         elif rec.get("refused"):
@@ -879,7 +892,7 @@ def main(a):
             # nothing either for a slide whose re-run was refused: running the same
             # command again gives the same nuclei. A slide decided with --force has
             # had its re-run set aside (resolve), so it is not usable here and gets
-            # its line; a label image that is usable needs no StarDist, forced or not
+            # its line
             if rec and (rec.get("usable") or rec.get("refused")):
                 continue
             dest = store_of(a.out, slide) / "rerun"

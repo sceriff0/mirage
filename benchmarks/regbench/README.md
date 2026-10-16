@@ -39,7 +39,7 @@ This package is being ported in steps. What exists now:
 |---|---|
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`) | here |
-| the cohort's cases (`arms_manifest.py`, `datasets/multiplex.py`) | here: the arms' original multichannel slides and the QC outlines of one arm (StarDist nuclei on the nuclear channel, grown by 10 px: see "What the cohort's nuclei are"). Built and tested against small trees laid out like the arms' results; never run on the cohort itself |
+| the cohort's inputs and cases (`slurm/inputs.sbatch`, `manifest.py`, `outlines.py`, `nuclei.py`, `datasets/multiplex.py`) | here: regbench's OWN pipeline preprocessing of the cohort (`launch.sbatch --inputs`) and its own StarDist outlines (nuclei on the nuclear channel, grown by 10 px, traced as the pipeline's QC traces them: see "What the cohort's nuclei are"). Built and tested against small trees laid out like the pipeline's published output and a stand-in `segment.py` / `nextflow`; never run on the cohort itself |
 | adapter `stare` | here, as in "Methods" below: the pipeline's `high` tier, the original slides, its own STITCH deferred until the clock has stopped, the option `stride` |
 | adapters `valis_mirage` (VALIS 1.0.0 through the pipeline's function) and `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`) | here, as in "VALIS" below. **Written against VALIS's source and never run with VALIS** (it is not installed where this was written): tested with a recording stand-in, and for `valis_mirage` with the real `bin/register.py` on that stand-in. Their first real run is the selfcheck inside each VALIS image |
 | adapter `initial` | here (the identity) |
@@ -62,9 +62,12 @@ Nothing here has run on the cluster.
 mapping.py     PointMap: a point mapping and the direction it was estimated in
 cases.py       the on-disk contract: case.json + points.npz in, warped.npz + run.json out
 cells.py       nuclei of a native slide: the built-in segmenter, label images, cell GeoJSON
-arms_manifest.py  the arms cohort as a `prepare multiplex` manifest, one row per moving round
-nuclei.py      bare nuclei per native slide: check the label images that exist, re-run the
-               pipeline's StarDist where there is none ("Bare nuclei")
+manifest.py    the cohort as a `prepare multiplex` manifest, one row per moving round, from
+               regbench's own preprocessing (slurm/inputs.sbatch)
+outlines.py    a StarDist cell mask traced to outlines by bin/mask_to_geojson.py itself
+nuclei.py      nuclei and outlines per native slide: the pipeline's StarDist, run by
+               regbench, its cell mask traced to the slide's outlines ("Bare nuclei")
+params_json.py a Nextflow -params-file typed against nextflow_schema.json
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
@@ -103,22 +106,46 @@ python -m benchmarks.regbench score --cases CASES --out OUT
 python -m benchmarks.regbench selfcheck --method stare --work WORK
 ```
 
-The cohort (the arms' results folder, `ROOT`):
+The cohort: regbench's OWN inputs (it no longer reads the arms' results). On the cluster
+`launch.sbatch --inputs` then `launch.sbatch --prepare` do all of this; by hand:
 
 ```bash
-python -m benchmarks.regbench.arms_manifest --root ROOT --out rounds.csv
-python -m benchmarks.regbench prepare multiplex --manifest rounds.csv --cases CASES
+# the input step: the pipeline's preprocessing of the cohort's samplesheet, ONE Nextflow
+# head job (slurm/inputs.sbatch; REGBENCH_INPUT = the samplesheet, REGBENCH_INPUTS = a folder)
+python -m benchmarks.regbench.manifest --preprocessed INPUTS/preprocess/results/csv/preprocessed.csv \
+    --outlines INPUTS/outlines --out rounds.csv
+python -m benchmarks.regbench nuclei --manifest rounds.csv --out NUCLEI --segment   # StarDist + trace
+python -m benchmarks.regbench prepare multiplex --manifest rounds.csv --cases CASES --nuclei-dir NUCLEI
 ```
 
-The first command reads `ROOT/preprocess_shared/csv/preprocessed.csv` and the QC outlines
-`ROOT/valis_high_micro2/<patient>/qc/registration/geojson/<slide>.geojson` (`--from-arm`
-names another arm), and writes one row per moving round: `case_id` = `<patient>_<slide>`,
-`group` = the patient. A patient without exactly one reference, a slide that is not on
-disk, a slide whose channel list does not name exactly one nuclear channel (a
-case-insensitive substring match of `DAPI` or `CELLTOX`; `--nuclear` narrows it) and a
-round whose nuclei are missing are dropped, each printed with its reason and path; the exit
-code is non-zero only when no row is left. The pixel size is the checkpoint's `pixel_size`
-column, 0.325 µm where a row has none (`pixel_size_source` says which).
+The input step runs `--start preprocessing --stop preprocessing` at the shipped defaults
+but one: `pixel_size` is pinned to 0.325 µm, as the arms ran it (user ruling 2026-10-15),
+through a `-params-file` (`params_json.py`: Nextflow 26 delivers a command-line param as a
+String). `cleanup_level` stays `none`, so `csv/preprocessed.csv` is written; `cleanup_work`
+stays on (the published tree is what is read). It refuses to run over an earlier one
+unless `REGBENCH_INPUTS_FORCE=1`, which moves it to `preprocess.replaced/<time>/`.
+
+The manifest reads the input step's checkpoint and writes one row per moving round:
+`case_id` = `<patient>_<slide>`, `group` = the patient, `ref_cells` / `mov_cells` =
+`INPUTS/outlines/<patient>/<slide>.geojson`, which the nuclei step fills (they need not
+exist yet). A patient without exactly one reference, a slide that is not on disk and a
+slide whose channel list does not name exactly one nuclear channel (a case-insensitive
+substring match of `DAPI` or `CELLTOX`; `--nuclear` narrows it) are dropped, each printed
+with its reason and path; the exit code is non-zero only when no row is left. The pixel
+size is the checkpoint's `pixel_size` column, 0.325 µm where a row has none
+(`pixel_size_source` says which). `prepare multiplex` DROPS a round whose outlines were
+not traced (`outlines not traced yet: run the nuclei step (launch.sbatch --prepare)`), or
+were traced from another file than the slide is now; it never reads them as an empty set.
+
+**A `rounds.csv` written from the arms' results before 2026-10-16** (the old
+`arms_manifest --root <arm_results>`) has the same columns and is still read as it was:
+export `REGBENCH_MANIFEST=<it>` and `--prepare` takes it as it is. Its `*_cells` name the
+arm's published GeoJSON; the nuclei step never rewrites a GeoJSON it did not trace (no
+`.traced.json` beside it) and compares its StarDist run with it as before
+(`outlines_from: "manifest"`). Its `*_nuclei` columns (label images offered by the removed
+`--nuclei-glob` / `--seg-arm`) are no longer read. Cases already prepared stay scoreable;
+preparing a case again from OTHER inputs (regbench's own) into the same cases folder is
+refused with the reason, unless `REGBENCH_PREPARE_FORCE=1` or another `REGBENCH_ROOT`.
 
 The second writes the cases. Each one names the original multichannel slides
 (`ref_image`, `mov_image`; `extra["ref_channel"]`, `["mov_channel"]`, `["channels_ref"]`,
@@ -930,7 +957,8 @@ show here):
 
 | step | what | where |
 |---|---|---|
-| the file | `<arm>/<patient>/qc/registration/geojson/<slide>.geojson`, arm `valis_high_micro2` | `arms_manifest.py:44, 185-186` |
+| the file (until 2026-10-16) | `<arm>/<patient>/qc/registration/geojson/<slide>.geojson`, arm `valis_high_micro2` | the removed `arms_manifest.py` |
+| the file (regbench's own, now) | `<inputs>/outlines/<patient>/<slide>.geojson`, traced by the nuclei step | `manifest.py`, `nuclei.py`, `outlines.py` |
 | the arm's QC | `reg_qc: 2`, `seg_method: stardist` (the site's StarDist model, not the pipeline's default InstanSeg) | `benchmarks/configs/arms.yaml:42-51`; the arm varies only the micro-registration |
 | what is segmented | each NATIVE slide, before registration, by the run's own segmenter | `subworkflows/local/seg_qc.nf:8-20, 136` (`SEG_QC_SEGMENT` is `SEGMENT` under an alias) |
 | on which channel | ONE channel, index 0, which must be the nuclear marker (the run refuses otherwise) | `lib/SegBackends.groovy:93-117` (`segment.py --dapi-channel 0`) |
@@ -954,8 +982,32 @@ follow for every method alike:
   `within_1um` inherits that.
 
 A nuclear mask is NOT among the arm's published files: `SEG_QC_SEGMENT` publishes nothing
-(`conf/modules.config:1140-1149`), and only the GeoJSON of the cell mask is published. The
-bare nuclei are therefore found or made by the benchmark, slide by slide: next section.
+(`conf/modules.config:1140-1149`), and only the GeoJSON of the cell mask is published.
+
+**Regbench's own outlines are DEFINED to be the arm's** (since 2026-10-16; user ruling
+2026-10-15: same model and settings, grown 10 px). The nuclei step runs the same
+`bin/segment.py` with the same flags on the same preprocessed slides and traces its own
+`*_cell_mask.tif` with the same `write_geojson` of `bin/mask_to_geojson.py` at the same
+`simplify_tolerance`, so by construction it gives the outline the arm would have published
+from the same image, model and settings. This is DERIVED from the code, link by link, and
+was NOT measured on cohort slides. `test_outline_definition.py` pins each link:
+
+| link | pinned by |
+|---|---|
+| the expansion is `seg_expand_distance` (10) | `test_the_rerun_grows_nuclei_by_the_pipelines_expand_distance` |
+| every flag SEGMENT's `ext.args` renders for StarDist is rendered, from the same params | `test_the_rerun_passes_every_flag_...`, `test_the_model_and_settings_are_the_params_ext_args_reads` |
+| channel 0, the pipeline's StarDist image, the GPU | `test_the_rerun_runs_in_the_pipelines_stardist_image_on_channel_zero` |
+| the cell mask is one whole-image `expand_labels` of the nuclei | `test_the_cell_mask_is_skimage_expand_labels_of_the_nuclei` |
+| the trace is `bin/mask_to_geojson.py`'s `write_geojson` at `simplify_tolerance` (site config, else 1.0) | `test_outlines_are_traced_by_...`, `test_the_tolerance_follows_the_site_config_like_the_pipeline`, `test_seg_qc_geojson_still_traces_...` |
+
+What no test can pin: the site's model files (the same name and folder are rendered, the
+files are the site's), the library versions inside the images (the trace runs in the
+scorer's image, the arm's in `bolt3x/mirage-quantify`), and a GPU's run-to-run
+differences. `--dapi-channel` is the one rendered difference: the pipeline passes 0 (and
+refuses a slide whose channel 0 is not nuclear), regbench the manifest's nuclear index,
+which is 0 on every slide the pipeline would segment.
+
+The bare nuclei are the same run's nuclei mask: next section.
 
 ### Outlines and bare nuclei
 
@@ -975,41 +1027,15 @@ The outlines stay the headline because they are what the pipeline's own QC and t
 benchmark report; the nuclei say how much of an outline number is rim. Both sets are
 segmented on the NATIVE slides before any registration, so neither depends on a method.
 
-**Where the nuclei of a cohort slide come from**, in this order (user's ruling: reuse what
-exists, segment only what has none):
+**Where the nuclei and outlines of a cohort slide come from** (since 2026-10-16 the one
+source; the label images an arm's work directory or a segmentation arm offered are gone
+with the arms):
 
-1. **An existing label image of that slide.** `arms_manifest --nuclei-glob PATTERN` finds
-   masks of the QC segmentation kept in a Nextflow work directory (`{patient}`, `{slide}`,
-   `{stem}`; `segment.py` names its mask `<image stem>_nuclei_mask.tif`, e.g.
-   `P1.r2.ome_nuclei_mask.tif`); `--seg-arm ARM` offers, for each patient's REFERENCE
-   slide only, the `nuclei_mask` a segmentation arm lists in `csv/segmented.csv` (made on
-   the registered image, whose reference round is likely the native reference slide
-   unchanged: not verified, hence the check). A manifest of your own names them in
-   `ref_nuclei` / `mov_nuclei`. A label image is **used only if** its shape is the
-   slide's (refused with both sizes otherwise) **and** at least **0.90** of the slide's
-   published outlines hold exactly one of its nuclei's centroids
-   (`nuclei.ACCEPT_ONE_NUCLEUS`; the measured share is recorded) **and** its objects
-   are the bare nuclei, not the cell mask grown from them and not nuclei in a shifted
-   frame (`nuclei.identity`; the grown cell mask, and a nuclear mask 3 px off, both put
-   one centroid in every outline). Over the objects that sit alone in an outline, with
-   fixed thresholds: the median area ratio object / outline at most **0.90** (a
-   nucleus of 12 px radius in an outline grown by 10 px gives 0.30; the cell mask
-   gives 1.00 and is refused as "looks like the cell mask", with the number); at least
-   **0.90** of the objects' vertices inside their own outline; and the median offset
-   of an object's centroid from its outline's at most **1.0 px** on each axis. The
-   three numbers are in the slide's record (`agreement.identity`), and `exact` needs
-   them too. The second check is
-   applied to every label image, not only to a segmentation arm's: two rounds of a patient
-   have the same shape, and a mask of the wrong round would pass the first. Why 0.90: an
-   outline is its nucleus grown outwards, so the true nuclei put one centroid in nearly
-   every outline, while a mask of another slide or another frame puts centroids at random
-   (in the test: under 0.1). It is `exact` when that share is at least 0.99 and the two
-   counts agree within 1 % (`EXACT_ONE_NUCLEUS`, `EXACT_COUNT_TOL`: room for concave
-   nuclei, the 1 px simplification of the published polygons and a GPU's run-to-run
-   differences). These numbers were fixed before any cohort run and are not tuned.
-2. **A StarDist re-run** (`python -m benchmarks.regbench nuclei`, `slurm/nuclei.sbatch`:
+1. **A StarDist run** (`python -m benchmarks.regbench nuclei`, `slurm/nuclei.sbatch`:
    an array over SLIDES): the pipeline's `bin/segment.py`, unchanged, on the native slide,
-   keeping its `*_nuclei_mask.tif`. The rendered command, and where each word is from:
+   keeping its `*_nuclei_mask.tif` and tracing its `*_cell_mask.tif` to the slide's
+   outlines (with a `.traced.json` beside them: the mask, its fingerprint, the slide's
+   fingerprint, the tolerance). The rendered command, and where each word is from:
 
    ```
    python <repo>/bin/segment.py --image <slide> --output-dir <nuclei dir>/<group>/<slide>/rerun \
@@ -1031,15 +1057,17 @@ exists, segment only what has none):
    None of these is set in `benchmarks/configs/arms.yaml` or `benchmark.config`
    (`test_nuclei_cohort.py::test_the_rerun_follows_the_pipelines_own_configuration` reads
    the defaults out of `nextflow.config` and the flag list out of `conf/modules.config`).
-   The same call also writes the cell mask it grows from its nuclei, and that is compared
-   with the arm's published outlines of the slide: the counts within 1 %, and at least
-   0.99 of the published centroids with a re-grown centroid within 1 px
+   The outlines are the trace of the cell mask the same call grows from its nuclei, so
+   the comparison below is a SELF-CONSISTENCY check (a mismatch is a tracing bug, not
+   another segmentation; with an old manifest's published outlines it is the comparison
+   with the arm, as before): the counts within 1 %, and at least
+   0.99 of the outlines' centroids with a re-grown centroid within 1 px
    (`RERUN_MATCH_PX`, `EXACT_MATCH`), beside the one-nucleus share above. What a re-run
    is then (user ruling 2026-10-11):
 
    | the re-run's share of published outlines holding exactly one of its nuclei | what happens |
    |---|---|
-   | under 0.90 (`ACCEPT_ONE_NUCLEUS`, the threshold every label image is held to) | **REFUSED**: not used. A `REFUSED <slide>` line with the share and both counts is printed, the task exits 1, `--list` shows status `refused` with that reason, the slide has no nuclei rows, and the reason is in its cases' `cell_sets` and in `nuclei_missing.csv`. It is not segmented again unless `--force` is given (`REGBENCH_NUCLEI_FORCE=1` through the launcher, which the array task passes on): the same command gives the same nuclei, so the model, the channel or a site setting is what to look at. The array task of such a slide says so and exits 1 without running StarDist |
+   | under 0.90 (`ACCEPT_ONE_NUCLEUS`) | **REFUSED**: not used. A `REFUSED <slide>` line with the share and both counts is printed, the task exits 1, `--list` shows status `refused` with that reason, the slide has no nuclei rows, and the reason is in its cases' `cell_sets` and in `nuclei_missing.csv`. It is not segmented again unless `--force` is given (`REGBENCH_NUCLEI_FORCE=1` through the launcher, which the array task passes on): the same command gives the same nuclei, so the model, the channel or a site setting is what to look at. The array task of such a slide says so and exits 1 without running StarDist |
    | 0.90 or more, but short of any exact threshold (0.99 of outlines, counts within 1 %, 0.99 of centroids within 1 px) | kept, marked `exact: false`, printed as `DISAGREEMENT <slide>` with the numbers |
    | every exact threshold met | kept, `exact: true` |
 
@@ -1144,13 +1172,10 @@ IoU work on the cohort too.
 **Commands on the cluster** (after exporting what "What to export" lists):
 
 ```bash
-# 0. the manifest, offering what already exists (both options are optional)
-python3 -m benchmarks.regbench.arms_manifest --root <arm_results> --out rounds.csv \
-    --nuclei-glob '<nextflow work>/*/*/{stem}_nuclei_mask.tif' --seg-arm <segmentation arm>
-# 1. which slides already have a usable mask (checks every offered label image; runs no StarDist)
-regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --workers 4
-regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --list
-# 2 + 3. the re-run for the rest, then prepare: one call
+# 0. the input step, then the rounds (launch.sbatch --inputs / --prepare do both)
+python3 -m benchmarks.regbench.manifest --preprocessed "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" \
+    --outlines "$REGBENCH_INPUTS/outlines" --out rounds.csv
+# 1 + 2. StarDist and the trace of every slide, then prepare: one call
 REGBENCH_MANIFEST=$PWD/rounds.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare -- <site options>
 #    (by hand: N=$(regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI" --count)
 #     sbatch --array=0-$((N-1)) -c 8 --mem=128G -t 8:00:00 $REGBENCH_SBATCH_GPU benchmarks/regbench/slurm/nuclei.sbatch
@@ -1160,9 +1185,9 @@ regbench_py STARE_REGBENCH nuclei --manifest rounds.csv --out "$REGBENCH_NUCLEI"
 grep -h DISAGREEMENT "$REGBENCH_OUT"/logs/rb-nuclei-*.log
 ```
 
-Step 1 is optional: the array of step 2 does the same check for its slide first and runs
-StarDist only when the slide is left without usable nuclei. `--list` prints `index, slide,
-status (usable | needs_rerun | refused | candidate | none), source, exact, one_nucleus_frac,
+The array task looks at what is kept for its slide first and runs StarDist only when the
+slide has no usable run. `--list` prints `index, slide,
+status (usable | needs_rerun | refused | none), source, exact, one_nucleus_frac,
 n_nuclei, reason`. The allocation of the array (8 CPUs, 128 GB, 8 h, a GPU) follows the
 pipeline's `SEGMENT` block (`conf/modules.config:1062-1067`: 8 CPUs, 32 to 128 GB by file
 size, 4 h per attempt) at its upper end; `REGBENCH_NUCLEI_CPUS`, `_MEM`, `_TIME` change it.
@@ -2335,7 +2360,9 @@ round).
 | `REGBENCH_SITE_CONFIG` | with `--prepare`: the site config the StarDist model and any override of the StarDist settings are read from when the two variables above are unset; `none` reads no file | `conf/ieo.config` of the checkout, if it is there |
 | `REGBENCH_SIF_STARDIST` | the pipeline's StarDist image (`bolt3x/mirage-stardist:1.0.0`), for the re-run only | none |
 | `REGBENCH_STARDIST_CPU`, `REGBENCH_STARDIST_PROB_THRESH` | `1`: StarDist without a GPU (else the array asks for `REGBENCH_SBATCH_GPU`, as the arms did); a detection threshold, only if the site's config sets one | `0`, none |
-| `REGBENCH_NUCLEI_SKIP`, `REGBENCH_NUCLEI_FALLBACK` | `1`: prepare without the nuclei step; `shrink`: the shrunk outline for a slide still without nuclei | `0`, none |
+| `REGBENCH_NUCLEI_FALLBACK` | `shrink`: the shrunk outline for a slide still without nuclei (the nuclei step itself is never left out: it traces the outlines) | none |
+| `REGBENCH_INPUT`, `REGBENCH_INPUTS` | `--inputs`: the cohort's samplesheet; the input folder (preprocess/, rounds.csv, outlines/) | none; `$REGBENCH_ROOT/inputs` (launch.sbatch) |
+| `REGBENCH_NF_PROFILE`, `REGBENCH_INPUTS_TIME`, `REGBENCH_INPUTS_FORCE` | `--inputs`: the pipeline's profile; the head job's time; `1` runs it again over an earlier one (moved aside) | `singularity,ieo`, `2-00:00:00`, `0` |
 | `REGBENCH_NUCLEI_CPUS`, `REGBENCH_NUCLEI_MEM`, `REGBENCH_NUCLEI_TIME` | the allocation of one slide's task | `8`, `128G`, `08:00:00` |
 | `REGBENCH_SCORE_CPUS` | CPUs of one task of the per-case scoring arrays: a case's pair records are computed on that many processes. The `tissue` and `score` jobs keep 4 | `8` |
 | `REGBENCH_SCORE_MEM` | memory of one task of those arrays, and of the `tissue` and `score` jobs | `64G` |
@@ -2408,7 +2435,7 @@ reports.
   is how `REGBENCH_*` reaches it, and the caller's own options come after it on the
   `sbatch` line: an `--export=NONE` or `--export=VAR=...` there replaces it, and the
   jobs start without their paths and images.
-- **Or as one job, everything set inside it.** `sbatch benchmarks/regbench/slurm/launch.sbatch [the launcher's arguments]` runs the launcher on a compute node (`--export=ALL`); its log is `regbench-launch-<job id>.log`. It can be submitted from any folder: the repository is found from the path given to `sbatch`, the benchmark lives in `regbench/` under the folder submitted from, and with `--prepare` a missing `rounds.csv` is written from `arm_results/` there (`REGBENCH_ARMS`). The SETTINGS block at the top of the script is the one place to edit: `REGBENCH_ROOT` (one folder holding `cases/`, `out/` and `rounds.csv`), the lanes (4), the array limit (20) and the tile queue (100, a total over the launch's stage-chain runs). The site is read from the site config when the job runs (`REGBENCH_SITE_CONFIG`, default `conf/ieo.config` of the checkout): the GPU request from `gpu_type`, the bound folders from the `--bind` entries of `runOptions`, the image folder from `cacheDir` (`REGBENCH_IMAGES`): each image is looked for there under the name Nextflow gives a pulled image (or the names above, also in `regbench/` under it), and one that is missing is pulled into it before the launcher starts. Without every image, or without a container runtime, the job stops with a line and the python on PATH is never used; nothing of it is written in the script. A variable exported before `sbatch` wins over the script's line. The node needs the scheduler's commands and the container runtime (a missing runtime stops the launch with a line saying so), and the pinned STARE source must already be there (one `--preflight` from a login node fetches it). Never run on a cluster.
+- **Or as one job, everything set inside it.** `sbatch benchmarks/regbench/slurm/launch.sbatch [the launcher's arguments]` runs the launcher on a compute node (`--export=ALL`); its log is `regbench-launch-<job id>.log`. It can be submitted from any folder: the repository is found from the path given to `sbatch`, the benchmark lives in `regbench/` under the folder submitted from, `--inputs` submits the input step (one Nextflow head job, no image of the benchmark needed), and `--prepare` writes `$REGBENCH_INPUTS/rounds.csv` from it unless `REGBENCH_MANIFEST` is exported. The SETTINGS block at the top of the script is the one place to edit: `REGBENCH_ROOT` (one folder holding `inputs/`, `cases/` and `out/`), the lanes (4), the array limit (20) and the tile queue (100, a total over the launch's stage-chain runs). The site is read from the site config when the job runs (`REGBENCH_SITE_CONFIG`, default `conf/ieo.config` of the checkout): the GPU request from `gpu_type`, the bound folders from the `--bind` entries of `runOptions`, the image folder from `cacheDir` (`REGBENCH_IMAGES`): each image is looked for there under the name Nextflow gives a pulled image (or the names above, also in `regbench/` under it), and one that is missing is pulled into it before the launcher starts. Without every image, or without a container runtime, the job stops with a line and the python on PATH is never used; nothing of it is written in the script. A variable exported before `sbatch` wins over the script's line. The node needs the scheduler's commands and the container runtime (a missing runtime stops the launch with a line saying so), and the pinned STARE source must already be there (one `--preflight` from a login node fetches it). Never run on a cluster.
 - **Inside `tmux` (or `screen`).** A real submission starts every image once (the
   preflight) and then makes several hundred `sbatch` calls, one after the other; it
   takes minutes. A login session that drops in the middle ends the script with part of
@@ -2459,17 +2486,18 @@ reports.
 cd <checkout of this branch>
 source benchmarks/regbench/slurm/env.sh        # after exporting the variables above
 
-# 1. the cohort's list (standard library only: the login node's python will do).
-#    --nuclei-glob / --seg-arm offer label images of bare nuclei that already exist
-#    ("Outlines and bare nuclei"); without them every slide is segmented again
-python3 -m benchmarks.regbench.arms_manifest --root <arm_results> --out rounds.csv
+# 1. the input step (REGBENCH_INPUT = the samplesheet), then the cohort's list (standard
+#    library only: the login node's python will do)
+benchmarks/regbench/slurm/submit_cohort.sh --inputs -- <site options>   # wait for it
+python3 -m benchmarks.regbench.manifest --preprocessed "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" \
+    --outlines "$REGBENCH_INPUTS/outlines" --out rounds.csv
 
 # 2. a walking skeleton: ONE patient, the cohort's cases only
 awk -F, 'NR==1 {print; next} NR==2 {p=$4} $4==p' rounds.csv > one.csv
 REGBENCH_MANIFEST=$PWD/one.csv benchmarks/regbench/slurm/submit_cohort.sh --prepare --datasets multiplex -- <site options>
 #    (this first runs the bare-nuclei array, one task per slide: it needs
 #    REGBENCH_STARDIST_MODEL, REGBENCH_STARDIST_MODEL_DIR, REGBENCH_SIF_STARDIST and the GPU
-#    request; REGBENCH_NUCLEI_SKIP=1 leaves it out)
+#    request; it traces the outlines every case needs)
 #    ok: no DISAGREEMENT line in $REGBENCH_OUT/logs/rb-nuclei-*.log, `regbench_py
 #        STARE_REGBENCH nuclei --manifest one.csv --out "$REGBENCH_NUCLEI" --list` says
 #        `usable` and `True` (exact) for every slide; the prepare log ends without a

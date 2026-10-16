@@ -1,58 +1,50 @@
-"""The arms cohort as a ``prepare multiplex`` manifest: one row per moving round.
+"""The cohort as a ``prepare multiplex`` manifest: one row per moving round.
 
-    python -m benchmarks.regbench.arms_manifest --root <arm results> --out rounds.csv
+    python -m benchmarks.regbench.manifest --preprocessed <preprocessed.csv> \
+        --outlines <folder> --out rounds.csv
 
-Reads two things the arm benchmark (``benchmarks/run_arms.sh``) leaves under its results
-folder, and writes nothing there:
+Reads one file, regbench's OWN input step (``slurm/inputs.sbatch``, submitted by
+``launch.sbatch --inputs``: the pipeline's preprocessing, ``--start preprocessing --stop
+preprocessing``), and writes nothing but ``--out``:
 
-``<root>/preprocess_shared/csv/preprocessed.csv``
-    the pipeline's preprocessing checkpoint (``lib/Checkpoint.groovy``: ``patient_id, id,
-    preprocessed_image, is_reference, channels, pixel_size``; RFC 4180 quoting; ``channels``
-    is ``|``-separated). One row per NATIVE slide, the one every arm registers.
-``<root>/<from_arm>/<patient>/qc/registration/geojson/<slide>.geojson``
-    the QC outlines that arm published (``conf/modules.config``, ``SEG_QC_GEOJSON``): each
-    native slide segmented BEFORE registration, in full-resolution pixels of that slide.
-    They are the CELL mask of the arm's segmenter (``subworkflows/local/seg_qc.nf:140``),
-    which for this arm (``arms.yaml``: ``seg_method: stardist``) is the StarDist nuclei of
-    channel 0, the nuclear marker, each grown by ``seg_expand_distance`` = 10 px
-    (``bin/segment.py:223-225``): nuclei-derived outlines, larger than a nucleus, and not
-    cells found on other channels. The benchmark calls them nuclei, as the pipeline's QC
-    does; README, "What the cohort's nuclei are".
+``--preprocessed``
+    the pipeline's preprocessing checkpoint, ``<inputs>/preprocess/results/csv/
+    preprocessed.csv`` (``lib/Checkpoint.groovy``: ``patient_id, id, preprocessed_image,
+    is_reference, channels, pixel_size``; RFC 4180 quoting; ``channels`` is
+    ``|``-separated). One row per NATIVE slide.
+``--outlines``
+    the folder the nuclei step fills (``regbench nuclei``, ``slurm/nuclei.sbatch``): the
+    outlines of each slide are ``<folder>/<patient>/<slide>.geojson``, the trace of the
+    cell mask of regbench's own StarDist run of that slide (``outlines.py``), defined to
+    be what the arms' QC published (``subworkflows/local/seg_qc.nf``: StarDist nuclei of
+    the nuclear channel, each grown by ``seg_expand_distance`` = 10 px, traced by
+    ``bin/mask_to_geojson.py`` at ``simplify_tolerance``; README, "What the cohort's
+    nuclei are"). The file is NOT there when the manifest is written: the round is a row
+    all the same, and ``prepare multiplex`` drops a round whose outlines were not traced.
     ``<slide>`` is the file name less ``.ome.tif`` / ``.ome.tiff``, then less ``.tif`` /
     ``.tiff`` (``subworkflows/local/seg_qc.nf``, ``slide_of``).
 
 A row is a (reference, moving round) pair of one patient. What cannot become a row is
 dropped and listed in ``problems`` with its reason and the path at fault: a patient without
 exactly one reference, a slide that is not on disk, a slide whose channel list does not name
-exactly one nuclear channel, a round whose nuclei (or whose reference's nuclei) are missing.
+exactly one nuclear channel.
 
 **The nuclear channel** follows the pipeline's rule, a case-insensitive substring match of
 ``DAPI`` or ``CELLTOX`` (``lib/MarkerUtils.groovy``, ``nuclearIndex``), with one difference:
 the pipeline resolves two matching channels by marker preference, this refuses the slide and
 says why. Pass ``--nuclear`` with one marker to settle it.
 
-**Bare nuclei that already exist** (columns ``ref_nuclei`` / ``mov_nuclei``, with
-``*_nuclei_from``; empty by default). The arms publish only the grown outlines, so a
-label image of a slide's nuclei exists only where something kept one:
-
-``--nuclei-glob PATTERN`` (repeatable)
-    masks of the QC segmentation kept in a Nextflow work directory. ``{patient}``,
-    ``{slide}`` and ``{stem}`` are replaced per slide; ``{stem}`` is the image's file name
-    less its last suffix, which is how ``bin/segment.py`` names its masks
-    (``P1.r2.ome.tif`` -> ``P1.r2.ome_nuclei_mask.tif``). Of several matches the newest
-    is taken and the count is recorded.
-``--seg-arm ARM``
-    the ``nuclei_mask`` a segmentation arm lists for the patient in
-    ``<root>/<ARM>/csv/segmented.csv``, for the REFERENCE slide only: that mask is made
-    on the registered image, whose reference round is LIKELY the native reference slide
-    unchanged. That is not verified here; ``regbench nuclei`` / ``prepare multiplex``
-    accept the mask only if it has the slide's shape and sits in its published outlines.
-
-This module only FINDS the files (it reads no pixel); whether one may be used is decided
-where it is read.
+**The bare-nuclei columns** (``ref_nuclei`` / ``mov_nuclei`` and ``*_nuclei_from``) stay in
+the schema (``NUCLEI_COLUMNS``) and are written empty: the nuclei of every slide are the
+StarDist run of the nuclei step.
 
 **Pixel size** is the checkpoint's ``pixel_size`` column; where a row has none it is
-``FALLBACK_PIXEL_SIZE_UM``, the cohort's 0.325 um, and ``pixel_size_source`` says which.
+``FALLBACK_PIXEL_SIZE_UM``, the cohort's 0.325 um (the input step pins it, as the arms
+did), and ``pixel_size_source`` says which.
+
+A ``rounds.csv`` written before 2026-10-16 from the arms' results
+(``arms_manifest --root``) has the same columns, its ``*_cells`` naming the arm's
+published GeoJSON; ``prepare multiplex`` reads it as before (README, "Bare nuclei").
 """
 
 from __future__ import annotations
@@ -63,10 +55,8 @@ import math
 import re
 from pathlib import Path
 
-PREPROCESS_ARM = "preprocess_shared"
-FROM_ARM = "valis_high_micro2"
 NUCLEAR_MARKERS = ("DAPI", "CELLTOX")  # nextflow.config: params.nuclear_markers
-FALLBACK_PIXEL_SIZE_UM = 0.325  # benchmarks/configs/benchmark.config: pixel_size
+FALLBACK_PIXEL_SIZE_UM = 0.325  # slurm/inputs.sbatch pins pixel_size, as the arms did
 CHANNEL_SEP = "|"
 REQUIRED = ("patient_id", "preprocessed_image", "is_reference", "channels")
 COLUMNS = (
@@ -87,10 +77,9 @@ COLUMNS = (
     "ref_nuclei_from",
     "mov_nuclei_from",
 )
-# the columns of the BARE nuclei (README, "Bare nuclei"): a label image of each native
-# slide where one already exists, and how it was found. Empty where there is none.
+# the columns of the BARE nuclei (README, "Bare nuclei"): kept in the schema, written
+# empty (the nuclei step's StarDist run is every slide's nuclei)
 NUCLEI_COLUMNS = COLUMNS[-4:]
-SEG_CHECKPOINT = ("csv", "segmented.csv")  # lib/Checkpoint.groovy: `segmented`
 
 
 def slide_name(path):
@@ -159,8 +148,9 @@ def read_checkpoint(path):
     path = Path(path)
     if not path.is_file():
         raise SystemExit(
-            f"{path}: not found. --root must be the arm results folder that holds "
-            f"{PREPROCESS_ARM}/"
+            f"{path}: not found. It is the checkpoint of regbench's input step "
+            "(<inputs>/preprocess/results/csv/preprocessed.csv): run "
+            "launch.sbatch --inputs first"
         )
     with open(path, newline="") as fh:
         reader = csv.DictReader(fh)
@@ -189,70 +179,19 @@ def read_checkpoint(path):
     return per
 
 
-def stem_of(path):
-    """A slide's file name less its last suffix: what ``bin/segment.py`` prefixes its
-    masks with (``Path(image).stem``)."""
-    return Path(str(path)).stem
+def outline_path(outlines_dir, patient, slide):
+    """Where the nuclei step traces the outlines of one slide."""
+    return Path(outlines_dir) / patient / f"{slide}.geojson"
 
 
-def find_by_glob(patterns, patient, image):
-    """``(path, how)`` of the newest file a pattern matches for one slide, else
-    ``("", "")``. The first pattern with a match wins."""
-    import glob
-
-    names = {"patient": patient, "slide": slide_name(image), "stem": stem_of(image)}
-    for pattern in patterns or ():
-        hits = [p for p in glob.glob(pattern.format(**names)) if Path(p).is_file()]
-        if hits:
-            newest = max(hits, key=lambda p: (Path(p).stat().st_mtime_ns, p))
-            how = "glob" if len(hits) == 1 else f"glob (newest of {len(hits)})"
-            return str(newest), how
-    return "", ""
-
-
-def seg_arm_masks(root, arm):
-    """``{patient: nuclei mask}`` of a segmentation arm's ``csv/segmented.csv``: the
-    reference row's ``nuclei_mask`` (any row's when none is marked), where it is on disk."""
-    path = Path(root).joinpath(arm, *SEG_CHECKPOINT)
-    if not path.is_file():
-        raise SystemExit(
-            f"--seg-arm {arm}: {path} not found (a segmentation arm's segmented.csv)"
-        )
-    per = {}
-    with open(path, newline="") as fh:
-        reader = csv.DictReader(fh)
-        if "nuclei_mask" not in (reader.fieldnames or []):
-            raise SystemExit(f"{path}: no nuclei_mask column")
-        for row in reader:
-            patient = (row.get("patient_id") or "").strip()
-            mask = (row.get("nuclei_mask") or "").strip()
-            if not patient or not mask or not Path(mask).is_file():
-                continue
-            if _truthy(row.get("is_reference")) or patient not in per:
-                per[patient] = mask
-    return per
-
-
-def build(
-    root, from_arm=FROM_ARM, nuclear=NUCLEAR_MARKERS, nuclei_globs=(), seg_arm=None
-):
+def build(preprocessed_csv, outlines_dir, nuclear=NUCLEAR_MARKERS):
     """``(rows, problems)``: the manifest rows, and what was dropped and why.
 
     A problem is ``{"patient", "slide", "reason", "path"}``; ``slide`` is empty when the
-    whole patient is dropped. ``nuclei_globs`` and ``seg_arm`` fill the bare-nuclei
-    columns where a label image already exists (module docstring).
+    whole patient is dropped. ``*_cells`` name where the nuclei step traces each slide's
+    outlines (:func:`outline_path`); they need not exist yet.
     """
-    root = Path(root)
-    from_seg = seg_arm_masks(root, seg_arm) if seg_arm else {}
-
-    def nuclei_of(patient, image, is_reference):
-        path, how = find_by_glob(nuclei_globs, patient, image)
-        if not path and is_reference and patient in from_seg:
-            path, how = from_seg[patient], f"seg_arm:{seg_arm}"
-        return path, how
-
-    checkpoint = root / PREPROCESS_ARM / "csv" / "preprocessed.csv"
-    nuclei_root = root / from_arm
+    checkpoint = Path(preprocessed_csv)
     rows, problems = [], []
 
     def drop(patient, slide, reason, path):
@@ -261,7 +200,7 @@ def build(
         )
 
     def resolve(patient, s, blame):
-        """Image, nuclear index and nuclei of one slide, or None after noting why not."""
+        """Image, nuclear index and outlines of one slide, or None after noting why not."""
         image = _published(s["image"])
         if image is None:
             drop(patient, blame, f"slide {s['slide']} is not on disk", s["image"])
@@ -271,12 +210,7 @@ def build(
         except ValueError as exc:
             drop(patient, blame, f"slide {s['slide']}: {exc}", s["image"])
             return None
-        cells = nuclei_root / patient / "qc" / "registration" / "geojson"
-        cells = cells / f"{s['slide']}.geojson"
-        if not cells.is_file():
-            drop(patient, blame, f"no QC nuclei for slide {s['slide']}", cells)
-            return None
-        return image, channel, cells
+        return image, channel, outline_path(outlines_dir, patient, s["slide"])
 
     for patient, slides in sorted(read_checkpoint(checkpoint).items()):
         refs = [s for s in slides if s["is_reference"]]
@@ -312,8 +246,6 @@ def build(
                 )
                 continue
             px = px_ref or px_mov
-            ref_nuc, ref_how = nuclei_of(patient, got_ref[0], True)
-            mov_nuc, mov_how = nuclei_of(patient, got_mov[0], False)
             rows.append(
                 {
                     "case_id": f"{patient}_{mov['slide']}",
@@ -328,10 +260,7 @@ def build(
                     "pixel_size_source": "preprocessed.csv" if px else "fallback",
                     "ref_cells": str(got_ref[2]),
                     "mov_cells": str(got_mov[2]),
-                    "ref_nuclei": ref_nuc,
-                    "mov_nuclei": mov_nuc,
-                    "ref_nuclei_from": ref_how,
-                    "mov_nuclei_from": mov_how,
+                    **{c: "" for c in NUCLEI_COLUMNS},
                 }
             )
     return rows, problems
@@ -349,16 +278,22 @@ def write(rows, out):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="python -m benchmarks.regbench.arms_manifest",
+        prog="python -m benchmarks.regbench.manifest",
         description=__doc__.split("\n\n")[0],
     )
-    ap.add_argument("--root", required=True, help="the arm results folder")
-    ap.add_argument("--out", required=True, help="the manifest CSV to write")
     ap.add_argument(
-        "--from-arm",
-        default=FROM_ARM,
-        help="the arm whose QC nuclei score every method",
+        "--preprocessed",
+        required=True,
+        help="the input step's checkpoint, <inputs>/preprocess/results/csv/"
+        "preprocessed.csv",
     )
+    ap.add_argument(
+        "--outlines",
+        required=True,
+        help="the folder the nuclei step traces each slide's outlines into "
+        "(<folder>/<patient>/<slide>.geojson)",
+    )
+    ap.add_argument("--out", required=True, help="the manifest CSV to write")
     ap.add_argument(
         "--nuclear",
         action="append",
@@ -367,29 +302,8 @@ def main(argv=None):
         help="a nuclear marker, matched as a substring of the channel name; "
         f"repeatable (default: {' '.join(NUCLEAR_MARKERS)})",
     )
-    ap.add_argument(
-        "--nuclei-glob",
-        action="append",
-        default=None,
-        metavar="PATTERN",
-        help="where label images of bare nuclei were kept, e.g. "
-        "'<work>/*/*/{stem}_nuclei_mask.tif' ({patient}, {slide}, {stem}); repeatable",
-    )
-    ap.add_argument(
-        "--seg-arm",
-        default=None,
-        metavar="ARM",
-        help="a segmentation arm whose per-patient nuclei_mask (csv/segmented.csv) is "
-        "offered for each patient's REFERENCE slide",
-    )
     a = ap.parse_args(argv)
-    rows, problems = build(
-        a.root,
-        a.from_arm,
-        a.nuclear or NUCLEAR_MARKERS,
-        a.nuclei_glob or (),
-        a.seg_arm,
-    )
+    rows, problems = build(a.preprocessed, a.outlines, a.nuclear or NUCLEAR_MARKERS)
     for p in problems:
         who = "/".join(v for v in (p["patient"], p["slide"]) if v)
         print(f"DROPPED {who}: {p['reason']}: {p['path']}")
@@ -404,19 +318,10 @@ def main(argv=None):
         print(f"no round is left ({len(problems)} dropped); nothing written")
         return 1
     write(rows, a.out)
-    slides = {}
-    for r in rows:
-        slides[(r["group"], r["reference"])] = r["ref_nuclei"]
-        slides[(r["group"], r["moving"])] = r["mov_nuclei"]
-    have = sum(bool(v) for v in slides.values())
-    print(
-        f"bare nuclei: a label image was found for {have} of {len(slides)} slide(s); "
-        "`python -m benchmarks.regbench nuclei --list` says which may be used, the "
-        "rest need the StarDist re-run"
-    )
     print(
         f"{len(rows)} round(s) of {patients} patient(s) -> {a.out} "
-        f"({len(problems)} dropped)"
+        f"({len(problems)} dropped); their outlines are traced by the nuclei step "
+        f"into {a.outlines}"
     )
     return 0
 

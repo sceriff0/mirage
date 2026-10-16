@@ -16,24 +16,32 @@ One row is one (reference round, moving round) pair::
                              ships (e.g. mirage's SEG_QC output) to score its cells; leave
                              empty to use the built-in threshold + watershed segmenter.
 
-``ref_nuclei`` / ``mov_nuclei``  optional label TIFF of the BARE nuclei of each native
-                             slide (``ref_nuclei_from`` / ``mov_nuclei_from`` say how the
-                             manifest came by it)
+``ref_nuclei`` / ``mov_nuclei``  kept in the schema and not read: the bare nuclei of a
+                             slide are the nuclei step's StarDist run (``--nuclei-dir``)
 
-For the arms cohort the manifest is written by ``benchmarks.regbench.arms_manifest``.
+For the cohort the manifest is written by ``benchmarks.regbench.manifest`` from
+regbench's own preprocessing; its ``ref_cells`` / ``mov_cells`` name where the nuclei step
+traces each slide's outlines. **A round whose outline GeoJSON is not there is DROPPED**
+with the reason (``outlines not traced yet: run the nuclei step (launch.sbatch
+--prepare)``), never read as an empty set. A manifest written from the arms' results
+before 2026-10-16 names the arm's published GeoJSON and is read as before.
 
 **Two polygon sets per slide** (``cases.SETS``). ``ref_cells`` / ``mov_cells`` are the
-OUTLINES (on the arms cohort: each StarDist nucleus grown by 10 px). The bare NUCLEI of a
+OUTLINES (on the cohort: each StarDist nucleus grown by 10 px). The bare NUCLEI of a
 slide come from the first of these that applies, and ``case.json: extra.cell_sets`` records
 which, per side:
 
 1. ``--nuclei-dir``: the record ``python -m benchmarks.regbench nuclei`` left for that
-   slide (an existing label image that passed its checks, or a StarDist re-run);
-2. the manifest's label image, checked here the same way (``nuclei.check_label_image``);
-3. ``--nuclei-fallback shrink``, only when asked: the outline with the 10 px rim taken off
+   slide (its StarDist run);
+2. ``--nuclei-fallback shrink``, only when asked: the outline with the 10 px rim taken off
    (``shrunk_outlines``, ``exact: false``; too small where cells touch);
-4. nothing: the case is still prepared and is scored on its outlines; the reason is kept
+3. nothing: the case is still prepared and is scored on its outlines; the reason is kept
    (``extra.cell_sets.<side>.nuclei.reason``) and the scorer lists it.
+
+A case that is already prepared is kept (``--force`` prepares it again) only when it was
+prepared from the slides and outlines the row names: one prepared from other inputs (a
+manifest of the arms' results, then one of regbench's own) is refused with the reason,
+never silently kept or replaced.
 
 Without ``ref_cells`` both sets come from the built-in segmenter, as on the known-truth
 datasets: its objects are the nuclei, and the outlines are those labels grown by
@@ -67,9 +75,9 @@ from pathlib import Path
 import numpy as np
 
 from .. import cells, nuclei
-from ..arms_manifest import slide_name
 from ..cases import Case, case_dir, polys, polyset_arrays, write_case, write_npz
 from ..imageio import channel_names, extract_channel, pixel_size_um, shape_of
+from ..manifest import slide_name
 
 CHANNEL_SEP = "|"
 
@@ -128,16 +136,25 @@ def _geojson_cells(cache, key, image, cells_file, force):
 
 
 NO_NUCLEI = (
-    "no nuclear label image for this slide and no StarDist re-run "
+    "no StarDist run of this slide "
     "(python -m benchmarks.regbench nuclei; README, 'Bare nuclei')"
 )
+NOT_TRACED = "outlines not traced yet: run the nuclei step (launch.sbatch --prepare)"
+
+
+class Dropped(Exception):
+    """A round that cannot be a case yet, with the reason; not a failure."""
+
+
 SHRUNK = "shrunk_outlines"
 
 
 def _slide(cache, image, channel, cells_file, px, a):
     """``(nuclear path, outlines, nuclei | None, how)`` for one slide, all cached.
 
-    ``how`` is ``"arm_geojson"``, ``"label_image:<path>"`` or ``"builtin"``: where the
+    ``how`` is ``"arm_geojson"`` (a GeoJSON the manifest names: regbench's own trace or,
+    in a manifest of the arms' results, the arm's), ``"label_image:<path>"`` or
+    ``"builtin"``: where the
     outlines came from. Only the built-in segmenter gives nuclei here (its objects; the
     outlines are then those labels grown); for given outlines they are found by
     ``_nuclei``."""
@@ -195,8 +212,6 @@ def _nuclei(cache, row, side, image, channel, outlines, a):
         "image": image,
         "channel": channel,
         "outlines": row.get(f"{side}_cells") or "",
-        "candidate": row.get(f"{side}_nuclei") or "",
-        "candidate_from": row.get(f"{side}_nuclei_from") or "",
     }
     rec, store = None, None
     if getattr(a, "nuclei_dir", None):
@@ -210,28 +225,9 @@ def _nuclei(cache, row, side, image, channel, outlines, a):
                 "reason": f"the nuclei kept under {store} are not used: {other}. "
                 "Run the nuclei step again (python -m benchmarks.regbench nuclei)",
             }
-    if (rec is None or not rec.get("usable")) and slide["candidate"]:
-        # a label image named by the manifest, checked here as the nuclei step would
-        st = Path(slide["candidate"])
-        raw = f"{st}|{st.stat().st_mtime_ns if st.is_file() else 0}"
-        tag = hashlib.sha1(raw.encode()).hexdigest()[:8]
-        local = cache / f"{_key(image, channel)}.nuclei.{tag}"
-        got = nuclei.load(local) if not a.force else None
-        if got is None or nuclei.other_image(got, slide):
-            got = nuclei.check_label_image(
-                slide,
-                slide["candidate"],
-                local,
-                a,
-                outlines,
-                slide["candidate_from"],
-            )
-            nuclei.write_json(local / "nuclei.json", got)
-        if got.get("usable") or rec is None:
-            rec, store = got, local
     if rec is not None and rec.get("usable"):
         info = {"source": rec["source"], "exact": bool(rec["exact"])}
-        for k in ("agreement", "origin", "command"):
+        for k in ("agreement", "origin", "command", "outlines_from", "tolerance"):
             if rec.get(k):
                 info[k] = rec[k]
         return nuclei.read_polys(store), info, None
@@ -278,10 +274,57 @@ def _names(row, key, image):
     return given or channel_names(image)
 
 
+INPUT_KEYS = ("reference", "moving", "ref_cells", "mov_cells")
+
+
+def _prepared_from_other_inputs(d, row):
+    """``""``, or why the case under ``d`` is not of this row: it was prepared from
+    other slides or outlines (``case.json: extra``)."""
+    import json
+
+    try:
+        extra = json.loads((d / "case.json").read_text()).get("extra") or {}
+    except (OSError, ValueError):
+        return ""
+    for k in INPUT_KEYS:
+        if k in extra and (extra[k] or "") != (row.get(k) or ""):
+            return (
+                f"the case under {d} was prepared from {k} {extra[k] or '(none)'} and "
+                f"the manifest names {row.get(k) or '(none)'}. It is not replaced "
+                "unasked (results made on it would no longer match it): prepare again "
+                "with --force (REGBENCH_PREPARE_FORCE=1), or into another cases folder"
+            )
+    return ""
+
+
+def _require_outlines(row):
+    """A round is a case only with the outlines of both slides: not traced yet, or
+    traced from another file than the slide that is there now, it is DROPPED."""
+    from ..cases import file_fingerprint
+
+    for side, image_col in (("ref", "reference"), ("mov", "moving")):
+        path = row.get(f"{side}_cells") or ""
+        if not path or not cells.is_geojson(path):
+            continue
+        if not Path(path).is_file():
+            raise Dropped(f"{NOT_TRACED}: {path}")
+        made = nuclei.traced_record(path)
+        if made and made.get("image_fingerprint") != file_fingerprint(row[image_col]):
+            raise Dropped(
+                f"the outlines {path} were traced from another file than the slide "
+                f"{row[image_col]} is now: run the nuclei step again "
+                "(launch.sbatch --prepare)"
+            )
+
+
 def prepare_one(cases_root, row, a):
     d = case_dir(cases_root, "multiplex", row["case_id"])
     if (d / "case.json").exists() and not a.force:
+        other = _prepared_from_other_inputs(d, row)
+        if other:
+            raise ValueError(other)
         return d
+    _require_outlines(row)
     if a.max_cells and cells.is_geojson(row.get("mov_cells") or ""):
         raise ValueError(
             f"{row['mov_cells']}: --max-cells does not apply to nuclei given as GeoJSON"
@@ -376,6 +419,9 @@ def prepare(a):
         try:
             d = prepare_one(a.cases, row, a)
             print(f"multiplex/{row['case_id']} -> {d}")
+        except Dropped as exc:
+            bad += 1
+            print(f"multiplex/{row['case_id']}: DROPPED {exc}")
         except Exception as exc:
             bad += 1
             print(f"multiplex/{row['case_id']}: FAILED {type(exc).__name__}: {exc}")

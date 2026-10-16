@@ -83,8 +83,8 @@ def build_parser():
     m.add_argument(
         "--manifest",
         required=True,
-        help="CSV: case_id,reference,moving,... (for the arms cohort: the output of "
-        "`python -m benchmarks.regbench.arms_manifest`)",
+        help="CSV: case_id,reference,moving,... (for the cohort: the output of "
+        "`python -m benchmarks.regbench.manifest`, written by launch.sbatch --prepare)",
     )
     m.add_argument(
         "--diameter",
@@ -103,8 +103,7 @@ def build_parser():
     m.add_argument(
         "--nuclei-dir",
         default=None,
-        help="where `regbench nuclei` left each slide's bare nuclei (an existing "
-        "label image that passed its checks, or a StarDist re-run)",
+        help="where `regbench nuclei` left each slide's bare nuclei (its StarDist run)",
     )
     m.add_argument(
         "--nuclei-fallback",
@@ -117,8 +116,8 @@ def build_parser():
 
     nu = sub.add_parser(
         "nuclei",
-        help="bare nuclei per native slide of a manifest: check the label images "
-        "that exist, re-run StarDist where there is none",
+        help="nuclei and outlines per native slide of a manifest: StarDist, its cell "
+        "mask traced to the slide's outlines (the manifest's ref_cells / mov_cells)",
     )
     nu.add_argument("--manifest", required=True, help="the `prepare multiplex` CSV")
     nu.add_argument("--out", required=True, help="one folder per slide is kept here")
@@ -129,8 +128,8 @@ def build_parser():
     nu.add_argument(
         "--force",
         action="store_true",
-        help="decide every chosen slide again, whatever is kept for it: a label "
-        "image is checked again, a kept StarDist re-run is set aside and run again",
+        help="decide every chosen slide again, whatever is kept for it: a kept "
+        "StarDist run (and the outlines traced from it) is set aside and run again",
     )
     mode = nu.add_mutually_exclusive_group()
     mode.add_argument("--count", action="store_true", help="print the number of slides")
