@@ -13,6 +13,8 @@ import csv
 import math
 from typing import NamedTuple
 
+__all__ = ["NA", "Col", "Table", "TABLES", "columns", "empty_row", "write", "read"]
+
 NA = "NA"
 
 
@@ -144,7 +146,7 @@ _ID = (
     ("panel", "", "the moving slide's channel set, joined by '_' (e.g. DAPI_CD8_CD3)"),
     ("case_id", "", "the case: one moving panel against its patient's reference"),
 )
-TABLES = dict([
+_TABLE_LIST = [
     _t("per_pair", ("dataset", "patient_id", "panel", "row", "set"),
        "one row per (case, result, polygon set): the tidy per-pair numbers",
        *_ID,
@@ -274,8 +276,8 @@ TABLES = dict([
        ("name", "", ""), ("default", "", ""), ("type", "", ""), ("description", "", "")),
     _t("cohort_counts", ("dataset", "patient_id", "row"), "panel pairs per case, nuclei per pair",
        ("dataset", "", ""), ("patient_id", "", ""), ("row", "", ""), ("n_panels", "count", "moving panels"),
-       ("n_pairs_min", "count", "matched nuclei per pair, min"), ("n_pairs_med", "count", ""),
-       ("n_pairs_max", "count", "")),
+       ("n_pairs_min", "count", "matched nuclei per pair, min"), ("n_pairs_med", "count", "matched nuclei per pair, median over the row's pairs in the patient"),
+       ("n_pairs_max", "count", "matched nuclei per pair, max over the row's pairs in the patient")),
     _t("crosscheck_arms", ("patient_id", "panel", "row"),
        "regbench against the retired arms on the same (patient, panel)",
        ("patient_id", "", ""), ("panel", "", ""), ("row", "", ""), ("arm", "", ""),
@@ -295,7 +297,17 @@ TABLES = dict([
     _t("public_tissue", ("dataset", "row"), "tissue-level agreement (secondary), public datasets",
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""), ("n_pairs", "count", ""),
        ("score_med", "1", "tissue.py's score, median over pairs"), ("note", "", "")),
-])
+]
+
+
+def _unique(pairs):
+    out = dict(pairs)
+    if len(out) != len(pairs):
+        raise ValueError("duplicate table name in the schema")
+    return out
+
+
+TABLES = _unique(_TABLE_LIST)
 
 
 def columns(name):
@@ -320,13 +332,15 @@ def _cell(v):
 
 def write(path, name, rows):
     cols = columns(name)
+    rows = list(rows)
+    for r in rows:
+        extra = set(r) - set(cols)
+        if extra:
+            raise KeyError(f"{name}: no column {sorted(extra)}")
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()
         for r in rows:
-            extra = set(r) - set(cols)
-            if extra:
-                raise KeyError(f"{name}: no column {sorted(extra)}")
             w.writerow({c: _cell(r.get(c)) for c in cols})
 
 

@@ -57,3 +57,32 @@ def test_source_documents_expected_and_the_reexport_is_the_scorer_side_module():
 
     assert "expected" in schema.TABLES["per_pair"].cols[0].what
     assert schema.TABLES is table_schema.TABLES
+
+
+def test_a_duplicate_table_name_is_refused():
+    from benchmarks.regbench import table_schema
+
+    name, table = table_schema._t("x", ("dataset",), "w", ("dataset", "", ""))
+    with pytest.raises(ValueError):
+        table_schema._unique([(name, table), (name, table)])
+
+
+def test_star_import_exports_only_the_interface():
+    from benchmarks.regbench import table_schema
+
+    assert set(table_schema.__all__) == {
+        "NA", "Col", "Table", "TABLES", "columns", "empty_row", "write", "read"}
+
+
+def test_cell_values_and_a_failed_write_leaves_the_file(tmp_path):
+    p = tmp_path / "laptop.csv"
+    row = schema.empty_row("laptop", source="regbench")
+    for v, want in [(0, "0"), (0.0, "0.0"), ("0", "0"), ("", None), (None, None),
+                    (math.nan, None)]:
+        row["wall_s"] = v
+        schema.write(p, "laptop", [row])
+        assert schema.read(p)[0]["wall_s"] == want, v
+    before = p.read_bytes()
+    with pytest.raises(KeyError):
+        schema.write(p, "laptop", [row, {"source": "x", "bogus": 1}])
+    assert p.read_bytes() == before
