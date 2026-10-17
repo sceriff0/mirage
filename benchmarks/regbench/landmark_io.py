@@ -14,7 +14,10 @@ into ``warped.npz: truth_xy`` (``truth_side`` says which side was moved). In eac
 ``run.json`` it records ``truth_sha256`` (:func:`truth_sha256`, None without a sidecar:
 a result is reused only for the same value) and ``truth_note``: ``""`` when
 ``truth_xy`` was written, else why not (:data:`NO_TRUTH`,
-:data:`ONE_SIDED_REF_TO_MOV`).
+:data:`ONE_SIDED_REF_TO_MOV`). A failure record (no map, so nothing moved) says
+:data:`NO_TRUTH` for a case without a sidecar and :data:`RUN_FAILED` for one with
+(:func:`failure_note`): whether a one-sided truth would have been moved is not known
+without the map's direction.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ ONE_SIDED_REF_TO_MOV = (
     "the truth has moving points only and this map takes reference points "
     "(ref_to_mov): nothing to move"
 )
+RUN_FAILED = "the run failed: no landmarks were moved"
 
 
 def _path(case_or_dir):
@@ -63,9 +67,18 @@ def _checked(path, ref, mov):
     return ref, mov
 
 
+def _umask_mode():
+    """The mode a new file gets here (``0o666 & ~umask``). The umask is only readable by
+    setting it, so it is set back at once."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
+
+
 def write_truth(case_dir, truth_ref, truth_mov):
     """Write the sidecar (``truth_ref`` may be None: a one-sided truth). Atomic: a
-    temporary name in the same folder, then ``os.replace``."""
+    temporary name in the same folder, then ``os.replace``. ``mkstemp`` creates the file
+    0600 and ``os.replace`` keeps that, so it is given the umask default first."""
     path = _path(case_dir)
     ref, mov = _checked(path, truth_ref, truth_mov)
     arrays = {"mov": mov} if ref is None else {"ref": ref, "mov": mov}
@@ -74,6 +87,7 @@ def write_truth(case_dir, truth_ref, truth_mov):
     try:
         with os.fdopen(fd, "wb") as fh:
             np.savez(fh, **arrays)
+        os.chmod(tmp, _umask_mode())
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
@@ -90,6 +104,12 @@ def read_truth(case):
             raise ValueError(f"{path}: no 'mov' array (found {sorted(z.files)})")
         ref, mov = _checked(path, z["ref"] if "ref" in z.files else None, z["mov"])
     return {"ref": ref, "mov": mov}
+
+
+def failure_note(case):
+    """``truth_note`` of a failure record: :data:`NO_TRUTH` without a sidecar, else
+    :data:`RUN_FAILED`."""
+    return NO_TRUTH if not _path(case).is_file() else RUN_FAILED
 
 
 def truth_sha256(case):

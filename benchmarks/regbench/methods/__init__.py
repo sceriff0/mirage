@@ -99,13 +99,13 @@ same for every method.
 
 **A unit that is already done is not run again** (``resume=True``, what ``run`` passes):
 when every result of the unit is ``ok`` for the same method, label, options, cases,
-points and landmarks (``truth_sha256``), AND was computed the same way from the same bytes (``reuse_key``, kept in
-``run.json: reuse_key``), nothing runs and no placeholder is written; the records gain
-this submission's id (``submissions``, ``reused_by``). ``REGBENCH_FORCE=1``
-(``run --force``) runs it anyway. ``reuse_key`` holds, for every method: ``execution``
-(``one process`` for a method that registers in one; for a method that declares
-``STAGES``, STARE, who starts its stage processes as ``REGBENCH_STAGES`` states it:
-``jobs`` or ``local``), ``code`` (a sha256 of the
+points and landmarks (``truth_sha256``), AND was computed the same way from the same
+bytes (``reuse_key``, kept in ``run.json: reuse_key``), nothing runs and no placeholder
+is written; the records gain this submission's id (``submissions``, ``reused_by``).
+``REGBENCH_FORCE=1`` (``run --force``) runs it anyway. ``reuse_key`` holds, for every
+method: ``execution`` (``one process`` for a method that registers in one; for a
+method that declares ``STAGES``, STARE, who starts its stage processes as
+``REGBENCH_STAGES`` states it: ``jobs`` or ``local``), ``code`` (a sha256 of the
 driver, the adapter module, the sibling modules it imports and the ``regbench`` modules
 it imports directly: ``code_files``), ``inputs`` (``cases.inputs_fingerprint`` of every
 case: size, time and sampled bytes of its image files) and ``method`` (what the adapter
@@ -684,6 +684,8 @@ def _run(
         # nothing an earlier attempt left may answer for this one (the verdict reads it)
         (d / "realcheck.json").unlink(missing_ok=True)
         rec = {**head(case, variant), "ok": False, "error": error, "cause": cause}
+        # every run.json says why its landmarks were or were not moved
+        rec["truth_note"] = landmark_io.failure_note(case)
         if cost is not None:
             rec.update(register_s=cost.get("wall_s"), resources=cost)
         if tb:

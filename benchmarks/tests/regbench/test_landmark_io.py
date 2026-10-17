@@ -230,3 +230,52 @@ def test_a_record_from_before_truth_stays_reusable_for_a_case_without_truth(tmp_
     assert methods.record_gaps(rec, case, path.parent, rec["reuse_key"]) == []
     assert methods.run_case(method, case, out, resume=True) == ["cnt"]
     assert calls == [case.case_id]  # reused, nothing run
+
+
+def test_the_sidecar_gets_the_umask_default_mode(tmp_path):
+    """``mkstemp`` creates its file 0600 and ``os.replace`` keeps that: the sidecar must
+    instead have the mode an ordinary new file gets (``0o666 & ~umask``), so another
+    account of the group can read the case."""
+    import os
+    import stat
+
+    d = tmp_path / "case"
+    d.mkdir()
+    old = os.umask(0o022)
+    try:
+        landmark_io.write_truth(d, REF, REF + D)
+        assert stat.S_IMODE((d / landmark_io.FILE).stat().st_mode) == 0o644
+        os.umask(0o002)
+        landmark_io.write_truth(d, REF, REF + 2 * D)
+        assert stat.S_IMODE((d / landmark_io.FILE).stat().st_mode) == 0o664
+    finally:
+        os.umask(old)
+
+
+def _failing(name="bad"):
+    def register(case, work, opts):
+        raise RuntimeError("boom")
+        yield  # a generator
+
+    return scored_cohort.fake(name, register)
+
+
+def test_a_failed_run_records_its_truth_note(tmp_path):
+    """Every run.json carries ``truth_note``, a failure record too: ``NO_TRUTH`` when
+    the case has no sidecar, else ``RUN_FAILED`` (nothing was moved because the method
+    failed, not because the truth is missing)."""
+    root, out, made = scored_cohort.build(tmp_path)
+    with_truth, without = made[0], made[1]
+    landmark_io.write_truth(with_truth.dir, REF, REF + D)
+    out = tmp_path / "o9"
+    for case, note in (
+        (with_truth, landmark_io.RUN_FAILED),
+        (without, landmark_io.NO_TRUTH),
+    ):
+        assert methods.run_case(_failing(), case, out) == []
+        rec = json.loads(
+            (out / "bad" / case.dataset / case.case_id / "run.json").read_text()
+        )
+        assert rec["ok"] is False and rec["cause"] == "exception"
+        assert rec["truth_sha256"] == landmark_io.truth_sha256(case)
+        assert rec["truth_note"] == note
