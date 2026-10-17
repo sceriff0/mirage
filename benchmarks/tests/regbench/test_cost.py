@@ -242,15 +242,15 @@ def test_cost_by_step_reads_complete_patients_only():
 def test_cpu_and_gpu_rows_share_one_table_with_the_device_in_its_own_column():
     rows = cost.end_to_end(
         [
-            res("deeperhistreg_hr_gpu_asdrawn", "P1", "deeperhistreg",
+            res("deeperhistreg_hr_gpu", "P1", "deeperhistreg",
                 device="cuda:0", gpu_model="NVIDIA H200", method_convert_s=1.0),
-            res("deeperhistreg_hr_cpu_asdrawn", "P1", "deeperhistreg",
+            res("deeperhistreg_hr_cpu", "P1", "deeperhistreg",
                 method_convert_s=1.0),
         ]
     )  # fmt: skip
     assert [(r["method"], r["device"], r["gpu_model"]) for r in rows] == [
-        ("deeperhistreg_hr_gpu_asdrawn", "cuda:0", "NVIDIA H200"),
-        ("deeperhistreg_hr_cpu_asdrawn", "cpu", ""),
+        ("deeperhistreg_hr_gpu", "cuda:0", "NVIDIA H200"),
+        ("deeperhistreg_hr_cpu", "cpu", ""),
     ]
     summary = cost.summarise(rows)
     assert {"device", "gpu_model"} <= set(cost.SUMMARY_COLUMNS)

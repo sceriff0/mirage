@@ -209,9 +209,8 @@ SIZES = {
     # `initial_resolution`, never up. With 40000 px on the short side the 4096 px set
     # works at k = 1.953125, S = 9.765625 (the cohort's class), and the 8192 px set at
     # k = 1, S = 5.0 (loaded 8000 px is below 8192). Every division is exact here (loaded
-    # 8000 x 10000, a field of 4096 x 5120 or 8000 x 10000, pads 200 and 1000), which
-    # the declared offset of the estimated-field row needs. The coarsest pyramid level
-    # is 32 px (eight levels) and 31 px (nine). A smaller pair for the 8192 px set was
+    # 8000 x 10000, a field of 4096 x 5120 or 8000 x 10000, pads 200 and 1000). The
+    # coarsest pyramid level is 32 px (eight levels) and 31 px (nine). A smaller pair for the 8192 px set was
     # dropped: (8200, 10240) also gives S = 5.0 and adds only a 6 px coarsest level,
     # nothing the cohort has (the package fails outright once a level reaches 1 px,
     # its issue #22). NOT reached by this pair: a non-integer second resampling at the

@@ -44,7 +44,7 @@ primary rows the summary opens on.
 | STARE | `stare` | strides 64, 128, 256 x preprocessing none / CLAHE / percentile |
 | VALIS (the pipeline's call, 1.0.0) | `valis_mirage` | |
 | VALIS 1.2.0 as shipped | `valis120_hires` | `valis120` |
-| DeeperHistReg 1.0.1 | `deeperhistreg_hr_gpu_asdrawn` | eight labels, each with an estimated-field row |
+| DeeperHistReg 1.0.1 | `deeperhistreg_hr_gpu` | eight labels, one row each: the image its writer draws, which sits about S/2 px plus a whole-pixel padding term (roughly 1 to 3 µm on the cohort) off its own registration |
 | ASHLAR 1.20.0 | `ashlar` | clean, affine-anchored and a 20-cell factorial |
 | PALOM | `palom` | |
 

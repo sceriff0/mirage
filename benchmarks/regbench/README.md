@@ -10,13 +10,15 @@ commit `f5ce62e`, archived there as the tag `archive/benchmarking-2026-10-08`).
 sets, its own reader and its own writer, and is judged with the transform it estimated,
 moved by its own code in its own direction. Every departure from that is listed per run
 in `run.json: info.implementation.benchmark_side`.** Where a method's writer departs
-from its own transform, both are scored and the difference is reported.
+from its own transform, that is reported; DeeperHistReg, whose shipped writer draws its
+image off its own registration, is scored on the image as drawn only (user instruction
+of 2026-10-17).
 
 The departures are listed, none is hidden; "Caveats that travel with the results" and
 each method's section give them in full. In short:
 
 - **Parameter sets.** Not every primary row is its package's default: `valis120_hires`
-  is upstream's high-resolution example, `deeperhistreg_hr_gpu_asdrawn` a shipped 8192
+  is upstream's high-resolution example, `deeperhistreg_hr_gpu` a shipped 8192
   px set on a GPU, and `stare` and `valis_mirage` run the pipeline's settings, which
   their authors chose on this cohort with this metric.
 - **ASHLAR.** Its nuclei are moved by a map the benchmark builds from ASHLAR's tile
@@ -26,10 +28,11 @@ each method's section give them in full. In short:
 - **VALIS.** Its nuclei go through VALIS's own point function with the slide's
   matrices and field copied at the yield, not through the image writer; the VALIS 1.2.0
   rows start the JVM with a heap the benchmark sets.
-- **DeeperHistReg.** Its nuclei go through a full-resolution coordinate chain of the
-  benchmark around the package's `warp_landmarks`, on the field the package estimated;
-  the `_asdrawn` rows re-state the writer's arithmetic, so that the image on disk is
-  what is scored.
+- **DeeperHistReg.** One row per run, under the run's own label: its nuclei go through
+  the writer's arithmetic, re-stated by the benchmark, so that the image on disk is what
+  is scored. That writer draws the image about S/2 px plus a few whole pixels off the
+  package's own registration (roughly 1 to 3 µm on the cohort), so a good registration
+  can score low.
 
 ## State
 
@@ -50,7 +53,7 @@ step with the run list, `score.TABLES` and the launcher's job names).
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | the cohort's inputs and cases (`slurm/inputs.sbatch`, `manifest.py`, `outlines.py`, `nuclei.py`, `datasets/multiplex.py`) | here: regbench's OWN pipeline preprocessing of the cohort (`submit_cohort.sh --inputs`, `pixel_size` pinned at 0.325 µm by user ruling) and its own StarDist outlines (the cell mask traced as the pipeline's QC traces it: see "What the cohort's nuclei are"). Inputs carry fingerprints. Never run on the cohort itself |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`, `billing.py`) | here |
-| adapters `stare` (the pipeline's `high` tier on the original slides, its own STITCH deferred until the clock has stopped, the option `stride`), `valis_mirage` (VALIS 1.0.0 through the pipeline's function), `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`), `initial` (the identity), `deeperhistreg` (1.0.1: eight labels, each with an estimated-field row and an `_asdrawn` row), `ashlar` (1.20.0: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` and a 20-cell factorial), `palom` (2026.4.1, one run) | here, as in "Methods" and each method's section. **Only `stare` has ever been run with its package** (the only one installed where this was written); the others are written against the package's source and tested with a recording stand-in. Their first real run is the selfcheck inside each method's image |
+| adapters `stare` (the pipeline's `high` tier on the original slides, its own STITCH deferred until the clock has stopped, the option `stride`), `valis_mirage` (VALIS 1.0.0 through the pipeline's function), `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`), `initial` (the identity), `deeperhistreg` (1.0.1: eight labels, one row each: the image its writer draws), `ashlar` (1.20.0: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` and a 20-cell factorial), `palom` (2026.4.1, one run) | here, as in "Methods" and each method's section. **Only `stare` has ever been run with its package** (the only one installed where this was written); the others are written against the package's source and tested with a recording stand-in. Their first real run is the selfcheck inside each method's image |
 | selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
 | tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
@@ -199,7 +202,7 @@ the regime of every dataset of the paper; a run carries the regimes that take it
 `RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
 exactly the cohort's result names and opens its summary on the six primary rows:
 
-`stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
+`stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu`, `ashlar`, `palom`.
 
 - **Two methods run at two settings, and the high-resolution one is primary** (the
   user's ruling of 2026-10-11, fixed before any cohort run). VALIS 1.2.0: `valis120` is
@@ -209,9 +212,9 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
-- **DeeperHistReg's primary row follows its writer (option A).** Its `_asdrawn` row (the
-  image its writer puts on disk) is primary, and the estimated-field row beside it is
-  kept in every table whatever its selfcheck says.
+- **DeeperHistReg keeps one row per run, the image its writer draws** (user instruction
+  of 2026-10-17, which replaced option A of 2026-10-15). The row is named after the run
+  (`deeperhistreg_hr_gpu`); no row of the estimated field is written.
 - **STARE runs are generated: stride x preprocessing level**
   (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. The cohort's
   regime has the levels `baseline` (STARE unchanged: the fluorescence channel as it is),
@@ -262,10 +265,7 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   also sets `ENV OMP_NUM_THREADS 1`: the harness sets no thread variable, but this one
   comes with the image ("Cost", "Threads the method's own image sets").
 - **Which rows a run's selfcheck status is read from** (`variants.checked_rows`,
-  column `checked_rows`). For every method but one that is all of the run's rows.
-  DeeperHistReg's status is read from its `_asdrawn` row alone, the row of the image its
-  writer puts on disk; the estimated-field row is checked and reported all the same, with
-  its own verdict beside its numbers (`selfcheck_row`). Nothing is dropped:
+  column `checked_rows`): all of the run's rows. Nothing is dropped:
   `variants.selfcheck_status(name, record)` is the status that is REPORTED, and no row
   is ever left out of a table because of it.
 - **Which runs have a realcheck** (`realcheck`, column 15): the primary rows of the two
@@ -406,8 +406,7 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
-| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
-| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), so its `within_1um` can be low with a perfect registration; `deeperhistreg_hr_gpu`, the estimated-field row, shows the registration itself | same |
+| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
 | `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame | refused, with the reason (the README's recipe reads one channel by index; which of its colour modes is the input rule is not decided) |
 | `initial` | none | | identity | |  |
@@ -1511,8 +1510,8 @@ repository (`compute_qcs_4methods.py:2`).
 
 A variant with no image has NO row and one line in `tissue_missing.csv` with the reason:
 `not run`, `the run failed (<cause>): no image`, `the method writes no image for this
-variant` (`stare_rigid`, `palom_affine`, the VALIS rigid and non-rigid stages, DeeperHistReg's
-estimated-field rows), `the method's writer failed: ...`. A failed run is NOT scored at
+variant` (`stare_rigid`, `palom_affine`, the VALIS rigid and non-rigid stages), `the
+method's writer failed: ...`. A failed run is NOT scored at
 the unregistered pose here, so `n_scored` of `n_cases` is printed beside every median.
 
 | file | one row per | columns |
@@ -2885,7 +2884,7 @@ missing the rest of the list]`). None of the following was observed:
    (`score.IN_SAMPLE`). The other methods were NOT tuned on it, but
    "package defaults" describes only some of them: three primary rows are not a default.
    `valis120_hires` is upstream's high-resolution example, not its default
-   (`valis120` is, and is shown beside it). `deeperhistreg_hr_gpu_asdrawn` is a shipped
+   (`valis120` is, and is shown beside it). `deeperhistreg_hr_gpu` is a shipped
    8192 px parameter set, not the 4096 px default, on a GPU. `ashlar` is ASHLAR's own
    command at its defaults, but on tiles the benchmark cut from stitched slides, with
    noise added to their empty background. `palom` is its documented recipe. None of these
@@ -2903,12 +2902,14 @@ missing the rest of the list]`). None of the following was observed:
    is left inside its tiles: at 0.5 degrees, 5.2 px of map error against 8.8 px for the
    copies the image shows. The selfcheck masks exactly those points. The
    `<variant>:non_ashlar` rows are the measure of how much it matters.
-7. **DeeperHistReg's primary row follows its writer, not its registration.** By the
-   adapter's reading the written image sits half a field pixel right and down of the
+7. **DeeperHistReg's rows follow its writer, not its registration.** By the adapter's
+   reading the written image sits half a field pixel right and down of the
    registration: 2.5 px (0.81 µm) per axis, 1.15 µm along the diagonal, at the primary
-   8192 px set; 4.9 px (1.59 µm) per axis at the 4096 px set. `within_1um` of
-   `deeperhistreg_hr_gpu_asdrawn` can therefore be low with a perfect registration. The
-   estimated-field row `deeperhistreg_hr_gpu` beside it shows the registration itself.
+   8192 px set; 4.9 px (1.59 µm) per axis at the 4096 px set; plus a whole-pixel padding
+   term on uneven sizes (measured on the cohort on 2026-10-15: roughly 1 to 3 µm in all).
+   `within_1um` of `deeperhistreg_hr_gpu` can therefore be low with a perfect
+   registration. The benchmark scores what the package puts on disk; no row of the
+   registration itself is written.
 8. **The cohort's "nuclei" are StarDist nuclei grown by 10 px** ("What the cohort's nuclei
    are"): Dice and `within_1um` have a ceiling that is not registration, the same for
    every method.
@@ -3551,14 +3552,9 @@ writer is run afterwards, outside the clock, as the package's own example does).
   8192 px `default_initial_nonrigid_high_resolution` is another shipped factory, listed
   there as "High Resolution". Both are run,
   on the GPU and on the CPU, each with its own selfcheck. The primary row is the 8192 px
-  one, `deeperhistreg_hr_gpu_asdrawn`, by the user's ruling of 2026-10-11 (it is the
+  one, `deeperhistreg_hr_gpu`, by the user's ruling of 2026-10-11 (it is the
   resolution of the paper's headline result); the 4096 px rows stand beside it in every
   table. `variants.PRIMARY_DEEPERHISTREG` is the one line that names it.
-- **The selfcheck status is read from the `_asdrawn` row only**
-  (`variants.CHECKED_BY_SUFFIX`). The estimated-field row is still checked and reported,
-  with its own verdict beside it (`selfcheck_row`); it is never left out, whatever the
-  check says (option A: the as-drawn row is primary and the estimated-field row is kept
-  beside it).
 
 **Inputs.** The package does not read OME-TIFF (issue #4 `[FULL]`) and its TIFF loader
 counts top-level pages as pyramid levels (`tiff_loader.py:34-38`). Each slide's nuclear
@@ -3568,18 +3564,13 @@ uncompressed (`single_page_tiff`); the clock is paused meanwhile and `convert_s`
 min-max rule (counted on every fourth row and column): a few bright pixels can leave
 16-bit DAPI in a handful of levels.
 
-**Two rows per run, both reference -> moving, neither inverted.**
+**One row per run, reference -> moving, not inverted** (user instruction of 2026-10-17).
+`<label>` scores the image **as written**: for every pixel of the file on disk, the
+moving-slide position the package's writer sampled (`asdrawn_map`). Its points are the
+transform of the image, and its selfcheck declares no offset.
 
-- `<label>` scores the field the method **estimated**: reference pixel -> moving pixel
-  through the package's own `warp_landmarks` and the coordinate chain of issue #12 (a
-  user's function the maintainer endorsed; the package itself never calls
-  `warp_landmarks`). The chain leaves out the half-pixel terms of the two resamplings
-  (`info.gap.chain_halfpixel_px_p95`).
-- `<label>_asdrawn` scores the image **as written**: for every pixel of the file on disk,
-  the moving-slide position the package's writer sampled. Its points are the transform of
-  the image, and its selfcheck declares no offset.
-
-They differ because the writer is not the registration. The field lives on the padded,
+**Why DeeperHistReg can score low with a good registration:** its shipped writer is not
+its registration. The field lives on the padded,
 resampled grid, `warped(x) = source(x + u(x))`. The writer (`apply_deformation_pyvips`,
 `dhr_utils/warping.py:224-239`) turns `grid + u` into an index image, enlarges it to the
 full-resolution canvas with libvips' linear kernel, multiplies by the enlargement and
@@ -3590,7 +3581,7 @@ mapim.c:225-300, 455-480, 589-594; not executed]`). Three consequences:
 
 1. **Half a field pixel.** The written image samples `X - S/2 + S u(X/S - 0.5)`: its
    content sits about S/2 px right and down of the registration, 4.9 px at S = 9.77 and
-   2.5 px at S = 5. The gap between the two maps is `(S/2) x Jacobian x (1, 1)`, a
+   2.5 px at S = 5. The gap from the registration is `(S/2) x Jacobian x (1, 1)`, a
    function of position.
 2. **The stretch.** The writer enlarges by `canvas / field size`. The field's size is a
    floor (torch's `interpolate` with a scale factor), so on a slide whose loaded size
@@ -3601,14 +3592,12 @@ mapim.c:225-300, 455-480, 589-594; not executed]`). Three consequences:
 3. **The pads.** The writer pads at full resolution, the registration padded the loaded
    images; the two agree only where the slides' sizes divide evenly.
 
-The as-drawn map uses the writer's own numbers for all three (`asdrawn_map`: full-
-resolution centre pads, `S = canvas / field size`, the index image read at `X / S - 0.5`
-linearly with the edge copied). The estimated-field row declares only the first
-(`declared_offset`: the registration differenced over half a field pixel), and each run
-records how far the two maps are apart and how much of that the declaration does not
-explain (`info.gap.mean_px`, `beyond_declared_px_p95`). On real slides the second and
-third terms are expected to be several pixels, which is why the as-drawn rows are the
-ones that describe the image on disk.
+The map uses the writer's own numbers for all three (`asdrawn_map`: full-resolution
+centre pads, `S = canvas / field size`, the index image read at `X / S - 0.5` linearly
+with the edge copied). Measured on the cohort on 2026-10-15, the written image sits
+`S/2 + k` px off the package's own registration (`k` whole pixels from the padding
+computed twice, with different rounding on uneven sizes), roughly 1 to 3 µm: the
+benchmark scores what the package puts on disk, and that loss is the package's.
 
 **The written image** (`write_native`): the package's writer with the arguments its own
 `save_final` passes, once per channel of the moving slide (the maintainer's route for
@@ -3619,9 +3608,8 @@ on its grid, because the writer crops the padded canvas back by the reference's 
 the pads enter the map, not the origin. Pixels from outside the moving slide are the pad
 value (255 counts, or 0 for `_fluo`) inside the padded canvas and 0 beyond it;
 `valid_box` bounds the pixels that come from the moving slide. A failed writer fails
-the row it was writing for, `<label>_asdrawn` (`writer`, or `writer_oom` for a memory
-error), as for every method (a row is ok only when its image exists); the other row,
-which has no image of its own, stays `ok`.
+the row, `<label>` (`writer`, or `writer_oom` for a memory error), as for every method
+(a row is ok only when its image exists).
 
 **Cost.** The clock runs over `run_registration` only, including the package's own
 loading, its diagnostic JPEGs and intermediate fields; its own per-stage seconds are in
@@ -3636,23 +3624,18 @@ captured and the error raised with that text, so a CUDA out-of-memory is `gpu_oo
 (reported, never escalated), a host allocation failure is `oom` (the ladder), anything
 else `exception`.
 
-**The checks.** The selfcheck compares both rows with the one image the writer produced:
-`_asdrawn` as it is, the estimated-field row minus its declared offset. With a stand-in
-for the package whose writer is drawn from the source, a wrong direction, dropped or
-exchanged pads, a 1 % scale error, a missing half pixel and a field of the wrong sign
-are each reported `inconsistent` on the `_asdrawn` row; an undeclared offset and a wrong
-chain are each reported `inconsistent` on the estimated-field row alone
-(`test_dhr_adapter.py`). The realcheck runs on the `_asdrawn` row (the one with the
-image).
+**The checks.** The selfcheck compares the row with the one image the writer produced,
+as it is (no declared offset). With a stand-in for the package whose writer is drawn
+from the source, a wrong direction, dropped or exchanged pads, a 1 % scale error, a
+missing half pixel and a field of the wrong sign are each reported `inconsistent`
+(`test_dhr_adapter.py`). The realcheck runs on that row.
 
 **What the selfcheck reaches.** One pair for all eight labels, 40000 x 50000 against
 40000 x 48000: S = 9.77 at the 4096 px set (the cohort's class) and S = 5.0 at the
-8192 px set, with every division exact, which the estimated-field row's declaration
-needs. A coarsest pyramid level of 31 to 32 px. Not reached: the 8192 px set's second
-resampling (a slide whose short side exceeds 40960 px: S between 5 and about 6.1), and
-sizes that leave remainders, where the estimated-field row is expected to fail its
-declaration and the `_asdrawn` row to hold (emulated in `test_dhr_adapter.py`); on the
-cohort that is the realcheck's ground. The 8192 px set on the CPU is 1100 full-field
+8192 px set, with every division exact. A coarsest pyramid level of 31 to 32 px. Not
+reached: the 8192 px set's second resampling (a slide whose short side exceeds 40960 px:
+S between 5 and about 6.1), and sizes that leave remainders, where the row is expected to
+hold (emulated in `test_dhr_adapter.py`); on the cohort that is the realcheck's ground. The 8192 px set on the CPU is 1100 full-field
 iterations at 80 megapixels: hours, and tens of GB.
 
 **Not checked by reading alone:** nothing here has run DeeperHistReg or libvips.
@@ -3669,7 +3652,7 @@ and `imagecodecs`):
 # 1. the settling measurement, seconds: a zero field must be written 2.5 px right and down
 python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
     -k "zero_field or factory or centre_pads" --basetemp=/tmp/rb_dhr
-# 2. the small pair on the CPU, both rows, shipped and fluo (S = 5)
+# 2. the small pair on the CPU, the run's row, shipped and fluo (S = 5)
 python -m pytest benchmarks/tests/regbench/test_external_methods.py -q -rs \
     -k deeperhistreg_points --basetemp=/tmp/rb_dhr2
 # 3. the selfcheck of each label (the cohort-class pair)
@@ -3684,9 +3667,7 @@ python -m benchmarks.regbench selfcheck --method deeperhistreg --label deeperhis
 ```
 
 `ok` is exit 0 and, in `W/<label>/selfcheck.json`, `"status": "ok"` with
-`variants.<label>` and `variants.<label>_asdrawn` both `ok`; in the pair's record,
-`variants.<label>.declared_px_mean_x/y` is the measured offset between the two maps
-(4.9 px at the 4096 px set, 2.5 px at the 8192 px set). Add `--size 8200x10240:7780x9720`
+`variants.<label>` `ok`. Add `--size 8200x10240:7780x9720`
 for a quick S = 5 run of any label. If step 1 fails, the offset is not what the source
 reading predicts: report the measured shift and stop.
 

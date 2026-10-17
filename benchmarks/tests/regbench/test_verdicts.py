@@ -102,16 +102,17 @@ def test_a_selfcheck_that_left_no_record_is_reported_as_no_selfcheck_record(tmp_
 
 
 def test_every_verdict_of_a_run_is_kept_and_its_rows_too(tmp_path):
-    """DeeperHistReg (user ruling, option A): the status is read from the as-drawn row,
-    and the estimated-field row stays in every table whatever its own selfcheck says."""
+    """DeeperHistReg's one row (the image its writer draws, under the run's label) is
+    the row its status is read from, and the row stays in every table whatever its
+    selfcheck says."""
     out = tmp_path / "out"
-    _record(out, HR, **{HR: "inconsistent", f"{HR}_asdrawn": "ok"})
+    _record(out, HR, **{HR: "inconsistent"})
     _, _, lines = _verdict(out, HR)
-    assert _line(lines, HR)[2:5] == ["ok", "-", f"{HR}_asdrawn"]
-    assert variants.checked_rows(HR) == (f"{HR}_asdrawn",)
-    # and the field row's own verdict travels beside its numbers (selfcheck_row)
+    assert _line(lines, HR)[2:5] == ["inconsistent", "-", HR]
+    assert variants.checked_rows(HR) == (HR,)
+    # and the row's own verdict travels beside its numbers (selfcheck_row)
     checks = variants.row_checks(out / "logs" / "selfcheck")
-    assert checks[HR] == "inconsistent" and checks[f"{HR}_asdrawn"] == "ok"
+    assert checks[HR] == "inconsistent"
 
 
 # ── a case of the selfcheck that died ─────────────────────────────────────────

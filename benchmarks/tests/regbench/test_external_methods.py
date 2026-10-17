@@ -166,10 +166,9 @@ def test_params_equal_the_factory_except_changed_keys():
 
 
 def test_centre_pads_equal_the_packages_own():
-    package = need_dhr()
+    need_dhr()
     from dhr_utils import utils  # the package puts its own folder on sys.path
 
-    assert package.direct_registration.w.warp_landmarks is not None
     for a, b in (((10, 20), (15, 14)), ((7, 9), (7, 9)), ((301, 40), (300, 47))):
         pad_a, pad_b = utils.calculate_pad_value(a, b)
         assert dhr.centre_pads(a, b) == [
@@ -181,7 +180,7 @@ def test_centre_pads_equal_the_packages_own():
 def test_a_zero_field_is_written_half_a_field_pixel_right_and_down(tmp_path):
     """The settling measurement. A zero displacement field of 200 x 240 on a 1000 x 1200
     dot image (S = 5): the package's own writer must draw every dot 2.5 px right and down
-    of where it is, which is what the as-drawn row is built on. If this fails, the number
+    of where it is, which is what the run's one row is built on. If this fails, the number
     in the message is the measurement: report it, do not adjust anything to fit."""
     package = need_dhr()
     import SimpleITK as sitk
@@ -220,20 +219,15 @@ def test_a_zero_field_is_written_half_a_field_pixel_right_and_down(tmp_path):
 
 @pytest.mark.parametrize("fluo", [False, True], ids=["shipped", "fluo"])
 def test_deeperhistreg_points_follow_its_written_image(tmp_path, fluo):
-    """The selfcheck IS the test, on the CPU: the as-drawn row must follow the image the
-    package's own writer produced, and the estimated-field row must be exactly its
-    declared half field pixel away from it."""
+    """The selfcheck IS the test, on the CPU: the run's one row must follow the image
+    the package's own writer produced, with no declared offset."""
     need_dhr()
     opts = {"device": "cpu", **({"fluo": "1"} if fluo else {})}
     label = "deeperhistreg_fluo_cpu" if fluo else "deeperhistreg_cpu"
     rec = selfcheck.run("deeperhistreg", tmp_path, opts, label=label, sizes=DHR_SMALL)
-    assert rec["variants"] == {label: selfcheck.OK, f"{label}_asdrawn": selfcheck.OK}, (
-        rec
-    )
+    assert rec["variants"] == {label: selfcheck.OK}, rec
     check = rec["pairs"][0]["variants"][label]
-    # the measured offset between the two maps: S / 2 = 2.5 px on each axis
-    assert check["declared_px_mean_x"] == pytest.approx(2.5, abs=0.3), check
-    assert check["declared_px_mean_y"] == pytest.approx(2.5, abs=0.3), check
+    assert check["declared_offset"] is False, check
 
 
 # ── PALOM ────────────────────────────────────────────────────────────────────

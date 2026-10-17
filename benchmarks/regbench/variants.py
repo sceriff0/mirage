@@ -50,9 +50,8 @@ only ever added at the end, so a position never changes.
 13. ``active``         ``1``, or ``0`` for a paused run (seen only with ``runs --all``).
 14. ``checked_rows``   the result names the run's reported selfcheck status is read
                        from, joined by commas (``checked_rows()``): all of the run's
-                       names, except for DeeperHistReg, whose status is read from the
-                       row of the written image (``<label>_asdrawn``) alone. Every row
-                       stays in every table whatever its selfcheck says.
+                       names. Every row stays in every table whatever its selfcheck
+                       says.
 15. ``realcheck``      the result name whose realcheck is reported for the run, or ``-``
                        (``realcheck_row()``): the run's first unit runs with ``run
                        --realcheck``, beside the rest of the run, which never waits
@@ -314,11 +313,11 @@ RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
 
 # Ruling R3.12 (2026-10-11): the high-resolution row is primary for both methods that
 # have one. Each is one line to switch back to upstream's default setting:
-# "valis120" (register at 512 / 2048 px) and "deeperhistreg_gpu_asdrawn" (the 4096 px
-# set). Both settings run either way. DeeperHistReg's is the row of the image written to
-# disk in both cases.
+# "valis120" (register at 512 / 2048 px) and "deeperhistreg_gpu" (the 4096 px set). Both
+# settings run either way. DeeperHistReg's one row per run is the image its writer puts
+# on disk (user instruction 2026-10-17).
 PRIMARY_VALIS120 = "valis120_hires"
-PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_gpu_asdrawn"
+PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_gpu"
 PRIMARY = (
     "stare",
     "valis_mirage",
@@ -364,13 +363,6 @@ CHECKED_BY = {
 
 # the private plug-in's key keeps its older name
 CHECKED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
-
-# Method -> the suffixes of the result names a run's reported selfcheck status is read
-# from, when that is not all of them. DeeperHistReg (ruling R3.12 b): only the row of the
-# image its writer puts on disk. Its estimated-field row is checked and reported all the
-# same, and stays in every table whatever its selfcheck says (user ruling, option A): its
-# own verdict is beside its numbers (`selfcheck_row`).
-CHECKED_BY_SUFFIX = {"deeperhistreg": ("_asdrawn",)}
 
 # The methods whose realcheck is run and REPORTED (never a gate): the two VALIS adapters.
 # Their point path is derived by the benchmark, not handed over by the package, so it is
@@ -688,17 +680,9 @@ def checked_by(name):
 
 def checked_rows(name):
     """The result names a run's reported selfcheck status is read from: all the names it
-    writes, unless its method is in ``CHECKED_BY_SUFFIX``. For a run checked by another
-    run's selfcheck (``checked_by``), ask for THAT run's names."""
-    run = run_of(name)
-    names = tuple(variants_of(run))
-    suffixes = CHECKED_BY_SUFFIX.get(run.method)
-    if not suffixes:
-        return names
-    rows = tuple(v for v in names if v.endswith(tuple(suffixes)))
-    if not rows:
-        raise ValueError(f"{name}: none of {names} ends in one of {suffixes}")
-    return rows
+    writes. For a run checked by another run's selfcheck (``checked_by``), ask for THAT
+    run's names."""
+    return tuple(variants_of(run_of(name)))
 
 
 def realcheck_row(name):
@@ -754,9 +738,8 @@ def selfcheck_status(name, record):
     record's summary (``variants``) and from every round of every case
     (``pairs[].variants``), a name missing anywhere counting as ``not_checked`` (as that
     round's own status when it is not ok). So the verdict is never better than what any
-    case of the record says of a checked row. It is the record's own ``status`` except
-    where a method's status is read from only some of its rows. An empty record (none
-    was found) is ``not_checked``. ``reference`` is the worst reference comparison
+    case of the record says of a checked row. An empty record (none was found) is
+    ``not_checked``. ``reference`` is the worst reference comparison
     (``_reference_status``), or ``""``."""
     from . import selfcheck
 

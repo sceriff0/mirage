@@ -9,10 +9,9 @@ It does three things and nothing else:
 * keeps the package's **bookkeeping**, transcribed from MWod/DeeperHistReg main @
   ``42e7c9d`` ``[PARTIAL: the functions named here]``: the two parameter factories the
   benchmark runs (``registration_params.py:484-565, 652-733``), ``calculate_pad_value``
-  (``dhr_utils/utils.py:152-180``), ``calculate_resampling_ratio`` (``:530-540``),
-  ``warp_landmarks`` (``dhr_utils/warping.py:212-221``), what ``run_registration`` does
-  around its swallowed ``try`` (``run.py:19-68``), the device fallback
-  (``full_resolution.py:58``), the contents of ``postprocessing_params.json``
+  (``dhr_utils/utils.py:152-180``), ``calculate_resampling_ratio`` (``:530-540``), what
+  ``run_registration`` does around its swallowed ``try`` (``run.py:19-68``), the device
+  fallback (``full_resolution.py:58``), the contents of ``postprocessing_params.json``
   (``full_resolution.py:82-83, 104-106``) and the log lines;
 * **draws** a warped image the way ``apply_deformation_pyvips`` is written to (``draw``):
   both slides centre-padded at full resolution, ``grid + u`` enlarged to the canvas the
@@ -100,21 +99,6 @@ def calculate_resampling_ratio(x_sizes, y_sizes, min_resolution):
     """``dhr_utils/utils.py:530-540``."""
     min_size = min(max(x_sizes), max(y_sizes))
     return 1 if min_resolution > min_size else min_size / min_resolution
-
-
-def warp_landmarks(landmarks, displacement_field):
-    """``dhr_utils/warping.py:212-221``."""
-    import scipy.ndimage as nd
-
-    landmarks_x = landmarks[:, 0]
-    landmarks_y = landmarks[:, 1]
-    ux = nd.map_coordinates(
-        displacement_field[0, :, :], [landmarks_y, landmarks_x], mode="nearest"
-    )
-    uy = nd.map_coordinates(
-        displacement_field[1, :, :], [landmarks_y, landmarks_x], mode="nearest"
-    )
-    return np.stack((landmarks_x + ux, landmarks_y + uy), axis=1)
 
 
 def _factory(resolution, sizes, angle_step, levels, iterations, rates, alphas):
@@ -511,7 +495,6 @@ def modules():
         loader_mapper={"tiff": TIFFLoader},
         saver_mapper={"tiff": TIFFSaver, "pil": PILSaver},
         adf=types.SimpleNamespace(apply_deformation_pyvips=apply_deformation_pyvips),
-        w=types.SimpleNamespace(warp_landmarks=warp_landmarks),
     )
     package = types.ModuleType("deeperhistreg")
     package.__version__ = CONFIG["version"]

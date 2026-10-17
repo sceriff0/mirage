@@ -169,9 +169,6 @@ def dhr_fake(monkeypatch):
     fake_dhr.install(monkeypatch.setitem, initial_resolution=104)
     yield fake_dhr
     fake_dhr.configure()
-    from benchmarks.regbench.methods import deeperhistreg
-
-    deeperhistreg._LIVE.clear()
 
 
 @pytest.fixture(scope="module")
@@ -186,8 +183,8 @@ def test_deeperhistreg_runs_an_rgb_ome_tiff_with_the_shipped_parameters(
     case = rgb_cases.rgb_case(base, tmp_path / "bf")
     out = tmp_path / "out"
     done = methods.run_case("deeperhistreg", case, out, keep_work=True)
-    assert done == ["deeperhistreg", "deeperhistreg_asdrawn"]
-    work = result_dir(out, "deeperhistreg_asdrawn", case) / "work"
+    assert done == ["deeperhistreg"]
+    work = result_dir(out, "deeperhistreg", case) / "work"
     with tifffile.TiffFile(work / "moving.tif") as tif:
         assert len(tif.pages) == 1 and tif.pages[0].photometric.name == "RGB"
         assert tif.pages[0].compression.name == "NONE" and tif.pages[0].is_tiled
@@ -198,9 +195,7 @@ def test_deeperhistreg_runs_an_rgb_ome_tiff_with_the_shipped_parameters(
     params = call["parameters"]
     assert params["loading_params"]["pad_value"] == 255.0
     assert params["preprocessing_params"]["flip_intensity"] is True
-    run = json.loads(
-        (result_dir(out, "deeperhistreg_asdrawn", case) / "run.json").read_text()
-    )
+    run = json.loads((result_dir(out, "deeperhistreg", case) / "run.json").read_text())
     info = run["info"]
     assert info["fluo"] is False and "RGB image" in info["implementation"]["input"]
     (one,) = dhr_fake.calls("apply_deformation_pyvips")

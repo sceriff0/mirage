@@ -18,20 +18,15 @@ Rows (``--label`` with the options that go with it; a label and its options must
 ``deeperhistreg_hr_fluo_...``   both
 ==============================  =====================================================
 
-Each run yields two results, both reference -> moving (``REF_TO_MOV``):
+Each run yields ONE result, under the run's own label (user instruction 2026-10-17):
+the image AS WRITTEN by the package's own writer (``apply_deformation_pyvips``),
+reference -> moving (``REF_TO_MOV``): for every pixel of the file on disk, the
+moving-slide position it was sampled from (``asdrawn_map``). Its points are exactly the
+transform of the image the package puts on disk, and that is what is scored.
 
-``deeperhistreg``          the field the method ESTIMATED: reference pixel -> moving pixel
-                           through the package's own ``warp_landmarks`` and the coordinate
-                           chain of issue #12 (a user's function the maintainer endorsed;
-                           the package itself never calls ``warp_landmarks``). Secondary.
-``deeperhistreg_asdrawn``  the image AS WRITTEN by the package's own writer
-                           (``apply_deformation_pyvips``): for every pixel of the file on
-                           disk, the moving-slide position it was sampled from. This is
-                           the row whose points are exactly the transform of the image,
-                           and the one that can be primary.
-
-**Why they differ** (read from the source, never executed here). The field lives on the
-padded, resampled grid: ``warped(x) = source(x + u(x))`` (``dhr_utils/warping.py:55-82``).
+**Why it can score low with a good registration** (read from the source, never executed
+here). The field lives on the padded, resampled grid: ``warped(x) = source(x + u(x))``
+(``dhr_utils/warping.py:55-82``).
 The writer turns ``grid + u`` into a libvips index image, enlarges it to the full-resolution
 padded canvas with ``resize(W_pad / w_field, kernel='linear', vscale=H_pad / h_field)``,
 multiplies by the same ratios and calls ``mapim`` (``warping.py:224-239``). libvips
@@ -40,13 +35,15 @@ output pixel ``X`` reads the field at ``X / S - 0.5`` (libvips v8.15.2 ``resize.
 ``affine.c:445-480`` (the output area is fixed BEFORE the displacement is applied, so it
 starts at 0), ``:320-349``, ``:529``; ``mapim.c:589-593`` bilinear, background 0). The
 written image therefore samples ``X - S/2 + S u(X/S - 0.5)``, half a field pixel up and
-left of the chain's ``X + S u(X/S)``: its content sits about ``S/2`` px right and down of
-the registration, 4.9 px at S = 9.77 and 2.5 px at S = 5. On slides whose sizes do not
-divide evenly there is more: the writer pads at full resolution and stretches by
-``W_pad / w_field``, the registration padded at the loaded resolution and resampled by
-``initial_resample_ratio``; the two agree only when every division is exact. The as-drawn
-map uses the writer's own numbers (``asdrawn_map``); how far the two maps are apart on a
-case, and how much of that the half-pixel term explains, is in ``info["gap"]``.
+left of the registration's ``X + S u(X/S)``: its content sits about ``S/2`` px right
+and down of the registration, 4.9 px at S = 9.77 and 2.5 px at S = 5. On slides whose
+sizes do not divide evenly there is more: the writer pads at full resolution and
+stretches by ``W_pad / w_field``, the registration padded at the loaded resolution and resampled by
+``initial_resample_ratio``; the two agree only when every division is exact (padding
+computed twice, with different rounding on uneven sizes: a whole-pixel shift ``k``).
+Measured on the cohort on 2026-10-15, the written image sits ``S/2 + k`` px, roughly 1
+to 3 um, off the package's own registration. The map uses the writer's own numbers
+(``asdrawn_map``), so the benchmark scores what the package puts on disk.
 
 **The written image** has the reference slide's size and is on its grid: the writer crops
 the padded canvas back by the reference's own pads (``pair_full_saver.py:76-80``,
@@ -134,7 +131,7 @@ from ..mapping import REF_TO_MOV, PointMap
 from . import require_fluorescence
 
 SCOPE = "pair"
-VARIANTS = ("deeperhistreg", "deeperhistreg_asdrawn")
+VARIANTS = ("deeperhistreg",)
 VERSION = "1.0.1"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
 OPTIONS = ("config", "device", "fluo")
@@ -176,9 +173,6 @@ STAGE_LINES = {
     "nonrigid_registration_s": "Nonrigid registration time",
     "total_registration_s": "Total registration time",
 }
-# The live maps of the run in progress, by ``info["run_token"]``: a declared offset is a
-# function of position and cannot travel through run.json. One entry at a time.
-_LIVE = {}
 
 
 class _NullMonitor:
@@ -420,7 +414,7 @@ def scale_xy(canvas_hw, field_hw):
 
 
 class Geometry:
-    """What the two maps need: the saved field and the numbers around it.
+    """What the map needs: the saved field and the numbers around it.
 
     ``field`` is ``(2, h, w)``: X then Y displacement in FIELD pixels, as the package saves
     it (``displacement_saver.py:28-38`` after ``tc_df_to_np_df``, ``utils.py:673-702``).
@@ -439,13 +433,8 @@ class Geometry:
         self.field_hw = tuple(int(v) for v in self.field.shape[1:])
         self.ref_hw = tuple(int(v) for v in ref_hw)
         self.mov_hw = tuple(int(v) for v in mov_hw)
-        self.r_mov = float(post["source_resample_ratio"])
-        self.r_ref = float(post["target_resample_ratio"])
         self.resampled = bool(post.get("initial_resampling"))
         self.k = float(post["initial_resample_ratio"]) if self.resampled else 1.0
-        p_mov, p_ref = post["pad_1"], post["pad_2"]
-        self.pad_mov_xy = np.array([p_mov[1][0], p_mov[0][0]], dtype=float)
-        self.pad_ref_xy = np.array([p_ref[1][0], p_ref[0][0]], dtype=float)
         # the writer's own pads and canvas, at full resolution (pair_full_loader.py:80-94)
         (mt, ml), (rt, rl) = centre_pads(self.mov_hw, self.ref_hw)
         self.full_pad_mov_xy = np.array([ml, mt], dtype=float)
@@ -455,31 +444,6 @@ class Geometry:
             max(self.ref_hw[1], self.mov_hw[1]),
         )
         self.scale_xy = np.array(scale_xy(self.canvas_hw, self.field_hw), dtype=float)
-
-
-def registration_map(geo, warp_landmarks):
-    """reference px -> moving px: the field the method estimated.
-
-    The chain is the function of issue #12, step for step, around the package's own
-    ``warp_landmarks(points, field)`` (``dhr_utils/warping.py:212-221``: a cubic-spline
-    lookup of the field at the points, ``mode='nearest'``). It leaves out the half-pixel
-    terms of the two resamplings, so it is off from the registration by about
-    ``grad(u) (S - 1) / 2``.
-    """
-
-    def fn(xy):
-        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
-        if not len(xy):
-            return xy.copy()
-        pts = xy * geo.r_ref + geo.pad_ref_xy
-        if geo.resampled:
-            pts = pts / geo.k
-        moved = np.asarray(warp_landmarks(pts, geo.field), dtype=float).reshape(-1, 2)
-        if geo.resampled:
-            moved = moved * geo.k
-        return (moved - geo.pad_mov_xy) / geo.r_mov
-
-    return fn
 
 
 def asdrawn_map(geo):
@@ -509,53 +473,6 @@ def asdrawn_map(geo):
         return out - geo.full_pad_mov_xy
 
     return fn
-
-
-def declared_offset(registration, geo):
-    """The estimated-field map minus the written image, as the reading predicts it:
-    ``R(X) - R(X - S/2)``, the registration differenced over the half field pixel the
-    writer is off by. To first order it is ``(S/2) x Jacobian x (1, 1)``. It is built from
-    the registration map alone, so a wrong chain cannot cancel out of the check."""
-    half = geo.scale_xy * WRITER_SHIFT
-
-    def offset(xy):
-        xy = np.asarray(xy, dtype=float).reshape(-1, 2)
-        if not len(xy):
-            return xy.copy()
-        both = np.asarray(registration(np.concatenate([xy, xy - half])), dtype=float)
-        return both[: len(xy)] - both[len(xy) :]
-
-    return offset
-
-
-def gap_stats(registration, asdrawn, geo, max_side=96):
-    """How far the two maps are apart on a lattice over the reference slide, in moving px.
-
-    ``mean_px``: the mean of estimated-field minus as-drawn, per axis (about ``S/2``).
-    ``beyond_declared_px_p95``: the 95th percentile of what ``declared_offset`` does NOT
-    explain: zero where every division of the package's resamplings is exact, more on
-    slides where the writer's pads and stretch differ from the registration's.
-    ``chain_halfpixel_px_p95``: the size of the half-pixel terms the issue-#12 chain
-    leaves out, ``|R(X) - (R(X - c) + c)|`` with ``c = (S - 1) / 2``.
-    """
-    h, w = geo.ref_hw
-    step = max(1.0, max(h, w) / max_side)
-    gx, gy = np.meshgrid(np.arange(step / 2, w, step), np.arange(step / 2, h, step))
-    xy = np.stack([gx.ravel(), gy.ravel()], axis=1)
-    half, c = geo.scale_xy * WRITER_SHIFT, (geo.scale_xy - 1.0) / 2.0
-    n = len(xy)
-    r = np.asarray(registration(np.concatenate([xy, xy - half, xy - c])), dtype=float)
-    gap = r[:n] - np.asarray(asdrawn(xy), dtype=float)
-    beyond = gap - (r[:n] - r[n : 2 * n])
-    chain = r[:n] - (r[2 * n :] + c)
-    return {
-        "n": int(n),
-        "mean_px": [float(v) for v in gap.mean(axis=0)],
-        "declared_px_mean": [float(v) for v in (r[:n] - r[n : 2 * n]).mean(axis=0)],
-        "half_field_px": [float(v) for v in half],
-        "beyond_declared_px_p95": float(np.percentile(np.hypot(*beyond.T), 95)),
-        "chain_halfpixel_px_p95": float(np.percentile(np.hypot(*chain.T), 95)),
-    }
 
 
 def footprint_box(fn, ref_hw, mov_hw):
@@ -696,16 +613,7 @@ def register(case, work, opts):
     field = sitk.GetArrayFromImage(sitk.ReadImage(str(field_p))).astype(np.float32)
     post = json.loads((out / "postprocessing_params.json").read_text())
     geo = Geometry(field, post, ref_meta["hw"], mov_meta["hw"])
-    registration = registration_map(geo, pipeline.w.warp_landmarks)
     asdrawn = asdrawn_map(geo)
-
-    mon.pause()  # the benchmark's own description of the two maps, not the method's work
-    try:
-        gap = gap_stats(registration, asdrawn, geo)
-    finally:
-        mon.resume()
-    _LIVE.clear()
-    _LIVE[token] = {"offset": declared_offset(registration, geo)}
 
     px = float(case.pixel_size_um) if case.pixel_size_um else None
     s_x, s_y = (float(v) for v in geo.scale_xy)
@@ -728,7 +636,6 @@ def register(case, work, opts):
         "register_call_s": call_s,
         "stage_s": stage_times(log_text),
         "grey_levels": {"reference": ref_meta["levels"], "moving": mov_meta["levels"]},
-        "gap": gap,
         "implementation": {
             "package": "deeperhistreg",
             "source": str(Path(getattr(deeperhistreg, "__file__", "?")).parent),
@@ -742,8 +649,8 @@ def register(case, work, opts):
             "roles": "source = the moving slide, target = the reference (native)",
             "parameters": recorded,
             "changed_keys": changed,
-            "point_warp": "dhr_utils.warping.warp_landmarks (deeperhistreg): a cubic-"
-            "spline lookup of the saved field",
+            "point_warp": "the writer's arithmetic re-stated (asdrawn_map): the image "
+            "on disk, not the package's warp_landmarks",
             "writer": WRITER,
             "input": "the RGB image, three 8-bit channels, shipped parameters "
             "(brightfield)"
@@ -770,12 +677,7 @@ def register(case, work, opts):
                     if fluo
                     else ""
                 ),
-                "deeperhistreg: the full-resolution coordinate chain around the "
-                "package's warp_landmarks (issue #12: a user's function the maintainer "
-                "endorsed; the package has no caller for warp_landmarks). The chain "
-                "leaves out the half-pixel terms of the two resamplings: "
-                f"chain_halfpixel_px_p95 = {gap['chain_halfpixel_px_p95']:.3f}",
-                "deeperhistreg_asdrawn: the writer's arithmetic re-stated so the image "
+                "the point map: the writer's arithmetic re-stated so the image "
                 "on disk can be scored: full-resolution centre pads, the field's index "
                 "image read at X / S - 0.5 with linear interpolation and edge copying, "
                 "times S = canvas / field size",
@@ -805,8 +707,7 @@ def register(case, work, opts):
         "fluo": bool(fluo),
         "native": None,
     }
-    yield VARIANTS[0], PointMap(registration, DIRECTION), dict(info)
-    yield VARIANTS[1], PointMap(asdrawn, DIRECTION), {**info, "_state": state}
+    yield VARIANTS[0], PointMap(asdrawn, DIRECTION), {**info, "_state": state}
 
 
 # ── the writer ────────────────────────────────────────────────────────────────
@@ -1003,17 +904,3 @@ def _write_native_rgb(state, dest, loader, saver, loading, saving):
     }
     state["native"] = native
     return native
-
-
-def write_stage(state, case_id, variant, dest_dir):
-    """The estimated-field row has no image of its own: the package writes one image, and
-    that row is checked against it with its declared offset."""
-    return dict(state["native"]) if state.get("native") else None
-
-
-def SELFCHECK_OFFSET(info):
-    """``{variant: f(xy)}``: the estimated-field row's map minus the written image, as
-    declared (``declared_offset``). The as-drawn row declares nothing: it must follow the
-    image as it is."""
-    live = _LIVE.get((info or {}).get("run_token"))
-    return {VARIANTS[0]: live["offset"]} if live else {}

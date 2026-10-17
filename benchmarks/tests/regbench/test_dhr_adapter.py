@@ -7,10 +7,10 @@ that module). What these tests pin:
 
 * the call is the package's own, in its native roles, with a shipped parameter set in
   which only the device keys and ``save_final_images`` (and, for ``fluo``, two keys) differ;
-* the two point maps: the estimated field through the issue-#12 chain, and the image as
-  written; the as-drawn map against the emulated writer at S = 5, 9.77 and 6.10 and on
-  sizes that do not divide; that a wrong direction, a dropped pad origin, a wrong scale,
-  a missing writer offset and a wrong chain are each reported ``inconsistent``;
+* the one point map, the image as its writer draws it, under the run's own label;
+  the map against the emulated writer at S = 5, 9.77 and 6.10 and on sizes that do
+  not divide; that a wrong direction, a dropped pad origin, a wrong scale and a
+  missing writer offset are each reported ``inconsistent``;
 * a swallowed failure is raised with what the package printed, and classified;
 * what a run records: the method (RegWSI), the factory, the working resolution.
 
@@ -60,7 +60,6 @@ def fake(monkeypatch):
     fd.install(monkeypatch.setitem, initial_resolution=EXACT_RESOLUTION)
     yield fd
     fd.configure()
-    dhr._LIVE.clear()
 
 
 @pytest.fixture(scope="module")
@@ -85,18 +84,34 @@ def _selfcheck(tmp_path, **opts):
 # ── names and settings ────────────────────────────────────────────────────────
 def test_contract():
     assert "deeperhistreg" in METHODS and dhr.SCOPE == "pair"
-    assert dhr.VARIANTS == ("deeperhistreg", "deeperhistreg_asdrawn")
+    assert dhr.VARIANTS == ("deeperhistreg",)
     assert methods.scope_of("deeperhistreg") == "pair"
-    assert methods.variant_names("deeperhistreg", "deeperhistreg_gpu") == [
-        "deeperhistreg_gpu",
-        "deeperhistreg_gpu_asdrawn",
-    ]
-    assert methods.variant_names("deeperhistreg", "deeperhistreg_hr_fluo_cpu") == [
-        "deeperhistreg_hr_fluo_cpu",
-        "deeperhistreg_hr_fluo_cpu_asdrawn",
-    ]
-    # both rows are the method's own direction: no inverse anywhere in the module
+    assert methods.variant_names("deeperhistreg") == ["deeperhistreg"]
+    # the row is the method's own direction: no inverse anywhere in the module
     assert dhr.DIRECTION == REF_TO_MOV and not hasattr(dhr, "inverse_warper")
+
+
+@pytest.mark.parametrize("label", sorted(LABELS))
+def test_a_run_yields_one_variant_named_after_its_label(label):
+    """User instruction 2026-10-17: one result per run, under the run's own label."""
+    assert dhr.VARIANTS == ("deeperhistreg",)
+    assert methods.variant_names("deeperhistreg", label) == [label]
+
+
+def test_the_one_row_is_the_image_as_its_writer_draws_it(tmp_path, case, pair):
+    """The run's only row moves the reference points by the writer's own arithmetic
+    (``asdrawn_map``), value for value, and nothing else is written."""
+    out = tmp_path / "out"
+    done = methods.run_case("deeperhistreg", case, out, label="deeperhistreg_cpu")
+    geo = _geometry(pair["ref_hw"], pair["mov_hw"], EXACT_RESOLUTION)
+    w = np.load(result_dir(out, "deeperhistreg_cpu", case) / "warped.npz")
+    assert str(w["direction"]) == REF_TO_MOV
+    grid, _, _ = methods.jacobian_grid(case.ref_hw)
+    assert len(grid) > 100
+    want = dhr.asdrawn_map(geo)(grid).astype(np.float32)
+    assert np.array_equal(w["grid"], want)
+    assert done == ["deeperhistreg_cpu"]
+    assert sorted(p.name for p in out.iterdir()) == ["deeperhistreg_cpu"]
 
 
 def test_imports_without_torch():
@@ -273,7 +288,7 @@ def test_grey_levels_of_a_well_spread_channel(tmp_path):
     assert dhr.single_page_tiff(src, 0, tmp_path / "ramp.tif")["levels"] > 150
 
 
-# ── the two maps ──────────────────────────────────────────────────────────────
+# ── the map ───────────────────────────────────────────────────────────────────
 def test_centre_pads_are_the_packages():
     assert dhr.centre_pads((10, 20), (15, 14)) == [(2, 0), (0, 3)]
     for a, b in (((10, 20), (15, 14)), ((7, 9), (7, 9)), ((301, 40), (300, 47))):
@@ -333,7 +348,7 @@ EXACT_GEOMETRIES = {
 
 
 @pytest.mark.parametrize("name", sorted(EXACT_GEOMETRIES))
-def test_landmark_chain_and_asdrawn_chain_on_synthetic_params(name):
+def test_the_asdrawn_map_is_the_writer_on_synthetic_params(name):
     ref_hw, mov_hw, resolution = EXACT_GEOMETRIES[name]
     geo = _geometry(ref_hw, mov_hw, resolution)
     s = float(name[1:])
@@ -341,7 +356,6 @@ def test_landmark_chain_and_asdrawn_chain_on_synthetic_params(name):
     assert (geo.full_pad_mov_xy > 0).all() and geo.full_pad_mov_xy[
         0
     ] != geo.full_pad_mov_xy[1]
-    registration = dhr.registration_map(geo, fd.warp_landmarks)
     asdrawn = dhr.asdrawn_map(geo)
     xy = _lattice(ref_hw)
 
@@ -358,30 +372,13 @@ def test_landmark_chain_and_asdrawn_chain_on_synthetic_params(name):
     assert inside.mean() > 0.6
     seen = np.stack([drawn_x[iy, ix], drawn_y[iy, ix]], axis=1)
     assert np.abs(got[inside] - seen[inside]).max() < 0.05
-
-    # the estimated field is S/2 away from it, through the local Jacobian
-    gap = registration(xy) - got
-    assert gap.mean(axis=0) == pytest.approx(geo.scale_xy / 2, abs=0.3)
-    e = geo.scale_xy / 2
-    jacobian_term = registration(xy + e / 2) - registration(xy - e / 2)
-    assert np.abs(gap - jacobian_term)[inside].max() < 0.3
-    declared = dhr.declared_offset(registration, geo)(xy)
-    assert np.abs(gap - declared)[inside].max() < 0.05
-    # ... and NOT a constant: the rotation alone moves it by more than the gate's mean
-    assert np.ptp(gap[inside], axis=0).max() > 0.02 * s
-
-    stats = dhr.gap_stats(registration, asdrawn, geo)
-    assert stats["mean_px"] == pytest.approx(list(geo.scale_xy / 2), abs=0.3)
-    assert stats["beyond_declared_px_p95"] < 0.05
-    # the invented field is far steeper than a real one: only that the term is there
-    assert 0 < stats["chain_halfpixel_px_p95"] < 2.0
+    assert asdrawn(np.empty((0, 2))).shape == (0, 2)
 
 
-def test_on_sizes_that_do_not_divide_only_the_asdrawn_map_follows_the_writer():
+def test_on_sizes_that_do_not_divide_the_asdrawn_map_still_follows_the_writer():
     """A slide whose sizes leave remainders: the writer pads at full resolution and
     stretches by canvas / field size, the registration padded the loaded image and
-    resampled by k. The as-drawn map uses the writer's numbers and still reproduces it;
-    the estimated-field chain is further from the image than its declared half pixel."""
+    resampled by k. The as-drawn map uses the writer's numbers and still reproduces it."""
     ref_hw, mov_hw = (2493, 3761), (2411, 3587)
     geo = _geometry(ref_hw, mov_hw, 256)
     assert geo.scale_xy[0] != pytest.approx(geo.scale_xy[1], abs=1e-3)
@@ -396,31 +393,6 @@ def test_on_sizes_that_do_not_divide_only_the_asdrawn_map_follows_the_writer():
     seen = np.stack([drawn_x[iy, ix], drawn_y[iy, ix]], axis=1)
     assert inside.mean() > 0.6
     assert np.abs(got[inside] - seen[inside]).max() < 0.05
-    registration = dhr.registration_map(geo, fd.warp_landmarks)
-    stats = dhr.gap_stats(registration, asdrawn, geo)
-    assert stats["beyond_declared_px_p95"] > 1.0
-
-
-def test_the_estimated_field_goes_through_the_packages_own_function():
-    geo = _geometry((400, 600), (360, 520), 4096)
-    seen = []
-
-    def spy(points, field):
-        seen.append((np.array(points), field))
-        return fd.warp_landmarks(points, field)
-
-    xy = np.array([[100.0, 50.0], [333.0, 222.0]])
-    out = dhr.registration_map(geo, spy)(xy)
-    ((points, field),) = seen
-    assert field is geo.field
-    # issue #12's chain, written out: ratio, the TARGET's pad, k; then back with the
-    # SOURCE's pad
-    assert points == pytest.approx(xy * 0.2 + geo.pad_ref_xy)
-    assert out == pytest.approx(
-        (fd.warp_landmarks(points, field) - geo.pad_mov_xy) / 0.2
-    )
-    assert dhr.registration_map(geo, spy)(np.empty((0, 2))).shape == (0, 2)
-    assert dhr.asdrawn_map(geo)(np.empty((0, 2))).shape == (0, 2)
 
 
 def test_stage_times_are_read_from_the_packages_log():
@@ -441,17 +413,15 @@ def test_stage_times_are_read_from_the_packages_log():
 
 
 # ── the run, against the emulated writer ──────────────────────────────────────
-def test_the_unmutated_adapter_passes_both_rows(tmp_path):
+def test_the_unmutated_adapter_passes_its_row(tmp_path):
     rec, v = _selfcheck(tmp_path)
     assert rec["status"] == sc.OK and not rec["not_ok"], v
-    assert rec["variants"] == {"deeperhistreg": sc.OK, "deeperhistreg_asdrawn": sc.OK}
-    drawn, field = v["deeperhistreg_asdrawn"], v["deeperhistreg"]
-    assert drawn["declared_offset"] is False and field["declared_offset"] is True
+    assert rec["variants"] == {"deeperhistreg": sc.OK}
+    drawn = v["deeperhistreg"]
+    # the row declares nothing: it must follow the written image as it is
+    assert drawn["declared_offset"] is False
     assert drawn["direction"] == REF_TO_MOV and drawn["n_blocks_judged"] >= 2
     assert drawn["n_found"] >= 0.99 * drawn["n_dots"] > 50
-    # the measured offset between the two maps: S / 2 = 5 px on each axis
-    assert field["declared_px_mean_x"] == pytest.approx(5.0, abs=0.3)
-    assert field["declared_px_mean_y"] == pytest.approx(5.0, abs=0.3)
     assert drawn["native"]["origin_xy"] == [0.0, 0.0]
 
 
@@ -505,65 +475,31 @@ def _mutate_inverse_field(monkeypatch):
 )
 def test_a_wrong_asdrawn_map_is_inconsistent(tmp_path, monkeypatch, mutate):
     """Each of these is a mistake the adapter could contain; the selfcheck must object
-    on the row that can be primary."""
+    on the run's row."""
     mutate(monkeypatch)
     rec, v = _selfcheck(tmp_path)
     assert rec["status"] == sc.INCONSISTENT and rec["not_ok"], v
-    assert v["deeperhistreg_asdrawn"]["status"] == sc.INCONSISTENT
-    assert "whole image" in v["deeperhistreg_asdrawn"]["failed"]
-
-
-def test_without_its_declared_offset_the_estimated_field_row_is_inconsistent(
-    tmp_path, monkeypatch
-):
-    """The estimated field is half a field pixel away from the image: undeclared, the
-    check must see it, and see it as the 5 px it is."""
-    monkeypatch.setattr(dhr, "SELFCHECK_OFFSET", lambda info: {})
-    rec, v = _selfcheck(tmp_path)
-    assert rec["status"] == sc.INCONSISTENT
-    assert v["deeperhistreg_asdrawn"]["status"] == sc.OK
     assert v["deeperhistreg"]["status"] == sc.INCONSISTENT
+    assert "whole image" in v["deeperhistreg"]["failed"]
 
 
-def test_a_wrong_chain_does_not_cancel_out_of_the_estimated_field_rows_check(
-    tmp_path, monkeypatch
-):
-    """The declared offset is built from the registration map alone, so a wrong chain
-    (here: the two pads exchanged) still fails that row, and only that row."""
-    real = dhr.registration_map
-
-    def swapped(geo, warp_landmarks):
-        geo = copy.copy(geo)
-        geo.pad_mov_xy, geo.pad_ref_xy = geo.pad_ref_xy, geo.pad_mov_xy
-        return real(geo, warp_landmarks)
-
-    monkeypatch.setattr(dhr, "registration_map", swapped)
-    rec, v = _selfcheck(tmp_path)
-    assert v["deeperhistreg_asdrawn"]["status"] == sc.OK
-    assert v["deeperhistreg"]["status"] == sc.INCONSISTENT
-    assert rec["status"] == sc.INCONSISTENT
-
-
-def test_on_sizes_that_do_not_divide_the_asdrawn_row_still_passes(tmp_path, fake):
+def test_on_sizes_that_do_not_divide_the_row_still_passes(tmp_path, fake):
     """The floor of the package's resampling (a field of 85 x 104 for a loaded 208 x 256)
-    stretches the written image by canvas / field size. The as-drawn row follows it; the
-    estimated-field row, with its half-pixel declaration, does not."""
+    stretches the written image by canvas / field size. The row follows it."""
     fake.configure(initial_resolution=85)
     rec, v = _selfcheck(tmp_path)
-    assert v["deeperhistreg_asdrawn"]["status"] == sc.OK, v["deeperhistreg_asdrawn"]
-    assert v["deeperhistreg"]["status"] == sc.INCONSISTENT
-    (path,) = (tmp_path / "out" / "deeperhistreg_asdrawn").rglob("run.json")
+    assert v["deeperhistreg"]["status"] == sc.OK, v["deeperhistreg"]
+    (path,) = (tmp_path / "out" / "deeperhistreg").rglob("run.json")
     info = json.loads(path.read_text())["info"]
     assert info["S_x"] != pytest.approx(info["S_y"], abs=1e-3)
-    assert info["gap"]["beyond_declared_px_p95"] > 0.4
 
 
 # ── what a run calls and records ──────────────────────────────────────────────
 def test_the_call_is_the_packages_own_in_its_native_roles(tmp_path, case, fake):
     done = methods.run_case("deeperhistreg", case, tmp_path / "out", keep_work=True)
-    assert done == ["deeperhistreg", "deeperhistreg_asdrawn"]
+    assert done == ["deeperhistreg"]
     (call,) = fake.calls("run_registration")
-    work = result_dir(tmp_path / "out", "deeperhistreg_asdrawn", case) / "work"
+    work = result_dir(tmp_path / "out", "deeperhistreg", case) / "work"
     assert call["source_path"] == str(work / "moving.tif")  # the moving slide is SOURCE
     assert call["target_path"] == str(work / "reference.tif")
     assert call["save_displacement_field"] is True and call["copy_target"] is False
@@ -625,7 +561,7 @@ def test_parameters_are_the_factorys_but_for_the_changed_keys(tmp_path, case, fa
     assert got["device"] == "cpu" and got["save_final_images"] is False
     assert got["initial_registration_params"]["cuda"] is False
     assert got["loading_params"]["pad_value"] == 0.0
-    run = run_json(tmp_path, "deeperhistreg_hr_fluo_cpu_asdrawn", case)
+    run = run_json(tmp_path, "deeperhistreg_hr_fluo_cpu", case)
     impl = run["info"]["implementation"]
     assert impl["changed_keys"] == keys
     assert impl["parameters"] == json.loads(json.dumps(got))
@@ -652,7 +588,6 @@ def test_info_names_regwsi_and_the_departures(tmp_path, case):
         side = " ".join(impl["benchmark_side"])
         for word in (
             "one top-level page",
-            "issue #12",
             "re-stated",
             "stacked",
             "stdout",
@@ -671,7 +606,7 @@ def test_info_names_regwsi_and_the_departures(tmp_path, case):
 
 def test_working_resolution_recorded(tmp_path, case):
     methods.run_case("deeperhistreg", case, tmp_path)
-    info = run_json(tmp_path, "deeperhistreg_asdrawn", case)["info"]
+    info = run_json(tmp_path, "deeperhistreg", case)["info"]
     impl = info["implementation"]
     # the fake's geometry: loaded 208 x 256, a working short side of 104 px
     assert impl["initial_resample_ratio"] == 2.0
@@ -683,14 +618,12 @@ def test_working_resolution_recorded(tmp_path, case):
     assert info["stage_s"]["nonrigid_registration_s"] == 30.5
     assert info["workers_seen"] == 4 and info["torch_num_threads"] == 4
     assert set(info["grey_levels"]) == {"reference", "moving"}
-    assert info["gap"]["mean_px"] == pytest.approx([5.0, 5.0], abs=0.3)
-    assert info["gap"]["beyond_declared_px_p95"] < 0.05
     assert info["device"] == "cpu" and info["version"] == "1.0.1"
 
 
 def test_the_written_image_is_on_the_reference_grid(tmp_path, case, pair):
     methods.run_case("deeperhistreg", case, tmp_path)
-    run = run_json(tmp_path, "deeperhistreg_asdrawn", case)
+    run = run_json(tmp_path, "deeperhistreg", case)
     native = run["native"]
     assert run["write_s"] > 0 and native["origin_xy"] == [0.0, 0.0]
     assert native["nuclear_channel"] == 0 and native["channels"] == ["DAPI", "dots"]
@@ -708,10 +641,7 @@ def test_the_written_image_is_on_the_reference_grid(tmp_path, case, pair):
     assert cost.complete_image(own) is False
     assert native["dtype"] == "uint16" and "255 counts" in native["fill"]
     (path,) = native["files"]
-    assert (
-        Path(path).parent
-        == result_dir(tmp_path, "deeperhistreg_asdrawn", case) / "native"
-    )
+    assert Path(path).parent == result_dir(tmp_path, "deeperhistreg", case) / "native"
     assert imageio.shape_of(path) == (2, *pair["ref_hw"])
     assert sorted(p.name for p in Path(path).parent.iterdir()) == ["registered.ome.tif"]
     x0, y0, x1, y1 = native["valid_box"]
@@ -726,8 +656,6 @@ def test_the_written_image_is_on_the_reference_grid(tmp_path, case, pair):
         stacked = tif.series[0].asarray()
     geo = _geometry(pair["ref_hw"], pair["mov_hw"], EXACT_RESOLUTION)
     assert np.array_equal(stacked[1], fd.draw(dots, pair["ref_hw"], geo.field, 255.0))
-    # the estimated-field row has no image of its own
-    assert run_json(tmp_path, "deeperhistreg", case)["native"] is None
 
 
 def test_each_call_has_its_own_case_name(tmp_path, case, fake):
@@ -747,10 +675,9 @@ def test_cuda_request_without_cuda_fails(tmp_path, case, fake):
         label="deeperhistreg_gpu",
     )
     assert done == [] and fake.calls("run_registration") == []
-    for variant in ("deeperhistreg_gpu", "deeperhistreg_gpu_asdrawn"):
-        run = run_json(tmp_path, variant, case)
-        assert run["ok"] is False and run["cause"] == "exception"
-        assert "no CUDA device" in run["error"]
+    run = run_json(tmp_path, "deeperhistreg_gpu", case)
+    assert run["ok"] is False and run["cause"] == "exception"
+    assert "no CUDA device" in run["error"]
 
 
 def test_a_gpu_row_sets_every_device_key(tmp_path, case, fake):
@@ -762,7 +689,7 @@ def test_a_gpu_row_sets_every_device_key(tmp_path, case, fake):
         opts={"device": "cuda:0"},
         label="deeperhistreg_gpu",
     )
-    assert done == ["deeperhistreg_gpu", "deeperhistreg_gpu_asdrawn"]
+    assert done == ["deeperhistreg_gpu"]
     params = fake.calls("run_registration")[0]["parameters"]
     assert params["device"] == "cuda:0"
     assert params["initial_registration_params"]["device"] == "cuda:0"
@@ -807,15 +734,14 @@ def test_a_swallowed_failure_is_raised_with_what_the_package_printed(
 def test_a_failed_writer_fails_the_row_of_the_image_it_did_not_write(
     tmp_path, case, fake
 ):
-    """The `_asdrawn` row IS the written image: without the image it is not a result
-    (the same rule for every method; it used to stay ok here). The estimated-field row
-    has no image of its own and stands."""
+    """The row IS the written image: without the image it is not a result (the same
+    rule for every method)."""
     fake.configure(
         writer_fails="vips: out of disc", initial_resolution=EXACT_RESOLUTION
     )
     done = methods.run_case("deeperhistreg", case, tmp_path)
-    assert done == ["deeperhistreg"]
-    run = run_json(tmp_path, "deeperhistreg_asdrawn", case)
+    assert done == []
+    run = run_json(tmp_path, "deeperhistreg", case)
     assert run["ok"] is False and run["cause"] == "writer"
     assert "out of disc" in run["error"]
 
@@ -841,11 +767,7 @@ def test_conversion_is_off_the_clock_and_the_registration_on_it(
     tmp_path, case, monkeypatch
 ):
     clock, seen = _Clock(), {}
-    real_convert, real_run, real_gap = (
-        dhr.single_page_tiff,
-        dhr.run_package,
-        dhr.gap_stats,
-    )
+    real_convert, real_run = dhr.single_page_tiff, dhr.run_package
 
     def converting(*a, **kw):
         seen.setdefault("convert", []).append(clock.paused)
@@ -855,32 +777,26 @@ def test_conversion_is_off_the_clock_and_the_registration_on_it(
         seen["run"] = clock.paused
         return real_run(*a, **kw)
 
-    def describing(*a, **kw):
-        seen["gap"] = clock.paused
-        return real_gap(*a, **kw)
-
     monkeypatch.setattr(dhr, "single_page_tiff", converting)
     monkeypatch.setattr(dhr, "run_package", running)
-    monkeypatch.setattr(dhr, "gap_stats", describing)
     items = list(dhr.register(case, tmp_path / "work", {"monitor": clock}))
-    assert seen == {"convert": [True, True], "run": False, "gap": True}
+    assert seen == {"convert": [True, True], "run": False}
     assert not clock.paused  # handed back running
     assert [v for v, _, _ in items] == list(dhr.VARIANTS)
     assert all(
         isinstance(m, PointMap) and m.direction == REF_TO_MOV for _, m, _ in items
     )
-    assert "_state" in items[1][2] and "_state" not in items[0][2]
+    assert "_state" in items[0][2]
     assert items[0][2]["convert_s"] > 0
 
 
-def test_the_realcheck_is_the_asdrawn_rows(tmp_path, case):
-    """A case without nuclei cannot be judged, but the wiring is visible: the row with
-    the image gets a realcheck record, the estimated-field row none."""
+def test_the_realcheck_is_the_rows(tmp_path, case):
+    """A case without nuclei cannot be judged, but the wiring is visible: the row, the
+    one with the image, gets a realcheck record."""
     methods.run_case("deeperhistreg", case, tmp_path, realcheck=True)
-    assert run_json(tmp_path, "deeperhistreg_asdrawn", case)["realcheck"]["status"] == (
+    assert run_json(tmp_path, "deeperhistreg", case)["realcheck"]["status"] == (
         sc.NOT_CHECKED
     )
-    assert "realcheck" not in run_json(tmp_path, "deeperhistreg", case)
 
 
 def test_the_selfcheck_pair_is_the_cohorts_class_for_every_label():

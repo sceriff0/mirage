@@ -103,8 +103,8 @@ def public_counts():
     # + PALOM
     others = 20
     other_names = (
-        9 * 3 + 3 + 3 + 8 * 2 + 2
-    )  # valis_mirage x 9, valis120, valis120_hires, dhr, palom
+        9 * 3 + 3 + 3 + 8 + 2
+    )  # valis_mirage x 9, valis120, valis120_hires, dhr (one row per run), palom
     cohort = {
         variants.stare_cell(s_, k, lv)[0]
         for k, lv in rg.stare_levels(rg.COHORT_REGIME)
