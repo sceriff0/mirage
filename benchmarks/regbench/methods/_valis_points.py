@@ -248,6 +248,60 @@ def patient_slides(cases):
     return ref, moving
 
 
+# ── a brightfield (RGB) patient ───────────────────────────────────────────────
+# What VALIS does with an RGB slide, read in the PyPI sdists ``valis-wsi==1.0.0`` and
+# ``==1.2.0`` ``[PARTIAL: registration.py -- Valis.register's signature (1.0.0 :3977-3982,
+# 1.2.0 :4593-4598), its call of create_img_processor_dict (:4102 / :4725),
+# create_img_processor_dict (:2428-2503 / :2679-2754), Slide.__init__'s is_rgb and
+# img_type (:343-344 / :364-365); slide_io.py -- guess_image_type (:666-684 /
+# :1017-1035), BioFormatsSlideReader._check_rgb (:1161-1171 / :1513-1523), the vips
+# reader's _check_rgb (1.2.0 :1858-1881), the OME is_rgb rule (1.2.0 :785-800); missing:
+# the brightfield processors themselves (1.0.0 ColorfulStandardizer, 1.2.0 OD) and every
+# other reader]``. ``register()`` takes ``brightfield_processing_cls`` /
+# ``if_processing_cls`` with defaults and ``processor_dict=None``; given no processor
+# dict, it assigns each slide the BRIGHTFIELD class when ``slide.img_type`` is
+# ``"brightfield"``, which ``guess_image_type`` sets exactly when the reader's
+# ``metadata.is_rgb`` is true. For Bio-Formats that is ``rdr.isRGB()``, which Bio-Formats
+# defines as more than one sample per pixel (Bio-Formats' own source not read:
+# ``[MEMORY]``). A slide written as three separate channels is therefore expected NOT to
+# be read as RGB, and to be given the fluorescence processing (its ``dapi`` channel,
+# else channel 0). The adapters
+# pass no processor (``bin/register.py:516``: ``registrar.register()``), so what VALIS
+# chose is recorded per slide (``valis_img_type``), and a brightfield case whose slide
+# VALIS read otherwise carries a ``problem``.
+RGB_INPUT = (
+    "the patient's original RGB slides as they are; VALIS chooses each slide's "
+    "processing itself from its reader's is_rgb (an RGB slide: its brightfield class), "
+    "no processor is passed"
+)
+
+
+def brightfield(cases):
+    """A patient of brightfield (RGB) cases."""
+    return any(c.modality == "brightfield" for c in cases)
+
+
+def modality_record(cases, slides):
+    """``(info, problem)`` of a brightfield patient: ``info`` adds ``modality``, sets
+    ``nuclear_channel`` to None (no channel is looked for on an RGB slide) and records
+    ``valis_img_type`` (VALIS's own reading of each slide); ``problem`` names the slides
+    VALIS did not read as brightfield, or is empty. ``({}, "")`` for a fluorescence
+    patient: its record is what it was. ``slides`` is ``{name: Slide}``."""
+    if not brightfield(cases):
+        return {}, ""
+    types = {str(n): str(getattr(s, "img_type", "unknown")) for n, s in slides.items()}
+    other = sorted(n for n, t in types.items() if t != "brightfield")
+    problem = ""
+    if other:
+        problem = (
+            f"VALIS read {', '.join(f'{n} as {types[n]}' for n in other)}, not "
+            "brightfield: its reader does not see three samples per pixel, so those "
+            "slides were given the fluorescence processing"
+        )
+    info = {"modality": "brightfield", "nuclear_channel": None, "valis_img_type": types}
+    return info, problem
+
+
 def place_slides(paths, dst_dir):
     """Put the slides in ``dst_dir``: a hard link, or a copy where a link is not
     possible. Never a symlink (the pipeline copies for that reason,

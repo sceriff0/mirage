@@ -467,13 +467,19 @@ def apply_deformation_pyvips(
     if CONFIG["writer_fails"]:
         raise RuntimeError(CONFIG["writer_fails"])
     field = _sitk_read(displacement_field_path).array
-    plane = draw(
-        _read(source_image_path, level), _shape(target_image_path), field, pad_value
-    )
+    source = _read(source_image_path, level)
+    target_hw = _shape(target_image_path)
+    if source.ndim == 3:  # an RGB source (three samples): each drawn as a plane
+        plane = np.stack(
+            [draw(source[..., c], target_hw, field, pad_value) for c in range(3)], -1
+        )
+        photometric = "rgb"
+    else:
+        plane, photometric = draw(source, target_hw, field, pad_value), "minisblack"
     with tifffile.TiffWriter(str(warped_image_path), bigtiff=True) as tif:
-        tif.write(plane, photometric="minisblack", metadata=None)
+        tif.write(plane, photometric=photometric, metadata=None)
         tif.write(
-            plane[::2, ::2], photometric="minisblack", metadata=None, subfiletype=1
+            plane[::2, ::2], photometric=photometric, metadata=None, subfiletype=1
         )
 
 

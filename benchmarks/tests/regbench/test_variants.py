@@ -45,6 +45,23 @@ def _stare_names():
     ]
 
 
+def _brightfield_stare_names():
+    """The STARE runs of the brightfield regimes that are not the cohort's (every
+    stride x level of ``bf_same`` and ``bf_consecutive`` whose name is no cohort cell's),
+    in the order of ``RUNS``: in ``RUNS``, never in the cohort's list."""
+    from benchmarks.regbench import regimes as rg_
+
+    cohort = set(_stare_names())
+    out = []
+    for reg in ("bf_same", "bf_consecutive"):
+        for k, lv in rg_.stare_levels(reg):
+            for s_ in variants.STARE_STRIDES:
+                name = variants.stare_cell(s_, k, lv)[0]
+                if name not in cohort and name not in out:
+                    out.append(name)
+    return out
+
+
 def _stare_variants(name):
     """The result names of one STARE run: the label replaces the method's name in both."""
     return [f"{name}_rigid", name]
@@ -135,12 +152,13 @@ N_RUNS = 55
 def test_counts():
     n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
-    assert n_runs == len(variants.RUNS) == N_RUNS
-    assert {variants.run_name(r) for r in variants.RUNS if r.gpu} == GPU
+    cohort = variants.runs_for(None)
+    assert n_runs == len(cohort) == N_RUNS
+    # RUNS also holds the brightfield regimes' STARE runs, which the cohort never takes
+    assert len(variants.RUNS) == N_RUNS + len(_brightfield_stare_names()) == N_RUNS + 15
+    assert {variants.run_name(r) for r in cohort if r.gpu} == GPU
     per_patient = {
-        variants.run_name(r)
-        for r in variants.RUNS
-        if variants.scope(r.method) == "group"
+        variants.run_name(r) for r in cohort if variants.scope(r.method) == "group"
     }
     assert per_patient == PER_PATIENT
 
@@ -149,7 +167,7 @@ def test_run_names_are_unique_and_the_stride_runs_are_exactly_the_generated_set(
     names = [variants.run_name(r) for r in variants.RUNS]
     assert len(names) == len(set(names)) == len(variants.RUNS)
     stare = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
-    assert sorted(stare) == sorted(_stare_names())
+    assert sorted(stare) == sorted(_stare_names() + _brightfield_stare_names())
     stride = {n for n in names if n.startswith("stare_s")}
     # stare_s<stride>_<level>: one per non-default stride and level, no more
     levels = {n.split("_", 2)[2] for n in stride}
@@ -377,7 +395,9 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
     from pathlib import Path
 
     both = [r for r in variants.RUNS if r.method == "stare"]
-    assert {variants.run_name(r) for r in both} == set(_stare_names())
+    assert {variants.run_name(r) for r in both} == set(
+        _stare_names() + _brightfield_stare_names()
+    )
     for stare in both:
         assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
     assert "STARE" not in variants.BUILT_HERE  # the pipeline's image runs no row here
@@ -581,8 +601,8 @@ def pause(monkeypatch, *names):
 
 
 def test_no_run_is_paused_today():
-    assert variants.Run._fields[-1] == "active"
-    assert variants.Run._field_defaults == {"active": True}
+    assert variants.Run._fields[-2:] == ("active", "regimes")
+    assert variants.Run._field_defaults == {"active": True, "regimes": ("cyclic_if",)}
     assert [r for r in variants.RUNS if not r.active] == []
     assert variants.paused_names() == []
     assert variants.active_runs() == variants.RUNS
@@ -620,7 +640,10 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert [r[0] for r in everything] == [variants.run_name(r) for r in variants.RUNS]
     flags = {r[0]: r[12] for r in everything}
     assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
-    assert sum(v == "1" for v in flags.values()) == n_runs - 2
+    # --all is every run, the brightfield regimes' STARE runs too
+    assert sum(v == "1" for v in flags.values()) == (
+        n_runs - 2 + len(_brightfield_stare_names())
+    )
     # the same line, flag apart, as when it ran
     (line,) = [r for r in everything if r[0] == "valis120"]
     assert line[:12] == [
@@ -665,7 +688,7 @@ def test_reactivating_is_one_field(monkeypatch):
         ),
     )
     assert variants.expected_variants() == EXPECTED
-    assert variants.counts()[0] == len(variants.RUNS)
+    assert variants.counts()[0] == len(variants.runs_for(None)) == N_RUNS
 
 
 @pytest.mark.parametrize(
@@ -693,8 +716,9 @@ def test_a_paused_run_cannot_write_a_primary_row_or_check_an_active_run(
 
 def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
-    # every STARE cell is checked by `stare`, so they are paused with it
-    stare_cells = [n for n in _stare_names()]
+    # every STARE cell is checked by `stare`, so they are paused with it (the
+    # brightfield regimes' cells too, which the cohort's counts never held)
+    stare_cells = [*_stare_names(), *_brightfield_stare_names()]
     pause(monkeypatch, *stare_cells)
     monkeypatch.setattr(
         variants, "PRIMARY", tuple(v for v in variants.PRIMARY if v != "stare")
@@ -707,7 +731,7 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     variants.check()
     n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (
-        n_runs - len(stare_cells) - len(anchored),
+        n_runs - len(_stare_names()) - len(anchored),
         len(GPU),
         len(PER_PATIENT) - len(anchored),
     )
@@ -923,11 +947,38 @@ def _generated_stare():
 
 
 def test_stare_runs_are_strides_times_levels_of_the_cohort_regime():
-    names = {variants.run_name(r) for r in _generated_stare()}
+    names = {
+        variants.run_name(r)
+        for r in _generated_stare()
+        if rg.COHORT_REGIME in r.regimes
+    }
     assert len(names) == len(variants.STARE_STRIDES) * len(
         rg.stare_levels(rg.COHORT_REGIME)
     )
     assert "stare" in names  # the default cell is always present (R4)
+
+
+def test_each_regime_has_its_strides_times_levels_and_the_baseline_is_shared():
+    """``_stare_runs(regime)`` per regime (as at 5a46f778): a run lists the regimes whose
+    levels produce it; a baseline cell (no proxy) is one run of every regime."""
+    for reg in rg.REGIMES:
+        got = [variants.run_name(r) for r in _generated_stare() if reg in r.regimes]
+        assert got == list(variants._stare_runs(reg))
+        assert len(got) == len(variants.STARE_STRIDES) * len(rg.stare_levels(reg))
+    for r in _generated_stare():
+        if "proxy" not in r.opts:
+            assert r.regimes == tuple(rg.REGIMES)
+    by = {variants.run_name(r): r.regimes for r in _generated_stare()}
+    assert by["stare_clahe"] == ("cyclic_if",)
+    assert by["stare_grey_clahe"] == ("bf_same", "bf_consecutive")
+    assert by["stare_haem_clahe"] == ("bf_same",)
+    assert by["stare_s256_grey_smooth_none"] == ("bf_consecutive",)
+
+
+def test_every_run_but_stare_is_the_cohorts_only():
+    for r in variants.RUNS:
+        if r.method != "stare" or "tier" in r.opts:
+            assert r.regimes == (rg.COHORT_REGIME,), variants.run_name(r)
 
 
 def test_the_regime_has_the_baseline_at_every_stride():
@@ -952,10 +1003,11 @@ def test_a_baseline_run_carries_no_proxy():
 def test_a_generated_name_maps_to_exactly_one_opts_dict():
     """Two cells producing the same name must produce the same options."""
     seen = {}
-    for key, level in rg.stare_levels(rg.COHORT_REGIME):
-        for s in variants.STARE_STRIDES:
-            name, opts = variants.stare_cell(s, key, level)
-            assert seen.setdefault(name, opts) == opts, name
+    for reg in rg.REGIMES:
+        for key, level in rg.stare_levels(reg):
+            for s in variants.STARE_STRIDES:
+                name, opts = variants.stare_cell(s, key, level)
+                assert seen.setdefault(name, opts) == opts, name
     assert seen.keys() == {variants.run_name(r) for r in _generated_stare()}
 
 
@@ -1030,11 +1082,24 @@ def test_ashlar_checkers_and_families_follow_the_affine_factor():
         assert r.after == ("stare" if anchored else None)
 
 
-def test_runs_for_takes_the_cohorts_dataset_and_no_other():
+def test_runs_for_takes_a_dataset_by_its_regime():
     names = {variants.run_name(r) for r in variants.runs_for("multiplex")}
     assert "stare_clahe" in names and "stare_percentile" in names
-    with pytest.raises(KeyError):
-        variants.runs_for("anhir")
+    assert not any("grey" in n or "haem" in n for n in names)
+    anhir = [variants.run_name(r) for r in variants.runs_for("anhir")]
+    assert anhir == [
+        variants.run_name(r)
+        for r in variants.RUNS
+        if r.method == "stare" and "bf_consecutive" in r.regimes
+    ]
+    assert (
+        "stare" in anhir and "stare_grey_clahe" in anhir and "stare_clahe" not in anhir
+    )
+    assert {variants.run_name(r) for r in variants.runs_for("hyreco_a@raw")} == {
+        variants.run_name(r) for r in variants.runs_for("hyreco_b")
+    }
+    with pytest.raises(KeyError, match="no_such"):
+        variants.runs_for("no_such")
 
 
 def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
@@ -1054,8 +1119,43 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
     assert len(variants.expected_variants()) == sum(
         len(variants.variants_of(r)) for r in cohort
     )
-    # --all still lists every run, paused or not
-    assert len(variants.runs_table(paused=True)) == len(variants.RUNS) == N_RUNS
+    # --all still lists every run, paused or not, of every regime
+    assert len(variants.runs_table(paused=True)) == len(variants.RUNS)
+    assert len(variants.RUNS) == N_RUNS + len(_brightfield_stare_names())
+
+
+# the cohort's run list, as `python -m benchmarks.regbench runs` printed it at c532c1ba
+# (before Task 6b), name by name and as the sha256 of its lines joined by newlines
+COHORT_RUNS = [
+    "stare", "stare_s128_none", "stare_s256_none", "stare_clahe", "stare_s128_clahe",
+    "stare_s256_clahe", "stare_percentile", "stare_s128_percentile",
+    "stare_s256_percentile", "stare_medium", "stare_low", "valis_mirage",
+    "valis_mirage_high_m0", "valis_mirage_high_m1", "valis_mirage_medium_m0",
+    "valis_mirage_medium_m1", "valis_mirage_medium_m2", "valis_mirage_low_m0",
+    "valis_mirage_low_m1", "valis_mirage_low_m2", "valis120", "valis120_hires",
+    "deeperhistreg_gpu", "deeperhistreg_cpu", "deeperhistreg_hr_gpu",
+    "deeperhistreg_hr_cpu", "deeperhistreg_fluo_gpu", "deeperhistreg_fluo_cpu",
+    "deeperhistreg_hr_fluo_gpu", "deeperhistreg_hr_fluo_cpu", "ashlar", "ashlar_clean",
+    "affine_ashlar", "affine_ashlar_clean", "ashlar_anone_n0_s60",
+    "ashlar_anone_n0_s240", "ashlar_anone_n002_s60", "ashlar_anone_n002_s240",
+    "ashlar_anone_n01_s15", "ashlar_anone_n01_s60", "ashlar_anone_n01_s240",
+    "ashlar_anone_n05_s15", "ashlar_anone_n05_s60", "ashlar_anone_n05_s240",
+    "ashlar_astare_n0_s60", "ashlar_astare_n0_s240", "ashlar_astare_n002_s60",
+    "ashlar_astare_n002_s240", "ashlar_astare_n01_s15", "ashlar_astare_n01_s60",
+    "ashlar_astare_n01_s240", "ashlar_astare_n05_s15", "ashlar_astare_n05_s60",
+    "ashlar_astare_n05_s240", "palom",
+]  # fmt: skip
+COHORT_RUNS_SHA256 = "9e5ada24f3a2c4293b1ff4caf08718ae84cb69c27c5d0464e5b41a4692cecd85"
+
+
+def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
+    import hashlib
+
+    assert [variants.run_name(r) for r in variants.runs_for(None)] == COHORT_RUNS
+    assert len(COHORT_RUNS) == N_RUNS
+    for dataset in (None, "multiplex"):
+        lines = "\n".join("\t".join(r) for r in variants.runs_table(dataset=dataset))
+        assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256
 
 
 def test_the_stare_tiers_are_runs_checked_by_stare():

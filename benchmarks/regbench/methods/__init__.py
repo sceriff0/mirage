@@ -189,13 +189,45 @@ def patient_channels(cases):
 _LAUNCHES = itertools.count(1)
 
 
+# Methods with NO input rule for a brightfield case (an RGB image pair), and why, word for
+# word as they were written at 5a46f778 (methods/__init__.py). Their adapters refuse such a
+# case with this text (``require_fluorescence``). Every other method has a rule: both
+# VALIS adapters read the original RGB slides and VALIS picks its own brightfield
+# processing (methods/valis_mirage.py, methods/valis.py), DeeperHistReg reads the RGB
+# image with its shipped parameters (methods/deeperhistreg.py), and STARE reads a
+# one-channel proxy of each RGB slide (methods/stare.py).
+NO_BRIGHTFIELD = {
+    "ashlar": "ASHLAR stitches unstitched tiles by one translation per tile; a pair of "
+    "whole brightfield images of two sections (or of one section re-mounted between "
+    "the scans) is not its input (rulings R3.8 and R3.20: ASHLAR is run on neither "
+    "HyReCo nor ANHIR)",
+    "palom": "this adapter follows PALOM's README recipe on one channel by index; on an "
+    "RGB slide that would be the red channel, chosen by nobody. PALOM has colour "
+    "modes of its own for an RGB slide (palom/color.py HaxProcessor: grayscale, "
+    "hematoxylin, aec, dab); which one is the input rule is not decided, and PALOM "
+    "is described by its README as made for re-imaged slides of the same section",
+}
+
+
+def input_rule(method, modality):
+    """None when ``method`` has an input rule for a case of ``modality`` (it is
+    accepted), else the reason it has none (``NO_BRIGHTFIELD``). Every method takes a
+    fluorescence case."""
+    if modality == "fluorescence":
+        return None
+    return NO_BRIGHTFIELD.get(method)
+
+
 def require_fluorescence(case, method):
-    """Refuse a case that is not fluorescence: the cohort is cyclic IF, and brightfield
-    cases are not part of this benchmark (no adapter has an input rule for one)."""
-    if case.modality != "fluorescence":
+    """Refuse a case of another modality for a method without an input rule for it
+    (``NO_BRIGHTFIELD``); every other case passes. The name is older than the rule (it
+    refused every brightfield case once) and is kept because two adapters that are not
+    edited for the rule call it (``methods/ashlar.py``, ``methods/palom.py``)."""
+    reason = input_rule(method, case.modality)
+    if reason is not None:
         raise ValueError(
-            f"{case.case_id}: {method}: brightfield cases are not part of this "
-            f"benchmark (this one is a {case.modality} case)"
+            f"{case.case_id}: {method} has no input rule for a {case.modality} case: "
+            f"{reason}"
         )
 
 

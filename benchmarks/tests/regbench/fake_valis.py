@@ -402,11 +402,31 @@ class Slide:
         self.val_obj = val_obj
         with tifffile.TiffFile(self.src_f) as tif:
             shape = tif.series[0].shape
-        h, w = shape[-2:]
+            page = tif.pages[0]
+            # Bio-Formats' isRGB, which both sdists' BioFormatsSlideReader._check_rgb
+            # return (1.0.0 slide_io.py:1161-1171, 1.2.0 :1513-1523); taken here as an
+            # image of three samples per pixel (Bio-Formats' definition, more than one
+            # sample per pixel, is `[MEMORY]`). Three separate channels are not RGB.
+            self.is_rgb = bool(
+                page.samplesperpixel == 3 and page.photometric.name == "RGB"
+            )
+        # slide_io guess_image_type (1.0.0 :666-684, 1.2.0 :1017-1035): RGB = brightfield
+        self.img_type = "brightfield" if self.is_rgb else "fluorescence"
+        h, w = shape[:2] if self.is_rgb else shape[-2:]
         self.slide_dimensions_wh = np.array([[w, h]])
+        n = 3 if self.is_rgb else shape[0] if len(shape) == 3 else 1
         names = CONFIG["channel_names"]
         if names is None:
-            names = ["DAPI", "dots"][: shape[0] if len(shape) == 3 else 1]
+            names = ["DAPI", "dots"][:n]
+        if len(names) != n:  # a slide of other channels: the names in its header
+            from benchmarks.regbench import imageio
+
+            try:
+                names = imageio.channel_names(self.src_f)
+            except Exception:
+                names = []
+            if len(names) != n:
+                names = ["R", "G", "B"] if self.is_rgb else [f"C{i}" for i in range(n)]
         self.reader = _Reader(names)
         self.M = None
         self.processed_img_shape_rc = None
@@ -486,6 +506,8 @@ class Slide:
         if crop != "reference":
             raise AssertionError(f"crop={crop!r}: only 'reference' is expected")
         planes = tifffile.imread(src_f or self.src_f)
+        if self.is_rgb:  # (H, W, 3) samples: drawn as three planes
+            planes = np.moveaxis(planes, -1, 0)
         planes = planes[None] if planes.ndim == 2 else planes
         if self is self.val_obj.get_ref_slide():
             out = planes  # written as it is (1.2.0); the benchmark never reads it
@@ -817,6 +839,8 @@ def main(argv=None):
     sys.modules["torch"] = _torch_stub()
     for key, value in (request.get("env") or {}).items():
         os.environ[key] = str(value)
+    if request.get("mode") == "group":
+        return _group(request)
     from benchmarks.regbench import selfcheck
 
     rec = selfcheck.run(
@@ -835,6 +859,74 @@ def main(argv=None):
     }
     Path(request["work"], "answer.json").write_text(json.dumps(answer, default=str))
     return 0
+
+
+# a point the maps of ``run_group`` are evaluated at, so a row can say it has one
+PROBE = [[50.0, 60.0]]
+
+
+def _group(request):
+    """``register_group`` of one adapter on prepared cases, in this (fresh) process; the
+    rows are written beside the request as ``group_answer.json``."""
+    from benchmarks.regbench import methods
+    from benchmarks.regbench.cases import load_case
+
+    cases = [load_case(d) for d in request["cases"]]
+    work = Path(request["work"])
+    rows = []
+    gen = methods.load(request["method"]).register_group(
+        cases, work / "work", request.get("opts") or {}
+    )
+    for case_id, variant, pmap, info in gen:
+        mapped = None if pmap is None else np.asarray(pmap(np.array(PROBE))).tolist()
+        info = {k: v for k, v in (info or {}).items() if not k.startswith("_")}
+        rows.append([case_id, variant, mapped, info])
+    (work / "group_answer.json").write_text(
+        json.dumps({"rows": rows, "calls": CALLS}, default=str)
+    )
+    return 0
+
+
+def run_group(method, cases, work, opts=None, **fake):
+    """``register_group`` of ``method`` (``valis_mirage``: the REAL ``bin/register.py``;
+    ``valis``) on ``cases`` with this stand-in installed, in a fresh process (the
+    pipeline's module rebinds ``multiprocessing.cpu_count``). Returns the generator's
+    rows as ``(case_id, variant, map, info)``: ``map`` is the row's point map evaluated
+    at ``PROBE`` (None for a failed row), ``info`` its JSON-safe record."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[3]
+    work = Path(work)
+    work.mkdir(parents=True, exist_ok=True)
+    pinned = (
+        {"version": "1.0.0", "rounding": "trunc"} if method == "valis_mirage" else {}
+    )
+    request = {
+        "mode": "group",
+        "method": method,
+        "work": str(work),
+        "cases": [str(c.dir) for c in cases],
+        "opts": {"workers": 2, **(opts or {})},
+        "fake": {**pinned, **fake},
+        "env": {"REGBENCH_MEM_GB": "64", "REGBENCH_ATTEMPT": "1"},
+    }
+    (work / "group_request.json").write_text(json.dumps(request))
+    environ = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_")}
+    environ["PYTHONPATH"] = os.pathsep.join(
+        [str(root), environ.get("PYTHONPATH", "")]
+    ).rstrip(os.pathsep)
+    done = subprocess.run(
+        [sys.executable, __file__, str(work / "group_request.json")],
+        cwd=root,
+        env=environ,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    answer = work / "group_answer.json"
+    if not answer.exists():
+        raise AssertionError(done.stdout[-3000:] + done.stderr[-3000:])
+    return [tuple(r) for r in json.loads(answer.read_text())["rows"]]
 
 
 if __name__ == "__main__":

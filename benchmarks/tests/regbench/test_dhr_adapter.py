@@ -909,8 +909,12 @@ def test_the_selfcheck_pair_is_the_cohorts_class_for_every_label():
         assert (short * 0.2 / k) / 2 ** (levels - 1) >= 31
 
 
-# ── a brightfield case is not part of this benchmark ──────────────────────────
-def test_a_brightfield_case_is_refused(tmp_path, case):
+# ── a brightfield case: the RGB image, the shipped parameters ─────────────────
+def test_a_brightfield_case_is_accepted_and_refused_only_with_fluo(tmp_path, case):
+    """DeeperHistReg has an input rule for an RGB case (methods.NO_BRIGHTFIELD does not
+    name it); the one refusal is ``fluo=1``, which configures it for fluorescence. The
+    RGB run itself is pinned in ``test_modality_rules.py``."""
     case.modality = "brightfield"
-    with pytest.raises(ValueError, match="brightfield cases are not part of this"):
-        next(dhr.register(case, tmp_path / "work", {}))
+    assert methods.input_rule("deeperhistreg", "brightfield") is None
+    with pytest.raises(ValueError, match="fluo=1 configures DeeperHistReg"):
+        next(dhr.register(case, tmp_path / "work", {"fluo": 1}))

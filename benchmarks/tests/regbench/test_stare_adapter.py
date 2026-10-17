@@ -232,10 +232,325 @@ def test_refused_option_combinations_on_fluorescence(toy_cases, opts, match):
         adapter.settings(opts, toy_cases["rigid"])
 
 
-def test_a_brightfield_case_is_refused(toy_cases):
-    case = dataclasses.replace(toy_cases["rigid"], modality="brightfield")
-    with pytest.raises(ValueError, match="brightfield cases are not part of this"):
-        adapter.settings({}, case)
+def test_the_fluorescence_command_is_the_one_before_the_brightfield_rule(
+    toy_cases, tmp_path
+):
+    """The cohort's command, every argument, as it was before an RGB case had a rule
+    (c532c1ba): the brightfield branches change nothing of a fluorescence round."""
+    case = multichannel(toy_cases["rigid"])
+    s = str(tmp_path)
+    assert adapter.command(case, tmp_path, {}) == [
+        "register", "--reference", "/cohort/P1_R1.ome.tif",
+        "--moving", "/cohort/P1_R2.ome.tif", "--out", f"{s}/registered.ome.tif",
+        "--manifest", f"{s}/manifest.json", "--tre", f"{s}/tre.json",
+        "--workdir", s, "--workers", "1", "--reference-name", "reference",
+        "--moving-name", "moving", "--nuclear-index", "1", "--tile", "2048",
+        "--halo", "256", "--out-tile", "1024", "--max-dim", "1024", "--stride", "64",
+        "--prep", "none", "--pixel-size", "0.325", "--channel-names", *NAMES,
+    ]  # fmt: skip
+    rigid = toy_cases["rigid"]
+    assert adapter.stage_argv(rigid, {}, tmp_path)["coarse"] == [
+        "--reference", rigid.ref_image, "--moving", rigid.mov_image,
+        "--nuclear-index", "0", "--tile", "2048", "--halo", "256", "--max-dim", "1024",
+        "--model", "euclidean", "--out-m0", f"{s}/moving_m0.json",
+        "--out-tiles", f"{s}/moving_tiles.csv", "--prep", "none",
+        "--pixel-size", "0.325",
+    ]  # fmt: skip
+    rnd = adapter.Round(rigid, tmp_path, {})
+    assert rnd.candidate is None and rnd.inputs is None
+
+
+def test_the_cohort_stare_list_is_unchanged():
+    from benchmarks.regbench import variants
+
+    cohort = [
+        (variants.run_name(r), r.opts)
+        for r in variants.runs_for("multiplex")
+        if r.method == "stare"
+    ]
+    assert ("stare", {}) in cohort
+    assert ("stare_clahe", {"proxy": "channel", "sprep": "clahe"}) in cohort
+    assert all(o.get("proxy", "channel") == "channel" for _, o in cohort)
+    assert cohort == [
+        (variants.run_name(r), r.opts)
+        for r in variants.runs_for(None)
+        if r.method == "stare"
+    ]
+
+
+# ── a brightfield case: a one-channel proxy and STARE's own --prep ────────────
+@pytest.fixture
+def rgb_case(toy_cases, tmp_path):
+    """``rigid`` as an RGB case: interleaved RGB OME-TIFFs and their grey proxies
+    (``rgb_cases``), as a dataset module writes them."""
+    from . import rgb_cases
+
+    return rgb_cases.rgb_case(toy_cases["rigid"], tmp_path / "bf")
+
+
+def _reduced(case, f, **settings):
+    extra = {**case.extra, "settings": {"proxy": "grey", "reduce": f, **settings}}
+    return dataclasses.replace(case, extra=extra)
+
+
+def test_an_rgb_case_registers_on_its_grey_proxy(rgb_case, tmp_path):
+    assert adapter.settings({}, rgb_case) == ("grey", "none")
+    argv = adapter.command(rgb_case, tmp_path, {})
+    assert argv[argv.index("--reference") + 1] == rgb_case.ref_nuclear
+    assert argv[argv.index("--moving") + 1] == rgb_case.mov_nuclear
+    assert flag(argv, "--nuclear-index") == "0"
+    assert flag(argv, "--pixel-size") == repr(float(rgb_case.pixel_size_um))
+    rnd = adapter.Round(rgb_case, tmp_path / "g", {})
+    assert rnd.candidate is None and rnd.inputs is None  # the case's own proxy
+    # a proxy reduced f-fold: STARE's pixel is f of the slide's
+    four = adapter.command(_reduced(rgb_case, 4), tmp_path, {})
+    assert flag(four, "--pixel-size") == repr(float(rgb_case.pixel_size_um) * 4)
+    # no established pixel size: STITCH's header gets the placeholder
+    none = dataclasses.replace(rgb_case, pixel_size_um=None)
+    assert flag(adapter.command(none, tmp_path, {}), "--pixel-size") == repr(
+        adapter.NOMINAL_PIXEL_SIZE
+    )
+
+
+def test_a_channel_proxy_on_an_rgb_case_is_refused(rgb_case, tmp_path):
+    with pytest.raises(ValueError, match="RGB"):
+        adapter.settings({"proxy": "channel"}, rgb_case)
+
+
+def test_the_proxy_options_of_an_rgb_case(rgb_case):
+    """Ported from 5a46f778 (``test_proxy_on_an_rgb_case``)."""
+    assert adapter.settings({"proxy": "haem", "sprep": "clahe"}, rgb_case) == (
+        "haem",
+        "clahe",
+    )
+    assert adapter.settings({"proxy": "grey_smooth"}, rgb_case) == (
+        "grey_smooth",
+        "none",
+    )
+    unknown = dataclasses.replace(rgb_case, pixel_size_um=None)
+    with pytest.raises(ValueError, match="pixel size"):
+        adapter.settings({"sprep": "clahe"}, unknown)
+    assert adapter.settings({"sprep": "percentile"}, unknown) == ("grey", "percentile")
+
+
+def test_the_default_grey_proxy_is_not_written_but_haem_is(rgb_case, tmp_path):
+    """Ported from 5a46f778: ``grey`` is the case's own proxy, read as it is; ``haem``
+    is written by the benchmark under the round's ``stages/prep`` and is what COARSE
+    reads."""
+    assert adapter.slides(rgb_case)[:3] == (
+        rgb_case.ref_nuclear,
+        rgb_case.mov_nuclear,
+        0,
+    )
+    haem = adapter.Round(rgb_case, tmp_path / "h", {"proxy": "haem"})
+    assert haem.candidate == "haem" and haem.inputs is not None
+    assert haem.inputs[0] == tmp_path / "h" / "prep" / "reference.haem.ome.tif"
+    assert flag(haem.argv["coarse"], "--reference") == str(haem.inputs[0])
+    assert flag(haem.argv["coarse"], "--nuclear-index") == "0"
+    assert adapter.Round(rgb_case, tmp_path / "s", {"proxy": "grey_smooth"}).candidate
+
+
+def test_the_proxy_is_written_before_coarse_once_and_again_when_a_slide_changes(
+    rgb_case, tmp_path, no_stage, monkeypatch
+):
+    """The benchmark writes it in COARSE's job, outside the stage command; a second
+    COARSE of the same slides finds it there and writes nothing; a slide replaced is
+    another proxy and another COARSE."""
+    import os
+
+    from benchmarks.regbench import prep
+
+    written = []
+    real = prep.write_inputs
+    monkeypatch.setattr(
+        prep, "write_inputs", lambda *a: written.append(a[1]) or real(*a)
+    )
+    rnd = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    adapter.run_stage(rgb_case, rnd.dir, rnd.opts, stages.COARSE, rnd=rnd)
+    assert written == ["haem"] and all(p.exists() for p in rnd.inputs)
+    record = json.loads((rnd.prep_dir / "record.json").read_text())
+    assert record["proxy"] == "haem" and record["base"] == "haem"
+    assert record["hw"] == {"ref": rgb_case.ref_hw, "mov": rgb_case.mov_hw}
+    # COARSE ran on the written files
+    (coarse,) = no_stage
+    assert flag(coarse[2], "--reference") == str(rnd.inputs[0])
+    again = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    adapter.run_stage(rgb_case, again.dir, again.opts, stages.COARSE, rnd=again)
+    assert written == ["haem"]
+    st = os.stat(rgb_case.mov_image)
+    os.utime(rgb_case.mov_image, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    third = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    adapter.run_stage(rgb_case, third.dir, third.opts, stages.COARSE, rnd=third)
+    assert written == ["haem", "haem"]
+
+
+@pytest.mark.parametrize(
+    "exc, cause",
+    [(MemoryError(), "benchmark_oom"), (RuntimeError("a bug"), "benchmark")],
+)
+def test_a_failed_proxy_is_the_benchmarks_cause(
+    rgb_case, tmp_path, no_stage, monkeypatch, exc, cause
+):
+    """Ported from 5a46f778 (``test_a_failed_preprocessing_job_is_the_benchmarks_cause``):
+    whatever ends the benchmark's proxy, the round's cause is the benchmark's, never
+    STARE's ``exception`` / ``oom``; COARSE is not run."""
+    from benchmarks.regbench import failure_log, prep
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(prep, "write_inputs", boom)
+    rnd = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    ((stage, _, ran, why, rec),) = adapter.run_stage(
+        rgb_case, rnd.dir, rnd.opts, stages.COARSE, rnd=rnd
+    )
+    assert stage == stages.COARSE and ran and "proxy" in why and no_stage == []
+    assert rec["ok"] is False and rec["cause"] == cause
+    assert rnd.record(stages.COARSE)["cause"] == cause
+    assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
+    err = adapter._failed(rnd, stages.COARSE, None, False)
+    assert err.regbench_cause == cause and "was not written" in str(err)
+
+
+@pytest.mark.parametrize(
+    "make, opts, match",
+    [
+        # HyReCo prepared with `--reduce 2`: a proxy written at the slide's size
+        (lambda c: _reduced(c, 2), {"proxy": "haem"}, "reduced proxy"),
+        # ANHIR's mammary glands: CLAHE's region is in micrometres
+        (
+            lambda c: dataclasses.replace(c, pixel_size_um=None),
+            {"sprep": "clahe"},
+            "no established pixel size",
+        ),
+        # HyReCo prepared with `--proxy haematoxylin`: `grey` is not its own proxy
+        (
+            lambda c: _reduced(c, 1, proxy="haematoxylin"),
+            {"proxy": "grey", "sprep": "clahe"},
+            "haematoxylin",
+        ),
+    ],
+)
+def test_a_cell_a_dataset_cannot_have_is_the_benchmarks_refusal(
+    rgb_case, tmp_path, make, opts, match
+):
+    """Ported from 5a46f778 (its three typed refusals), each mapped onto the existing
+    cause ``benchmark`` (not the archive's ``reduced_proxy`` / ``no_pixel_size`` /
+    ``proxy_mismatch``: score writes a column per cause). The run records the refusal;
+    the tile feeder lists no tile of it."""
+    from benchmarks.regbench import failure_log, resources
+
+    case = make(rgb_case)
+    with pytest.raises(ValueError, match=match) as err:
+        adapter.Round(case, tmp_path / "r", opts)
+    assert resources.classify_error(err.value) == "benchmark"
+    assert failure_log.WHOSE["benchmark"] == failure_log.BENCHMARK
+    assert adapter.tiles_due(case, tmp_path / "r", opts, 1) == []
+    out = tmp_path / "out"
+    methods.run_group("stare", [case], out, opts, label="stare_x")
+    runs = [json.loads(p.read_text()) for p in out.rglob("run.json")]
+    assert runs and all(r["ok"] is False for r in runs)
+    assert {r["cause"] for r in runs} == {"benchmark"}
+
+
+def test_the_baseline_runs_on_a_haematoxylin_prepared_case(rgb_case):
+    haem = _reduced(rgb_case, 1, proxy="haematoxylin")
+    assert adapter.settings({}, haem) == ("grey", "none")  # no proxy option: no refusal
+    lum = _reduced(rgb_case, 1, proxy="luminance")
+    assert adapter.settings({"proxy": "grey", "sprep": "clahe"}, lum) == (
+        "grey",
+        "clahe",
+    )
+
+
+def test_a_reduced_proxys_map_is_taken_back_to_full_resolution():
+    """Block i of an f-fold block average is centred on pixel i f + (f - 1) / 2."""
+    f = 4
+    shift = np.array([3.0, -2.0])  # a translation in the reduced frame
+    full = adapter.reduced_map(lambda xy: np.asarray(xy) + shift, f)
+    xy = np.array([[1.5, 1.5], [10.0, 7.0]])  # the centre of block 0 is (1.5, 1.5)
+    assert np.allclose(full(xy), xy + shift * f)
+    assert adapter.reduced_map(len, 1) is len
+
+
+def test_the_tile_count_of_a_brightfield_case_is_its_proxys(rgb_case):
+    """A brightfield case's tiles are those of the proxy STARE reads (a reduced one is
+    smaller than the slide), never of the slide's ``ref_hw``."""
+    small = {"tile": "256", "halo": "64"}
+    big = dataclasses.replace(rgb_case, ref_hw=[9000, 9000])  # not what STARE reads
+    assert adapter.tile_count(big, small) == adapter.tile_count(rgb_case, small) > 1
+    fluo = dataclasses.replace(big, modality="fluorescence")
+    assert adapter.tile_count(fluo, small) > adapter.tile_count(big, small)
+
+
+@pytest.fixture(scope="module")
+def ran_rgb(toy_cases, tmp_path_factory):
+    """``crop`` as an RGB case, registered on its own grey proxy and on a written
+    ``haem`` proxy with STARE's CLAHE."""
+    from . import rgb_cases
+
+    root = tmp_path_factory.mktemp("stare_rgb")
+    case = rgb_cases.rgb_case(toy_cases["crop"], root / "bf")
+    for key, opts in (("plain", {}), ("haem", {"proxy": "haem", "sprep": "clahe"})):
+        label = None if key == "plain" else "stare_haem_clahe"
+        got = methods.run_case(
+            "stare",
+            case,
+            root / key,
+            opts={**OPTS, **opts},
+            label=label,
+            keep_work=True,
+        )
+        assert got == ([*adapter.VARIANTS] if key == "plain" else [
+            "stare_haem_clahe_rigid", "stare_haem_clahe"
+        ])  # fmt: skip
+    return case, root
+
+
+def test_a_proxy_is_recorded_as_benchmark_side(ran_rgb):
+    """Ported from 5a46f778 (``test_proxy_recorded_as_benchmark_side``)."""
+    case, root = ran_rgb
+    plain = run_json(root / "plain", "stare", case)["info"]
+    haem = run_json(root / "haem", "stare_haem_clahe", case)["info"]
+    side = haem["implementation"]["benchmark_side"]
+    assert any("proxy `haem`" in x and "unbilled" in x for x in side)
+    assert haem["input"]["sprep"] == "clahe" and haem["input"]["proxy_option"] == "haem"
+    assert haem["input"]["moving"].endswith("moving.haem.ome.tif")
+    assert haem["proxy_prep"]["proxy"] == "haem" and haem["proxy_prep"]["prep_s"] > 0
+    # sprep is STARE's own option: not a departure; the default proxy is not either
+    assert not any("clahe" in x for x in side)
+    plain_side = plain["implementation"]["benchmark_side"]
+    assert not any("proxy `" in x for x in plain_side)
+    assert any(x.startswith("brightfield: STARE is given") for x in plain_side)
+    assert plain["input"] == {
+        "reference": case.ref_nuclear,
+        "moving": case.mov_nuclear,
+        "kind": "one-channel proxy of an RGB slide",
+        "proxy_option": "grey",
+        "sprep": "none",
+        "proxy": "grey",
+        "reduced_by": 1,
+    }
+    assert "proxy_prep" not in plain and plain["nuclear_index"] == 0
+
+
+def test_the_written_image_is_the_cases_own_proxy_registered(ran_rgb):
+    """5a46f778's rule: STITCH draws the one-channel proxy STARE was given, the case's
+    own (never a proxy the benchmark wrote), on the reference grid."""
+    import tifffile
+
+    case, root = ran_rgb
+    for out, name in ((root / "plain", "stare"), (root / "haem", "stare_haem_clahe")):
+        native = run_json(out, name, case)["native"]
+        assert native["content"] == "the one-channel proxy STARE was given, registered"
+        assert native["reduced_by"] == 1 and native["channels"] == 1
+        (written,) = native["files"]
+        image = tifffile.imread(written)
+        assert image.dtype == np.uint8 and list(image.shape[-2:]) == case.ref_hw
+        assert image.any()
+        (stitch,) = out.rglob("stages/jobs/stitch.json")  # the kept work directory
+        command = json.loads(stitch.read_text())["command"]
+        assert flag(command, "--moving") == case.mov_nuclear
 
 
 def test_clahe_needs_the_pixel_size_and_percentile_does_not(toy_cases):

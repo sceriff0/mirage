@@ -1130,7 +1130,7 @@ def _verdict(a):
 
     names = (a.runs or "").replace(",", " ").split()
     if not names:
-        names = [variants.run_name(r) for r in variants.active_runs()]
+        names = [variants.run_name(r) for r in variants.runs_for(None)]
     lines = []
     for name in dict.fromkeys(names):
         try:

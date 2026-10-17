@@ -739,10 +739,10 @@ def test_the_array_tasks_records_are_the_ones_the_scorer_reads(cohort, tmp_path)
     started = [ln for ln in done.stderr.splitlines() if ": started (" in ln]
     assert started == []
     assert done.stdout.strip().splitlines()[-1].startswith("REGBENCH_END kind=score ")
-    # the verdicts first (no runs file: every active run), then the tables that name them
+    # the verdicts first (no runs file: every run of the cohort), then the tables that name them
     verdicts = (out / "logs" / "verdicts.tsv").read_text().splitlines()
     assert verdicts[0] == "run\tcheck\tstatus\treference\trows\tlog"
-    assert len(verdicts) == 1 + 2 * len(variants.active_runs())
+    assert len(verdicts) == 1 + 2 * len(variants.runs_for(None))
     assert done.stdout.index("REGBENCH_END kind=verdict ") < done.stdout.index(
         "REGBENCH_END kind=score "
     )

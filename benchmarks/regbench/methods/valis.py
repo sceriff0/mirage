@@ -373,6 +373,14 @@ def register_group(cases, work, opts):
                     str(s.name): _channel_used(s) for s in reg.slide_dict.values()
                 },
             )
+            # a brightfield patient: no channel is looked for, VALIS's own reading is
+            # recorded (_valis_points.modality_record); a fluorescence one is unchanged
+            bf_info, bf_problem = vp.modality_record(cases, dict(reg.slide_dict))
+            if bf_info:
+                info.update(bf_info)
+                info["implementation"]["input"] = vp.RGB_INPUT
+            if bf_problem:
+                info["problem"] = bf_problem
             staging = work / "native"
             wrote = _write(reg, slides, "valis", opts, True, staging)
             wrote_rigid = (
@@ -420,10 +428,15 @@ def register_group(cases, work, opts):
                 "non_rigid_bbox": _jsonable(getattr(reg, "_non_rigid_bbox", None)),
             }
             if not micro_ran:
-                micro["problem"] = (
-                    "register_micro returned without registering (the first non-rigid "
-                    "pass already ran at this size or larger): this row is the "
-                    "non-rigid result"
+                micro["problem"] = "; ".join(
+                    x
+                    for x in (
+                        info.get("problem"),
+                        "register_micro returned without registering (the first "
+                        "non-rigid pass already ran at this size or larger): this row "
+                        "is the non-rigid result",
+                    )
+                    if x
                 )
             args = (warp_tools, {**info, **micro}, points)
             ready = _stage_items(cases, "valis_micro", final, wrote, *args)

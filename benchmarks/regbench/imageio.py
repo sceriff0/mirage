@@ -1,5 +1,10 @@
 """Writing and extracting the OME-TIFFs the methods are given: the one-channel nuclear slide,
-and slides with several named channels (the selfcheck's pair)."""
+and slides with several named channels (the selfcheck's pair).
+
+The RGB readers (``_rgb_view``, ``read_rgb_reduced``: a brightfield slide read in
+rectangles, or reduced) are restored as they were at ``5a46f778``: DeeperHistReg's and
+STARE's brightfield input rules read with them, and so will the brightfield dataset
+modules."""
 
 from __future__ import annotations
 
@@ -179,6 +184,69 @@ def pixel_size_um(path):
     if isinstance(px, (tuple, list)):
         px = px[0]
     return float(px) if px else None
+
+
+def _rgb_view(level, lazy_only=False):
+    """``(read, (H, W))`` of one TIFF pyramid level: ``read(y0, y1, x0=0, x1=W)`` gives
+    that rectangle as ``(h, w, 3)``. Read lazily (only the TIFF's tiles or strips the
+    rectangle touches) if zarr is installed, and whole otherwise; ``lazy_only`` refuses
+    the whole read (``ImportError``) for a caller that must stream."""
+    axes = level.axes.replace("S", "C")
+    if set(axes) != set("YXC") or level.shape[axes.index("C")] < 3:
+        raise ValueError(
+            f"expected an RGB image, got axes {level.axes} shape {level.shape}"
+        )
+    order = [axes.index(c) for c in "YXC"]
+    h, w = level.shape[order[0]], level.shape[order[1]]
+    try:
+        import zarr
+
+        arr = zarr.open(level.aszarr(), mode="r")
+    except ImportError:
+        if lazy_only:
+            raise
+        arr = level.asarray()
+
+    def read(y0, y1, x0=0, x1=None):
+        idx = [slice(None)] * 3
+        idx[order[0]] = slice(y0, y1)
+        idx[order[1]] = slice(x0, w if x1 is None else x1)
+        return np.transpose(np.asarray(arr[tuple(idx)]), order)[..., :3]
+
+    return read, (h, w)
+
+
+def read_rgb_reduced(path, max_dim, rows=64):
+    """An RGB whole-slide TIFF as uint8 ``(h, w, 3)`` with long side <= ``max_dim``, and the
+    integer factor it was reduced by: the coarsest pyramid level still at least that large,
+    then block-averaged in bands of rows."""
+    import tifffile
+
+    with tifffile.TiffFile(path) as tif:
+        levels = tif.series[0].levels
+        h0, w0 = _rgb_view(levels[0])[1]
+        pick, f_level = levels[0], 1
+        for lv in levels[1:]:
+            f = round(h0 / _rgb_view(lv)[1][0])
+            if (
+                max(_rgb_view(lv)[1]) >= max_dim
+                and abs(h0 / f - _rgb_view(lv)[1][0]) < 1.0
+            ):
+                pick, f_level = lv, f
+        read, (h, w) = _rgb_view(pick)
+        f = max(1, -(-max(h, w) // max_dim))
+        hh, ww = (h // f) * f, (w // f) * f
+        out = np.empty((hh // f, ww // f, 3), np.uint8)
+        for y0 in range(0, hh, rows * f):
+            y1 = min(y0 + rows * f, hh)
+            band = read(y0, y1)[:, :ww].astype(np.float32)
+            out[y0 // f : y1 // f] = (
+                band.reshape((y1 - y0) // f, f, ww // f, f, 3)
+                .mean(axis=(1, 3))
+                .round()
+                .clip(0, 255)
+            )
+    return out, f * f_level
 
 
 def tiff_mm_per_px(path):

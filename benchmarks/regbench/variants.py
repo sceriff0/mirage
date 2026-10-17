@@ -9,8 +9,11 @@ expect (``expected_variants()``) and which are the primary rows (``PRIMARY``).
 Totals are ``counts()`` and ``expected_variants()``; nothing here is a second copy to keep in
 step. The STARE and ASHLAR runs are GENERATED from tables (``regimes.REGIMES`` x
 ``STARE_STRIDES``; ``methods.ashlar.ASHLAR_CELLS``), so a total moves with a table. A run
-takes a dataset argument (``runs_for(dataset)``): the only dataset is the cohort's
-``multiplex`` (``regimes.DATASET_REGIME``).
+takes a dataset argument (``runs_for(dataset)``). A run carries ``Run.regimes``, the
+regimes (``regimes.REGIMES``) whose datasets take it: by default the cohort's only
+(``regimes.COHORT_REGIME``), so ``runs_for(dataset)`` keeps it only on a dataset of one of
+those regimes (``regimes.DATASET_REGIME``). The STARE runs of a brightfield regime are in
+``RUNS`` beside the cohort's and never in the cohort's list (as at commit 5a46f778).
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
@@ -58,8 +61,9 @@ only ever added at the end, so a position never changes.
                        (``stages_of()``): their names in order, joined by commas
                        (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit.
 
-The STARE runs of the cohort are its regime's levels x the three strides
-(``regimes.DATASET_REGIME``), and two tier runs, ``stare_medium`` and ``stare_low``
+The STARE runs of a set are its regime's levels x the three strides
+(``regimes.DATASET_REGIME``; a baseline cell, STARE unchanged, is one run in every regime),
+and for the cohort two tier runs, ``stare_medium`` and ``stare_low``
 (``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
 The pipeline's VALIS runs at its three tiers x micro-registration depth 0, 1, 2
 (``_valis_mirage_runs``): ``valis_mirage`` is (``high``, 2), the shipped call, and the
@@ -103,6 +107,8 @@ class Run(NamedTuple):
     active: bool = (
         True  # False pauses the run: kept and tested, not launched or expected
     )
+    # the regimes (regimes.REGIMES) whose datasets take the run: the cohort's by default
+    regimes: tuple[str, ...] = (regimes.COHORT_REGIME,)
 
 
 STARE_STRIDES = (64, 128, 256)
@@ -126,14 +132,32 @@ def stare_cell(stride, key, level):
     return name, opts
 
 
-def _stare_runs():
-    """The STARE runs: every stride x every level of the cohort's regime
-    (``regimes.COHORT_REGIME``), deduplicated by name."""
+def _stare_runs(regime):
+    """``{run name: opts}`` of one regime's STARE runs: every stride x every level of the
+    regime (``regimes.stare_levels``), deduplicated by name."""
     found = {}
-    for key, level in regimes.stare_levels(regimes.COHORT_REGIME):
+    for key, level in regimes.stare_levels(regime):
         for s in STARE_STRIDES:
             name, opts = stare_cell(s, key, level)
             found.setdefault(name, opts)
+    return found
+
+
+def _stare_regime_runs():
+    """The STARE runs of every regime, the cohort's first and in its own order (as at
+    commit 5a46f778). A run lists the regimes whose levels produce it, so a baseline cell
+    (STARE unchanged at a stride) is one run of every regime. Two regimes producing one
+    name with different options is a bug and is refused."""
+    found = {}
+    order = (regimes.COHORT_REGIME,) + tuple(
+        r for r in regimes.REGIMES if r != regimes.COHORT_REGIME
+    )
+    for reg in order:
+        for name, opts in _stare_runs(reg).items():
+            seen_opts, seen_regs = found.setdefault(name, (opts, []))
+            if seen_opts != opts:
+                raise ValueError(f"{name}: {seen_opts} in one regime, {opts} in {reg}")
+            seen_regs.append(reg)
     return tuple(
         Run(
             "stare",
@@ -142,8 +166,10 @@ def _stare_runs():
             "STARE_REGBENCH",
             False,
             None,
+            True,
+            tuple(regs),
         )
-        for name, opts in found.items()
+        for name, (opts, regs) in found.items()
     )
 
 
@@ -210,7 +236,7 @@ def _ashlar_runs():
 
 
 RUNS = (
-    *_stare_runs(),
+    *_stare_regime_runs(),
     *_stare_tier_runs(),
     *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
@@ -329,7 +355,7 @@ CHECKED_BY = {
         for n, c in _ashlar.ASHLAR_CELLS.items()
         if n not in ("ashlar", "affine_ashlar")
     },
-    **{run_label: "stare" for r in _stare_runs() if (run_label := r.label) is not None},
+    **{r.label: "stare" for r in _stare_regime_runs() if r.label is not None},
     # the tier runs too: the same adapter and pointing path at other tile sizes
     **{r.label: "stare" for r in _stare_tier_runs()},
     # the pipeline's VALIS at its other tier x depth cells: the same adapter and point path
@@ -582,12 +608,11 @@ def check():
 
 
 def runs_for(dataset=None):
-    """The active runs of a dataset: the same list for the cohort (None) and for
-    ``multiplex``, the only dataset. A dataset with no regime
-    (``regimes.DATASET_REGIME``) is a KeyError."""
-    if dataset is not None:
-        regimes.regime_of(dataset)
-    return active_runs()
+    """The active runs of a dataset: those whose ``regimes`` take its regime
+    (``Run.regimes``); the cohort (None) is ``regimes.COHORT_REGIME``. A dataset with no
+    regime (``regimes.DATASET_REGIME``) is a KeyError."""
+    reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
+    return tuple(r for r in active_runs() if reg in r.regimes)
 
 
 def primary_for(dataset=None):
@@ -615,8 +640,8 @@ def stages_of(run):
 
 
 def counts():
-    """``(runs, runs on a GPU, runs per patient)``, of the active runs."""
-    runs = active_runs()
+    """``(runs, runs on a GPU, runs per patient)``, of the cohort's active runs."""
+    runs = runs_for(None)
     return (
         len(runs),
         sum(1 for r in runs if r.gpu),
@@ -639,9 +664,9 @@ def family(variant):
 
 
 def members(family_name, paused=False):
-    """The active run names of one family, in the order of ``RUNS``; with ``paused``,
-    the paused ones too."""
-    runs = RUNS if paused else active_runs()
+    """The cohort's active run names of one family, in the order of ``RUNS``; with
+    ``paused``, every run of the family, paused or of another regime."""
+    runs = RUNS if paused else runs_for(None)
     return [run_name(r) for r in runs if family(run_name(r)) == family_name]
 
 

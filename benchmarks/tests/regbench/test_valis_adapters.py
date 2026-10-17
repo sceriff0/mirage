@@ -1324,16 +1324,29 @@ def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
         assert "info.place_s" in cost.CLOCK[name]["reading"]
 
 
-# ── a brightfield case is not part of this benchmark ──────────────────────────
+# ── a brightfield case: VALIS's own processing, recorded (methods.NO_BRIGHTFIELD) ──
 @pytest.mark.parametrize("module", [valis120, valis_mirage])
-def test_a_brightfield_case_is_refused(tmp_path, pair, module):
+def test_a_brightfield_case_is_accepted_and_valis_own_reading_recorded(
+    tmp_path, pair, module, monkeypatch
+):
+    """Both adapters have an input rule for a brightfield case (VALIS chooses its own
+    processing from its reader's is_rgb). Here the slides are the fluorescence pair
+    labelled brightfield, which VALIS reads as fluorescence: every row still runs, and
+    says so (``problem``); no channel is looked for (``nuclear_channel`` None)."""
     import dataclasses
 
     cases = [
         dataclasses.replace(c, modality="brightfield") for c in patient(tmp_path, pair)
     ]
-    with pytest.raises(ValueError, match="brightfield cases are not part of this"):
-        next(iter(module.register_group(cases, tmp_path / "work", {})))
+    if module is valis_mirage:
+        fv.install(monkeypatch.setitem, version="1.0.0", rounding="trunc")
+        monkeypatch.setattr(valis_mirage, "pipeline", pipeline_stand_in)
+    rows = list(module.register_group(cases, tmp_path / "work", {"workers": 2}))
+    assert len(rows) == 6 and all(pm is not None for _, _, pm, _ in rows)
+    for _, _, _, info in rows:
+        assert info["modality"] == "brightfield" and info["nuclear_channel"] is None
+        assert set(info["valis_img_type"].values()) == {"fluorescence"}
+        assert "not brightfield" in info["problem"]
 
 
 # ── the pipeline's three tiers x micro-registration depth 0, 1, 2 ─────────────

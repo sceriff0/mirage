@@ -1,6 +1,10 @@
 """The cohort is the only dataset: what was removed stays removed.
 
-``REMOVED`` is the module-level tuple that later removals extend.
+``REMOVED`` is the module-level tuple that later removals extend. ``REINTRODUCED`` are the
+public names plan F brings back, and where: the regimes of the brightfield sets
+(``regimes.DATASET_REGIME``, every dataset of the plan, so that ``regimes.py`` is not
+edited after the method-code freeze). Their dataset modules, launcher choices and CLI
+choices are still absent, and the scan below still says so for every other file.
 """
 
 import ast
@@ -17,6 +21,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[3]
 RB = ROOT / "benchmarks" / "regbench"
 REMOVED = ("synthetic", "semisynth", "anhir", "anhir_tune", "hyreco_a", "hyreco_b")
 REMOVED += ("stare_prep",)
+# public names reintroduced by plan F, with the one file each may be named in so far
+REINTRODUCED = {name: ("regimes.py",) for name in ("anhir", "hyreco_a", "hyreco_b")}
 
 sys.path.insert(0, str(ROOT / "tests"))
 strip_line_comment = importlib.import_module("ci_actions").strip_line_comment
@@ -47,6 +53,8 @@ def test_no_module_of_a_removed_dataset_is_left(name):
 @pytest.mark.parametrize("name", REMOVED)
 def test_no_launcher_or_cli_choice_names_a_removed_dataset(name):
     for path in [RB / "cli.py", RB / "regimes.py", *sorted((RB / "slurm").glob("*"))]:
+        if path.name in REINTRODUCED.get(name, ()):
+            continue
         assert not re.search(rf"\b{name}\b", _code(path)), (
             f"{path.relative_to(ROOT)} names {name}"
         )
@@ -66,12 +74,14 @@ def test_no_benchmarks_anhir_directory():
     assert not (ROOT / "benchmarks" / "anhir").exists()
 
 
-def test_no_prep_module():
-    from benchmarks.regbench import regimes
+def test_no_preprocessing_selection():
+    """``prep.py`` is back with the brightfield proxies only (Task 6b): the ``stare_prep``
+    candidate list, its selection and its frozen file stay gone."""
+    from benchmarks.regbench import prep
 
-    assert not (RB / "prep.py").exists()
     assert not (RB / "prep_frozen.json").exists()
-    assert set(regimes.REGIMES) == {"cyclic_if"}
+    for gone in ("CANDIDATES", "selected", "load_frozen", "rank", "ROW", "CRITERION"):
+        assert not hasattr(prep, gone), gone
 
 
 def test_the_arms_and_sweep_layers_are_gone():

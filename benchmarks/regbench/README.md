@@ -192,8 +192,12 @@ does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 55 runs, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
-regime (`regimes.COHORT_REGIME`, cyclic IF). `score` expects exactly that list's result
-names and opens its summary on the six primary rows:
+regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the two brightfield
+regimes (`bf_same`: one section re-stained; `bf_consecutive`: consecutive sections) and
+the regime of every dataset of the paper; a run carries the regimes that take it
+(`Run.regimes`, the cohort's by default), so the brightfield regimes' 15 STARE runs are in
+`RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
+exactly the cohort's result names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu_asdrawn`, `ashlar`, `palom`.
 
@@ -222,10 +226,14 @@ names and opens its summary on the six primary rows:
   is STARE's OWN `--prep`, passed to `stare coarse` and `stare reg-tile` (default `none`;
   `--pixel-size` goes with it, as the case's size, else `auto`). It is the package's
   option, so it is NOT a benchmark-side departure and is not listed in `benchmark_side`;
-  it is recorded in `info.input.sprep`. `proxy=channel` is the one-channel image STARE
-  reads, the case's nuclear channel. Refused: any other proxy, values outside
-  `PROXIES`/`SPREPS`, and `sprep=clahe` where the pixel size is unknown (the run
-  raises, so its round is the method's `exception`).
+  it is recorded in `info.input.sprep`. `proxy=` is the one-channel image STARE reads:
+  on a fluorescence case `channel` (the case's nuclear channel, the only value); on an
+  RGB case `grey` (the case's own inverted-luminance proxy, the default), `haem` or
+  `grey_smooth`, the last two written by the benchmark (`regbench.prep`) before COARSE,
+  unbilled and listed in `benchmark_side`. Refused: a proxy of the other modality, values
+  outside `PROXIES`/`SPREPS`; and, as the benchmark's cause (`benchmark`, not the
+  method's), `sprep=clahe` where the pixel size is unknown, a written proxy on a case
+  with a reduced proxy, and a named `proxy=grey` on a case whose own proxy is not grey.
 - **What a selfcheck does not exercise.** A generated STARE cell is checked by `stare`'s
   selfcheck and an ASHLAR cell by that of `ashlar` (affine none) or `affine_ashlar`
   (affine stare), which run the 15 um / 0.002 cell. The check covers the adapter's
@@ -392,20 +400,21 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 
 ## Methods (the design; see "State" for what exists)
 
-| variant(s) | software | run unit | native transform | how nuclei are moved |
-|---|---|---|---|---|
-| `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame |
-| `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame |
-| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same |
-| `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same |
-| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary |
-| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), so its `within_1um` can be low with a perfect registration; `deeperhistreg_hr_gpu`, the estimated-field row, shows the registration itself |
-| `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame |
-| `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame |
-| `initial` | none | | identity | |
+| variant(s) | software | run unit | native transform | how nuclei are moved | an RGB (brightfield) case |
+|---|---|---|---|---|---|
+| `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame | registered on a one-channel proxy of each slide: the case's own grey proxy, or a haematoxylin / smoothed proxy the benchmark writes; STARE's own `--prep` on it; the image written is the registered proxy |
+| `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
+| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same | same |
+| `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
+| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys | pair | backward field on the padded, resampled reference grid | reference nuclei through its `warp_landmarks` and the coordinate chain of its issue #12; moving frame. Secondary | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
+| the same eight with `_asdrawn` | the same runs | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. The rows that can be primary: **`deeperhistreg_hr_gpu_asdrawn` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), so its `within_1um` can be low with a perfect registration; `deeperhistreg_hr_gpu`, the estimated-field row, shows the registration itself | same |
+| `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
+| `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame | refused, with the reason (the README's recipe reads one channel by index; which of its colour modes is the input rule is not decided) |
+| `initial` | none | | identity | |  |
 
 Honest limits of "natively": ASHLAR is run on tiles cut from stitched slides, not raw tiles;
-DeeperHistReg is run on fluorescence with brightfield defaults; STARE is run as the
+DeeperHistReg is run on fluorescence with brightfield defaults; STARE reads one channel,
+so an RGB case is a one-channel proxy of it; STARE is run as the
 pipeline's four stages in scheduler jobs of their own, with a throttled tile submitter
 in place of Nextflow's queue, a retried tile grouped with its round's other retries, and
 STITCH as a process inside the round's last job; `valis120` at upstream defaults is upstream's
@@ -1498,7 +1507,7 @@ repository (`compute_qcs_4methods.py:2`).
 | row | image |
 |---|---|
 | every variant with a written image | the method's own file |
-| `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |
+| `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |  |
 
 A variant with no image has NO row and one line in `tissue_missing.csv` with the reason:
 `not run`, `the run failed (<cause>): no image`, `the method writes no image for this

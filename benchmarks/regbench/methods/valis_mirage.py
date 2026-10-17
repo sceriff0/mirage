@@ -651,6 +651,15 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
             info["nuclear_channel"] = {
                 str(n): _channel_used(s) for n, s in registrar.slide_dict.items()
             }
+    # a brightfield patient: no channel is looked for, VALIS's own reading is recorded
+    # (_valis_points.modality_record); a fluorescence patient's record is unchanged
+    slides = {}
+    with contextlib.suppress(Exception):
+        slides = dict(registrar.slide_dict)
+    bf_info, bf_problem = vp.modality_record(cases, slides)
+    if bf_info:
+        info.update(bf_info)
+        info["implementation"]["input"] = vp.RGB_INPUT
 
     for variant in VARIANTS:
         for case in cases:
@@ -693,6 +702,8 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                 problems.append("no displacement field: the writer drew rigid only")
             if state.get("capture_error"):
                 problems.append(f"stage capture failed: {state['capture_error']}")
+            if bf_problem:
+                problems.append(bf_problem)
             if problems:
                 own["problem"] = "; ".join(problems)
             source = (
