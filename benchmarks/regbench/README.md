@@ -2395,6 +2395,27 @@ folder; these rules keep one from answering for the other:
   new record names the folder (`earlier_result`). The current submission's row reads
   `infrastructure`, not that earlier result; moving the two files back restores it.
 
+**Reuse: what is computed again, and why.** A unit result is reused only when its
+`run.json: reuse_key` equals the key the current code computes. `code` is a sha256 over
+the driver `methods/__init__.py`, the adapter, the `methods/` modules it imports and the
+`regbench` modules it imports directly; `inputs` is the fingerprint of every image the
+cases name; STARE adds its version and its SOLVE identity. So **any byte change to one
+of those files makes every earlier result of that method run again**, and results made
+before plan E (on the arms' inputs) are not reused by this branch's code. Two finer
+caches survive code changes: a STARE stage job (COARSE, a tile, SOLVE) is reused when its
+command, STARE's version and the bytes it reads are equal (`stages/jobs/*.json:
+identity`, no code hash), and a pair record of the scorer is reused when `pairs.py`,
+`cases.py`, `mapping.py`, `cell_pairs.py` and the `PAIR_CODE_MEMBERS` are unchanged.
+There is no switch that ignores a code change.
+
+`python -m benchmarks.regbench reuse --cases C --out O [--dataset multiplex] [--csv PATH]`
+reports, read-only, for every finished result whether the launcher would reuse it now
+(`reusable`: `yes`/`no`) and which part differs (`differs`: any of `execution`, `code`,
+`inputs`, `method`, `points`, `record`; `record` = not `ok` or no `warped.npz`). A method
+whose adapter cannot be loaded on this machine (a stand-in, a plug-in that is not enabled)
+is `no` with `code` and the detail `key not computable here`. The last line is
+`# reusable: N of M ok results`. It writes nothing under `--out`.
+
 A GPU is asked for only for the runs whose `gpu` column is 1, with the site's own
 request string, and the script refuses to submit them without it. An image is given the
 GPU (`--nv`) only for those runs. VALIS 1.2.0's image is started with `--writable-tmpfs`.

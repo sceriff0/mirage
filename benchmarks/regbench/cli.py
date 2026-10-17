@@ -396,6 +396,17 @@ def build_parser():
         "is reused only when everything it rests on is unchanged",
     )
 
+    ru = sub.add_parser(
+        "reuse",
+        help="READ-ONLY: per finished result, would the launcher reuse it, and which "
+        "part of its reuse key differs (execution, code, inputs, method, points, "
+        "record). Writes nothing under --out",
+    )
+    ru.add_argument("--cases", required=True)
+    ru.add_argument("--out", required=True)
+    ru.add_argument("--dataset", default="multiplex")
+    ru.add_argument("--csv", default=None, help="also write the rows here")
+
     so = sub.add_parser(
         "score-case",
         help="score ONE case of a cohort dataset and keep its record under "
@@ -1226,6 +1237,26 @@ def print(*args, **kwargs):  # noqa: A001  (this module's answers, see ANSWERS)
     builtins.print(*args, **kwargs)
 
 
+def _reuse_report(a):
+    import csv
+
+    from . import reuse
+
+    rows = reuse.report(a.cases, a.out, a.dataset)
+    cols = ["variant", "case_id", "method", "label", "reusable", "differs", "detail"]
+    print("\t".join(cols))
+    for r in rows:
+        print("\t".join(str(r[c]) for c in cols))
+    if a.csv:
+        with open(a.csv, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+    ok = [r for r in rows if r["differs"] != "record"]
+    print(f"# reusable: {sum(r['reusable'] == 'yes' for r in ok)} of {len(ok)} ok results")
+    return 0
+
+
 def main(argv=None):
     """Run one command. For a command in ``ANSWERS`` everything but its answer goes to
     the standard error."""
@@ -1308,6 +1339,8 @@ def _main(a):
         return _tissue(a)
     if a.cmd == "score-case":
         return _score_one(a)
+    if a.cmd == "reuse":
+        return _reuse_report(a)
     if a.cmd == "submissions":
         import sys
 
