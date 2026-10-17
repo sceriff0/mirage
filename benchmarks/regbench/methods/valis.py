@@ -178,6 +178,20 @@ def _write(reg, slides, variant, opts, non_rigid, staging):
     return out
 
 
+class CaptureFailed(str):
+    """The benchmark's own capture of a slide's transform failed (the crop probe, a
+    stored field loaded whole): its text, and the cause that says it is not VALIS's
+    (``benchmark``, ``benchmark_oom`` for a memory error, which goes up the ladder)."""
+
+    def __new__(cls, exc):
+        from .. import resources
+
+        self = super().__new__(cls, f"the benchmark's capture failed: {_error(exc)}")
+        memory = resources.classify_error(exc) in resources.MEMORY_CAUSES
+        self.cause = "benchmark_oom" if memory else "benchmark"
+        return self
+
+
 def _stage_items(cases, variant, snaps, natives, warp_tools, info, points):
     """One result for every round, ready to yield: ``(case_id, variant, PointMap | None,
     info)``. Built while the clock is paused: the valid box goes through the point path."""
@@ -185,6 +199,11 @@ def _stage_items(cases, variant, snaps, natives, warp_tools, info, points):
     for case in cases:
         cid = case.case_id
         snap = snaps.get(cid)
+        if isinstance(snap, CaptureFailed):
+            # the benchmark's capture failed, not VALIS: benchmark / benchmark_oom
+            failed = {**info, "error": str(snap), "cause": snap.cause}
+            items.append((cid, variant, None, failed))
+            continue
         if isinstance(snap, str) or snap is None:
             items.append((cid, variant, None, {**info, "error": snap or "no slide"}))
             continue
@@ -243,7 +262,9 @@ def register_group(cases, work, opts):
     # lines and slide_io.py:231-260]`). A Java heap error would then repeat on every
     # rung of the ladder. So the JVM is started here, through VALIS's own
     # slide_io.init_jvm, with the heap the pipeline's module asks for at this rung;
-    # VALIS's later init_jvm calls find it started and do nothing.
+    # VALIS's later init_jvm calls find it started and do nothing. The heap is the
+    # module's at the attempt the PIPELINE would be on with this memory
+    # (_valis_points.jvm_heap_gb): 12, 48, 80, 96, 96 GiB at 16/64/256/512/700 GB.
     heap = vp.jvm_heap_gb(opts)
     if heap:
         from valis import slide_io
@@ -275,8 +296,9 @@ def register_group(cases, work, opts):
         "jvm_cache": jvm_cache,
         "jvm_heap_gb": heap,
         "jvm_heap": f"-Xmx{heap}G, set by the benchmark through valis.slide_io."
-        "init_jvm before VALIS starts the JVM (min(32 + 16 x rung, GiB - 4), the "
-        "pipeline module's formula)"
+        "init_jvm before VALIS starts the JVM (min(32 + 16 x attempt, GiB - 4), the "
+        "pipeline module's formula, at the attempt the pipeline would be on with "
+        "this memory)"
         if heap
         else "VALIS's own 10 GB (no memory request is known: not on the ladder)",
         "implementation": {
@@ -354,11 +376,15 @@ def register_group(cases, work, opts):
                     slide = reg.get_slide(placed[moving[cid]])
                     if slide is None or slide.M is None:
                         raise RuntimeError("VALIS has no transform for this slide")
+                except Exception as exc:  # VALIS's: the method's failure
+                    snaps[cid] = _error(exc)
+                    continue
+                try:
                     args = (slide, ref, warp_tools, non_rigid, crop_round)
                     snaps[cid] = vp.snapshot(*args, points == "from_to")
                     slides[cid] = slide
-                except Exception as exc:
-                    snaps[cid] = _error(exc)
+                except Exception as exc:  # the benchmark's own capture (F18)
+                    snaps[cid] = CaptureFailed(exc)
             return snaps, slides
 
         mon.pause()

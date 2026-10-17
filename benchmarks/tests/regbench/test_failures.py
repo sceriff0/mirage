@@ -869,3 +869,145 @@ def test_the_counting_unit_is_stated_under_the_table():
     )
     assert "count CASES" in text
     assert "count CASES" not in score.summary_markdown(summary, [], [])
+
+
+# ── pre-freeze review wave 1: F19, F20, F21 ───────────────────────────────────
+def _with_slide(case, tmp_path):
+    """The toy case naming a moving slide on disk (the toy has none)."""
+    import dataclasses
+
+    slide = tmp_path / "slides" / "moving.tif"
+    slide.parent.mkdir(parents=True, exist_ok=True)
+    slide.write_bytes(b"\x01" * 4096)
+    return dataclasses.replace(case, mov_image=str(slide)), slide
+
+
+def _one_variant(name="g"):
+    def register(case, work, opts):
+        yield name, true_map(), {}
+
+    return fake(name, [name], register)
+
+
+def test_unreadable_inputs_leave_an_earlier_ok_result_as_it_was(
+    toy, tmp_path, monkeypatch
+):
+    """F19: a slide not visible from the job says nothing of whether the inputs changed:
+    the earlier ok record and its warped.npz stay as they were."""
+    _, case, out = toy
+    case, slide = _with_slide(case, tmp_path)
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S1")
+    assert methods.run_case(_one_variant(), case, out, resume=True) == ["g"]
+    d = result_dir(out, "g", case)
+    kept = (d / "run.json").read_bytes(), (d / "warped.npz").read_bytes()
+    slide.rename(slide.with_suffix(".moved"))
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S2")
+    assert methods.run_case(_one_variant(), case, out, resume=True) == []
+    assert ((d / "run.json").read_bytes(), (d / "warped.npz").read_bytes()) == kept
+
+
+def test_unreadable_inputs_fail_a_row_without_an_ok_result_as_infrastructure(
+    toy, tmp_path
+):
+    _, case, out = toy
+    case, slide = _with_slide(case, tmp_path)
+    slide.unlink()
+    assert methods.run_case(_one_variant(), case, out, resume=True) == []
+    run = run_json(out, "g", case)
+    assert not run["ok"] and run["cause"] == "infrastructure"
+    assert "cannot be read" in run["error"]
+
+
+def test_another_submissions_ok_result_is_set_aside_not_destroyed(
+    toy, tmp_path, monkeypatch
+):
+    """F19: a reuse refused (here the slide's bytes changed) runs the unit again; the
+    earlier ok record of another submission is moved to earlier/<n>/, named in the new
+    record, and survives a new attempt that fails."""
+    _, case, out = toy
+    case, slide = _with_slide(case, tmp_path)
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S1")
+    methods.run_case(_one_variant(), case, out, resume=True)
+    d = result_dir(out, "g", case)
+    old = json.loads((d / "run.json").read_text())
+    slide.write_bytes(b"\x02" * 4096)
+
+    def broken(case, work, opts):
+        raise RuntimeError("this attempt fails")
+        yield  # pragma: no cover
+
+    monkeypatch.setenv("REGBENCH_SUBMISSION", "S2")
+    methods.run_case(fake("g", ["g"], broken), case, out, resume=True)
+    new = run_json(out, "g", case)
+    assert not new["ok"] and new["earlier_result"]["ok"] is True
+    kept = Path(new["earlier_result"]["kept"])
+    assert kept == d / ladder.SET_ASIDE / "1"
+    assert json.loads((kept / "run.json").read_text()) == old
+    assert (kept / "warped.npz").exists()
+
+
+def test_the_final_row_of_a_method_with_its_own_writer_is_held_until_it_wrote(toy):
+    """F20: between the final yield and the writer, the row on disk is the writer's
+    holding record, never ok without an image."""
+    _, case, out = toy
+    seen = {}
+
+    def register(case, work, opts):
+        yield "m_rigid", true_map(), {}
+        yield "m", true_map(), {"_state": {}}
+        # the generator resumes after the driver handled the yield, before the writer
+        run = run_json(out, "m", case)
+        seen.update(ok=run["ok"], cause=run["cause"], phase=run.get("phase"))
+
+    mod = fake("m", ["m_rigid", "m"], register, write_native=lambda s, c, d: image(d))
+    assert methods.run_case(mod, case, out) == ["m_rigid", "m"]
+    assert seen == {"ok": False, "cause": "killed", "phase": "writer"}
+    final = run_json(out, "m", case)
+    assert final["ok"] is True and final["native"]["files"]
+    assert run_json(out, "m_rigid", case)["ok"] is True  # not a writer's row
+
+
+def test_a_rise_the_main_thread_saw_first_is_never_signalled(counter, monkeypatch):
+    """F21: the main thread saw the rise and handles it: the watcher must not send a
+    SIGINT for it later, into code without a handler. A LATER rise still is."""
+    monkeypatch.setattr(methods, "OOM_POLL_S", 0.3)
+    watch = methods._OomWatch(lambda: None).start()
+    try:
+        counter.write_text("oom 1\noom_kill 1\n")
+        assert watch.seen("method") is True and watch.phase == "method"
+        try:
+            time.sleep(1.0)  # three polls of the watcher
+        except KeyboardInterrupt:  # pragma: no cover - the defect
+            pytest.fail("the watcher signalled a rise the main thread had handled")
+        assert watch.fired is False
+        counter.write_text("oom 2\noom_kill 2\n")
+        with pytest.raises(KeyboardInterrupt):
+            time.sleep(2.0)
+        assert watch.fired is True
+    finally:
+        watch.stop()
+
+
+def test_a_rise_seen_at_a_yield_leaves_the_rounds_already_done_to_their_writer(
+    tmp_path, counter, monkeypatch
+):
+    """F21: a rise seen at round 2's yield fails round 2 as the method's oom; round 1,
+    done before it, is written by the writer, uninterrupted, and stays ok."""
+    monkeypatch.setattr(methods, "OOM_POLL_S", 0.3)
+    root, out = tmp_path / "cases", tmp_path / "out"
+    first, second = toy_case(root, "P1_r1", "P1"), toy_case(root, "P1_r2", "P1")
+
+    def register_group(cases, work, opts):
+        yield first.case_id, "g", true_map(), {"_state": {}}
+        counter.write_text("oom 1\noom_kill 1\n")
+        yield second.case_id, "g", true_map(), {"_state": {}}
+
+    def write_native(state, case_id, dest):
+        time.sleep(1.0)  # long enough for the watcher to poll
+        return image(dest)
+
+    mod = fake("g", ["g"], register_group=register_group, write_native=write_native)
+    methods.run_group(mod, [first, second], out)
+    assert run_json(out, "g", second)["cause"] == "oom"
+    done = run_json(out, "g", first)
+    assert done["ok"] is True and done["native"]["files"]

@@ -34,10 +34,15 @@ only the reference cycle's edge alignment can (``:261-262``). ``affine=stare`` c
 moving tile, unrotated and uninterpolated, where STARE's rigid matrix (``info["m0"]`` of
 the ``stare`` run of that round) puts the matching reference tile's centre; ASHLAR is told
 the regular grid. A round whose ``stare`` result is missing fails alone ("anchor
-unavailable"). Reference tiles are cut once per noise level and shared on disk by the plain
-and the anchored row (``<out>/cache/ashlar_tiles``), the moving cycles' tiles (noise-free in
-every cell) once per slide, cycle and tile origins (``moving_tiles``); ASHLAR's reference
-stitch is not shared, each command does its own. The cause ``identical_overlap`` is given
+unavailable", cause ``benchmark``: the benchmark could not build its input; STARE's own
+recorded cause is kept as ``anchor_cause``). The anchor each round would read is in the
+anchored row's reuse key (``REUSE_KEY``), so a STARE result that moved its matrix makes
+the row run again. Reference tiles are cut once per noise level and shared on disk by the
+plain and the anchored row (``<out>/cache/ashlar_tiles``), the moving cycles' tiles
+(noise-free in every cell) once per slide, cycle and tile origins (``moving_tiles``), each
+folder keyed by the code that cuts it too (``cutter_code``); ASHLAR's reference stitch is
+not shared, each command does its own. A failure of the cutting itself (a full disk, a
+failed read) is the benchmark's: ``benchmark``, or ``benchmark_oom`` for memory. The cause ``identical_overlap`` is given
 only on a cell without noise: with noise the same raise is ASHLAR's own (``exception``).
 
 **Points: exactly where ASHLAR drew each tile.** ``Mosaic.assemble_channel`` pastes tile
@@ -297,10 +302,64 @@ def read_anchor(opts, case, root):
     return None, f"anchor unavailable: {where}"
 
 
+def anchor_cause(opts, case, root):
+    """The ``cause`` STARE's own run of this round recorded (``""`` for an ok one), or
+    ``"no record"``: what a round that fails as "anchor unavailable" carries as
+    ``anchor_cause``, so the tables can tell a STARE failure from a lost job."""
+    for path in anchor_paths(opts, case, root):
+        try:
+            run = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        return str(run.get("cause") or "") if isinstance(run, dict) else "no record"
+    return "no record"
+
+
+def REUSE_KEY(cases, out, opts, label):
+    """What an ASHLAR result rests on beyond its options, inputs and code
+    (``methods.reuse_key``): for an anchored row (``affine=stare``) the anchor of each
+    round, STARE's ``info.m0`` as the row would read it now (None where there is none).
+    A STARE result that ran again and moved its rigid matrix makes the anchored row
+    another result, not a reused one. None for a row without an anchor."""
+    if str(opts.get("affine", "none")) != "stare":
+        return None
+    root = Path(opts["out"]) if opts.get("out") else Path(out)
+    anchors = {}
+    for case in cases:
+        m0, _ = read_anchor(opts, case, root)
+        anchors[case.case_id] = None if m0 is None else m0.tolist()
+    return {"anchor_m0": anchors}
+
+
 # ── tiles ─────────────────────────────────────────────────────────────────────
 def _file_key(path):
     st = os.stat(path)
     return [str(Path(path).resolve()), int(st.st_size), int(st.st_mtime_ns)]
+
+
+def cutter_code():
+    """sha256 of the code that cuts the tiles: ``benchmarks/ashlar/retile.py`` and the
+    ``bin/utils`` modules it imports. In the key of every cached tile folder, so tiles
+    cut by other code are not found in the cache (the run's own reuse key holds the
+    same files: ``methods.code_files``)."""
+    from benchmarks.ashlar import retile
+
+    from . import _flat_imports
+
+    here = Path(retile.__file__).resolve()
+    h = hashlib.sha256()
+    for path in [here, *sorted(set(_flat_imports(here)))]:
+        h.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+class TilesNotCut(RuntimeError):
+    """The benchmark's own step that cuts ASHLAR's tiles failed: not ASHLAR's failure
+    (``benchmark``, or ``benchmark_oom`` for a memory error, which goes up the ladder)."""
+
+    def __init__(self, message, cause):
+        super().__init__(message)
+        self.regbench_cause = cause
 
 
 def reference_tiles(ref, slides, px, frac, cache, work):
@@ -323,6 +382,7 @@ def reference_tiles(ref, slides, px, frac, cache, work):
         _file_key(ref),
         sorted(retile._yx_shape(p) for p in slides),
         [TILE, OVERLAP, float(px), frac, floor, SEED],
+        cutter_code(),
     ]
     name = f"ref_n{frac:g}_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
     home = Path(cache) if cache is not None else Path(work) / "tiles"
@@ -358,6 +418,7 @@ def moving_tiles(mov, k, slides, px, origins, cache, work):
         sorted(retile._yx_shape(p) for p in slides),
         [TILE, OVERLAP, float(px), SEED, int(k)],
         None if origins is None else np.asarray(origins, float).tolist(),
+        cutter_code(),
     ]
     name = "mov_" + hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16]
     home = Path(cache) if cache is not None else Path(work) / "tiles"
@@ -817,6 +878,14 @@ def register_group(cases, work, opts):
         retile_s = (
             moving_s + ref_s if ref_s is not None and moving_s is not None else None
         )
+    except Exception as exc:
+        # the benchmark's own step (a full disk, a failed read, memory): not ASHLAR's
+        cause = resources.classify_error(exc)
+        if cause not in resources.NOT_THE_METHOD:
+            cause = "benchmark_oom" if cause in resources.MEMORY_CAUSES else "benchmark"
+        raise TilesNotCut(
+            f"the benchmark's tile cutting failed: {_error(exc)}", cause
+        ) from exc
     finally:
         mon.resume()
     base.update(
@@ -831,7 +900,19 @@ def register_group(cases, work, opts):
         rounds_in_command=[c.case_id for c in included],
     )
     for case, why in dropped:  # the patient's other rounds proceed
-        yield case.case_id, variant, None, {**base, "error": why}
+        # no anchor to read: the benchmark could not build this round's input, whatever
+        # became of STARE's own run (its cause is kept beside it)
+        yield (
+            case.case_id,
+            variant,
+            None,
+            {
+                **base,
+                "error": why,
+                "cause": "benchmark",
+                "anchor_cause": anchor_cause(opts, case, root),
+            },
+        )
     if not included:
         return
 

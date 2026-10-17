@@ -758,8 +758,10 @@ def test_a_missing_anchor_fails_its_round_and_the_others_proceed(tmp_path, pair,
     assert done == {"P1_r1": ["affine_ashlar"], "P1_r2": []}
     bad = run_json(out, "affine_ashlar", cases[1])
     missing = result_dir(out, "stare", cases[1]) / "run.json"
-    assert not bad["ok"] and bad["cause"] == "exception"
+    # F11: no anchor is the benchmark's input missing, not the hybrid's own failure
+    assert not bad["ok"] and bad["cause"] == "benchmark"
     assert bad["error"] == f"anchor unavailable: {missing}"
+    assert bad["info"]["anchor_cause"] == "no record"
     good = run_json(out, "affine_ashlar", cases[0])
     assert good["ok"] and good["info"]["rounds_in_command"] == ["P1_r1"]
     assert good["info"]["m0"] == M0.tolist()
@@ -772,6 +774,91 @@ def test_a_missing_anchor_fails_its_round_and_the_others_proceed(tmp_path, pair,
     assert info["register_s_round"] == pytest.approx(
         info["layer_s"][0] + info["edge_s"]
     )
+
+
+def test_a_failed_stare_run_leaves_its_cause_beside_the_anchor_failure(
+    tmp_path, pair, small
+):
+    """F11: STARE's own cause (here the scheduler's) is kept, the row is the
+    benchmark's."""
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    path = stare_run(out, cases[0], ok=False)
+    path.write_text(json.dumps({"ok": False, "cause": "infrastructure", "info": {}}))
+    methods.run_group("ashlar", cases, out, {"affine": "stare"}, label="affine_ashlar")
+    bad = run_json(out, "affine_ashlar", cases[0])
+    assert (bad["cause"], bad["info"]["anchor_cause"]) == (
+        "benchmark",
+        "infrastructure",
+    )
+
+
+def test_an_anchored_row_is_reused_only_while_stares_anchor_is_the_same(
+    tmp_path, pair, small
+):
+    """F10 (b): STARE ran again and moved its matrix: the anchored row is not reused
+    with the old one."""
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    stare_run(out, cases[0], M0)
+    opts = {"affine": "stare"}
+
+    def again():
+        methods.run_group(
+            "ashlar", cases, out, opts, label="affine_ashlar", resume=True
+        )
+        return len(fa.calls("main"))
+
+    assert again() == 1 and again() == 1  # the second is reused
+    moved = M0.copy()
+    moved[0, 2] += 3.0
+    stare_run(out, cases[0], moved)
+    assert again() == 2
+    run = run_json(out, "affine_ashlar", cases[0])
+    assert run["ok"] and run["info"]["m0"] == moved.tolist()
+    assert run["reuse_key"]["method"] == {"anchor_m0": {"P1_r1": moved.tolist()}}
+    plain = methods.reuse_key("ashlar", cases, out, {}, None)
+    assert plain["method"] is None  # a row without an anchor reads none
+
+
+@pytest.mark.parametrize(
+    "exc, cause",
+    [
+        (OSError(28, "No space left on device"), "benchmark"),
+        (MemoryError("Unable to allocate 12.0 GiB"), "benchmark_oom"),
+    ],
+)
+def test_a_failure_of_the_tile_cutting_is_the_benchmarks(
+    tmp_path, pair, small, monkeypatch, exc, cause
+):
+    """F12: the benchmark cuts the tiles, with the clock paused: a full disk or a memory
+    error there is not ASHLAR's failure."""
+
+    def broken(*a, **kw):
+        raise exc
+
+    monkeypatch.setattr(retile, "write_tiles", broken)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("ashlar", cases, tmp_path / "out")
+    run = run_json(tmp_path / "out", "ashlar", cases[0])
+    assert not run["ok"] and run["cause"] == cause
+    assert "tile cutting failed" in run["error"]
+
+
+def test_tiles_cut_by_other_code_are_not_found_in_the_cache(
+    tmp_path, pair, small, monkeypatch
+):
+    """F10 (a): the tile cache is keyed by the code that cuts the tiles."""
+    slides = [pair["reference"], pair["moving"]]
+    px = pair["pixel_size_um"]
+    first, _, _ = am.reference_tiles(slides[0], slides, px, 0.0, tmp_path, tmp_path)
+    copy = tmp_path / "retile.py"
+    copy.write_text(Path(retile.__file__).read_text() + "\n# another cut\n")
+    monkeypatch.setattr(retile, "__file__", str(copy))
+    second, _, reused = am.reference_tiles(
+        slides[0], slides, px, 0.0, tmp_path, tmp_path
+    )
+    assert second != first and reused is False
 
 
 @pytest.mark.parametrize(

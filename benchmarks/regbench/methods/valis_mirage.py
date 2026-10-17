@@ -66,7 +66,11 @@ any other label is free.
 a fixed text; the wrapper around ``valtils.print_warning`` (``_valis_points.
 swallowed_errors``) puts what VALIS printed back into the error, so a Java
 ``OutOfMemoryError`` or a NumPy memory error is ``cause: oom`` and the patient goes up a
-rung. The micro pass is different: ``bin/register.py:805-808`` catches ANY exception of
+rung. VALIS 1.0.0 also PRINTS a failed BioFormats tile read and raises an
+``UnboundLocalError`` instead (``slide_io.py:885-900``); what it prints that names memory
+is kept (``_valis_points.printed_errors``) and read the same way. A slide the pipeline's
+writer failed on is ``writer`` / ``writer_oom`` with the writer's error; a capture of the
+benchmark's that failed is ``benchmark`` / ``benchmark_oom``. The micro pass is different: ``bin/register.py:805-808`` catches ANY exception of
 ``register_micro`` and carries on, writing the non-rigid result. When that exception is
 a memory error the ``valis_mirage`` row is FAILED with ``cause: oom`` instead of being
 kept with a ``problem``: the row's name is the full method, every other method's memory
@@ -79,7 +83,8 @@ SimpleElastix) is kept as shipped, with ``problem``.
 rebinds ``multiprocessing.cpu_count`` to it, so VALIS 1.0.0's pools, each sized
 ``cpu_count() - 1`` (``serial_rigid.py:578, 643`` and four other places in the 1.0.0
 sdist), run on one thread fewer. ``jvm_heap_gb`` follows the module's own formula,
-``min(32 + 16 * attempt, memory in GiB - 4)``, with the ladder's rung as the attempt;
+``min(32 + 16 * attempt, memory in GiB - 4)``, with the attempt the pipeline would be on
+at the rung's memory (``_valis_points.pipeline_attempt``: 64 GB doubling per attempt);
 outside a scheduler it is left to the pipeline's estimate. As read in the VALIS 1.0.0
 sdist, ``registration.init_jvm(jar=None, mem_gb=10)`` passes the literal 10 on
 (``registration.py:115-118`` `[PARTIAL: those lines and slide_io.py:183-211]`), so the
@@ -177,6 +182,15 @@ ARGS = {
     "max_keypoints": None,
 }
 RUN_ARGS = ("input_dir", "out", "reference", "jvm_heap_gb", "n_cpus")
+# The pipeline's code this adapter runs, from the repository root: in its reuse key and
+# its freeze with the bin/utils modules it imports (methods.code_files). The checkpoint
+# writer is imported only under `if stage_checkpoint_dir:` (bin/register.py:730, 814),
+# and this adapter passes stage_checkpoint_dir=None (ARGS).
+CODE_FILES = ("bin/register.py",)
+CODE_FILES_NOT_RUN = {
+    "bin/utils/stage_checkpoint.py": "imported only with a stage_checkpoint_dir, and "
+    "ARGS passes None",
+}
 # the rows of bin/utils/valis_config.py MEMORY_PRESETS, and bin/register.py's depths
 TIERS = ("high", "medium", "low")
 MICRO = (0, 1, 2)
@@ -249,9 +263,10 @@ def pipeline():
 
 
 def jvm_heap_gb(opts, host=None):
-    """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
-    12 GiB at 16 GB, 60 at 64 GB, 80 at 256 GB, 96 at 512 GB, 112 at 700 GB. None (the pipeline's own
-    estimate from the input size) when the memory request is unknown."""
+    """``modules/local/register.nf``'s formula at the attempt the pipeline would be on
+    with the rung's memory: 12 GiB at 16 GB, 48 at 64 GB, 80 at 256 GB, 96 at 512 GB,
+    96 at 700 GB. None (the pipeline's own estimate from the input size) when the memory
+    request is unknown."""
     return vp.jvm_heap_gb(opts, host)
 
 
@@ -298,12 +313,17 @@ def register_micro_wrapper(original, capture, state):
             state["capture_traceback"] = traceback.format_exc()
         state["micro_called"] = True
         seen = len(state.get("caught", ()))
+        printed = len(state.get("printed", ()))
         try:
             out = original(self, *args, **kwargs)
         except BaseException as exc:
             state["micro_error"] = _error(exc)
-            # what VALIS printed while the micro pass ran, and nothing from before it
-            state["micro_caught"] = list(state.get("caught", ()))[seen:]
+            # what VALIS reported (and printed) while the micro pass ran, and nothing
+            # from before it
+            state["micro_caught"] = [
+                *list(state.get("caught", ()))[seen:],
+                *list(state.get("printed", ()))[printed:],
+            ]
             raise
         state["micro_ran"] = True
         return out
@@ -380,9 +400,26 @@ def save_wrapper(original, state, mon, warp_tools, opts):
                     )
                     state["final_non_rigid"][name] = non_rigid
             except Exception as exc:
+                # the benchmark's own capture, not VALIS (F18)
                 state["errors"].setdefault(name, []).append(_error(exc))
+                state["capture_causes"].setdefault(name, []).append(
+                    resources.classify_error(exc)
+                )
             t0 = time.perf_counter()
-            out = original(self, *args, **kwargs)
+            printed = len(state.get("printed", ()))
+            try:
+                out = original(self, *args, **kwargs)
+            except BaseException as exc:
+                # the pipeline catches it per slide and goes on (bin/register.py:
+                # 969-998); what failed, and what VALIS printed meanwhile, is kept
+                # for the row (F15, F16). The pipeline sees the same exception.
+                state["write_errors"][name] = {
+                    "error": _error(exc),
+                    "cause": resources.classify_error(exc),
+                    "printed": list(state.get("printed", ()))[printed:],
+                }
+                raise
+            state["write_errors"].pop(name, None)  # a retry of the slide that worked
             state["written"][name] = {
                 "path": str(kwargs.get("dst_f") or (args[0] if args else "")),
                 "write_s": time.perf_counter() - t0,
@@ -496,6 +533,8 @@ def register_group(cases, work, opts):
         "final_non_rigid": {},
         "micro_called": False,
         "micro_ran": False,
+        "capture_causes": {},
+        "write_errors": {},
     }
     from valis import valtils
 
@@ -524,10 +563,13 @@ def register_group(cases, work, opts):
         # a fixed text. What VALIS printed is put back into the error, so that a memory
         # failure is classified as one and the patient goes up the ladder.
         state["caught"] = stack.enter_context(vp.swallowed_errors(valtils))
+        # VALIS 1.0.0 PRINTS a BioFormats tile failure (a Java heap error) and raises
+        # something else: what it printed that names memory is kept too (F16)
+        state["printed"] = stack.enter_context(vp.printed_errors())
         try:
             rc = reg_module.valis_registration(**call)
         except Exception as exc:
-            said = vp.reported(state["caught"])
+            said = vp.reported([*state["caught"], *state["printed"]])
             if said and resources.classify_error(exc) == "exception":
                 raise RuntimeError(f"{_error(exc)} VALIS reported: {said}") from exc
             raise
@@ -541,6 +583,49 @@ def register_group(cases, work, opts):
     yield from ready
 
 
+def _not_written(info, state, name, written):
+    """The failed row of a slide without an image or without its captured transform,
+    with the cause that says whose failure it is:
+
+    - the pipeline's writer failed for this slide (it catches that per slide and goes
+      on, ``bin/register.py:969-998``): ``writer_oom`` when the error, or what VALIS
+      printed while it ran, names memory, else ``writer``; its error is kept (F15, F16);
+    - the benchmark's capture of the final transform failed while the writer ran
+      (the crop probe, a stored field loaded whole): ``benchmark``, or
+      ``benchmark_oom`` for memory (F18);
+    - neither is known (the function never called the writer for it): no cause, the
+      method's ``exception``, as the pipeline's module fails the task."""
+    why = "; ".join(state["errors"].get(name, []))
+    failed = state.get("write_errors", {}).get(name)
+    if written is None and failed:
+        texts = [failed["error"], *failed.get("printed", ())]
+        memory = failed["cause"] == "oom" or any(
+            resources.classify_text(t) == "oom" for t in texts
+        )
+        said = "; ".join(failed.get("printed", ()))
+        error = (
+            f"the pipeline's writer failed for {name}: {failed['error']}"
+            + (f". VALIS printed: {said}" if said else "")
+            + (f". {why}" if why else "")
+        )
+        return {
+            **info,
+            "error": error,
+            "cause": "writer_oom" if memory else "writer",
+        }
+    if written is None:
+        msg = f"valis_registration wrote no registered image of {name}"
+        return {**info, "error": f"{msg}. {why}".strip()}
+    causes = state.get("capture_causes", {}).get(name, [])
+    return {
+        **info,
+        "error": f"the final transform of {name} was not captured. {why}".strip(),
+        "cause": "benchmark_oom"
+        if any(c in resources.MEMORY_CAUSES for c in causes)
+        else "benchmark",
+    }
+
+
 def _results(cases, moving, placed, how, call, state, opts, rc, host):
     """Every result of one call: ``(case_id, variant, PointMap | None, info)``."""
     import valis
@@ -549,7 +634,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
     version = str(getattr(valis, "__version__", "?"))
     points = str(opts.get("points", "image"))
     if rc:
-        said = vp.reported(state.get("caught", ()))
+        said = vp.reported([*state.get("caught", ()), *state.get("printed", ())])
         raise RuntimeError(
             f"valis_registration returned {rc}: no slide was warped (its log is on "
             "stdout)" + (f". VALIS reported: {said}" if said else "")
@@ -592,6 +677,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         "micro_error": state.get("micro_error", ""),
         "jvm_max_heap_gb": state.get("jvm_max_heap_gb"),
         "valis_reported": vp.reported(state.get("caught", ())),
+        "valis_printed_memory": list(state.get("printed", ())),
         "register_micro": state.get("register_micro", {}),
         "repair_fired": bool(state.get("repair_expected")),
         "repair_slides": state.get("repair_expected", []),
@@ -667,13 +753,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
             written = state["written"].get(name)
             final = stages.get(FINAL, {}).get(name)
             if written is None or final is None:
-                why = "; ".join(state["errors"].get(name, []))
-                msg = (
-                    f"valis_registration wrote no registered image of {name}"
-                    if written is None
-                    else f"the final transform of {name} was not captured"
-                )
-                yield cid, variant, None, {**info, "error": f"{msg}. {why}".strip()}
+                yield cid, variant, None, _not_written(info, state, name, written)
                 continue
             if variant == FINAL and micro_oom:
                 # not the full method: failed with a memory cause, so that it climbs

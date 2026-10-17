@@ -134,16 +134,76 @@ def swallowed_errors(valtils):
         valtils.print_warning = original
 
 
+class _Tee:
+    """``sys.stdout`` for the duration of ``printed_errors``: everything goes on to the
+    real stream; a chunk that names a memory failure is also kept."""
+
+    def __init__(self, stream, kept, most):
+        self._stream, self._kept, self._most = stream, kept, most
+
+    def write(self, text):
+        try:
+            if len(self._kept) < self._most and _names_memory(text):
+                self._kept.append(str(text).strip()[-400:])
+        except Exception:  # noting it must never be the method's problem
+            pass
+        return self._stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _names_memory(text):
+    from .. import resources
+
+    return resources.classify_text(text) in ("oom", "gpu_oom")
+
+
+@contextlib.contextmanager
+def printed_errors(most=50):
+    """What VALIS PRINTS that names a memory failure, for the duration: a list of texts.
+
+    VALIS 1.0.0 reads BioFormats tiles in threads whose worker does ``try: tile =
+    self.slide2image(...) except Exception as e: print(e)`` and then uses ``tile``
+    (``slide_io.py:885-900``, as read in the pre-freeze review `[not re-read this
+    session]`): a Java ``OutOfMemoryError`` there goes to stdout and what is raised is
+    an ``UnboundLocalError``, which ``swallowed_errors`` alone would classify as the
+    method's ``exception``. ``sys.stdout`` is replaced by a tee that passes everything
+    on and keeps (at most ``most``) chunks that ``resources.classify_text`` reads as a
+    memory failure; nothing VALIS does changes."""
+    import sys
+
+    kept = []
+    original = sys.stdout
+    sys.stdout = _Tee(original, kept, most)
+    try:
+        yield kept
+    finally:
+        sys.stdout = original
+
+
 def reported(caught):
     """The texts VALIS printed, short enough for ``run.json: error``."""
     text = " | ".join(str(c).strip() for c in caught if str(c).strip())
     return text[-3000:]
 
 
+def pipeline_attempt(mem_gb):
+    """The attempt the pipeline's REGISTER would be on with ``mem_gb`` of memory: it asks
+    64 GB doubling per attempt (``conf/modules.config``: ``64.GB * (2 ** (task.attempt -
+    1))``), so the largest attempt whose request fits, and 1 below 64 GB."""
+    import math
+
+    mem = float(mem_gb)
+    return 1 if mem < 64 else 1 + int(math.floor(math.log2(mem / 64.0) + 1e-9))
+
+
 def jvm_heap_gb(opts, host=None):
-    """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
-    ``min(32 + 16 * attempt, memory in GiB - 4)``: 12 GiB at 16 GB, 60 at 64 GB, 80 at
-    256 GB, 96 at 512 GB, 112 at 700 GB. None when the memory request is unknown (outside a
+    """``modules/local/register.nf``'s formula, ``min(32 + 16 * attempt, memory in GiB -
+    4)``, with the attempt the PIPELINE would be on at this memory (``pipeline_attempt``;
+    not the ladder's rung, which climbs 16/64/256/512/700 GB where the pipeline doubles
+    from 64): 12 GiB at 16 GB, 48 at 64 GB, 80 at 256 GB, 96 at 512 GB and 96 at 700 GB.
+    Never above memory - 4. None when the memory request is unknown (outside a
     scheduler). ``--opt jvm_heap_gb=N`` overrides it."""
     from .. import resources
 
@@ -153,7 +213,8 @@ def jvm_heap_gb(opts, host=None):
     mem = host.get("mem_requested_gb")
     if not mem:
         return None
-    return max(1, int(min(32 + 16 * int(host.get("attempt") or 1), float(mem) - 4)))
+    attempt = pipeline_attempt(mem)
+    return max(1, int(min(32 + 16 * attempt, float(mem) - 4)))
 
 
 def jvm_max_heap_gb():

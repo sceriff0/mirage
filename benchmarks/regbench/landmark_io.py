@@ -67,9 +67,24 @@ def _checked(path, ref, mov):
     return ref, mov
 
 
+# Linux reports the process umask here (the ``Umask:`` field, since Linux 4.7 --
+# proc(5) [MEMORY]), which reads it without changing it.
+_PROC_STATUS = "/proc/self/status"
+
+
 def _umask_mode():
-    """The mode a new file gets here (``0o666 & ~umask``). The umask is only readable by
-    setting it, so it is set back at once."""
+    """The mode a new file gets here (``0o666 & ~umask``). Read from
+    ``/proc/self/status`` where it is there. Elsewhere the umask is only readable by
+    setting it, and ``os.umask`` is process-wide: another thread creating a file in
+    that window would get mode 0o666. The fallback sets it back at once; it is
+    safe only while no other thread of the process creates files."""
+    try:
+        with open(_PROC_STATUS) as fh:
+            for line in fh:
+                if line.startswith("Umask:"):
+                    return 0o666 & ~int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
     mask = os.umask(0)
     os.umask(mask)
     return 0o666 & ~mask

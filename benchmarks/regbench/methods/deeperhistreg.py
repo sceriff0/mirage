@@ -38,9 +38,10 @@ written image therefore samples ``X - S/2 + S u(X/S - 0.5)``, half a field pixel
 left of the registration's ``X + S u(X/S)``: its content sits about ``S/2`` px right
 and down of the registration, 4.9 px at S = 9.77 and 2.5 px at S = 5. On slides whose
 sizes do not divide evenly there is more: the writer pads at full resolution and
-stretches by ``W_pad / w_field``, the registration padded at the loaded resolution and resampled by
-``initial_resample_ratio``; the two agree only when every division is exact (padding
-computed twice, with different rounding on uneven sizes: a whole-pixel shift ``k``).
+stretches by ``W_pad / w_field``, the registration padded at the loaded resolution
+and resampled by ``initial_resample_ratio``; the two agree only when every division
+is exact (padding computed twice, with different rounding on uneven sizes: a
+whole-pixel shift ``k``).
 Measured on the cohort on 2026-10-15, the written image sits ``S/2 + k`` px, roughly 1
 to 3 um, off the package's own registration. The map uses the writer's own numbers
 (``asdrawn_map``), so the benchmark scores what the package puts on disk.
@@ -518,6 +519,23 @@ def stage_times(log_text):
     return out
 
 
+def printed_memory_failure(printed):
+    """Did the package swallow a HOST memory failure? It catches the pipeline's
+    exception and prints only ``Exception: {e}``, without the type (``run.py:40-46``,
+    as quoted in the pre-freeze review `[not re-read this session]`), so the type is
+    gone. Two texts are still a memory failure: nothing after the colon (a bare
+    ``MemoryError`` has an empty message) and libvips' "out of memory" (its allocation
+    failure, ``out of memory --- size == ...MB``). A CUDA one stays ``gpu_oom``
+    (``resources.classify_text``); every other text is classified as before."""
+    for line in str(printed or "").splitlines():
+        if not line.startswith("Exception:"):
+            continue
+        said = line[len("Exception:") :].strip()
+        if not said or ("out of memory" in said and "CUDA out of memory" not in said):
+            return True
+    return False
+
+
 def run_package(package, source, target, out, params, token, tmp):
     """``deeperhistreg.run_registration`` with its stdout captured: ``(printed, error)``.
 
@@ -604,10 +622,14 @@ def register(case, work, opts):
     log = tmp / "logs.txt"
     log_text = log.read_text(errors="replace") if log.exists() else ""
     if error is not None or not field_p.exists():
-        raise RuntimeError(
+        text = (
             "DeeperHistReg wrote no displacement field. What it printed: "
             f"{printed.strip()[-2000:] or '(nothing)'} | logs.txt: "
             f"{log_text.strip()[-600:] or '(empty)'}"
+        )
+        # a host memory failure the package swallowed climbs like any other (oom)
+        raise (
+            MemoryError(text) if printed_memory_failure(printed) else RuntimeError(text)
         )
     # as its own loader reads it (displacement_loader.py:33)
     field = sitk.GetArrayFromImage(sitk.ReadImage(str(field_p))).astype(np.float32)

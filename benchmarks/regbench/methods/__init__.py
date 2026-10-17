@@ -172,6 +172,12 @@ class _OutOfMemory(MemoryError):
         self.phase = phase
 
 
+def writer_holding():
+    """What a row's ``run.json`` says while its method's own writer has still to run or
+    finish (``write_native``): not ok, ``killed``, in the writer's stretch."""
+    return {"ok": False, "error": WRITER_KILLED, "cause": "killed", "phase": "writer"}
+
+
 def writer_cause(error):
     """``writer_oom`` when a writer's error text names memory, else ``writer``."""
     return "writer_oom" if resources.classify_text(error) == "oom" else "writer"
@@ -269,25 +275,86 @@ def load(method):
     return importlib.import_module(f"{__name__}.{method}")
 
 
+# The regbench modules the DRIVER imports whose bytes change what a result holds: the
+# points it loads and the files it writes (cases), the landmarks it moves (landmark_io),
+# the map's direction (mapping), the causes it records (resources). They are in every
+# method's ``code_files``. The driver's other imports are left out, each for its reason
+# (tests/regbench/test_reuse_code.py fails on an import that is in neither list).
+DRIVER_CODE = ("cases.py", "landmark_io.py", "mapping.py", "resources.py")
+DRIVER_CODE_LEFT_OUT = {
+    "billing.py": "cost accounting only: which CPU figure a row's write_cpu_s is",
+    "plugins.py": "finds a private method; that method's own file is in its key",
+    "ladder.py": "the bookkeeping of earlier attempts of the same submission",
+    "imageio.py": "describes a written file after the writer (reporting)",
+    "tissue.py": "the secondary tissue block, reduced from the written image after "
+    "the writer; never ranked",
+    "selfcheck.py": "the realcheck, which reports and never gates",
+}
+REPO = Path(__file__).resolve().parents[3]
+
+
+def _flat_imports(path):
+    """The repository files ``path`` imports outside the ``regbench`` package: an
+    absolute ``benchmarks.<...>`` module, or a flat name that is a module of
+    ``bin/utils/`` (the pipeline's convention: ``sys.path`` holds ``bin/utils``)."""
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(Path(path).read_text())):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names = [node.module, *(f"{node.module}.{a.name}" for a in node.names)]
+        else:
+            continue
+        for name in names:
+            parts = name.split(".")
+            if parts[0] == "benchmarks" and parts[1:2] != ["regbench"]:
+                targets = [REPO.joinpath(*parts)]
+            elif len(parts) == 1:
+                targets = [REPO / "bin" / "utils" / parts[0]]
+            else:
+                continue
+            for target in targets:
+                if target.with_suffix(".py").is_file():
+                    found.append(target.with_suffix(".py").resolve())
+    return found
+
+
 def code_files(method):
     """The source files whose bytes are the ``code`` of a method's ``reuse_key``: this
-    driver, the adapter module, the modules of ``methods/`` it imports (followed
-    through), and the ``regbench`` modules the adapter imports directly. ``[]`` beyond
-    the driver for a module-like object without a file (a test's stand-in)."""
+    driver and the regbench modules of its own that change a result (``DRIVER_CODE``),
+    the adapter module, the modules of ``methods/`` it imports (followed through), the
+    ``regbench`` modules the adapter imports directly, and the repository code outside
+    ``regbench`` the adapter runs: an absolute ``benchmarks.<...>`` import (ASHLAR's
+    tile cutting, ``benchmarks/ashlar``), the files it names in ``CODE_FILES`` (paths
+    from the repository root: ``valis_mirage`` loads ``bin/register.py`` by path), and
+    the ``bin/utils`` modules those import, followed through, except the ones the
+    adapter names in ``CODE_FILES_NOT_RUN`` (imported only on a path it never takes).
+    Only the driver's own part for a module-like object without a file (a test's
+    stand-in)."""
     import ast
 
     here = Path(__file__).resolve()
     package, root = here.parent, here.parent.parent
     mod = load(method)
     start = getattr(mod, "__file__", None)
-    files, todo = [here], [Path(start).resolve()] if start else []
+    skip = {(REPO / p).resolve() for p in getattr(mod, "CODE_FILES_NOT_RUN", {}) or {}}
+    files = [here, *(root / name for name in DRIVER_CODE)]
+    todo = [Path(start).resolve()] if start else []
+    todo += [(REPO / p).resolve() for p in getattr(mod, "CODE_FILES", ()) or ()]
     while todo:
         path = todo.pop()
-        if path in files or not path.is_file():
+        if path in files or path in skip or not path.is_file():
             continue
         files.append(path)
+        if not path.is_relative_to(root):
+            # repository code outside regbench: what it imports of the repository too
+            todo += _flat_imports(path)
+            continue
         if path.parent != package:
             continue  # a regbench module: its bytes, not what it imports in turn
+        todo += _flat_imports(path)
         for node in ast.walk(ast.parse(path.read_text())):
             if not isinstance(node, ast.ImportFrom) or node.level not in (1, 2):
                 continue
@@ -313,7 +380,10 @@ def code_fingerprint(method):
         try:
             name = str(path.relative_to(root))
         except ValueError:
-            name = path.name  # a private plug-in outside the package
+            try:  # repository code outside regbench (bin/, benchmarks/ashlar/)
+                name = str(path.relative_to(REPO))
+            except ValueError:
+                name = path.name  # a private plug-in outside the repository
         h.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
     return h.hexdigest()
 
@@ -516,7 +586,13 @@ def _jsonable(obj):
 
 
 class _OomWatch:
-    """Polls the cgroup ``oom_kill`` counter; on a rise, interrupts the main thread."""
+    """Polls the cgroup ``oom_kill`` counter; on a rise, interrupts the main thread.
+
+    The main thread may see a rise first (``seen``: at a yield, after the writer, in
+    its handler). It then handles that rise itself, and the count it has seen becomes
+    the one the thread compares with, under the lock the thread signals under: no
+    SIGINT for it can land later in code without a handler, and a LATER rise (a kill
+    in the writer) is still signalled."""
 
     def __init__(self, on_stuck, where=None):
         self.path = resources.oom_events_path()
@@ -527,6 +603,7 @@ class _OomWatch:
         self._where = where or (lambda: "method")
         self._acknowledged = threading.Event()
         self._stop = threading.Event()
+        self._lock = threading.Lock()
         self._on_stuck = on_stuck
         self._thread = None
 
@@ -536,16 +613,32 @@ class _OomWatch:
         now = resources.read_oom_kills(self.path)
         return now is not None and now > self.start_count
 
+    def seen(self, phase=None):
+        """The main thread's own check: True when the counter rose. Unless the thread
+        has signalled already (``fired``), the rise is the main thread's from here on:
+        ``phase`` is recorded as its stretch and the thread will not signal it."""
+        with self._lock:
+            if self.start_count is None:
+                return False
+            now = resources.read_oom_kills(self.path)
+            if now is None or now <= self.start_count:
+                return False
+            if not self.fired:
+                self.start_count = now
+                self.phase = self.phase or phase
+            return True
+
     def _loop(self):
         while not self._stop.wait(OOM_POLL_S):
-            if not self.rose():
-                continue
-            self.phase = self._where()
-            self.fired = True
-            try:  # a real signal: it also wakes a main thread blocked in a system call
-                signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
-            except (AttributeError, OSError, ValueError):
-                pass
+            with self._lock:
+                if not self.rose():
+                    continue
+                self.phase = self._where()
+                self.fired = True
+                try:  # a real signal: it also wakes a main thread blocked in a call
+                    signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+                except (AttributeError, OSError, ValueError):
+                    pass
             if not self._acknowledged.wait(OOM_GRACE_S):
                 # The method never came back to the interpreter (native code waiting on a
                 # dead worker). Record the run, then leave: nothing else can end it.
@@ -596,7 +689,7 @@ def _run(
     realcheck=False,
     resume=False,
 ):
-    from ..ladder import mine
+    from ..ladder import mine, set_aside, submissions_of
 
     mod, name = load(method), method_name(method)
     scope = scope_of(method)
@@ -610,13 +703,26 @@ def _run(
         for k, v in opts.items()
         if k not in ("monitor", "native_dir", "label")
     }
+    # The inputs first: a slide that cannot be read from here (a folder not bound, a
+    # moved file) is the launch's fault and says nothing of whether the inputs CHANGED,
+    # so it must not cost an earlier ok result anything (below).
+    try:
+        check_inputs(cases)
+        unreadable = None
+    except resources.InputUnreadable as exc:
+        unreadable = exc
     try:
         key = reuse_key(method, cases, out, recorded, label)
     except (Exception, SystemExit) as exc:
         # an adapter that cannot say what its result rests on (a refused option, an
         # unreadable file): nothing is reused, and the run below says why it fails
         key = {"error": f"{type(exc).__name__}: {exc}"}
-    if resume and os.environ.get("REGBENCH_FORCE") != "1" and "error" not in key:
+    if (
+        resume
+        and os.environ.get("REGBENCH_FORCE") != "1"
+        and "error" not in key
+        and unreadable is None
+    ):
         reused = _reuse(
             out, cases, names, name, label, recorded, realcheck, host, launch_id, key
         )
@@ -663,6 +769,7 @@ def _run(
     done, failed, final_maps = {}, {}, {}  # keyed by (case_id, variant)
     infos = {}  # the live info of each yield, for a declared offset (realcheck)
     earlier = {}
+    aside = {}  # another submission's ok result, set aside rather than overwritten
 
     def head(case, variant):
         return {
@@ -676,6 +783,11 @@ def _run(
             # and the landmarks: None without a truth.npz (landmark_io)
             "truth_sha256": landmark_io.truth_sha256(case),
             "previous_attempts": earlier.get((case.case_id, variant), []),
+            **(
+                {"earlier_result": aside[(case.case_id, variant)]}
+                if (case.case_id, variant) in aside
+                else {}
+            ),
         }
 
     def fail(case, variant, error, cause, cost=None, tb="", info=None, no_rerun=False):
@@ -700,6 +812,9 @@ def _run(
     # Written first: if the scheduler kills the task (out of memory, time limit) nothing
     # below runs, and this is what the scorer finds instead of silence. A failed earlier
     # attempt of the ladder is carried along, so its cost is not lost when it is overwritten.
+    # An ok result is never destroyed here: with unreadable inputs it is left as it is
+    # (nothing says they changed), and one of ANOTHER submission is set aside
+    # (``ladder.set_aside``: ``<result>/earlier/<n>/``, named in ``earlier_result``).
     for case in cases:
         for variant in mod.VARIANTS:
             d = result_dir(out, names[variant], case)
@@ -707,6 +822,10 @@ def _run(
                 old = json.loads((d / "run.json").read_text())
             except (OSError, ValueError):
                 old = None
+            if not isinstance(old, dict):
+                old = None
+            if unreadable is not None and old and old.get("ok"):
+                continue
             before = (old or {}).get("attempt", 1), (old or {}).get("retry", 0)
             if (
                 old
@@ -739,7 +858,27 @@ def _run(
                         "log_path": old.get("log_path") or "",
                     },
                 ]
+            if unreadable is not None:
+                fail(
+                    case,
+                    variant,
+                    f"{type(unreadable).__name__}: {unreadable}",
+                    "infrastructure",
+                )
+                continue
+            if old and old.get("ok") and not mine(old, submission):
+                kept = set_aside(d / "run.json")
+                if kept is not None:
+                    aside[(case.case_id, variant)] = {
+                        "kept": str(kept),
+                        "ok": True,
+                        "submissions": submissions_of(old),
+                    }
             fail(case, variant, KILLED, "killed")
+    if unreadable is not None:
+        ids = "+".join(c.case_id for c in cases)
+        print(f"{cases[0].dataset}/{ids} [{name}]: {unreadable}", file=sys.stderr)
+        return {c.case_id: [] for c in cases}
 
     # for a method whose own writer runs at a yield: the clock to pause, and where the
     # image belongs (the work directory does not outlive the run)
@@ -801,6 +940,10 @@ def _run(
             else mod.register_group(list(cases), work, opts)
         )
         for item in gen:
+            # a rise before this yield, seen BEFORE the stretch becomes the
+            # benchmark's: in the method's stretch, or in a writer the method ran
+            # with the clock paused
+            risen = watch.seen(where())
             mon.pause()
             phase["now"] = "benchmark"
             cost = mon.snapshot()
@@ -834,9 +977,7 @@ def _run(
                     "driver_cpu_instrument": cost.get("cpu_instrument"),
                 }
             try:
-                if watch.rose():
-                    # it rose before this yield: in the method's stretch, or in a
-                    # writer the method ran with the clock paused
+                if risen:
                     raise _OutOfMemory(
                         watch.phase or "method",
                         "the cgroup out-of-memory counter rose during this run",
@@ -909,13 +1050,13 @@ def _run(
                     arrays["nuclei_xy"] = _warp_chunked(
                         pmap.fn, pts[f"nuclei_{side}_xy"], inside=mapping
                     ).astype(np.float32)
-                for name_nuc, where, flags, own in (
+                for name_nuc, nuc_side, flags, own in (
                     ("band_nuc", "mov", band, band_nuc_own),
                     ("band_ref_nuc", "ref", band_ref, band_ref_nuc_own),
                 ):
-                    got, how = _nuclei_band(pts, where, flags, own)
+                    got, how = _nuclei_band(pts, nuc_side, flags, own)
                     if got is not None:
-                        arrays[name_nuc], nuclei_band[where] = got, how
+                        arrays[name_nuc], nuclei_band[nuc_side] = got, how
                 # the ground-truth landmarks of the side the map takes, the same way;
                 # one the map sends nowhere is non-finite, as for nuclei
                 truth = landmark_io.read_truth(case)
@@ -952,7 +1093,13 @@ def _run(
                 }
                 if nuclei_band:  # how each side's nuclei got their seam flag
                     rec["nuclei_band"] = nuclei_band
-                write_json(d / "run.json", rec)
+                if variant == final and getattr(mod, "write_native", None):
+                    # its image is written after the generator ends: until then the
+                    # file says killed (the writer's holding record, below), so a kill
+                    # in between leaves a failed row, never an ok one without an image
+                    write_json(d / "run.json", {**rec, **writer_holding()})
+                else:
+                    write_json(d / "run.json", rec)
                 done[key] = rec
                 final_maps[key] = pmap
                 infos[key] = info
@@ -1021,7 +1168,7 @@ def _run(
         failure_info = getattr(exc, "regbench_info", None)
         if isinstance(exc, _OutOfMemory):
             cause = MEMORY_CAUSE[exc.phase]
-        elif watch.rose():
+        elif watch.seen(where()):
             cause = MEMORY_CAUSE[watch.phase or "method"]
     finally:
         phase["now"] = "method"
@@ -1072,19 +1219,12 @@ def _run(
             if dead:
                 lose(case, f"the method's own writer was not run: {dead}", "writer_oom")
                 continue
-            holding = {
-                **done[key],
-                "ok": False,
-                "error": WRITER_KILLED,
-                "cause": "killed",
-                "phase": "writer",
-            }
-            write_json(d / "run.json", holding)
+            write_json(d / "run.json", {**done[key], **writer_holding()})
             t0, cpu0 = time.perf_counter(), mon.cpu_clock()
             try:
                 (d / "native").mkdir(parents=True, exist_ok=True)
                 got = write_native(state, case.case_id, d / "native")
-                if watch.rose():
+                if watch.seen("writer"):
                     raise _OutOfMemory(
                         "writer",
                         "the cgroup out-of-memory counter rose while the method's "
@@ -1109,7 +1249,7 @@ def _run(
                 text = f"{type(exc).__name__}: {exc}"
                 how = (
                     "writer_oom"
-                    if resources.classify_error(exc) == "oom" or watch.rose()
+                    if resources.classify_error(exc) == "oom" or watch.seen("writer")
                     else "writer"
                 )
                 # a writer that names its own cause (STARE's STITCH inside the

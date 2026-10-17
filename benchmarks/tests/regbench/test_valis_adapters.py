@@ -813,10 +813,35 @@ def test_a_memory_error_in_the_micro_pass_of_valis_120_is_oom(tmp_path, pair):
     assert run["ok"] is False and run["cause"] == "oom"
 
 
+@pytest.mark.parametrize(
+    "exc, cause",
+    [
+        (ValueError("the crop probe is 2 px off"), "benchmark"),
+        (MemoryError("Unable to allocate 3.1 GiB"), "benchmark_oom"),
+    ],
+)
+def test_a_failed_capture_of_valis_120_is_the_benchmarks(
+    tmp_path, pair, monkeypatch, exc, cause
+):
+    """F18: the benchmark's own capture (vp.snapshot: the crop probe, the field loaded
+    whole) failed: not VALIS's failure."""
+
+    def broken(*a, **kw):
+        raise exc
+
+    monkeypatch.setattr(vp, "snapshot", broken)
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
+    for variant in ("valis120_rigid", "valis120", "valis120_micro"):
+        run = run_json(tmp_path / "o", variant, cases[0])
+        assert run["ok"] is False and run["cause"] == cause, variant
+        assert "the benchmark's capture failed" in run["error"]
+
+
 def test_valis_120_gets_a_heap_that_follows_the_rung(tmp_path, pair, monkeypatch):
     """VALIS 1.2.0 starts its JVM at 10 GB whatever it is asked; the adapter starts it
     first, through VALIS's own slide_io.init_jvm, with the module's formula."""
-    want = {(16, 1): 12, (64, 2): 60, (256, 3): 80, (512, 4): 96, (700, 5): 112}
+    want = {(16, 1): 12, (64, 2): 48, (256, 3): 80, (512, 4): 96, (700, 5): 96}
     for (mem, attempt), heap in want.items():
         fv.configure()
         monkeypatch.setenv("REGBENCH_MEM_GB", str(mem))
@@ -1012,15 +1037,21 @@ def test_the_jvm_heap_follows_the_modules_formula():
     assert "(32 + 16 * task.attempt)" in module
     assert "Math.min(heap_request, task.memory.toGiga() - 4)" in module
     heap = valis_mirage.jvm_heap_gb
+    # F17: the attempt is the one the PIPELINE would be on with this memory (64 GB
+    # doubling per attempt: conf/modules.config), whatever the ladder's rung
+    config = (ROOT / "conf" / "modules.config").read_text()
+    assert "64.GB * (2 ** (task.attempt - 1))" in config
     for mem, attempt, want in (
         (16, 1, 12),
-        (64, 2, 60),
+        (64, 2, 48),  # the pipeline's first attempt at 64 GB: 32 + 16, not 60
+        (128, 3, 64),
         (256, 3, 80),
         (512, 4, 96),
-        (700, 5, 112),
+        (700, 5, 96),  # the pipeline's attempt 4 (512 GB) is the largest that fits
     ):
         host = {"mem_requested_gb": float(mem), "attempt": attempt}
         assert heap({}, host) == want, mem
+        assert want <= mem - 4
     assert heap({}, {"mem_requested_gb": None, "attempt": 1}) is None
     assert heap({"jvm_heap_gb": "20"}, {"mem_requested_gb": 64.0, "attempt": 2}) == 20
 
@@ -1169,8 +1200,9 @@ def test_the_pipelines_settings_reach_valis(mirage):
             "tile_wh": 2048,
         }
     ]
-    # 64 GB at the ladder's second rung: min(32 + 16 * 2, 64 - 4)
-    assert [c["mem_gb"] for c in named(mirage.calls, "init_jvm")] == [60]
+    # 64 GB at the ladder's second rung is the pipeline's FIRST attempt (F17):
+    # min(32 + 16 * 1, 64 - 4)
+    assert [c["mem_gb"] for c in named(mirage.calls, "init_jvm")] == [48]
     assert mirage.answer["cpu_count"] == 4  # what VALIS's pools were left with
     assert not named(mirage.calls, "get_inverse_field")
 
@@ -1210,7 +1242,7 @@ def test_valis_mirage_records_what_ran(mirage):
     info = run["info"]
     assert info["version"] == "1.0.0" and info["points"] == "image"
     assert info["ARGS"] == valis_mirage.ARGS
-    assert info["run_args"]["jvm_heap_gb"] == 60 and info["run_args"]["n_cpus"] == 4
+    assert info["run_args"]["jvm_heap_gb"] == 48 and info["run_args"]["n_cpus"] == 4
     assert info["run_args"]["reference"] == "reference.ome.tif"
     assert info["workers_seen"] == 4 and info["cpus"]["valis_pool_threads"] == 3
     assert info["micro_called"] and info["micro_ran"] and not info["repair_fired"]
@@ -1283,12 +1315,87 @@ def test_a_micro_pass_that_ran_out_of_memory_fails_the_full_row(tmp_path):
 
 
 def test_a_slide_the_pipeline_did_not_write_fails_its_round(tmp_path):
+    """F15: the pipeline's writer failed for the slide (it catches that per slide and
+    goes on): the row is the writer's failure, with the writer's own error."""
     answer, done = run_mirage(tmp_path / "w", fake={"skip_write": ["moving"]})
     rec = answer["selfcheck"]
     assert rec["status"] == sc.CRASHED
+    for variant in MIRAGE:
+        run = mirage_run_json(tmp_path / "w", variant)
+        assert run["ok"] is False and run["cause"] == "writer", variant
+        assert "the fake writer refuses moving" in run["error"]
+        assert "the pipeline's writer failed for moving" in run["error"]
+
+
+@pytest.mark.parametrize(
+    "fake",
+    [
+        {"write_error": "MemoryError"},
+        # VALIS 1.0.0's tile worker: the Java heap error printed, another raised (F16)
+        {"printed": JAVA_OOM},
+    ],
+)
+def test_a_writer_that_ran_out_of_memory_on_a_slide_climbs(tmp_path, fake):
+    """F15, F16: a memory failure of the pipeline's writer is writer_oom, the unit goes
+    up a rung."""
+    run_mirage(tmp_path / "w", fake={"skip_write": ["moving"], **fake})
     run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["ok"] is False
-    assert "wrote no registered image of moving" in run["error"]
+    assert run["ok"] is False and run["cause"] == "writer_oom"
+
+
+def test_a_java_heap_error_valis_printed_inside_register_is_oom(tmp_path):
+    """F16: VALIS 1.0.0 hands print_warning only the UnboundLocalError; the Java heap
+    error went to stdout. The row is oom, as the module docstring says."""
+    unbound = "local variable 'tile' referenced before assignment"
+    _, done = run_mirage(
+        tmp_path / "w", fake={"fail_register": unbound, "printed": JAVA_OOM}
+    )
+    run = mirage_run_json(tmp_path / "w", "valis_mirage")
+    assert run["ok"] is False and run["cause"] == "oom", done.stdout[-2000:]
+    assert JAVA_OOM in run["error"] and unbound in run["error"]
+    assert JAVA_OOM in done.stdout  # still printed: the tee passes everything on
+
+
+def test_a_micro_pass_whose_memory_error_valis_printed_fails_the_full_row(tmp_path):
+    """F16: the micro pass raised something else; the Java heap error was printed."""
+    run_mirage(
+        tmp_path / "w",
+        fake={"micro_raises": "UnboundLocalError: tile", "printed": JAVA_OOM},
+    )
+    final = mirage_run_json(tmp_path / "w", "valis_mirage")
+    assert final["ok"] is False and final["cause"] == "oom"
+
+
+def test_a_capture_of_the_benchmark_that_failed_is_the_benchmarks(monkeypatch):
+    """F18: the final transform was not captured because the benchmark's own probe or
+    field load failed: benchmark / benchmark_oom, never the method's exception."""
+    state = {
+        "errors": {"m": ["ValueError: probe off by 2 px"]},
+        "capture_causes": {"m": ["exception"]},
+        "write_errors": {},
+    }
+    written = {"path": "x.ome.tiff"}
+    got = valis_mirage._not_written({}, state, "m", written)
+    assert got["cause"] == "benchmark" and "not captured" in got["error"]
+    state["capture_causes"]["m"] = ["oom"]
+    assert (
+        valis_mirage._not_written({}, state, "m", written)["cause"] == "benchmark_oom"
+    )
+    # a slide the function never wrote, with no writer error: the method's
+    assert "cause" not in valis_mirage._not_written({}, {"errors": {}}, "m", None)
+
+
+def test_printed_memory_errors_are_kept_and_everything_passes_on(capsys):
+    """F16: the tee keeps the chunks that name memory, bounded, and prints all."""
+    from benchmarks.regbench.methods import _valis_points as vp
+
+    with vp.printed_errors(most=2) as kept:
+        print("reading tile 3")
+        print(JAVA_OOM)
+        print("Unable to allocate 4.0 GiB")
+        print("MemoryError")
+    assert kept == [JAVA_OOM, "Unable to allocate 4.0 GiB"]
+    assert "reading tile 3" in capsys.readouterr().out
 
 
 def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
@@ -1603,4 +1710,4 @@ def test_the_shipped_run_records_its_four_stages(mirage):
 def test_the_jvm_heap_at_the_fifth_rung():
     from benchmarks.regbench.methods import _valis_points as vp
 
-    assert vp.jvm_heap_gb({}, {"mem_requested_gb": 700, "attempt": 5}) == 112
+    assert vp.jvm_heap_gb({}, {"mem_requested_gb": 700, "attempt": 5}) == 96

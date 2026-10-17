@@ -50,6 +50,11 @@ CONFIG = {
     "fail_register": False,
     "micro_raises": False,
     "skip_write": (),  # slide names the writer raises on
+    "write_error": "RuntimeError",  # what the writer raises there (or "MemoryError")
+    # a text PRINTED (print(), stdout) when a failure happens, before it is raised or
+    # handed to print_warning: VALIS 1.0.0's tile worker prints a BioFormats error and
+    # raises an UnboundLocalError instead (slide_io.py:885-900)
+    "printed": None,
     "channel_names": None,
 }
 DEFAULTS = dict(CONFIG)
@@ -501,7 +506,12 @@ class Slide:
             extra=sorted(kw),
         )
         if self.name in CONFIG["skip_write"]:
-            raise RuntimeError(f"the fake writer refuses {self.name}")
+            if CONFIG["printed"]:
+                print(CONFIG["printed"])
+            kind = (
+                MemoryError if CONFIG["write_error"] == "MemoryError" else RuntimeError
+            )
+            raise kind(f"the fake writer refuses {self.name}")
         crop = self.val_obj.crop if crop is True else crop
         if crop != "reference":
             raise AssertionError(f"crop={crop!r}: only 'reference' is expected")
@@ -573,6 +583,8 @@ class Valis:
             # the module at call time) and (None, None, None) comes back
             text = CONFIG["fail_register"]
             exc = RuntimeError(text if isinstance(text, str) else "the fake fails")
+            if CONFIG["printed"]:
+                print(CONFIG["printed"])
             valtils = sys.modules["valis.valtils"]
             if CONFIG["version"] == "1.0.0":
                 valtils.print_warning(exc)
@@ -629,6 +641,8 @@ class Valis:
         record("register_micro", kwargs=_plain(kw), generation=self.generation)
         if CONFIG["micro_raises"]:
             text = CONFIG["micro_raises"]
+            if CONFIG["printed"]:
+                print(CONFIG["printed"])
             raise RuntimeError(
                 text if isinstance(text, str) else "the fake micro pass fails"
             )

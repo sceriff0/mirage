@@ -731,6 +731,31 @@ def test_a_swallowed_failure_is_raised_with_what_the_package_printed(
         assert "wrote no displacement field" in run["error"] and text in run["error"]
 
 
+@pytest.mark.parametrize(
+    "fail",
+    [
+        MemoryError(),  # printed as "Exception: ", nothing after the colon
+        "out of memory --- size == 48MB",  # libvips' allocation failure (F13)
+    ],
+)
+def test_a_swallowed_host_memory_failure_climbs(tmp_path, case, fake, fail):
+    """F13: the package prints only ``Exception: {e}``: a bare MemoryError leaves
+    nothing after the colon and libvips says "out of memory". Both are host memory
+    failures (``oom``, the unit goes up a rung), never the method's ``exception``."""
+    fake.configure(fail=fail, initial_resolution=EXACT_RESOLUTION)
+    assert methods.run_case("deeperhistreg", case, tmp_path) == []
+    run = run_json(tmp_path, dhr.VARIANTS[-1], case)
+    assert run["ok"] is False and run["cause"] == "oom"
+    assert "wrote no displacement field" in run["error"]
+
+
+def test_a_printed_failure_is_read_for_host_memory_only():
+    said = dhr.printed_memory_failure
+    assert said("Exception: \n") and said("x\nException: out of memory --- size")
+    assert not said("Exception: CUDA out of memory. Tried to allocate 2 GiB")
+    assert not said("Exception: boom") and not said("") and not said("Exception")
+
+
 def test_a_failed_writer_fails_the_row_of_the_image_it_did_not_write(
     tmp_path, case, fake
 ):

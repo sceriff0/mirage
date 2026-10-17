@@ -806,6 +806,9 @@ def test_the_due_tiles_of_every_case_are_listed(toy_cases, tmp_path, monkeypatch
         def record(self, stage, row=None):
             return None
 
+        def current(self, stage, row=None):
+            return None
+
         def command(self, stage, row=None):
             return ["x", str(row)]
 
@@ -833,6 +836,37 @@ def test_the_due_tiles_of_every_case_are_listed(toy_cases, tmp_path, monkeypatch
     monkeypatch.setattr(adapter, "Round", broken)
     with pytest.raises(RuntimeError):
         adapter.tiles_due(base, tmp_path / "r", {}, 1)
+
+    # F25: the CLI keeps one round's error to that round. Its tiles are not listed
+    # (stderr names it) and every other round's due tiles still are, so the feeder
+    # does not fall back to submitting every tile of every round.
+    def one_broken(case, stage_dir, opts):
+        if case.case_id == "a_ok":
+            raise ValueError("ref_channel is not mov_channel")
+        return Fake(case, stage_dir, opts)
+
+    monkeypatch.setattr(adapter, "Round", one_broken)
+    said, told = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(said), contextlib.redirect_stderr(told):
+        code = cli.main([*sized, "--out", str(tmp_path / "out"), "--due", "1"])
+    assert code == 0
+    assert [int(v) for v in said.getvalue().split()] == [*range(n, 2 * n)]
+    assert "a_ok" in told.getvalue() and "ValueError" in told.getvalue()
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said), contextlib.redirect_stderr(io.StringIO()):
+        assert cli.main([*sized, "--out", str(tmp_path / "out"), "--due", "2"]) == 0
+    assert [int(v) for v in said.getvalue().split()] == [1]  # the round, by index
+
+    def exits(case, stage_dir, opts):
+        if case.case_id == "c_ok":
+            raise SystemExit("a channel name the parser takes for a flag")
+        return Fake(case, stage_dir, opts)
+
+    monkeypatch.setattr(adapter, "Round", exits)
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said), contextlib.redirect_stderr(io.StringIO()):
+        assert cli.main([*sized, "--out", str(tmp_path / "out"), "--due", "1"]) == 0
+    assert [int(v) for v in said.getvalue().split()] == [*range(n)]
 
 
 def load_case_by_id(cases, cid):

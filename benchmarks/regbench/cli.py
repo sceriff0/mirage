@@ -47,6 +47,7 @@ import argparse
 import builtins
 import contextlib
 import os
+import sys
 
 from . import DATASETS, compute_all, plugins
 from . import METHODS as PUBLIC_METHODS
@@ -817,9 +818,20 @@ def _stages(a):
         force = os.environ.get("REGBENCH_FORCE") == "1"
         offset = 0
         for index, (case, (_, n)) in enumerate(zip(cases, layout)):
-            due = mod.tiles_due(
-                case, mod.stage_dir_of(a.out, a.label, case), opts, a.due, force
-            )
+            # One round's error costs that round only: its tiles are not listed and
+            # the others still are. Raised out of here, the feeder's fallback would
+            # submit every tile of every round, reused ones included.
+            try:
+                due = mod.tiles_due(
+                    case, mod.stage_dir_of(a.out, a.label, case), opts, a.due, force
+                )
+            except (Exception, SystemExit) as exc:
+                print(
+                    f"{case.case_id}: no tiles listed, the round could not be read "
+                    f"({type(exc).__name__}: {exc})",
+                    file=sys.stderr,
+                )
+                due = []
             if a.due == 1:
                 for row in due:
                     if row < n:
@@ -1253,7 +1265,9 @@ def _reuse_report(a):
             w.writeheader()
             w.writerows(rows)
     ok = [r for r in rows if r["differs"] != "record"]
-    print(f"# reusable: {sum(r['reusable'] == 'yes' for r in ok)} of {len(ok)} ok results")
+    print(
+        f"# reusable: {sum(r['reusable'] == 'yes' for r in ok)} of {len(ok)} ok results"
+    )
     return 0
 
 

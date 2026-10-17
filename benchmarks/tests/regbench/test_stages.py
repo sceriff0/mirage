@@ -1101,23 +1101,67 @@ def test_solve_never_runs_on_fewer_tiles_than_the_plan(staged, tmp_path):
     assert rnd.tiles_done()[1] == ""
     kept = rnd.control(1).read_bytes()
     rnd.control(1).unlink()  # the tile's record still says ok
-    assert "1 missing" in rnd.tiles_done()[1]
+    # F24: an ok record whose file is gone is not done: the tile is not ok
+    assert "1 of 2 tiles are not ok (first: row 1)" in rnd.tiles_done()[1]
     got = adapter.run_stage(case, new, dict(OPTS), "solve", force=True)
     assert [(go, rec) for _, _, go, _, rec in got] == [(False, None)]
-    with as_jobs(), pytest.raises(stages.StageFailed, match="not complete"):
+    with as_jobs(), pytest.raises(stages.StageFailed, match="is gone") as failed:
         next(
             adapter.register(
                 case, tmp_path, {"native_dir": lambda c, v: new.parent / "native"}
             )
         )
+    assert failed.value.regbench_cause == "benchmark"
     # a control file of no tile of this plan would be read by SOLVE's glob: refused too
     rnd.control(1).write_bytes(kept)
     (new / "moving_9_9_ctrl.json").write_bytes(kept)
     assert "1 of another plan" in rnd.tiles_done()[1]
+    # and dropped before SOLVE runs (F24)
+    assert rnd.drop_stray_controls() == [str(new / "moving_9_9_ctrl.json")]
+    assert rnd.tiles_done()[1] == ""
     # and a tile whose record is not ok
-    (new / "moving_9_9_ctrl.json").unlink()
     rewrite(new, "tile", 0, ok=False, exit=1, cause="exception")
     assert "1 of 2 tiles are not ok (first: row 0)" in rnd.tiles_done()[1]
+
+
+def test_an_ok_stage_whose_files_are_gone_runs_again(staged, tmp_path):
+    """F24: SOLVE's record says ok, its manifest was purged. The round's last job fails
+    as the benchmark's (not STARE's exception), the SOLVE job is due again at any
+    attempt, and once it ran the round collects."""
+    case = staged["case"]
+    out, new = clone(staged, tmp_path)
+    rnd = adapter.Round(case, new, dict(OPTS))
+    manifest = Path(rnd.ns.manifest)
+    manifest.unlink()
+    assert rnd.done(stages.SOLVE) is None and rnd.missing(stages.SOLVE) == [
+        str(manifest)
+    ]
+    with as_jobs():
+        assert methods.run_case("stare", case, out, opts={"stage_images": True}) == []
+    run = run_json(out, "stare", case)
+    assert run["cause"] == "benchmark" and "is gone" in run["error"]
+    got = adapter.run_stage(case, new, dict(OPTS), "solve", attempt=2)
+    assert [go for _, _, go, _, _ in got] == [True] and manifest.is_file()
+    with as_jobs():
+        done = methods.run_case("stare", case, out, opts={"stage_images": True})
+    assert done == ["stare_rigid", "stare"]
+
+
+def test_a_tile_whose_control_file_is_gone_is_due_again(staged, tmp_path):
+    """F24: the tile submitter puts it back into the queue, at any attempt."""
+    case = staged["case"]
+    out, new = clone(staged, tmp_path)
+    rnd = adapter.Round(case, new, dict(OPTS))
+    assert adapter.tiles_due(case, new, dict(OPTS), 2) == []
+    rnd.control(1).unlink()
+    assert adapter.tiles_due(case, new, dict(OPTS), 1) == [1]
+    assert adapter.tiles_due(case, new, dict(OPTS), 3) == [1]
+    # COARSE's anchor gone: COARSE is not done, so no tile is due before it ran again
+    Path(rnd.argv["m0"]).unlink()
+    assert adapter.tiles_due(case, new, dict(OPTS), 2) == []
+    got = adapter.run_stage(case, new, dict(OPTS), "coarse", attempt=2)
+    assert [go for _, _, go, _, _ in got] == [True]
+    assert Path(rnd.argv["m0"]).is_file()
 
 
 def test_a_tile_that_fails_after_its_retries_fails_the_round(staged, tmp_path):

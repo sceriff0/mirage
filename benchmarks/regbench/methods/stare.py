@@ -669,15 +669,52 @@ class Round:
 
     def done(self, stage, row=None):
         """The job's record when it is ok FOR THIS JOB (the same command, computed
-        from the same things: ``identity``), else None."""
+        from the same things: ``identity``) AND the files it wrote are still there
+        (``missing``), else None."""
         rec = self.record(stage, row)
         if (
             rec
             and rec.get("ok")
             and stages.same_job(rec, self.command(stage, row), self.identity(stage))
+            and not self.missing(stage, row)
         ):
             return rec
         return None
+
+    def outputs(self, stage, row=None):
+        """The files a stage job writes, which the stages after it read: COARSE the
+        anchor and the tile plan, a tile its control file, SOLVE the manifest and its
+        TRE record."""
+        if stage == stages.COARSE:
+            return [Path(self.argv["m0"]), Path(self.argv["plan"])]
+        if stage == stages.TILE:
+            return [self.control(row)]
+        if stage == stages.SOLVE:
+            return [Path(self.ns.manifest), Path(self.ns.tre)]
+        return []
+
+    def missing(self, stage, row=None):
+        """The outputs of the job that are gone (a scratch purge, a partial cleanup):
+        an ok record without them is not done, and the job runs again."""
+        return [str(p) for p in self.outputs(stage, row) if not p.is_file()]
+
+    def current(self, stage, row=None):
+        """The job's record as ``stages.decide`` should see it: None for an ok record
+        whose outputs are gone, so that the job is due again at any attempt."""
+        rec = self.record(stage, row)
+        if rec and rec.get("ok") and self.missing(stage, row):
+            return None
+        return rec
+
+    def drop_stray_controls(self):
+        """Remove control files no row of THIS plan writes (left by another plan of the
+        same stage folder): SOLVE reads a glob and would read them with the others.
+        Returns the files removed."""
+        wanted = {str(self.control(i)) for i in range(len(self.plan()))}
+        stray = sorted(set(glob.glob(self.argv[stages.SOLVE][3])) - wanted)
+        for path in stray:
+            Path(path).unlink(missing_ok=True)
+        return stray
 
     def control(self, row):
         return Path(self.command(stages.TILE, row)[-1])
@@ -735,7 +772,7 @@ def run_stage(
             return [(stage, row, True, "the proxy was not written", failed)]
 
     def one(stage, row=None):
-        rec = rnd.record(stage, row)
+        rec = rnd.current(stage, row)  # an ok record whose files are gone runs again
         command = rnd.command(stage, row)
         identity = rnd.identity(stage)
         go, why = stages.decide(rec, attempt, command, submission, force, identity)
@@ -759,6 +796,7 @@ def run_stage(
             one(stage, i)
         return out
     if stage == stages.SOLVE:
+        rnd.drop_stray_controls()
         _, why = rnd.tiles_done()
         if why:
             return [(stage, row, False, why, None)]
@@ -822,7 +860,7 @@ def tiles_due(case, stage_dir, opts, attempt, force=False):
         i
         for i in range(len(rnd.plan()))
         if stages.decide(
-            rnd.record(stages.TILE, i),
+            rnd.current(stages.TILE, i),
             attempt,
             rnd.command(stages.TILE, i),
             submission,
@@ -836,6 +874,16 @@ def _failed(rnd, stage, row, jobs):
     """The error of a round whose job ``stage`` did not end ok for this command."""
     rec = rnd.record(stage, row)
     what = stage.upper() + (f" (tile row {row})" if row is not None else "")
+    gone = rnd.missing(stage, row)
+    if rec and rec.get("ok") and gone:
+        # the job ran and ended ok; what it wrote is not there any more: the
+        # benchmark's files, not STARE's failure
+        err = stages.StageFailed(
+            f"{what}: its record is ok but what it wrote is gone ({', '.join(gone)})",
+            "benchmark",
+        )
+        err.regbench_no_rerun = False
+        return err
     mine = stages.same_job(
         rec, rnd.command(stage, row), rnd.identity(stage)
     ) and ladder.mine(rec, resources.host_info()["submission"])
@@ -948,7 +996,9 @@ def _collect(rnd, jobs):
             raise _failed(rnd, stages.TILE, i, jobs)
     _, why = rnd.tiles_done()
     if why:
-        raise stages.StageFailed(f"SOLVE's inputs are not complete: {why}")
+        # every tile is ok, yet the files on disk are not the plan's: the benchmark's
+        # stage folder, not STARE's failure
+        raise stages.StageFailed(f"SOLVE's inputs are not complete: {why}", "benchmark")
     if not rnd.done(stages.SOLVE):
         raise _failed(rnd, stages.SOLVE, None, jobs)
 

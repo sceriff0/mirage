@@ -308,7 +308,10 @@ class _Pipeline:
                 "torch.cuda.is_available() is False"
             )
         if CONFIG["fail"]:
-            raise RuntimeError(CONFIG["fail"])
+            fail = CONFIG[
+                "fail"
+            ]  # a text, or the exception itself (a bare MemoryError)
+            raise fail if isinstance(fail, BaseException) else RuntimeError(fail)
         for path in (source_path, target_path):
             if _pages(path) != 1:
                 raise RuntimeError(

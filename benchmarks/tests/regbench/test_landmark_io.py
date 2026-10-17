@@ -279,3 +279,31 @@ def test_a_failed_run_records_its_truth_note(tmp_path):
         assert rec["ok"] is False and rec["cause"] == "exception"
         assert rec["truth_sha256"] == landmark_io.truth_sha256(case)
         assert rec["truth_note"] == note
+
+
+def test_the_umask_is_read_without_being_set_where_linux_reports_it(
+    tmp_path, monkeypatch
+):
+    """``os.umask`` is process-wide: setting it to read it races any other thread
+    that creates a file. Where ``/proc/self/status`` carries ``Umask:`` it is read
+    from there and ``os.umask`` is never called; elsewhere the round-trip is the
+    fallback."""
+    import os
+
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nUmask:\t0027\nState:\tR (running)\n")
+    monkeypatch.setattr(landmark_io, "_PROC_STATUS", str(status))
+
+    def set_umask(mask):
+        raise AssertionError("os.umask was called")
+
+    monkeypatch.setattr(landmark_io.os, "umask", set_umask)
+    assert landmark_io._umask_mode() == 0o640
+    monkeypatch.undo()
+    monkeypatch.setattr(landmark_io, "_PROC_STATUS", str(tmp_path / "absent"))
+    old = os.umask(0o022)
+    try:
+        assert landmark_io._umask_mode() == 0o644
+        assert os.umask(0o022) == 0o022  # set back
+    finally:
+        os.umask(old)
