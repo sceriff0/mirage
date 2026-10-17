@@ -49,11 +49,45 @@ def test_re_prepared_points_are_named(tmp_path, monkeypatch):
     assert row["reusable"] == "no" and "points" in row["differs"]
 
 
-def test_the_report_writes_nothing_under_out(tmp_path):
+def test_the_report_writes_nothing_under_out(tmp_path, monkeypatch):
     root, out, made = scored_cohort.build(tmp_path)
     before = sorted(p for p in out.rglob("*"))
+    stamps = {p: p.stat().st_mtime_ns for p in before if p.is_file()}
     reuse.report(root, out)
     assert sorted(p for p in out.rglob("*")) == before
+    # and around the `yes` case (key made to match)
+    rec = json.loads((out / "stare" / "multiplex" / "P1_r1" / "run.json").read_text())
+    monkeypatch.setattr(methods, "reuse_key", lambda *a, **k: rec["reuse_key"])
+    assert _rows(root, out)[("stare", "P1_r1")]["reusable"] == "yes"
+    assert sorted(p for p in out.rglob("*")) == before
+    assert {p: p.stat().st_mtime_ns for p in before if p.is_file()} == stamps
+
+
+def test_a_non_dict_run_json_is_a_record_row(tmp_path):
+    root, out, made = scored_cohort.build(tmp_path)
+    (out / "stare" / "multiplex" / "P1_r1" / "run.json").write_text("[1, 2]")
+    row = _rows(root, out)[("stare", "P1_r1")]
+    assert row["reusable"] == "no" and row["differs"] == "record"
+
+
+def test_a_sibling_that_is_not_ok_is_named(tmp_path, monkeypatch):
+    import shutil
+
+    root, out, made = scored_cohort.build(tmp_path)
+    here = out / "stare" / "multiplex" / "P1_r1"
+    rec = json.loads((here / "run.json").read_text())
+    monkeypatch.setattr(methods, "reuse_key", lambda *a, **k: rec["reuse_key"])
+    sib = out / "stare_b" / "multiplex" / "P1_r1"  # another variant of the same unit
+    shutil.copytree(here, sib)
+    rows = _rows(root, out)
+    assert rows[("stare", "P1_r1")]["reusable"] == "yes"
+    assert rows[("stare", "P1_r1")]["detail"] == ""
+    (sib / "warped.npz").unlink()
+    rows = _rows(root, out)
+    assert rows[("stare_b", "P1_r1")]["reusable"] == "no"
+    assert rows[("stare", "P1_r1")]["reusable"] == "yes"  # as computed for the record
+    assert rows[("stare", "P1_r1")]["detail"] == "sibling variant not ok"
+    assert rows[("stare", "P1_r2")]["detail"] == ""
 
 
 def test_the_cli_prints_rows_and_the_summary_line(tmp_path, capsys):

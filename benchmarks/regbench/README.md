@@ -2414,7 +2414,12 @@ reports, read-only, for every finished result whether the launcher would reuse i
 `inputs`, `method`, `points`, `record`; `record` = not `ok` or no `warped.npz`). A method
 whose adapter cannot be loaded on this machine (a stand-in, a plug-in that is not enabled)
 is `no` with `code` and the detail `key not computable here`. The last line is
-`# reusable: N of M ok results`. It writes nothing under `--out`.
+`# reusable: N of M ok results`. It writes nothing under `--out`. It reports **per
+result, not per unit; `opts` and a requested realcheck are not compared**: the launcher
+reuses a unit only when every variant of every case of it is `ok` (with the same
+`group_cases`, `opts` and, if asked, a realcheck), so a row whose sibling variants
+include a `no` carries the detail `sibling variant not ok`. The per-record test is
+`methods.record_gaps`, the same function the launcher's reuse uses.
 
 A GPU is asked for only for the runs whose `gpu` column is 1, with the site's own
 request string, and the script refuses to submit them without it. An image is given the

@@ -1191,6 +1191,32 @@ def _run(
     }
 
 
+KEY_PARTS = ("execution", "code", "inputs", "method")
+
+
+def record_gaps(rec, case, result_path, key):
+    """What keeps ONE finished result from standing for this run, as a list: ``record``
+    (not an ``ok`` record, or its ``warped.npz`` is gone), the parts of ``reuse_key``
+    that differ (``KEY_PARTS``; ``key`` if only the whole differs), ``points`` (made for
+    points the case no longer has: a forced re-prepare changes them). ``[]`` = reusable.
+    The one predicate of ``_reuse`` and of ``regbench reuse`` (``reuse.py``)."""
+    if not isinstance(rec, dict) or not rec.get("ok"):
+        return ["record"]
+    gaps = []
+    was = rec.get("reuse_key")
+    if was != key:
+        if isinstance(key, dict):
+            old = was if isinstance(was, dict) else {}
+            gaps += [c for c in KEY_PARTS if key.get(c) != old.get(c)]
+        gaps = gaps or ["key"]
+    made_for = rec.get("points_sha256")
+    if not isinstance(made_for, dict) or stale_points(made_for, case):
+        gaps.append("points")
+    if not (Path(result_path) / "warped.npz").exists():
+        gaps.append("record")
+    return gaps
+
+
 def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id, key):
     """``{case_id: [variants]}`` when every result of this unit is already ``ok`` for the
     same configuration (method, label, options, cases, points) and was computed the
@@ -1207,17 +1233,12 @@ def _reuse(out, cases, names, name, label, recorded, realcheck, host, launch_id,
             except (OSError, ValueError):
                 return None
             same = (
-                rec.get("ok")
+                isinstance(rec, dict)
                 and rec.get("method") == name
                 and rec.get("label", "") == (label or "")
                 and rec.get("opts") == recorded
-                and rec.get("reuse_key") == key
                 and rec.get("group_cases") == ids
-                # made for the case as it is NOW: a forced re-prepare changes the
-                # points, and a result for the old ones is not this case's
-                and isinstance(rec.get("points_sha256"), dict)
-                and not stale_points(rec["points_sha256"], case)
-                and (result_dir(out, variant, case) / "warped.npz").exists()
+                and not record_gaps(rec, case, path.parent, key)
             )
             if not same:
                 return None

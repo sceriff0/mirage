@@ -7,6 +7,14 @@ the key), ``points`` (the case's points were re-prepared) and ``record`` (the re
 is not ``ok``, or its ``warped.npz`` is gone). Nothing is written and no reuse
 behaviour changes.
 
+The report is **per result, not per unit; ``opts`` and a requested realcheck are not
+compared**. The launcher reuses a unit only when every variant of every case of it is
+ok, its ``group_cases`` and ``opts`` equal the current ones and a requested realcheck
+exists; a row here whose siblings (same method, label, ``group_cases``) include a ``no``
+is marked ``sibling variant not ok`` in ``detail`` (``reusable`` stays what it is for
+the record itself). The per-record predicate is ``methods.record_gaps``, shared with
+the launcher's ``_reuse``.
+
 A method whose adapter cannot be loaded or whose key cannot be computed here (a
 stand-in, a private plug-in that is not enabled) is ``reusable: no`` with the detail
 ``KEY_NOT_COMPUTABLE`` and ``code`` among the differences: its code bytes cannot be
@@ -20,9 +28,8 @@ import os
 from pathlib import Path
 
 from . import methods
-from .cases import load_case, stale_points
+from .cases import load_case
 
-COMPONENTS = ("execution", "code", "inputs", "method")
 KEY_NOT_COMPUTABLE = "key not computable here"
 
 
@@ -51,17 +58,20 @@ def _key_now(method, cases, out, rec, label):
 
 
 def report(cases_root, out, dataset="multiplex"):
-    rows = []
+    rows, units = [], {}
     for path, rec in _records(out, dataset):
         variant, case_id = path.parts[-4], path.parts[-2]
         row = {"variant": variant, "case_id": case_id, "method": "", "label": "",
                "reusable": "no", "differs": "", "detail": ""}
-        if not rec or not rec.get("ok"):
+        if not isinstance(rec, dict) or not rec.get("ok"):
             row.update(differs="record", detail="no ok record")
+            if isinstance(rec, dict):
+                units.setdefault(_unit(rec), []).append(row)
             rows.append(row)
             continue
         method, label = rec.get("method", ""), rec.get("label") or None
         row.update(method=method, label=label or "")
+        units.setdefault(_unit(rec), []).append(row)
         try:
             cases = [load_case(Path(cases_root) / dataset / c)
                      for c in (rec.get("group_cases") or [case_id])]
@@ -70,19 +80,24 @@ def report(cases_root, out, dataset="multiplex"):
             rows.append(row)
             continue
         now, detail = _key_now(method, cases, out, rec, label)
-        was = rec.get("reuse_key") or {}
-        if now is None:
-            differs = ["code"]
-        else:
-            differs = [c for c in COMPONENTS if now.get(c) != was.get(c)]
+        was = rec.get("reuse_key")
         case = next((c for c in cases if c.case_id == case_id), cases[0])
-        made_for = rec.get("points_sha256")
-        if not isinstance(made_for, dict) or stale_points(made_for, case):
-            differs.append("points")
-        if not (path.parent / "warped.npz").exists():
-            differs.append("record")
-            detail = detail or "warped.npz is missing"
+        # not computable here: compare the record with itself, and name `code` below
+        gaps = methods.record_gaps(rec, case, path.parent, was if now is None else now)
+        differs = (["code"] if now is None else []) + gaps
+        if gaps == ["record"] and not detail:
+            detail = "warped.npz is missing"
         row.update(reusable="no" if differs else "yes", differs=",".join(differs),
                    detail=detail)
         rows.append(row)
+    for unit_rows in units.values():
+        if any(r["reusable"] == "no" for r in unit_rows):
+            for r in unit_rows:
+                if r["reusable"] == "yes":
+                    r["detail"] = "sibling variant not ok"
     return rows
+
+
+def _unit(rec):
+    return (rec.get("method", ""), rec.get("label") or "",
+            tuple(rec.get("group_cases") or ()))
