@@ -2169,7 +2169,7 @@ script names no method.
    | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most its share of `REGBENCH_STAGE_QUEUE_MAX` (a total over the launch, split over the runs feeding at once: 200 is 22 each for 9 runs without lanes; 100 over 4 lanes is 25 each) of them pending or running | 2; 4 GB; 2 h |
    | `rb-<run>-<ds>-tile-a<2..4>-o<n>` (the same) | a RETRY JOB: one task per round that has a tile the pipeline would retry; it runs that round's due tiles one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
    | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
-   | `rb-<run>-<ds>-last-<16,64,256,512,700>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
+   | `rb-<run>-<ds>-last-<16,64,256,512,700>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512, 700 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
 
    **The round's last job, in three sentences.** It holds the benchmark's own work
    (loading and moving the outlines, the tissue reduction), so it has the benchmark's

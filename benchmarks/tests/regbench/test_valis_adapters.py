@@ -1012,7 +1012,13 @@ def test_the_jvm_heap_follows_the_modules_formula():
     assert "(32 + 16 * task.attempt)" in module
     assert "Math.min(heap_request, task.memory.toGiga() - 4)" in module
     heap = valis_mirage.jvm_heap_gb
-    for mem, attempt, want in ((16, 1, 12), (64, 2, 60), (256, 3, 80), (512, 4, 96), (700, 5, 112)):
+    for mem, attempt, want in (
+        (16, 1, 12),
+        (64, 2, 60),
+        (256, 3, 80),
+        (512, 4, 96),
+        (700, 5, 112),
+    ):
         host = {"mem_requested_gb": float(mem), "attempt": attempt}
         assert heap({}, host) == want, mem
     assert heap({}, {"mem_requested_gb": None, "attempt": 1}) is None

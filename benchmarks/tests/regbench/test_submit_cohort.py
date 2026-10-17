@@ -3126,9 +3126,7 @@ def test_the_dry_run_plans_a_700g_rung(dry):
     jobs, _, _ = dry
     first = _any(jobs, "rb-palom-multiplex-16g")
     assert first.opt("--mem") == "16G"
-    steps = [
-        _any(jobs, f"rb-palom-multiplex-{gb}g") for gb in (16, 64, 256, 512, 700)
-    ]
+    steps = [_any(jobs, f"rb-palom-multiplex-{gb}g") for gb in (16, 64, 256, 512, 700)]
     assert [j.opt("--mem") for j in steps] == ["16G", "64G", "256G", "512G", "700G"]
     assert [j.args[7:9] for j in steps][-2:] == [["4", "512"], ["5", "700"]]
     assert _any(jobs, "rb-palom-multiplex-700g-again").opt("--mem") == "700G"

@@ -119,7 +119,7 @@ ol.caveats{margin:0;padding-left:22px;display:grid;gap:8px;max-width:80ch}
     <li class="step"><div class="n">4</div><div class="body">
       <h3>the runs, on memory ladders</h3>
       <div class="jobs"><span class="job">rb-&lt;run&gt;-multiplex</span><span class="job">rb-&lt;run&gt;-multiplex-retry</span></div>
-      <p>Per run, one task per case (a per-pair method) or per patient (a per-patient method), on the ladders 16, 64, 256, 512 GB at 4 CPUs. A unit climbs only after a memory failure; a retry is submitted after a failure, never queued before one. STARE is several jobs per round: coarse, one job per tile, solve, stitch. Its stage jobs (coarse, tiles, solve) run at the pipeline's per-process allocations, not on the ladders; only its last job (stitch) climbs them.</p>
+      <p>Per run, one task per case (a per-pair method) or per patient (a per-patient method), on the ladders 16, 64, 256, 512, 700 GB at 4 CPUs. A unit climbs only after a memory failure; a retry is submitted after a failure, never queued before one. STARE is several jobs per round: coarse, one job per tile, solve, stitch. Its stage jobs (coarse, tiles, solve) run at the pipeline's per-process allocations, not on the ladders; only its last job (stitch) climbs them.</p>
       <p class="writes">writes <code>warped.npz</code> (the moved polygons), <code>run.json</code> (ok, cause, seconds, resources, every departure from the method as shipped) and, for the VALIS primary rows, <code>realcheck.json</code>.</p>
     </div></li>
     <li class="step"><div class="n">5</div><div class="body">
