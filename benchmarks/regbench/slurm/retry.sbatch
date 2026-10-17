@@ -180,15 +180,16 @@ gone() {
 # returns 1. "Not there" is only ever an answer the queue GAVE: a successor that
 # resubmits on a failed look would put the step in the queue twice.
 in_queue() {
-    local name="$1" got bad=0
+    local name="$1" got bad=0 err="$plan/squeue.err"
     while :; do
-        if got="$(squeue -h -u "$(id -un)" --name="$name" -o '%i' 2>&1)"; then
-            got="$(sed -n 1p <<< "$got")"
+        # the id comes from stdout alone: a squeue that answers can still warn on stderr
+        if got="$(squeue -h -u "$(id -un)" --name="$name" -o '%i' 2>"$err")"; then
+            got="$(grep -m1 -E '^[0-9]+(_|$)' <<< "$got" || true)"
             echo "${got%%_*}"
             return 0
         fi
         bad=$((bad + 1))
-        echo "$(date +%FT%T) the queue could not be read (squeue --name=$name), look $bad of at most $REGBENCH_RETRY_SQUEUE_TRIES in a row: $got" >&2
+        echo "$(date +%FT%T) the queue could not be read (squeue --name=$name), look $bad of at most $REGBENCH_RETRY_SQUEUE_TRIES in a row: $(cat "$err" 2>/dev/null)" >&2
         [ "$bad" -ge "$REGBENCH_RETRY_SQUEUE_TRIES" ] && return 1
         sleep "$REGBENCH_RETRY_POLL_S"
     done

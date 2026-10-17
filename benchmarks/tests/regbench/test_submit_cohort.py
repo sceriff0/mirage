@@ -3384,6 +3384,22 @@ def test_a_takeover_that_cannot_read_the_queue_looks_again_and_never_submits_twi
     assert done.stdout.splitlines()[-1].startswith("REGBENCH_END kind=retry")
 
 
+def test_a_takeover_never_takes_a_squeue_warning_for_a_job_id(tmp_path):
+    """A squeue that answers AND warns on stderr (a slurm.conf notice, say) still gives
+    the job id: the warning line is never recorded as the step's job."""
+    ends = {i: None for i in range(2)}
+    warns = (
+        'case "$*" in *--name=rb-x-16g-again*)\n'
+        '  echo "squeue: warning: slurm.conf option deprecated" >&2; echo 77 ;; esac; exit 0'
+    )
+    done, sent, _ = _watch(
+        tmp_path, ends, STEPS, range_="0-1", link=2, squeue=warns,
+        plan_files={"submitting": "1 rb-x-16g-again\n"},
+    )  # fmt: skip
+    assert "it is in the queue as 77" in done.stdout, done.stdout + done.stderr
+    assert "--job-name=rb-x-16g-again" not in " ".join(sent)
+
+
 def test_a_rung_the_partition_cannot_grant_is_written_down_as_the_launchers(tmp_path):
     """F2: a `cut` step is never submitted. The units that would climb to it are
     written down by `regbench chain-mark` as not_submitted (the launcher's), and the
