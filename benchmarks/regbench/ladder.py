@@ -7,9 +7,9 @@ come later, from its tile submitter. Nothing waits on a login node. So a
 task must decide FOR ITSELF, when it starts, whether its unit has anything to do. That
 decision is here, in Python, so that it can be tested without a scheduler.
 
-**The chain of one unit.** Per rung (16, 64, 256, 512 GB) there are two array tasks:
+**The chain of one unit.** Per rung (16, 64, 256, 512, 700 GB) there are two array tasks:
 
-``first``  (rung 1) / ``climb`` (rungs 2-4)   the attempt at that rung
+``first``  (rung 1) / ``climb`` (rungs 2-5)   the attempt at that rung
 ``again``                                      the SAME rung once more, and only when the
                                                attempt before it was lost to the
                                                scheduler, not to the method
@@ -86,7 +86,8 @@ from pathlib import Path
 
 from . import resources
 
-RUNGS_GB = (16, 64, 256, 512)
+RUNGS_GB = (16, 64, 256, 512, 700)
+MAX_RUNG_GB = RUNGS_GB[-1]  # the site's largest node (user ruling 2026-10-16)
 SELFCHECK_RUNGS_GB = (64, 256, 512)
 CPUS = 4  # every method, every rung
 MAX_HOURS = 168  # the site's longest job: 7 days

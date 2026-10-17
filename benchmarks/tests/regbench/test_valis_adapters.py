@@ -816,7 +816,7 @@ def test_a_memory_error_in_the_micro_pass_of_valis_120_is_oom(tmp_path, pair):
 def test_valis_120_gets_a_heap_that_follows_the_rung(tmp_path, pair, monkeypatch):
     """VALIS 1.2.0 starts its JVM at 10 GB whatever it is asked; the adapter starts it
     first, through VALIS's own slide_io.init_jvm, with the module's formula."""
-    want = {(16, 1): 12, (64, 2): 60, (256, 3): 80, (512, 4): 96}
+    want = {(16, 1): 12, (64, 2): 60, (256, 3): 80, (512, 4): 96, (700, 5): 112}
     for (mem, attempt), heap in want.items():
         fv.configure()
         monkeypatch.setenv("REGBENCH_MEM_GB", str(mem))
@@ -1012,7 +1012,7 @@ def test_the_jvm_heap_follows_the_modules_formula():
     assert "(32 + 16 * task.attempt)" in module
     assert "Math.min(heap_request, task.memory.toGiga() - 4)" in module
     heap = valis_mirage.jvm_heap_gb
-    for mem, attempt, want in ((16, 1, 12), (64, 2, 60), (256, 3, 80), (512, 4, 96)):
+    for mem, attempt, want in ((16, 1, 12), (64, 2, 60), (256, 3, 80), (512, 4, 96), (700, 5, 112)):
         host = {"mem_requested_gb": float(mem), "attempt": attempt}
         assert heap({}, host) == want, mem
     assert heap({}, {"mem_requested_gb": None, "attempt": 1}) is None
@@ -1579,3 +1579,9 @@ def test_the_shipped_run_records_its_four_stages(mirage):
     impl = mirage_run_json(mirage.work, "valis_mirage")["info"]["implementation"]
     assert impl["tier"] == "high" and impl["micro_reg"] == 2
     assert impl["stages"] == ["rigid", "micro_rigid", "nonrigid", "micro"]
+
+
+def test_the_jvm_heap_at_the_fifth_rung():
+    from benchmarks.regbench.methods import _valis_points as vp
+
+    assert vp.jvm_heap_gb({}, {"mem_requested_gb": 700, "attempt": 5}) == 112

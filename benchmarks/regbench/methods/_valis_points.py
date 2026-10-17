@@ -143,7 +143,7 @@ def reported(caught):
 def jvm_heap_gb(opts, host=None):
     """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
     ``min(32 + 16 * attempt, memory in GiB - 4)``: 12 GiB at 16 GB, 60 at 64 GB, 80 at
-    256 GB, 96 at 512 GB. None when the memory request is unknown (outside a
+    256 GB, 96 at 512 GB, 112 at 700 GB. None when the memory request is unknown (outside a
     scheduler). ``--opt jvm_heap_gb=N`` overrides it."""
     from .. import resources
 

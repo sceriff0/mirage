@@ -567,16 +567,16 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
         gbs = rung_gb(run)
         # the benchmark's ladder for every run: the last job of a staged round holds
         # the benchmark's own work beside the method's writer
-        assert gbs == (16, 64, 256, 512), run
+        assert gbs == (16, 64, 256, 512, 700), run
         assert [j.opt("--mem") for j in got] == [f"{gb}G" for gb in gbs], run
-        assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 4, run
+        assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 5, run
         # attempt and memory reach the task: REGBENCH_ATTEMPT, REGBENCH_MEM_GB
         assert [j.args[7:9] for j in got] == [
             [str(i), str(gb)] for i, gb in enumerate(gbs, 1)
         ], run
         # only the last job of a run in several jobs is told to collect them
         assert {j.args[13] for j in got} == {"jobs" if run in STAGED else "-"}, run
-        assert [j.args[11] for j in got] == ["first", "climb", "climb", "climb"], run
+        assert [j.args[11] for j in got] == ["first"] + ["climb"] * 4, run
         assert got[0].args[10] == "-"
         assert all("--wait" not in j.words for j in got)
 
@@ -2368,7 +2368,7 @@ def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
     settle = {n.strip("<>") for _, n in jobs["rb-settle"].deps}
     for run in real:
         first = rungs(jobs, run, suffix="-first")
-        assert [j.opt("--array") for j in first] == ["0-0%20", None, None, None]
+        assert [j.opt("--array") for j in first] == ["0-0%20"] + [None] * 4
         assert all(j.args[9] == "1" for j in first)  # --realcheck
         for dataset in COHORT_DATASETS:
             rest = rungs(jobs, run, dataset)
@@ -3118,3 +3118,21 @@ def test_the_watchers_cause_lists_are_the_ladders():
     assert f'CLIMB_CAUSES="{" ".join(ladder.CLIMB_CAUSES)}"' in code
     assert set(resources.MEMORY_CAUSES) < set(ladder.CLIMB_CAUSES)
     assert not set(resources.MEMORY_CAUSES) & set(ladder.AGAIN_CAUSES)
+
+
+def test_the_dry_run_plans_a_700g_rung(dry):
+    """User ruling 2026-10-16: the ladder ends at the site's 700 GB node, for every
+    method; only the selfcheck stops at 512 GB."""
+    jobs, _, _ = dry
+    first = _any(jobs, "rb-palom-multiplex-16g")
+    assert first.opt("--mem") == "16G"
+    steps = [
+        _any(jobs, f"rb-palom-multiplex-{gb}g") for gb in (16, 64, 256, 512, 700)
+    ]
+    assert [j.opt("--mem") for j in steps] == ["16G", "64G", "256G", "512G", "700G"]
+    assert [j.args[7:9] for j in steps][-2:] == [["4", "512"], ["5", "700"]]
+    assert _any(jobs, "rb-palom-multiplex-700g-again").opt("--mem") == "700G"
+    assert _any(jobs, "rb-stare-multiplex-last-700g").opt("--mem") == "700G"
+    assert _any(jobs, "rb-stare-multiplex-last-700g-again").opt("--mem") == "700G"
+    everything = {**jobs, **jobs.later}
+    assert not [n for n in everything if n.startswith("rb-sc-") and "700g" in n]

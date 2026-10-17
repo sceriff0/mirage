@@ -240,7 +240,7 @@ def test_selfcheck_retry_memory_leaves_a_standing_record_alone(tmp_path, monkeyp
 
 
 def test_the_rungs_are_the_frozen_ones():
-    assert ladder.RUNGS_GB == (16, 64, 256, 512)
+    assert ladder.RUNGS_GB == (16, 64, 256, 512, 700)
     assert ladder.SELFCHECK_RUNGS_GB == (64, 256, 512)
     assert ladder.CPUS == 4 and ladder.MAX_HOURS == 168
 
@@ -1086,3 +1086,9 @@ def test_a_unit_is_reused_only_for_the_same_configuration(tmp_path, capsys):
     record(path, cause="exception", marker=1)  # a failed unit is never reused
     assert _run(root, out, "--opt", "workers=3") == 0
     assert json.loads(path.read_text())["ok"]
+
+
+def test_the_ladder_ends_at_the_sites_largest_node():
+    assert ladder.RUNGS_GB == (16, 64, 256, 512, 700)
+    assert ladder.MAX_RUNG_GB == 700 == ladder.RUNGS_GB[-1]
+    assert 700 not in ladder.SELFCHECK_RUNGS_GB

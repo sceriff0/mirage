@@ -1716,7 +1716,7 @@ can read (`cpu_instrument` of the first rows says).
   them a primary row) have one GPU as well, which no other method has (`device` and
   `gpu_model` are columns of the cost tables, and their `_cpu` twins are shown beside
   them). Memory starts at 16 GB and moves up one rung
-  (64, 256, 512 GB) only when the run ran out of memory. `attempt`, `mem_requested_gb` and
+  (64, 256, 512, 700 GB) only when the run ran out of memory. `attempt`, `mem_requested_gb` and
   `cpus_requested` are recorded per run; earlier failed attempts are kept in
   `previous_attempts` and reported as `wasted_*`. `slurm/submit_cohort.sh` submits each
   rung as two chained job arrays (the attempt, then the same rung once more for a unit
@@ -2095,7 +2095,7 @@ script names no method.
 2. **(Removed; the other steps keep their numbers.)** The gate job per run was removed; the step number is
    kept so that the numbering of the steps below, and the scripts' own comments, stay
    what they were.
-3. **The ladder**: per run and dataset, the rungs are 16, 64, 256 and 512 GB at 4 CPUs,
+3. **The ladder**: per run and dataset, the rungs are 16, 64, 256, 512 and 700 GB at 4 CPUs (700 GB is the site's largest node; the rungs changed on 2026-10-16 by user ruling, before any cohort run of this branch),
    each with an attempt (`run --ladder first` at 16 GB, `climb` above) and `-again`, the
    same rung once more (`run --ladder again`). One task is one case for a run that works
    per pair and one patient for a run that works per patient.
@@ -2169,7 +2169,7 @@ script names no method.
    | `rb-<run>-<ds>-tile-a1-o<n>` (submitted by the tile submitter, not by the launcher) | ONE TASK PER TILE: T tasks in arrays of at most `REGBENCH_STAGE_ARRAY_MAX` (100), at most its share of `REGBENCH_STAGE_QUEUE_MAX` (a total over the launch, split over the runs feeding at once: 200 is 22 each for 9 runs without lanes; 100 over 4 lanes is 25 each) of them pending or running | 2; 4 GB; 2 h |
    | `rb-<run>-<ds>-tile-a<2..4>-o<n>` (the same) | a RETRY JOB: one task per round that has a tile the pipeline would retry; it runs that round's due tiles one after another | 2; 8, 12, 16 GB; 4, 6, 8 h |
    | `rb-<run>-<ds>-solve-a1..a4` | 4 arrays of R tasks | 1; 1, 2, 3, 4 GB; 8, 16, 24, 32 h |
-   | `rb-<run>-<ds>-last-<16,64,256,512>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
+   | `rb-<run>-<ds>-last-<16,64,256,512,700>g[-again]` | 8 arrays of R tasks (`run_rung.sbatch ... jobs`): the round's LAST JOB reads the stage records, moves the benchmark's points, runs STITCH as a process of its own and reduces the tissue plane | 4; 16, 64, 256, 512 GB (the benchmark's ladder); one round's `REGBENCH_TIME` plus 40 h |
 
    **The round's last job, in three sentences.** It holds the benchmark's own work
    (loading and moving the outlines, the tissue reduction), so it has the benchmark's
@@ -2737,6 +2737,8 @@ Besides that:
 
 - **A compute node may call `sbatch` and `squeue`** (this site's Nextflow head jobs do).
   Check: `srun -c 1 --mem=1G --time=5 bash -c 'sbatch --version && squeue -h -u $USER | head -n 3'`.
+- **A partition with 700 GB nodes**, given after `--`: the ladder's last rung asks for 700 GB at 4 CPUs
+  for every method, and a job asking for more than any node has stays pending forever.
 - **A job of 7 days at 1 CPU and 1 GB** is accepted on the partition given after `--`
   (`REGBENCH_STAGE_FEED_TIME` shortens it; the chain of `REGBENCH_STAGE_FEEDERS`
   submitters then covers less time).
@@ -3100,7 +3102,7 @@ memory failure is `oom` and climbs.
 
 - `valis120`, `valis120_hires`: the JVM is started by the adapter through VALIS's own
   `slide_io.init_jvm(mem_gb=...)` before `Valis(...)` is built, with
-  `min(32 + 16 x rung, GiB - 4)` (12, 60, 80, 96 GiB on the four rungs: the pipeline
+  `min(32 + 16 x rung, GiB - 4)` (12, 60, 80, 96, 112 GiB on the five rungs: the pipeline
   module's formula), because VALIS's `registration.init_jvm` passes the literal 10 on
   whatever it is given. This is the ONE thing besides the reference slide that the
   benchmark sets for those rows, and it is not a registration parameter. Off the ladder

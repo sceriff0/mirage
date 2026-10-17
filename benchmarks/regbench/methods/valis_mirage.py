@@ -250,7 +250,7 @@ def pipeline():
 
 def jvm_heap_gb(opts, host=None):
     """``modules/local/register.nf``'s formula, the ladder's rung as the attempt:
-    12 GiB at 16 GB, 60 at 64 GB, 80 at 256 GB, 96 at 512 GB. None (the pipeline's own
+    12 GiB at 16 GB, 60 at 64 GB, 80 at 256 GB, 96 at 512 GB, 112 at 700 GB. None (the pipeline's own
     estimate from the input size) when the memory request is unknown."""
     return vp.jvm_heap_gb(opts, host)
 

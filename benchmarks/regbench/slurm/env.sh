@@ -66,7 +66,7 @@
 # launcher exports REGBENCH_GPU for each job. VALIS 1.2.0's image has a CUDA torch
 # inside and must never see one.
 #
-# Every method runs at 4 CPUs on a memory ladder (16 -> 64 -> 256 -> 512 GB; a unit moves
+# Every method runs at 4 CPUs on a memory ladder (16 -> 64 -> 256 -> 512 -> 700 GB; a unit moves
 # up one rung only when it ran out of memory). submit_cohort.sh owns that; it exports
 # REGBENCH_ATTEMPT and REGBENCH_MEM_GB to each task. No thread variable is exported: a
 # method's own core-count option is set to the allocation by the driver, and what its

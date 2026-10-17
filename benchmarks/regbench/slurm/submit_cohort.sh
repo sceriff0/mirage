@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submit the cohort benchmark: every run of the run list on a four-rung memory ladder,
+# Submit the cohort benchmark: every run of the run list on a five-rung memory ladder,
 # beside the selfchecks (REPORTED, NEVER A GATE: no run waits for one), then the scorer.
 # From a login node, in three steps:
 #
@@ -48,7 +48,7 @@
 #      out because of it (user ruling: run, report, never gate). Its verdict is read by
 #      the scorer (`regbench verdict`, step 5).
 #   2. (there is no step 2 any more: the gate jobs are gone)
-#   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 GB at 4 CPUs. ONE
+#   3. per run and dataset: the memory ladder, 16 -> 64 -> 256 -> 512 -> 700 GB at 4 CPUs. ONE
 #      array is submitted here, the 16 GB attempt, and one small job after it, the
 #      ladder's watcher (retry.sbatch). A RETRY IS SUBMITTED ONLY AFTER A FAILURE: the
 #      watcher submits the same rung once more for a unit the scheduler lost (node
@@ -269,7 +269,7 @@ unset REGBENCH_STAGES
 # shellcheck source=benchmarks/regbench/slurm/env.sh
 source "$HERE/env.sh"
 
-RUNGS_GB="16 64 256 512"
+RUNGS_GB="16 64 256 512 700"
 SELFCHECK_RUNGS_GB="64 256 512"
 CPUS=4
 MAX_SECONDS=$((7 * 24 * 3600))
