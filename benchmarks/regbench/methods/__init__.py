@@ -51,8 +51,10 @@ and ``label`` (the run's label, ``""`` without one).
 
 **At each yield, before the generator is resumed and with the clock paused,** the driver
 moves the nuclei through the map (the moving nuclei for ``mov_to_ref``, the reference
-nuclei for ``ref_to_mov``), writes ``warped.npz`` and ``run.json``, and calls
-``on_variant``. A method can therefore hand over live objects that a later stage
+nuclei for ``ref_to_mov``), and the case's ground-truth landmarks the same way when it
+has them (``regbench.landmark_io``: ``warped.npz: truth_xy`` / ``truth_side``,
+``run.json: truth_sha256`` / ``truth_note``), writes ``warped.npz`` and ``run.json``,
+and calls ``on_variant``. A method can therefore hand over live objects that a later stage
 overwrites.
 
 **What is billed.** Everything from the call to the generator until the variant is yielded:
@@ -96,8 +98,8 @@ cause: killed, phase: writer``, so a kill there leaves a failed row too. The rul
 same for every method.
 
 **A unit that is already done is not run again** (``resume=True``, what ``run`` passes):
-when every result of the unit is ``ok`` for the same method, label, options, cases and
-points, AND was computed the same way from the same bytes (``reuse_key``, kept in
+when every result of the unit is ``ok`` for the same method, label, options, cases,
+points and landmarks (``truth_sha256``), AND was computed the same way from the same bytes (``reuse_key``, kept in
 ``run.json: reuse_key``), nothing runs and no placeholder is written; the records gain
 this submission's id (``submissions``, ``reused_by``). ``REGBENCH_FORCE=1``
 (``run --force``) runs it anyway. ``reuse_key`` holds, for every method: ``execution``
@@ -128,7 +130,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import METHODS, billing, plugins, resources
+from .. import METHODS, billing, landmark_io, plugins, resources
 from ..cases import (
     load_points,
     points_fingerprint,
@@ -671,6 +673,8 @@ def _run(
             # the points this result is made for: a case prepared again with others
             # makes it stale (never reused, and scored as not run)
             "points_sha256": points_fingerprint(case),
+            # and the landmarks: None without a truth.npz (landmark_io)
+            "truth_sha256": landmark_io.truth_sha256(case),
             "previous_attempts": earlier.get((case.case_id, variant), []),
         }
 
@@ -910,6 +914,18 @@ def _run(
                     got, how = _nuclei_band(pts, where, flags, own)
                     if got is not None:
                         arrays[name_nuc], nuclei_band[where] = got, how
+                # the ground-truth landmarks of the side the map takes, the same way;
+                # one the map sends nowhere is non-finite, as for nuclei
+                truth = landmark_io.read_truth(case)
+                truth_note = landmark_io.NO_TRUTH
+                if truth is not None and truth[side] is None:
+                    truth_note = landmark_io.ONE_SIDED_REF_TO_MOV
+                elif truth is not None:
+                    arrays["truth_xy"] = _warp_chunked(
+                        pmap.fn, truth[side], inside=mapping
+                    ).astype(np.float64)
+                    arrays["truth_side"] = np.array(side)
+                    truth_note = ""
                 warp_s, warp_cpu_s = time.perf_counter() - t0, mon.cpu_clock() - cpu0
                 if isinstance(native, dict) and native.get("files"):
                     at_yield.add(key)
@@ -930,6 +946,7 @@ def _run(
                     "native": native,
                     "write_s": float(info.get("write_s") or 0.0),
                     "info": _jsonable(info),
+                    "truth_note": truth_note,
                 }
                 if nuclei_band:  # how each side's nuclei got their seam flag
                     rec["nuclei_band"] = nuclei_band
@@ -1230,7 +1247,9 @@ def record_gaps(rec, case, result_path, key):
     """What keeps ONE finished result from standing for this run, as a list: ``record``
     (not an ``ok`` record, or its ``warped.npz`` is gone), the parts of ``reuse_key``
     that differ (``KEY_PARTS``; ``key`` if only the whole differs), ``points`` (made for
-    points the case no longer has: a forced re-prepare changes them). ``[]`` = reusable.
+    points the case no longer has: a forced re-prepare changes them), ``truth`` (made
+    for other landmarks than the case's ``truth.npz`` now: a record without
+    ``truth_sha256`` was made for none). ``[]`` = reusable.
     The one predicate of ``_reuse`` and of ``regbench reuse`` (``reuse.py``)."""
     if not isinstance(rec, dict) or not rec.get("ok"):
         return ["record"]
@@ -1244,6 +1263,8 @@ def record_gaps(rec, case, result_path, key):
     made_for = rec.get("points_sha256")
     if not isinstance(made_for, dict) or stale_points(made_for, case):
         gaps.append("points")
+    if rec.get("truth_sha256") != landmark_io.truth_sha256(case):
+        gaps.append("truth")
     if not (Path(result_path) / "warped.npz").exists():
         gaps.append("record")
     return gaps
