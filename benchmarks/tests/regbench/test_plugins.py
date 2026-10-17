@@ -90,18 +90,20 @@ def probe(tmp_path, switch, with_plugin=True):
 
 def public_counts():
     """The public run list, derived from the tables: (runs, GPU runs, per patient, cohort result
-    names, cohort runs). STARE: every stride x level of every regime, by name (two result names each);
-    ASHLAR: its cells (one each); the others are written out below."""
+    names, cohort runs). STARE: every stride x level of every regime, by name, and the two tier
+    runs (two result names each); ASHLAR: its cells (one each); the others are written out
+    below."""
     from benchmarks.regbench import regimes as rg
     from benchmarks.regbench import variants
     from benchmarks.regbench.methods import ashlar
 
+    tiers = {f"stare_{t}" for t in variants.STARE_TIERS}  # stare_medium, stare_low
     stare = {
         variants.stare_cell(s_, k, lv)[0]
         for reg in rg.REGIMES
         for k, lv in rg.stare_levels(reg)
         for s_ in variants.STARE_STRIDES
-    }
+    } | tiers
     others = 12  # 3 VALIS + 8 DeeperHistReg + PALOM
     other_names = (
         3 + 3 + 3 + 8 * 2 + 2
@@ -110,7 +112,7 @@ def public_counts():
         variants.stare_cell(s_, k, lv)[0]
         for k, lv in rg.stare_levels(rg.COHORT_REGIME)
         for s_ in variants.STARE_STRIDES
-    }
+    } | tiers
     runs = len(stare) + others + len(ashlar.ASHLAR_CELLS)  # counts(): every active run
     # the cohort's own list (runs_for(None), the table, the expected names) is its regime's
     cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS)

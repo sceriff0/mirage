@@ -254,7 +254,8 @@ OPTS = {"workers": 2}
 
 @pytest.fixture(scope="module")
 def ran(toy_cases, tmp_path_factory):
-    """`crop` (a moving slide of another shape) registered at stride 64 and 256."""
+    """`crop` (a moving slide of another shape) registered at stride 64 and 256, and at
+    the low tier."""
     case = toy_cases["crop"]
     out = tmp_path_factory.mktemp("stare")
     assert methods.run_case("stare", case, out, opts=OPTS, keep_work=True) == [
@@ -264,6 +265,9 @@ def ran(toy_cases, tmp_path_factory):
     assert methods.run_case(
         "stare", case, out, opts={**OPTS, "stride": 256}, label="stare_s256"
     ) == ["stare_s256_rigid", "stare_s256"]
+    assert methods.run_case(
+        "stare", case, out, opts={**OPTS, "tier": "low"}, label="stare_low"
+    ) == ["stare_low_rigid", "stare_low"]
     return case, out
 
 
@@ -457,3 +461,95 @@ def load_case_by_id(cases, cid):
     from benchmarks.regbench.cases import list_cases
 
     return next(c for c in list_cases(cases, "multiplex") if c.case_id == cid)
+
+
+# ── the tiers: high, medium and low, each the pipeline's row ─────────────────
+def tier_row(tier):
+    """One row of the STARE table in ``lib/RegPresets.groovy``, in the adapter's names
+    (``coarse_max_dim`` is ``--max-dim``), read from the file."""
+    text = (REPO / "lib" / "RegPresets.groovy").read_text()
+    table = re.search(r"\bSTARE\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
+    row = re.search(rf"\b{tier}\s*:\s*\[([^\]]*)\]", table).group(1)
+    return {
+        ("max_dim" if k == "coarse_max_dim" else k): int(v)
+        for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)
+    }
+
+
+def test_every_tier_is_the_pipelines_row():
+    assert tuple(adapter.TIERS) == ("high", "medium", "low")
+    assert adapter.TIERS == {t: tier_row(t) for t in adapter.TIERS}
+    # the high row is the one every earlier result was registered with, keys in order
+    assert adapter.TIERS["high"] == {
+        ("max_dim" if k == "coarse_max_dim" else k): v for k, v in high_row().items()
+    }
+    assert list(adapter.TIER_HIGH_STRIDE64) == [*adapter.TIERS["high"], "stride"]
+    assert adapter.TIER_HIGH_STRIDE64 == {**adapter.TIERS["high"], "stride": 64}
+    assert "tier" in adapter.OPTIONS
+
+
+def test_the_high_tier_command_is_unchanged(toy_cases, tmp_path):
+    case = toy_cases["rigid"]
+    assert adapter.command(case, tmp_path, {}) == adapter.command(
+        case, tmp_path, {"tier": "high"}
+    )
+    assert adapter.stage_argv(case, {}, tmp_path) == adapter.stage_argv(
+        case, {"tier": "high"}, tmp_path
+    )
+
+
+@pytest.mark.parametrize("tier", ["high", "medium", "low"])
+def test_a_tier_sets_its_four_values_and_solve_bound(toy_cases, tmp_path, tier):
+    case = toy_cases["rigid"]
+    row = tier_row(tier)
+    argv = adapter.command(case, tmp_path, {"tier": tier})
+    flags = ("--tile", "--halo", "--out-tile", "--max-dim", "--stride")
+    got = {f: argv[argv.index(f) + 1] for f in flags}
+    assert got == {
+        "--tile": str(row["tile"]),
+        "--halo": str(row["halo"]),
+        "--out-tile": str(row["out_tile"]),
+        "--max-dim": str(row["max_dim"]),
+        "--stride": "64",
+    }
+    # the stage commands carry them: COARSE the tile, halo and size; SOLVE's range gate
+    # is the tier's halo, passed explicitly as the pipeline's TILED_SOLVE does
+    stage = adapter.stage_argv(case, {"tier": tier}, tmp_path)
+    assert flag(stage["coarse"], "--tile") == str(row["tile"])
+    assert flag(stage["coarse"], "--halo") == str(row["halo"])
+    assert flag(stage["coarse"], "--max-dim") == str(row["max_dim"])
+    assert flag(stage["solve"], "--max-disp") == str(row["halo"])
+
+
+def test_a_tier_and_a_stride_cross(toy_cases, recorded):
+    ns = recorded(toy_cases["rigid"], {"tier": "medium", "stride": "128"})
+    assert (ns.tile, ns.halo, ns.stride) == (1024, 192, 128)
+
+
+@pytest.mark.parametrize("bad", ["huge", "High", "", "custom"])
+def test_an_unknown_tier_is_refused(toy_cases, tmp_path, bad):
+    with pytest.raises(ValueError, match="tier"):
+        adapter.command(toy_cases["rigid"], tmp_path, {"tier": bad})
+    with pytest.raises(ValueError, match="high, medium, low"):
+        adapter.tier_of({"tier": bad})
+    assert adapter.tier_of({}) == "high"
+
+
+def test_the_tile_count_follows_the_tier(toy_cases):
+    case = toy_cases["rigid"]
+    assert adapter.tile_count(case, {"tier": "low"}) >= adapter.tile_count(case, {})
+    assert adapter.tile_count(case, {}) == adapter.tile_count(case, {"tier": "high"})
+
+
+def test_run_json_records_the_tier(ran):
+    case, out = ran
+    high = run_json(out, "stare", case)["info"]
+    low = run_json(out, "stare_low", case)["info"]
+    assert high["implementation"]["tier"] == "high"
+    assert low["implementation"]["tier"] == "low"
+    # a tier's own values are not changes from it; the bound is that tier's halo
+    assert low["implementation"]["changed_from_tier"] == {}
+    assert low["max_disp"] == adapter.TIERS["low"]["halo"] == 128
+    assert low["stride"] == 64
+    assert "`low` STARE tier" in low["implementation"]["parameters"]
+    assert "`high` STARE tier" in high["implementation"]["parameters"]

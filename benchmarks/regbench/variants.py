@@ -59,7 +59,8 @@ only ever added at the end, so a position never changes.
                        (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit.
 
 The STARE runs of the cohort are its regime's levels x the three strides
-(``regimes.DATASET_REGIME``); ``runs --dataset multiplex`` prints the list.
+(``regimes.DATASET_REGIME``), and two tier runs, ``stare_medium`` and ``stare_low``
+(``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -141,6 +142,19 @@ def _stare_runs():
     )
 
 
+STARE_TIERS = ("medium", "low")  # beside high (the `stare` row): ruling 2026-10-16
+
+
+def _stare_tier_runs():
+    """STARE's medium and low tiers (``methods.stare.TIERS``, the rows of
+    ``lib/RegPresets.groovy``) at stride 64 with no preprocessing: the high tier is the
+    ``stare`` row itself."""
+    return tuple(
+        Run("stare", f"stare_{t}", {"tier": t}, "STARE_REGBENCH", False, None)
+        for t in STARE_TIERS
+    )
+
+
 ASHLAR_AFFINES = _ashlar.AFFINES
 ASHLAR_NOISES = _ashlar.NOISE_FRACS
 ASHLAR_SHIFTS = _ashlar.MAX_SHIFTS_UM
@@ -165,6 +179,7 @@ def _ashlar_runs():
 
 RUNS = (
     *_stare_runs(),
+    *_stare_tier_runs(),
     Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
@@ -283,6 +298,8 @@ CHECKED_BY = {
         if n not in ("ashlar", "affine_ashlar")
     },
     **{run_label: "stare" for r in _stare_runs() if (run_label := r.label) is not None},
+    # the tier runs too: the same adapter and pointing path at other tile sizes
+    **{r.label: "stare" for r in _stare_tier_runs()},
 }
 
 # the private plug-in's key keeps its older name

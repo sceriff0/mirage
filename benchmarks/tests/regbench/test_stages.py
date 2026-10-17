@@ -78,10 +78,12 @@ FORMULA = (
 )
 
 
-def pipeline_memory_gb(stage):
-    """The first attempt's memory of a process at the high tier and stride 64, worked
-    out from the text of its ``memory`` closure in conf/modules.config."""
-    tier, body = high_tier(), name_block(stages.ALLOCATION[stage]["process"])
+def pipeline_memory_gb(stage, tier=None):
+    """The first attempt's memory of a process at a tier (a row of RegPresets' STARE
+    table; the high one when none is given) and stride 64, worked out from the text of
+    its ``memory`` closure in conf/modules.config."""
+    body = name_block(stages.ALLOCATION[stage]["process"])
+    tier = high_tier() if tier is None else tier
     if stage == stages.SOLVE:
         return int(re.search(r"memory\s*=\s*\{\s*(\d+)\.GB \* task\.attempt", body)[1])
     floor, a, b, k = (float(v) for v in re.search(FORMULA, body).groups())
@@ -1946,3 +1948,15 @@ def test_the_placeholder_of_a_last_job_is_any_units_placeholder(
     assert "collector" not in seen["placeholder"]
     plain = {"ok", "error", "cause"} | set(seen["placeholder"])
     assert plain == set(seen["placeholder"]) and "phase" not in seen["placeholder"]
+
+
+def test_every_tier_gets_the_allocation_the_table_holds():
+    """conf/modules.config's memory closures, evaluated at each of the adapter's tiers:
+    the floors hold at all three, so one ALLOCATION serves every tier (this fails, and
+    the table must become per tier, if RegPresets or a closure changes)."""
+    assert set(adapter.TIERS) == {"high", "medium", "low"}
+    for name, row in adapter.TIERS.items():
+        tier = {("coarse_max_dim" if k == "max_dim" else k): v for k, v in row.items()}
+        for stage in PIPELINE:
+            want = stages.ALLOCATION[stage]["mem_gb"]
+            assert pipeline_memory_gb(stage, tier) == want, (name, stage)

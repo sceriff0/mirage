@@ -52,7 +52,13 @@ in micrometres). A brightfield case is not part of this benchmark: the adapter r
 
 **Parameters.** ``TIER_HIGH_STRIDE64``: the ``high`` row of the STARE table in
 ``lib/RegPresets.groovy`` plus stride 64, i.e. the pipeline's ``tiled_high_s64`` arm. All
-five are passed explicitly. Every other TRANSFORM parameter of that arm is the command's
+five are passed explicitly.
+
+**Tier.** ``--opt tier=<high|medium|low>``, nothing else: ``high`` when unset. ``TIERS``
+holds the three rows of that table (tile, halo, out_tile, max_dim), each the pipeline's;
+a tier replaces those four values and nothing else (the stride is crossed with it, as in
+the pipeline's arms). SOLVE's ``--max-disp`` is then that tier's halo. The tier is
+recorded in ``info["implementation"]["tier"]``. Every other TRANSFORM parameter of that arm is the command's
 default (maximum displacement = halo, model, field step). Two STITCH flags are not, and the
 pipeline always passes them (``modules/local/tiled_stitch.nf``): ``--pixel-size`` (the
 case's) and ``--channel-names`` (``case.extra["channel_names"]``, else the names in the
@@ -79,7 +85,7 @@ slide has no pixels the image is 0. ``stare_rigid`` has no image of its own: STI
 writes one image.
 
 Other options (``--opt key=value``), for tests and small slides, each recorded in
-``info["implementation"]["changed_from_tier"]``: ``tile``, ``halo``, ``out_tile``,
+``info["implementation"]["changed_from_tier"]`` (a change from the run's own tier): ``tile``, ``halo``, ``out_tile``,
 ``max_dim``, ``model``, ``max_disp``.
 """
 
@@ -105,6 +111,7 @@ SCOPE = "pair"
 OPTIONS = (
     "proxy",
     "sprep",
+    "tier",
     "stride",
     "tile",
     "halo",
@@ -121,15 +128,15 @@ STAGES = (stages.COARSE, stages.TILE, stages.SOLVE, stages.STITCH)
 # who starts the stage processes of a run (module docstring): stated, never assumed
 JOBS_ENV = "REGBENCH_STAGES"
 JOBS, LOCAL = "jobs", "local"
-# lib/RegPresets.groovy, STARE.high (coarse_max_dim is --max-dim), plus the stride;
-# tests/regbench/test_stare_adapter.py reads the row from that file
-TIER_HIGH_STRIDE64 = {
-    "tile": 2048,
-    "halo": 256,
-    "out_tile": 1024,
-    "max_dim": 1024,
-    "stride": 64,
+# lib/RegPresets.groovy, STARE (coarse_max_dim is --max-dim): the three tiers, each the
+# pipeline's row; tests/regbench/test_stare_adapter.py reads the rows from that file
+TIERS = {
+    "high": {"tile": 2048, "halo": 256, "out_tile": 1024, "max_dim": 1024},
+    "medium": {"tile": 1024, "halo": 192, "out_tile": 768, "max_dim": 1024},
+    "low": {"tile": 512, "halo": 128, "out_tile": 512, "max_dim": 512},
 }
+# the high row plus the stride: the parameters of `stare`, every earlier result's
+TIER_HIGH_STRIDE64 = {**TIERS["high"], "stride": 64}
 _FLAGS = {
     "tile": "--tile",
     "halo": "--halo",
@@ -161,6 +168,14 @@ def settings(opts, case):
             "region is in micrometres"
         )
     return proxy, sprep
+
+
+def tier_of(opts):
+    """The tier of a run: a key of ``TIERS``, ``high`` when the option is unset."""
+    tier = str(opts.get("tier", "high")).strip()
+    if tier not in TIERS:
+        raise ValueError(f"tier={tier!r}: expected one of {', '.join(TIERS)}")
+    return tier
 
 
 def stride_of(opts):
@@ -210,7 +225,8 @@ def command(case, stage_dir, opts):
     the way ``stare.cli.register`` builds them (``stage_commands``). The list is parsed
     and never run."""
     stage_dir = Path(stage_dir)
-    values = {**TIER_HIGH_STRIDE64, "stride": stride_of(opts)}
+    # the dict's key order is the high row's at every tier: the high argv is unchanged
+    values = {**TIERS[tier_of(opts)], "stride": stride_of(opts)}
     values.update({k: opts[k] for k in _FLAGS if k in opts and k != "stride"})
     ref, mov, index = slides(case)
     argv = [
@@ -402,7 +418,7 @@ def tile_count(case, opts):
     from stare.tile_grid import tile_grid
 
     values = {
-        **TIER_HIGH_STRIDE64,
+        **TIERS[tier_of(opts)],
         **{k: opts[k] for k in ("tile", "halo") if k in opts},
     }
     if case.ref_hw:
@@ -800,10 +816,12 @@ def register(case, work, opts):
     man = json.loads(Path(ns.manifest).read_text())
     warp = make_warper(man)
     entry = man["slides"][MOV_NAME]
+    tier = tier_of(opts)
+    row = {**TIERS[tier], "stride": TIER_HIGH_STRIDE64["stride"]}
     changed = {
         k: str(getattr(ns, k))
         for k in _FLAGS
-        if k in opts and getattr(ns, k) != TIER_HIGH_STRIDE64.get(k)
+        if k in opts and getattr(ns, k) != row.get(k)
     }
     ref_in, mov_in, _ = slides(case)
     info = {
@@ -836,8 +854,9 @@ def register(case, work, opts):
             "registration": "the four stage commands `stare coarse`, `stare reg-tile` "
             "(one process per tile), `stare solve`, `stare stitch`, as the pipeline's "
             "TILED_COARSE, TILED_REG_TILE, TILED_SOLVE and TILED_STITCH run them",
-            "parameters": "mirage's `high` STARE tier (lib/RegPresets.groovy), stride "
-            f"{TIER_HIGH_STRIDE64['stride']}: {TIER_HIGH_STRIDE64}",
+            "tier": tier,
+            "parameters": f"mirage's `{tier}` STARE tier (lib/RegPresets.groovy), stride "
+            f"{int(ns.stride)}: {TIERS[tier]}",
             "changed_from_tier": changed,
             "point_warp": "stare.stage_warp.make_warper",
             "benchmark_side": [

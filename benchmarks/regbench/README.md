@@ -54,7 +54,7 @@ step with the run list, `score.TABLES` and the launcher's job names).
 | selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
 | tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 45 runs (STARE strides x preprocessing levels, ASHLAR's 24 cells, VALIS, DeeperHistReg, PALOM), six primary rows |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 47 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, VALIS, DeeperHistReg, PALOM), six primary rows |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster". **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | cost by step (`cost.py`, `cost_end_to_end.csv`, secondary) | here: every number in it is measured by this benchmark |
 | full pipeline cost (`compute_all.py`, `trace.py`, `slurm/compute_all.sbatch`, `pipeline_cost*.csv`, secondary) | here, as in "Cost". Reads Nextflow traces of the whole pipeline run per patient and backend; tested on generated traces, never run |
@@ -189,7 +189,7 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-45 runs, 4 on a GPU, 27 per patient (`variants.counts()`; the list is generated from
+47 runs, 4 on a GPU, 27 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables and no test pins a literal). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `score` expects exactly that list's result
 names and opens its summary on the six primary rows:
@@ -213,8 +213,10 @@ names and opens its summary on the six primary rows:
   `default` (the same), `alt` (CLAHE) and `pct` (percentile), deduplicated
   (`regimes.stare_levels`) to `none`, `clahe` and `percentile`: nine runs. A run is named
   `stare` (stride 64, no preprocessing), `stare_<level>` (stride 64) or
-  `stare_s<stride>_<level>`. A STARE run is checked by `stare`'s selfcheck (one adapter,
-  one pointing path).
+  `stare_s<stride>_<level>`. Beside them are two tier runs, `stare_medium` and
+  `stare_low` (`variants.STARE_TIERS`; stride 64, no preprocessing, `--opt tier=<tier>`),
+  the medium and low rows of `lib/RegPresets.groovy`; `stare` itself is the high tier.
+  A STARE run is checked by `stare`'s selfcheck (one adapter, one pointing path).
 - **STARE's run options `proxy` and `sprep`** (STARE 1.3.0). `sprep=<none|clahe|percentile>`
   is STARE's OWN `--prep`, passed to `stare coarse` and `stare reg-tile` (default `none`;
   `--pixel-size` goes with it, as the case's size, else `auto`). It is the package's
@@ -3006,6 +3008,16 @@ table and `test_stages.py` works each number out again from the text of
   names its tile by `--plan <COARSE's tile plan> --row <n>`, which reads the values the
   pipeline's module passes one by one. `info["cpu_count"]` records what COARSE's FFTs
   can use on the node.
+- **Tier.** `--opt tier=<high|medium|low>`; unset is `high`; any other value fails the
+  case. `TIERS` holds the three rows of the STARE table in `lib/RegPresets.groovy`, each
+  read back from that file by a test: `high` 2048 / 256 / 1024 / 1024, `medium`
+  1024 / 192 / 768 / 1024, `low` 512 / 128 / 512 / 512 (`tile` / `halo` / `out_tile` /
+  `max_dim`). A tier moves those four values and nothing else, so SOLVE's `--max-disp`
+  is that tier's halo; the stride is crossed with it. The high argument list is the one
+  every earlier result was made with. The tier is in `info.implementation.tier`, and
+  `changed_from_tier` lists changes from the run's own tier. The stage allocation table
+  above serves all three tiers: `test_stages.py` evaluates the three memory closures at
+  each tier and every one lands on its floor.
 - **Stride.** `--opt stride=<64|128|256>`; unset is 64; any other value fails the case.
   With `--label stare_s128` the results are named `stare_s128_rigid` and `stare_s128`.
   The rigid stage does not depend on the stride (COARSE is never given it and SOLVE stores

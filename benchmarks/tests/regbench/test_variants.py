@@ -13,16 +13,22 @@ from benchmarks.regbench import METHODS, cli, methods, variants
 from benchmarks.regbench.methods import ashlar, palom, valis
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
+# the two STARE tier runs beside `stare` (the high tier), written out: ruling 2026-10-16
+STARE_TIER_RUNS = ["stare_medium", "stare_low"]
+
 
 def _stare_names():
     """The STARE runs, from the table: every stride x level of the cohort's regime
-    (``regimes.COHORT_REGIME``), by name."""
+    (``regimes.COHORT_REGIME``), by name, then the two tier runs."""
     from benchmarks.regbench import regimes as rg_
 
     return [
-        variants.stare_cell(s_, k, lv)[0]
-        for k, lv in rg_.stare_levels(rg_.COHORT_REGIME)
-        for s_ in variants.STARE_STRIDES
+        *(
+            variants.stare_cell(s_, k, lv)[0]
+            for k, lv in rg_.stare_levels(rg_.COHORT_REGIME)
+            for s_ in variants.STARE_STRIDES
+        ),
+        *STARE_TIER_RUNS,
     ]
 
 
@@ -105,8 +111,9 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 
 # the run list of the cohort, as `python -m benchmarks.regbench runs` prints it (measured
 # 2026-10-15 after the stare_prep row and the brightfield regimes were removed: the same
-# 45 as before, the paused row never counted)
-N_RUNS = 45
+# 45 as before, the paused row never counted; 47 since STARE's medium and low tiers were
+# added beside high on 2026-10-17)
+N_RUNS = 47
 
 
 def test_counts():
@@ -881,7 +888,14 @@ from benchmarks.regbench.methods import ashlar as ashlar_adapter  # noqa: E402
 
 
 def _generated_stare():
-    return [r for r in variants.RUNS if r.method == "stare"]
+    """The STARE runs generated from the stride x level cross: every STARE run but the
+    two tier runs (``STARE_TIER_RUNS``), which are listed beside it."""
+    got = [r for r in variants.RUNS if r.method == "stare" and "tier" not in r.opts]
+    tiers = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
+    assert [n for n in tiers if n not in {variants.run_name(r) for r in got}] == (
+        STARE_TIER_RUNS
+    )
+    return got
 
 
 def test_stare_runs_are_strides_times_levels_of_the_cohort_regime():
@@ -1018,3 +1032,26 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
     )
     # --all still lists every run, paused or not
     assert len(variants.runs_table(paused=True)) == len(variants.RUNS) == N_RUNS
+
+
+def test_the_stare_tiers_are_runs_checked_by_stare():
+    for name, tier in (("stare_medium", "medium"), ("stare_low", "low")):
+        run = variants.run_of(name)
+        assert run.method == "stare" and run.opts == {"tier": tier}
+        assert (run.image, run.gpu, run.after, run.active) == (
+            "STARE_REGBENCH",
+            False,
+            None,
+            True,
+        )
+        assert variants.checked_by(name) == "stare"
+        assert variants.family(name) == "stare"
+        assert variants.variants_of(run) == [f"{name}_rigid", name]
+        assert variants.stages_of(run) == ("coarse", "tile", "solve", "stitch")
+    # the tiers beside high, and nothing else: high is the `stare` row itself
+    assert variants.STARE_TIERS == ("medium", "low")
+    assert [variants.run_name(r) for r in variants.RUNS if "tier" in r.opts] == (
+        STARE_TIER_RUNS
+    )
+    # neither is a primary row: `stare` stays STARE's primary
+    assert variants.primary_of("stare") == "stare"
