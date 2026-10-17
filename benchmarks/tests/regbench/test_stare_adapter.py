@@ -489,10 +489,28 @@ def test_every_tier_is_the_pipelines_row():
 
 
 def test_the_high_tier_command_is_unchanged(toy_cases, tmp_path):
+    """Unset is high, and the high command is the one every earlier result was made
+    with: the tier's four values from RegPresets' high row, then the stride, in that
+    order, between the nuclear index and ``--prep``."""
     case = toy_cases["rigid"]
-    assert adapter.command(case, tmp_path, {}) == adapter.command(
-        case, tmp_path, {"tier": "high"}
-    )
+    row = high_row()
+    argv = adapter.command(case, tmp_path, {})
+    at = argv.index("--nuclear-index") + 2
+    assert argv[at : at + 11] == [
+        "--tile",
+        str(row["tile"]),
+        "--halo",
+        str(row["halo"]),
+        "--out-tile",
+        str(row["out_tile"]),
+        "--max-dim",
+        str(row["coarse_max_dim"]),
+        "--stride",
+        "64",
+        "--prep",
+    ]
+    assert row == {"tile": 2048, "halo": 256, "out_tile": 1024, "coarse_max_dim": 1024}
+    assert argv == adapter.command(case, tmp_path, {"tier": "high"})
     assert adapter.stage_argv(case, {}, tmp_path) == adapter.stage_argv(
         case, {"tier": "high"}, tmp_path
     )
@@ -537,8 +555,9 @@ def test_an_unknown_tier_is_refused(toy_cases, tmp_path, bad):
 
 def test_the_tile_count_follows_the_tier(toy_cases):
     case = toy_cases["rigid"]
-    assert adapter.tile_count(case, {"tier": "low"}) >= adapter.tile_count(case, {})
-    assert adapter.tile_count(case, {}) == adapter.tile_count(case, {"tier": "high"})
+    got = [adapter.tile_count(case, {"tier": t}) for t in ("high", "medium", "low")]
+    assert got == [1, 1, 4]  # STARE's tile plan of the toy slide at each tier
+    assert adapter.tile_count(case, {}) == got[0]
 
 
 def test_run_json_records_the_tier(ran):

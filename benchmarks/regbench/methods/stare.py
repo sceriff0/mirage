@@ -52,13 +52,7 @@ in micrometres). A brightfield case is not part of this benchmark: the adapter r
 
 **Parameters.** ``TIER_HIGH_STRIDE64``: the ``high`` row of the STARE table in
 ``lib/RegPresets.groovy`` plus stride 64, i.e. the pipeline's ``tiled_high_s64`` arm. All
-five are passed explicitly.
-
-**Tier.** ``--opt tier=<high|medium|low>``, nothing else: ``high`` when unset. ``TIERS``
-holds the three rows of that table (tile, halo, out_tile, max_dim), each the pipeline's;
-a tier replaces those four values and nothing else (the stride is crossed with it, as in
-the pipeline's arms). SOLVE's ``--max-disp`` is then that tier's halo. The tier is
-recorded in ``info["implementation"]["tier"]``. Every other TRANSFORM parameter of that arm is the command's
+five are passed explicitly. Every other TRANSFORM parameter of that arm is the command's
 default (maximum displacement = halo, model, field step). Two STITCH flags are not, and the
 pipeline always passes them (``modules/local/tiled_stitch.nf``): ``--pixel-size`` (the
 case's) and ``--channel-names`` (``case.extra["channel_names"]``, else the names in the
@@ -66,6 +60,12 @@ moving slide's own header). SOLVE's ``--max-disp`` is the halo, as ``conf/module
 gives ``TILED_SOLVE``. A tile is named by ``--plan``/``--row``: the row of COARSE's tile
 plan whose values the pipeline's module passes one by one. COARSE's FFTs use every core
 of the node whatever the allocation is, so ``os.cpu_count()`` is recorded.
+
+**Tier.** ``--opt tier=<high|medium|low>``, nothing else: ``high`` when unset. ``TIERS``
+holds the three rows of that table (tile, halo, out_tile, max_dim), each the pipeline's;
+a tier replaces those four values and nothing else (the stride is crossed with it, as in
+the pipeline's arms). SOLVE's ``--max-disp`` is then that tier's halo. The tier is
+recorded in ``info["implementation"]["tier"]``.
 
 **Stride.** ``--opt stride=<64|128|256>``, nothing else: 64 when unset. The stride is the
 lattice REG-TILE measures on and SOLVE solves; COARSE never sees it (``stare/cli.py:79-100``

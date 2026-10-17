@@ -85,19 +85,14 @@ THREADS = (
 
 
 # every fixture slide: 2 x 3 tiles of 2048 px, so a round is six REG-TILE jobs at the
-# high tier (`tiles_per_round` for a run at another tier)
+# high tier (`TILES_PER_ROUND` for a run at another tier)
 REF_HW = (4096, 6144)
 TILES = 6
 
 
-def tiles_per_round(spec):
-    """The REG-TILE jobs of one round of a STARE run on a fixture slide: STARE's tile plan
-    at the run's tier (``methods.stare.tile_count``), the launcher's own count."""
-    from types import SimpleNamespace
-
-    from benchmarks.regbench.methods import stare as adapter
-
-    return adapter.tile_count(SimpleNamespace(ref_hw=REF_HW), spec.opts)
+# the tier runs' REG-TILE jobs per round on that slide, written out (STARE's tile plan
+# at 1024 / 192 and 512 / 128 px): every other STARE run is the high tier's TILES
+TILES_PER_ROUND = {"stare": TILES, "stare_medium": 24, "stare_low": 96}
 
 
 def _case(root, dataset, case_id, group, ref_hw=REF_HW):
@@ -1599,8 +1594,7 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
                     # four rounds of six tiles (high; more at a smaller tier), this
                     # link, and the pipeline's allocation of a tile job at each of its
                     # four attempts
-                    n_tiles = tiles_per_round(spec)
-                    assert n_tiles == TILES or "tier" in spec.opts
+                    n_tiles = TILES_PER_ROUND.get(run, TILES)
                     assert job.args[7:10] == ["4", str(4 * n_tiles), str(link)]
                     assert job.args[10:] == [
                         "{cpus}:{mem_gb}:{time}".format(**stages.allocation("tile", a))
