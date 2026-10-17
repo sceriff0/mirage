@@ -10,9 +10,9 @@ commit `f5ce62e`, archived there as the tag `archive/benchmarking-2026-10-08`).
 sets, its own reader and its own writer, and is judged with the transform it estimated,
 moved by its own code in its own direction. Every departure from that is listed per run
 in `run.json: info.implementation.benchmark_side`.** Where a method's writer departs
-from its own transform, that is reported; DeeperHistReg, whose shipped writer draws its
-image off its own registration, is scored on the image as drawn only (user instruction
-of 2026-10-17).
+from its own transform, that is stated in prose in the method's section, not recorded
+per run. DeeperHistReg, whose shipped writer draws its image off its own registration,
+is scored on the image as drawn only (user instruction of 2026-10-17).
 
 The departures are listed, none is hidden; "Caveats that travel with the results" and
 each method's section give them in full. In short:
@@ -2376,10 +2376,14 @@ folder; these rules keep one from answering for the other:
   the method, label, options, cases and points, four things are equal: `execution`
   (`one process`; for STARE, whose registration is several stage processes, who
   starts them: `jobs` or `local`, as `REGBENCH_STAGES` states it), `code` (a sha256 of the driver,
-  the adapter module, the modules of `methods/` it imports and the `regbench` modules
-  it imports directly), `inputs` (for every case, the fingerprint of each image file it
+  the driver's own modules that change what a result holds (`methods.DRIVER_CODE`:
+  `cases.py`, `landmark_io.py`, `mapping.py`, `resources.py`), the adapter module, the
+  modules of `methods/` it imports, the `regbench` modules it imports directly, the
+  `benchmarks.*` modules it imports by absolute name and, for an adapter that runs
+  outside code, its `CODE_FILES` with the `bin/utils` modules they import: see
+  `methods.code_files`), `inputs` (for every case, the fingerprint of each image file it
   names) and `method` (what the adapter adds: STARE's version and the identity of its
-  SOLVE job). A result made by other code, in another execution shape or from other
+  SOLVE job; for ASHLAR's anchored rows, the STARE matrix each round read). A result made by other code, in another execution shape or from other
   bytes is run again; so is a result of before the key existed.
 - *A stage job* of a staged run (`stages/jobs/*.json: identity`,
   `methods.stare.Round.identity`) is reused only for the same command AND the same
@@ -2405,11 +2409,20 @@ folder; these rules keep one from answering for the other:
   destroyed: `run.json` and `warped.npz` are moved to `<result>/earlier/<n>/` and the
   new record names the folder (`earlier_result`). The current submission's row reads
   `infrastructure`, not that earlier result; moving the two files back restores it.
+- A unit whose input images cannot be read (`methods.check_inputs`) is not run and
+  touches no `ok` record: those stay as they are until the inputs can be read and are
+  known to have changed. Its other rows read `infrastructure`. An `ok` record of another
+  submission that a re-run would overwrite is moved to `<result>/earlier/<n>/` first,
+  as above.
 
 **Reuse: what is computed again, and why.** A unit result is reused only when its
 `run.json: reuse_key` equals the key the current code computes. `code` is a sha256 over
-the driver `methods/__init__.py`, the adapter, the `methods/` modules it imports and the
-`regbench` modules it imports directly; `inputs` is the fingerprint of every image the
+the driver `methods/__init__.py` and `methods.DRIVER_CODE`, the adapter, the `methods/`
+modules it imports, the `regbench` and absolute `benchmarks.*` modules it imports, and
+the outside code it runs (`valis_mirage`: `bin/register.py` and the `bin/utils` modules
+on its path; ASHLAR: `benchmarks/ashlar/` and the tile cutter); `billing.py`,
+`plugins.py` and the reporting modules are left out because they change cost
+accounting or reports, not a result (`methods.DRIVER_CODE_LEFT_OUT`); `inputs` is the fingerprint of every image the
 cases name; STARE adds its version and its SOLVE identity. So **any byte change to one
 of those files makes every earlier result of that method run again**, and results made
 before plan E (on the arms' inputs) are not reused by this branch's code. Two finer
@@ -3076,7 +3089,7 @@ example; both run, and `valis120_hires` is the primary row by the user's ruling 
 
 | run | call | what the benchmark sets |
 |---|---|---|
-| `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x rung, GiB - 4)` (the module's formula: 12, 60, 80, 96 GiB on the four rungs), `stage_checkpoint_dir=None` (files only) |
+| `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x attempt, GiB - 4)`, attempt being the pipeline's own attempt for that memory (REGISTER asks `64 GB x 2^(attempt-1)`; the module's formula: 12, 48, 80, 96, 96 GiB on the five rungs), `stage_checkpoint_dir=None` (files only) |
 | `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()`, `.register_micro()` with no argument | the reference slide. `align_to_reference` stays `False` |
 | `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
 
@@ -3108,12 +3121,20 @@ it and returns `(None, None, None)`; the adapters used to raise a fixed text, so
 the ladder while STARE's `MemoryError` did. Both adapters now wrap `valtils.print_warning`
 for the duration of the call (`_valis_points.swallowed_errors`: it notes what VALIS hands
 it and calls the original with the same arguments) and put that text into the error, so a
-memory failure is `oom` and climbs.
+memory failure is `oom` and climbs. VALIS 1.0.0 also reports a failed Bio-Formats tile
+read with a bare `print(e)`, which `print_warning` never sees, so for the call stdout is
+teed (`_valis_points.printed_errors`: what it printed passes on unchanged, and up to 50
+chunks that read as a memory error are kept, 400 characters each) and that text is read
+too, also for the micro pass `bin/register.py` catches. In `valis_mirage`, a slide the
+pipeline's writer failed on keeps its reason as `writer` (`writer_oom` on memory), and a
+failure of the benchmark's own capture (the crop probe, the field load) is `benchmark`
+(`benchmark_oom`), not the method's `exception`; the same holds for `valis120`'s capture.
 
 - `valis120`, `valis120_hires`: the JVM is started by the adapter through VALIS's own
   `slide_io.init_jvm(mem_gb=...)` before `Valis(...)` is built, with
-  `min(32 + 16 x rung, GiB - 4)` (12, 60, 80, 96, 112 GiB on the five rungs: the pipeline
-  module's formula), because VALIS's `registration.init_jvm` passes the literal 10 on
+  `min(32 + 16 x attempt, GiB - 4)`, attempt being the pipeline's attempt for that
+  memory (REGISTER asks `64 GB x 2^(attempt-1)`: attempt 1 below 64 GB): 12, 48, 80, 96,
+  96 GiB at 16, 64, 256, 512 and 700 GB, the pipeline module's formula, because VALIS's `registration.init_jvm` passes the literal 10 on
   whatever it is given. This is the ONE thing besides the reference slide that the
   benchmark sets for those rows, and it is not a registration parameter. Off the ladder
   (no memory request known) nothing is started and VALIS's 10 GB stands. What each run
@@ -3316,7 +3337,10 @@ per pixel, and the overlap is the owner's ruling (`ashlar.TILE`, `ashlar.OVERLAP
   where STARE's rigid matrix (`info["m0"]` in `<out>/stare/<dataset>/<case>/run.json`) puts
   the matching reference tile's centre; ASHLAR is told the regular grid. A round whose
   `stare` result is missing, failed or has no matrix fails alone as `anchor unavailable:
-  <path>`, and the patient's other rounds proceed.
+  <path>` with `cause: benchmark` (not ASHLAR's failure) and `anchor_cause` naming
+  STARE's (`no record`, or the cause in STARE's `run.json`), and the patient's other
+  rounds proceed. An anchored row is reused only while the matrix each of its rounds
+  read is unchanged (`ashlar.REUSE_KEY`).
 - Reference tiles are cut once per noise level and shared by the plain and the anchored
   row, under `<out>/cache/ashlar_tiles/<dataset>__<patient>/` (delete it when both rows
   have run; it is large). The moving cycles' tiles (noise-free in every cell) are cut once
@@ -3622,7 +3646,10 @@ package is called, because the package would fall back silently
 (`run.py:40-46`); the caller sees a missing `displacement_field.mha` (`:59-60`). stdout is
 captured and the error raised with that text, so a CUDA out-of-memory is `gpu_oom`
 (reported, never escalated), a host allocation failure is `oom` (the ladder), anything
-else `exception`.
+else `exception`. The package prints only `str(e)`, so a bare `MemoryError` leaves
+`Exception: ` with nothing after it and libvips' failure reads `out of memory`: both are
+read as a host memory failure (`deeperhistreg.printed_memory_failure`; `CUDA out of
+memory` stays `gpu_oom`).
 
 **The checks.** The selfcheck compares the row with the one image the writer produced,
 as it is (no declared offset). With a stand-in for the package whose writer is drawn
@@ -3635,8 +3662,9 @@ missing half pixel and a field of the wrong sign are each reported `inconsistent
 8192 px set, with every division exact. A coarsest pyramid level of 31 to 32 px. Not
 reached: the 8192 px set's second resampling (a slide whose short side exceeds 40960 px:
 S between 5 and about 6.1), and sizes that leave remainders, where the row is expected to
-hold (emulated in `test_dhr_adapter.py`); on the cohort that is the realcheck's ground. The 8192 px set on the CPU is 1100 full-field
-iterations at 80 megapixels: hours, and tens of GB.
+hold (emulated in `test_dhr_adapter.py`); on the cohort that is the realcheck's ground.
+The 8192 px set on the CPU is 1100 full-field iterations at 80 megapixels: hours, and
+tens of GB.
 
 **Not checked by reading alone:** nothing here has run DeeperHistReg or libvips.
 Unverified until the checks run in the image: the half-pixel offset itself (the settling

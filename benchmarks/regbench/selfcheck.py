@@ -210,12 +210,12 @@ SIZES = {
     # works at k = 1.953125, S = 9.765625 (the cohort's class), and the 8192 px set at
     # k = 1, S = 5.0 (loaded 8000 px is below 8192). Every division is exact here (loaded
     # 8000 x 10000, a field of 4096 x 5120 or 8000 x 10000, pads 200 and 1000). The
-    # coarsest pyramid level is 32 px (eight levels) and 31 px (nine). A smaller pair for the 8192 px set was
-    # dropped: (8200, 10240) also gives S = 5.0 and adds only a 6 px coarsest level,
-    # nothing the cohort has (the package fails outright once a level reaches 1 px,
-    # its issue #22). NOT reached by this pair: a non-integer second resampling at the
-    # 8192 px set (short side above 40960 px: S between 5 and about 6.1), and sizes that
-    # leave remainders; the realcheck is the check there.
+    # coarsest pyramid level is 32 px (eight levels) and 31 px (nine). A smaller pair
+    # for the 8192 px set was dropped: (8200, 10240) also gives S = 5.0 and adds only a
+    # 6 px coarsest level, nothing the cohort has (the package fails outright once a
+    # level reaches 1 px, its issue #22). NOT reached by this pair: a non-integer second
+    # resampling at the 8192 px set (short side above 40960 px: S between 5 and about
+    # 6.1), and sizes that leave remainders; the realcheck is the check there.
     #
     # The second pair (added 2026-10-11, review section C) is the first with its two
     # canvases swapped: the MOVING slide is the larger one, so the REFERENCE is padded
