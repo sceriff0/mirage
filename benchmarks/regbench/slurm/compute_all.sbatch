@@ -35,7 +35,9 @@ backend="${1:-}" patient="${2:-}"
 d="" endfile=""
 end() {  # end <status> <exit>
     local line="REGBENCH_END kind=compute backend=${backend:--} patient=${patient:--} status=$1 exit=$2 log=${d:+$d/.nextflow.log} job=${SLURM_JOB_ID:--}"
-    echo "$line"
+    # the `[regbench] end` line before it, once env.sh is there (a refusal before has
+    # none: the start line was not printed either)
+    if declare -F regbench_say_end >/dev/null; then regbench_say_end "$line"; else echo "$line"; fi
     [ -z "$endfile" ] || { mkdir -p "$(dirname "$endfile")" && echo "$line" > "$endfile"; }
     exit "$2"
 }
@@ -52,6 +54,7 @@ case "$patient" in */*|.*) refuse "the patient '$patient' is not a folder name."
 [ -f "$REGBENCH_INPUT" ] || refuse "REGBENCH_INPUT=$REGBENCH_INPUT: no such file."
 # shellcheck source=benchmarks/regbench/slurm/env.sh
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
+regbench_start compute "run=$backend" "unit=$patient"
 : "${REGBENCH_NF_PROFILE:=singularity,ieo}"
 : "${REGBENCH_SUBMISSION:=compute-$(date +%Y%m%dT%H%M%S)}"
 site="${REGBENCH_SITE_CONFIG:-$REGBENCH_REPO/conf/ieo.config}"

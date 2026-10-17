@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -575,6 +576,44 @@ def test_a_selfcheck_run_is_not_reduced(slide_case, tmp_path):
     methods.run_case(mod, case, tmp_path, {"workers": 1, "stage_images": "1"})
     run = json.loads((result_dir(tmp_path, "drawn", case) / "run.json").read_text())
     assert run["native"]["files"] and "tissue" not in run
+
+
+def test_a_plane_of_an_earlier_attempt_is_not_scored_for_this_one(
+    slide_case, tmp_path, monkeypatch
+):
+    """Fleet wave 2, F22: a unit run again writes its new image, and the reduction of
+    that image fails (run.json: tissue.error). The plane the EARLIER attempt reduced is
+    still on disk; it is of the earlier image, so it is reduced again from this run's
+    image, never scored as this run's."""
+    _, case, ref, mov = slide_case
+    methods.run_case(_writer(lambda _: _stack(ref)), case, tmp_path, {"workers": 1})
+    d = result_dir(tmp_path, "drawn", case)
+    plane = d / "tissue" / tissue.MOVING_PLANE
+    earlier = tissue.read_plane(plane)
+
+    def no_memory(*a, **k):
+        raise MemoryError("the reduction ran out of memory")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(tissue, "reduce_native", no_memory)
+        methods.run_case(
+            _writer(lambda _: _stack(mov)), case, tmp_path, {"workers": 1}, resume=False
+        )
+    run = json.loads((d / "run.json").read_text())
+    assert run["ok"] and "MemoryError" in run["tissue"]["error"]
+    assert plane.exists()  # the earlier attempt's plane is still there
+    got, why = tissue._variant_plane(tmp_path, case, "drawn")
+    assert why is None and got == plane
+    fresh = tissue.reduce_native(case, run["native"], tmp_path / "fresh")
+    assert np.array_equal(tissue.read_plane(got), tissue.read_plane(fresh["file"]))
+    assert not np.array_equal(tissue.read_plane(got), earlier)
+    # and with this run's image gone, there is no plane to score: said, not the old one
+    for f in run["native"]["files"]:
+        Path(f).unlink()
+    run["tissue"] = {"error": "MemoryError: again"}
+    (d / "run.json").write_text(json.dumps(run))
+    got, why = tissue._variant_plane(tmp_path, case, "drawn")
+    assert got is None and "earlier attempt" in why
 
 
 def test_every_written_image_and_the_unregistered_slide_have_a_row(scored):

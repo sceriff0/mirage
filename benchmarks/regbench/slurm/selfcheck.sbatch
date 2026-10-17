@@ -27,6 +27,8 @@ attempt="$9" mem_gb="${10}" previous="${11:--}"
 export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU="$gpu"
 
 root="$REGBENCH_OUT/logs/selfcheck"
+export REGBENCH_RECORD="$root/$name/selfcheck.json"
+regbench_start selfcheck "run=$name" "label=$label" "rung_gb=$mem_gb" "attempt=$attempt"
 args=(selfcheck --method "$method" --work "$root/$name")
 [ "$label" != - ] && args+=(--label "$label")
 if [ "$opts" != - ]; then
@@ -46,10 +48,11 @@ regbench_py "$image" "${args[@]}"
 code=$?
 if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
     # the selfcheck wrote its verdict (whatever it is): reported, never a gate
-    cat "$REGBENCH_END_FILE"
+    sed '$d' "$REGBENCH_END_FILE"
+    regbench_say_end "$(tail -n 1 "$REGBENCH_END_FILE")"
     exit 0
 fi
 # no record line: the selfcheck process died. Not evidence about the method.
-echo "REGBENCH_END kind=selfcheck run=$name rung=$attempt status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+regbench_say_end "REGBENCH_END kind=selfcheck run=$name rung=$attempt status=no_end_line cause=selfcheck_not_checked whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
 [ "$code" = 0 ] && code=1
 exit "$code"

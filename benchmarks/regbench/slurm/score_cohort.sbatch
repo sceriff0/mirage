@@ -41,6 +41,11 @@ source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 kind="$1" dataset="${2:-}"  # `case` is the only kind that takes a dataset
 workers="${SLURM_CPUS_PER_TASK:-1}"
 verdicts="$REGBENCH_OUT/logs/verdicts.tsv"
+case "$kind" in
+    case) regbench_start "score_$kind" "dataset=$dataset" "unit=index_${SLURM_ARRAY_TASK_ID:--}" ;;
+    score) export REGBENCH_RECORD="$REGBENCH_OUT/tables/summary.md"; regbench_start score ;;
+    *) regbench_start "$kind" ;;
+esac
 
 # what `score-case` and `score` are both told: the submission
 shared=()
@@ -56,6 +61,17 @@ shared_args() {
 # and its cost is not zero. Returns 0 when the accounting was read and applied; then
 # logs/settled names the submission it was done for.
 settled="$REGBENCH_OUT/logs/settled"
+# settle_ids <jobs.tsv>: the ids of this submission's run jobs, comma-separated. The
+# submission's own ids are logs/submitted/<submission>.ids (the launcher's, its
+# watchers' and its tile submitters'); without that file (a folder filled before it was
+# written), every run job of jobs.tsv.
+settle_ids() {
+    local mine="$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.ids"
+    awk -F'\t' -v mine="$mine" '
+        BEGIN { own = 0; while ((getline id < mine) > 0) { want[id] = 1; own = 1 } }
+        $2 ~ /-[0-9]+g(-again)?$/ && $2 !~ /^rb-sc-/ && (!own || ($3 in want)) && !seen[$3]++ { print $3 }
+    ' "$1" | paste -sd, -
+}
 settle_killed() {
     local jobs="$REGBENCH_OUT/logs/jobs.tsv" acct="$REGBENCH_OUT/logs/accounting.psv" ids
     if [ ! -s "$jobs" ]; then
@@ -66,7 +82,17 @@ settle_killed() {
         echo "settle: no sacct on this node"
         return 1
     fi
-    ids=$(cut -f3 "$jobs" | paste -sd, -)
+    # Only a RUN TASK writes a run.json that can still say killed (run_rung.sbatch:
+    # the jobs named rb-<run>-<dataset>[-first|-last]-<GB>g[-again]), and only this
+    # submission's are settled (ladder.mine). jobs.tsv holds every job ever submitted
+    # into the folder, the tile arrays of hundreds of tasks each included: asked for
+    # all of them, with their steps, sacct could outlast this job's time limit.
+    ids="$(settle_ids "$jobs")"
+    if [ -z "$ids" ]; then
+        echo "settle: no run task of submission ${REGBENCH_SUBMISSION:-?} in $jobs"
+        return 1
+    fi
+    echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') run job(s) of submission ${REGBENCH_SUBMISSION:-?}"
     # with the jobs' steps (no -X): a job's line alone reports no CPU time, its steps
     # do (`regbench ... settle` adds them up: ladder.parse_accounting)
     if ! sacct -n -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
@@ -75,7 +101,7 @@ settle_killed() {
         return 1
     fi
     regbench_py "$REGBENCH_SCORER_IMAGE" settle --out "$REGBENCH_OUT" --accounting "$acct" \
-        || return 1
+        --cases "$REGBENCH_CASES" || return 1
     echo "${REGBENCH_SUBMISSION:-}" > "$settled"
 }
 already_settled() {
@@ -85,10 +111,10 @@ already_settled() {
 if [ "$kind" = settle ]; then
     rm -f "$settled"
     if settle_killed; then
-        echo "REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
+        regbench_say_end "REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
     else
         # the scorer tries again; if it cannot either, such results stay "killed"
-        echo "REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark exit=1 log=${REGBENCH_LOG:--}"
+        regbench_say_end "REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark exit=1 log=${REGBENCH_LOG:--}"
     fi
     exit 0
 fi
@@ -108,9 +134,10 @@ if [ "$kind" = case ]; then
     code=$?
     echo "score-case $dataset index $SLURM_ARRAY_TASK_ID: python exited $code (the scorer computes whatever is missing)"
     if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
-        cat "$REGBENCH_END_FILE"
+        sed '$d' "$REGBENCH_END_FILE"
+        regbench_say_end "$(tail -n 1 "$REGBENCH_END_FILE")"
     else
-        echo "REGBENCH_END kind=score_case dataset=$dataset unit=index_$SLURM_ARRAY_TASK_ID status=no_end_line cause=score_case_unfinished whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+        regbench_say_end "REGBENCH_END kind=score_case dataset=$dataset unit=index_$SLURM_ARRAY_TASK_ID status=no_end_line cause=score_case_unfinished whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
     fi
     exit "$code"
 fi
@@ -119,7 +146,7 @@ if [ "$kind" = tissue ]; then
         --out "$REGBENCH_OUT" --workers "$workers"
     code=$?
     echo "tissue: python exited $code (the scorer computes whatever is missing)"
-    echo "REGBENCH_END kind=tissue status=$([ "$code" = 0 ] && echo ok || echo failed) cause=$([ "$code" = 0 ] && echo - || echo tissue_missing) whose=$([ "$code" = 0 ] && echo - || echo benchmark) exit=$code log=${REGBENCH_LOG:--}"
+    regbench_say_end "REGBENCH_END kind=tissue status=$([ "$code" = 0 ] && echo ok || echo failed) cause=$([ "$code" = 0 ] && echo - || echo tissue_missing) whose=$([ "$code" = 0 ] && echo - || echo benchmark) exit=$code log=${REGBENCH_LOG:--}"
     exit 0
 fi
 
@@ -163,19 +190,33 @@ if [ -r "$manifest" ]; then
 fi
 regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
 code=$?
+# the chains no link of whose watcher finished (fleet wave 2, F1): named in the summary,
+# never left to be inferred from rows that say `infrastructure`
+if [ -s "$REGBENCH_OUT/tables/summary.md" ]; then
+    regbench_py "$REGBENCH_SCORER_IMAGE" status --out "$REGBENCH_OUT" \
+        --summary-to "$REGBENCH_OUT/tables/summary.md" \
+        ${REGBENCH_SUBMISSION:+--submission "$REGBENCH_SUBMISSION"} \
+        || echo "status: the chains no watcher finished could not be added to summary.md (see above)"
+fi
 
 # the scheduler's own accounting of every job, as a cross-check of the in-process numbers
 if [ -s "$jobs" ] && command -v sacct >/dev/null; then
     ids=$(cut -f3 "$jobs" | paste -sd, -)
-    sacct -j "$ids" --parsable2 --units=M \
+    if sacct -j "$ids" --parsable2 --units=M \
         --format=JobID,JobName,State,ExitCode,Elapsed,TotalCPU,UserCPU,SystemCPU,MaxRSS,AveRSS,MaxVMSize,ReqMem,AllocCPUS,ReqTRES,AllocTRES,NodeList \
-        > "$REGBENCH_OUT/tables/slurm_accounting.psv" || true
+        > "$REGBENCH_OUT/tables/slurm_accounting.psv"; then
+        echo "scheduler accounting -> $REGBENCH_OUT/tables/slurm_accounting.psv"
+    else
+        # said, and the partial file is not left to pass for the table
+        echo "scheduler accounting: sacct FAILED (exit $?): $REGBENCH_OUT/tables/slurm_accounting.psv is not written; the cross-check table is missing"
+        rm -f "$REGBENCH_OUT/tables/slurm_accounting.psv"
+    fi
     cp "$jobs" "$REGBENCH_OUT/tables/slurm_jobs.tsv"
-    echo "scheduler accounting -> $REGBENCH_OUT/tables/slurm_accounting.psv"
 fi
 if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
-    cat "$REGBENCH_END_FILE"
+    sed '$d' "$REGBENCH_END_FILE"
+    regbench_say_end "$(tail -n 1 "$REGBENCH_END_FILE")"
 else
-    echo "REGBENCH_END kind=score status=failed cause=unreadable_record whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+    regbench_say_end "REGBENCH_END kind=score status=failed cause=unreadable_record whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
 fi
 exit "$code"

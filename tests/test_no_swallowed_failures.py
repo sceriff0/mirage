@@ -32,7 +32,7 @@ a rule with no history:
 
 SCOPE. Every `run:` body in `.github/workflows/**` and `.github/actions/**`
 (resolved through `tests/ci_actions.py`, never a private parse), every tracked shell
-script, `.readthedocs.yaml`, every Nextflow process `script:`/`stub:` body (via
+script (`*.sh` and the SLURM job scripts, `*.sbatch`), `.readthedocs.yaml`, every Nextflow process `script:`/`stub:` body (via
 `tests/nfmodel`, never a private regex), **every `containers/*/Dockerfile`**, and the
 `Makefile`.
 
@@ -131,7 +131,11 @@ def _tracked(*patterns: str) -> list[Path]:
 
 
 def _shell_scripts() -> list[Path]:
-    return _tracked("*.sh")
+    """Every tracked shell script: ``*.sh``, and the SLURM job scripts (``*.sbatch``),
+    which are bash run by the scheduler. The second pattern was added on 2026-10-17
+    (regbench fleet wave 2, F5): five ``|| true`` sat in the benchmark's job scripts, one
+    of them hiding a failed ``sacct`` while its log said the table was written."""
+    return _tracked("*.sh", "*.sbatch")
 
 
 def _build_files() -> list[Path]:

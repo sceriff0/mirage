@@ -27,7 +27,14 @@
 # preprocess.replaced/<time>/ (never deleted). Its last line:
 #   REGBENCH_END kind=inputs status=<ok|failed> cause=... exit=... dir=... job=...
 set -uo pipefail
+# the operator's start and end lines (env.sh's format; this job does not source env.sh)
+t0="$(date +%s)"
+commit="$( [ -n "${REGBENCH_REPO:-}" ] && git -C "$REGBENCH_REPO" rev-parse --short=12 HEAD 2>/dev/null)" || commit=unknown
+echo "[regbench] start kind=inputs job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:--} run=- label=- dataset=- unit=- rung_gb=- attempt=- out=${REGBENCH_INPUTS:--} commit=${commit:-unknown} host=$(hostname 2>/dev/null || echo -) at=$(date +%FT%T)"
 end() {  # end <status> <cause> <exit>
+    local outcome="$1"
+    [ "$1" = ok ] || outcome="$1/$2"
+    echo "[regbench] end kind=inputs job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:--} outcome=$outcome wall=$(( $(date +%s) - t0 ))s peak_rss=- record=${d:+$d/results/csv/preprocessed.csv} exit=$3"
     echo "REGBENCH_END kind=inputs status=$1 cause=$2 exit=$3 dir=${d:--} job=${SLURM_JOB_ID:--}"
     exit "$3"
 }

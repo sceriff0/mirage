@@ -160,7 +160,7 @@ mkdir -p "$REGBENCH_ROOT" "$REGBENCH_INPUTS" "$REGBENCH_CASES" "$REGBENCH_OUT" |
 inputs_only=0
 case " $* " in *" --inputs "*) inputs_only=1 ;; esac
 if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ] && [ "$inputs_only" = 0 ]; then
-    runtime="$(command -v apptainer || command -v singularity || true)"
+    runtime="$(command -v apptainer || command -v singularity)" || runtime=""
     if [ -z "$runtime" ]; then
         echo "regbench-launch: neither apptainer nor singularity is on PATH here ($(hostname)). Load the site's container module before sbatch (--export=ALL carries the PATH into the job). Nothing was submitted." >&2
         exit 2
@@ -205,12 +205,16 @@ export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
 [ -d "$REGBENCH_ROOT" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$REGBENCH_ROOT"
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
 echo "regbench-launch: repository $repo, cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
-n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c . || true)"
+n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c .)" || n_bound=0
 echo "regbench-launch: bound: ${REGBENCH_BIND:-nothing}"
 rounds="${REGBENCH_MANIFEST:-$REGBENCH_INPUTS/rounds.csv}"
 echo "regbench-launch: inputs $REGBENCH_INPUTS (preprocessing $([ -s "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" ] && echo done || echo "not run yet: --inputs")), rounds file $rounds ($([ -s "$rounds" ] && echo there || echo "not written yet: --prepare"))"
 echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
 cd "$repo" || exit 2
-# --prepare writes the rounds itself (submit_cohort.sh), from the input step
+echo "[regbench] start kind=launch job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:--} run=- label=- dataset=- unit=- rung_gb=- attempt=- out=$REGBENCH_OUT commit=$(git -C "$repo" rev-parse --short=12 HEAD 2>/dev/null || echo unknown) host=$(hostname 2>/dev/null || echo -) at=$(date +%FT%T) args=$*"
+# --prepare writes the rounds itself (submit_cohort.sh), from the input step; its EXIT
+# trap prints the launch's `[regbench] end` line
+REGBENCH_LAUNCH_T0="$(date +%s)"
+export REGBENCH_LAUNCH_T0
 exec bash "$launcher" "$@"

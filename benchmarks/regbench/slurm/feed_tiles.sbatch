@@ -108,8 +108,9 @@ mkdir -p "$(dirname "$ids_file")"
 end() {  # end <status> <cause|-> : the last line of the log
     local cause=""
     [ "$2" = - ] || cause=" cause=$2 whose=launcher"
-    echo "REGBENCH_END kind=submitter run=$name dataset=$dataset link=$link status=$1$cause log=${REGBENCH_LOG:--}"
+    regbench_say_end "REGBENCH_END kind=submitter run=$name dataset=$dataset link=$link status=$1$cause log=${REGBENCH_LOG:--}"
 }
+regbench_start submitter "run=$name" "label=$label" "dataset=$dataset" "link=$link"
 
 if [ -e "$state.done" ]; then
     echo "$name on $dataset: every tile job was submitted and has left the queue ($state.done); nothing to do"
@@ -136,7 +137,10 @@ queued() {
         echo -1
         return 0
     fi
-    grep -c "^$prefix" <<< "$names" || true
+    # grep -c prints 0 and exits 1 for no match: the count is printed either way
+    local n
+    n="$(grep -c "^$prefix" <<< "$names")" || n=0
+    echo "$n"
 }
 # gave_up <reason>: the marker a round reads (stages.feed_problem), the end line, exit 1
 gave_up() {
@@ -252,7 +256,10 @@ the_due() {
     if regbench_py "$image" "${args[@]}" > "$file.tmp"; then
         # an index per line and nothing else: a line that is not one (a warning some
         # library wrote among them) is no tile, and would be an array no scheduler takes
-        grep -E '^[0-9]+$' "$file.tmp" > "$file.clean" || true
+        # exit 1 is "no line is an index" (an empty list); only 2 is grep's own error
+        if ! grep -E '^[0-9]+$' "$file.tmp" > "$file.clean"; then
+            [ -s "$file.clean" ] || : > "$file.clean"
+        fi
         dropped=$(( $(wc -l < "$file.tmp") - $(wc -l < "$file.clean") ))
         [ "$dropped" = 0 ] || echo "attempt $attempt: $dropped line(s) of the list of what is due were not an index and were dropped (the first: $(grep -vE '^[0-9]+$' "$file.tmp" | head -n 1))" >&2
         mv "$file.clean" "$file"

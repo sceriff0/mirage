@@ -9,8 +9,17 @@ set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 dataset="$1"; shift
+regbench_start prepare "dataset=$dataset" "unit=${SLURM_ARRAY_TASK_ID:--}"
+export REGBENCH_RECORD="$REGBENCH_CASES/$dataset"
 # only when run as an array task by hand: one case per task
 index=()
 [ -n "${SLURM_ARRAY_TASK_ID:-}" ] && index=(--index "$SLURM_ARRAY_TASK_ID")
 # REGBENCH_PREPARE_IMAGE: the image to prepare in (submit_cohort.sh sets the scorer's)
-regbench_py "${REGBENCH_PREPARE_IMAGE:-stare}" prepare "$dataset" --cases "$REGBENCH_CASES" --workers "${SLURM_CPUS_PER_TASK:-1}" "$@" ${index[@]+"${index[@]}"}
+code=0
+regbench_py "${REGBENCH_PREPARE_IMAGE:-stare}" prepare "$dataset" --cases "$REGBENCH_CASES" --workers "${SLURM_CPUS_PER_TASK:-1}" "$@" ${index[@]+"${index[@]}"} || code=$?
+if [ "$code" = 0 ]; then
+    regbench_say_end "REGBENCH_END kind=prepare dataset=$dataset status=ok cause=- exit=0 log=${REGBENCH_LOG:--}"
+else
+    regbench_say_end "REGBENCH_END kind=prepare dataset=$dataset status=failed cause=benchmark whose=benchmark exit=$code log=${REGBENCH_LOG:--}"
+fi
+exit "$code"

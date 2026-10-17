@@ -483,6 +483,86 @@ def test_unit_end_reads_the_first_failure():
     assert fl.unit_end([{}, {}]) == ("lost", "not_run")
 
 
+# ── what a chain's watcher may still submit for a unit (fleet wave 2, F3/F4) ──────
+def _rec(cause, attempt=2, **more):
+    if cause == "ok":
+        return {"ok": True, "cause": "", "attempt": attempt, **more}
+    return {"ok": False, "cause": cause, "attempt": attempt, **more}
+
+
+FINAL_KILLED = {"scheduler": {"state": "COMPLETED"}, "launch_id": "7_0"}
+SITUATIONS = {
+    "ok": [_rec("ok")],
+    "oom": [_rec("oom")],
+    "writer_oom": [_rec("writer_oom")],
+    "benchmark_oom": [_rec("benchmark_oom")],
+    "killed, no end state yet": [_rec("killed", launch_id="7_0")],
+    "killed, ended COMPLETED": [_rec("killed", **FINAL_KILLED)],
+    "lost once": [_rec("infrastructure", retry=0)],
+    "lost twice": [_rec("infrastructure", retry=1)],
+    "exception": [_rec("exception")],
+    "writer": [_rec("writer")],
+    "timeout": [_rec("timeout")],
+    "gpu_oom": [_rec("gpu_oom")],
+    "stage oom retried where it ran": [_rec("oom", no_rerun=True)],
+    # F3: the round that failed first is not the one that ran out of memory
+    "writer, then writer_oom": [_rec("writer"), _rec("writer_oom")],
+    "exception, then oom": [_rec("exception"), _rec("oom")],
+    "ok, then lost twice": [_rec("ok"), _rec("infrastructure", retry=1)],
+    "killed final, then oom": [_rec("killed", **FINAL_KILLED), _rec("oom")],
+}
+
+
+def test_the_watcher_takes_a_unit_whenever_one_of_its_records_climbs():
+    """F3: a unit goes up as a whole when ANY of its records ran out of memory
+    (ladder.unit_decision), whatever cause the first failed record has. F4: a unit no
+    later task can run (killed with an end state, lost twice, a cause of the method's
+    own) is taken by no step: a task for it would only exit at once, after days of
+    queueing for a large slot."""
+    wants = {k: fl.chain_wants(v) for k, v in SITUATIONS.items()}
+    assert wants["writer, then writer_oom"] == ("climb",)
+    assert wants["exception, then oom"] == ("climb",)
+    assert wants["killed final, then oom"] == ("climb",)
+    for memory in ("oom", "writer_oom", "benchmark_oom"):
+        assert wants[memory] == ("climb",)
+    assert wants["killed, no end state yet"] == ("again", "climb")
+    assert wants["lost once"] == ("again", "climb")
+    for final in (
+        "ok", "killed, ended COMPLETED", "lost twice", "exception", "writer",
+        "timeout", "gpu_oom", "stage oom retried where it ran", "ok, then lost twice",
+    ):  # fmt: skip
+        assert wants[final] == (), final
+    # no record of this submission: the task never started; every step may need it
+    assert fl.chain_wants([]) == fl.chain_wants([{}, {}]) == ("again", "climb")
+
+
+@pytest.mark.parametrize("name", sorted(SITUATIONS))
+def test_the_watchers_filter_never_drops_a_unit_the_ladder_would_run(tmp_path, name):
+    """One predicate, two readers: the watcher's filter (``chain_wants``, read off the
+    task's end line) and the ladder's decision (``ladder.unit_decision``, made by the
+    task itself). The filter may submit a task that then finds nothing to do; it must
+    never keep out a unit the ladder would run. The accounting is what the next task
+    is given (sacct), so a record with an end state is settled as it will be."""
+    records = SITUATIONS[name]
+    accounting = {
+        r["launch_id"]: {"state": r["scheduler"]["state"], "elapsed_s": 1, "cpu_s": 1}
+        for r in records
+        if r.get("scheduler")
+    }
+    wants = fl.chain_wants(records)
+    for task, rung in ((ladder.AGAIN, 2), (ladder.CLIMB, 3)):
+        paths = []
+        for i, rec in enumerate(records):
+            path = tmp_path / task / f"v{i}" / "run.json"
+            write_json(path, rec)
+            paths.append(path)
+        go, why, _ = ladder.unit_decision(
+            paths, task, rung, accounting=accounting, waited=True, mem_gb=64
+        )
+        if go:
+            assert task in wants, (name, task, why)
+
+
 SLURM = REGBENCH / "slurm"
 
 
@@ -527,7 +607,10 @@ def test_the_batch_script_s_last_line_is_the_step_s_or_a_fallback(tmp_path):
     died = _run_env_function(
         tmp_path, "regbench_end run 137 run=stare unit=index_3", **env
     )
-    assert died.strip() == (
+    # the last line; the operator's `[regbench] end` line just before it (B1)
+    assert died.strip().splitlines()[-2].startswith("[regbench] end kind=")
+    assert " outcome=no_end_line/killed " in died.strip().splitlines()[-2]
+    assert died.strip().splitlines()[-1] == (
         "REGBENCH_END kind=run run=stare unit=index_3 status=no_end_line cause=killed "
         f"whose=method exit=137 log={tmp_path}/out/logs/rb-x-9.log"
     )
@@ -538,7 +621,67 @@ def test_the_batch_script_s_last_line_is_the_step_s_or_a_fallback(tmp_path):
         "regbench_end run 0 run=stare",
         **env,
     )
-    assert wrote.strip() == "REGBENCH_END kind=run status=ok"
+    assert wrote.strip().splitlines()[-1] == "REGBENCH_END kind=run status=ok"
+    assert " outcome=ok " in wrote.strip().splitlines()[-2]
+
+
+START = re.compile(
+    r"^\[regbench\] start kind=\S+ job=\S+ run=\S+ label=\S+ dataset=\S+ unit=\S+ "
+    r"rung_gb=\S+ attempt=\S+( \S+=\S+)* out=\S+ commit=\S+ host=\S+ at=\S+$"
+)
+END = re.compile(
+    r"^\[regbench\] end kind=\S+ job=\S+ outcome=\S+ wall=(\d+s|-) "
+    r"peak_rss=(\d+MB|-) record=\S+ exit=\S+$"
+)
+
+
+def test_a_job_says_how_it_started_and_ended_in_one_format(tmp_path):
+    """Fleet wave 2, B1: the operator greps one format across every job's log."""
+    env = {"SLURM_JOB_ID": "9", "SLURM_JOB_NAME": "rb-x", "REGBENCH_COMMIT": "abc"}
+    said = _run_env_function(
+        tmp_path,
+        "regbench_start run run=stare dataset=multiplex unit=index_3 rung_gb=64 "
+        "attempt=2\n"
+        'echo "REGBENCH_END kind=run status=failed cause=oom whose=method '
+        'peak_rss_mb=61234 record=/o/r/run.json exit=0" > "$REGBENCH_END_FILE"\n'
+        "regbench_end run 0",
+        **env,
+    ).splitlines()
+    assert START.match(said[0]), said[0]
+    assert " run=stare label=- dataset=multiplex unit=index_3 rung_gb=64 " in said[0]
+    assert " commit=abc " in said[0]
+    assert END.match(said[1]), said[1]
+    assert " outcome=failed/oom " in said[1] and " peak_rss=61234MB " in said[1]
+    assert " record=/o/r/run.json " in said[1]
+    assert said[2].startswith("REGBENCH_END ") and len(said) == 3
+    # a job that ends without its end line (set -e, a die) still says how
+    done = subprocess.run(
+        ["bash", "-c", f'source "{SLURM}/env.sh"\nregbench_start retry\nexit 3'],
+        env={"PATH": "/usr/bin:/bin", "REGBENCH_OUT": str(tmp_path / "out"), **env},
+        capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 3
+    last = done.stdout.splitlines()[-1]
+    assert END.match(last) and " outcome=exit_3 " in last, last
+
+
+@pytest.mark.parametrize(
+    "name", sorted(p.name for p in SLURM.glob("*.sbatch"))
+)
+def test_every_job_prints_the_start_line(name):
+    code = "\n".join(
+        ln for ln in (SLURM / name).read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )  # fmt: skip
+    assert "regbench_start " in code or 'echo "[regbench] start kind=' in code, name
+    # its REGBENCH_END lines go out through the function that prints the end line first
+    for line in code.splitlines():
+        if (
+            "REGBENCH_END kind=" in line
+            and line.lstrip().startswith("echo ")
+            and not line.rstrip().endswith("\\")  # redirected on the next line
+        ):
+            assert "> " in line or name == "inputs.sbatch", (name, line)
 
 
 @pytest.mark.parametrize(

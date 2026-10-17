@@ -44,6 +44,11 @@ STAGED_ALL = {
     if variants.stages_of(r)
 }
 FEEDERS = 2  # tile submitters chained per staged run and dataset
+# links of each chain's watcher (REGBENCH_RETRY_WATCHERS): the first after the chain's
+# first job, each later one after the link before it, so a watcher ended at its time
+# limit or lost with its node is taken over by its successor
+LINKS = 2
+PAIR = 1 + LINKS  # a chain's first job and its watcher's links
 # the default submission on the fixture (the cohort, `multiplex`),
 # derived from the run list: per run and dataset the ladder's first array and its watcher;
 # per distinct checker a selfcheck and its watcher; per run with a realcheck the ladder of
@@ -52,12 +57,12 @@ FEEDERS = 2  # tile submitters chained per staged run and dataset
 # per staged run the stages' extra jobs per dataset (two feeders, the last job's pair, and
 # the preprocessing's pair where it has one)
 COHORT_DATASETS = ("multiplex",)
-MORE = sum(2 + FEEDERS + 2 + (2 if "prep" in st else 0) for st in STAGED.values())
+MORE = sum(PAIR + FEEDERS + PAIR + (PAIR if "prep" in st else 0) for st in STAGED.values())
 N_REALCHECKED = len([n for n in RUNS if variants.realcheck_row(n)])
 N_JOBS = (
-    2 * len(CHECKERS)
-    + len(RUNS) * 2 * len(COHORT_DATASETS)
-    + 2 * N_REALCHECKED
+    PAIR * len(CHECKERS)
+    + len(RUNS) * PAIR * len(COHORT_DATASETS)
+    + PAIR * N_REALCHECKED
     + 1
     + len(COHORT_DATASETS)
     + 2
@@ -287,7 +292,25 @@ def agains(jobs, run, dataset="multiplex", suffix=""):
 def last_job(run, dataset="multiplex"):
     """The name of the last job a run submits on a dataset: what a run that reads its
     results, the next dataset, the next run of its lane and the settle job wait for."""
-    return f"rb-{run}-{dataset}{_last(run, '')}-retry"
+    return f"rb-{run}-{dataset}{_last(run, '')}-{retry_link(LINKS)}"
+
+
+def retry_link(n):
+    """The name tail of a watcher's link `n` (1 is `retry`, a successor `retry-<n>`)."""
+    return "retry" if n == 1 else f"retry-{n}"
+
+
+def links(jobs, prefix):
+    """A chain's watcher, link by link: `<prefix>-retry`, `<prefix>-retry-2`, ...
+    Link 1 waits for the chain's first job, each later link for the link before it,
+    and each is told its number (the 6th argument)."""
+    got = [jobs[f"{prefix}-{retry_link(n)}"] for n in range(1, LINKS + 1)]
+    for n, link in enumerate(got, 1):
+        assert link.script == "retry.sbatch" and link.args[5] == str(n), link.name
+        if n > 1:
+            assert ("afterany", f"<{got[n - 2].name}>") in link.deps, link.name
+            assert link.args[:5] == got[0].args[:5], link.name
+    return got
 
 
 def launch_jobs(spec):
@@ -298,9 +321,9 @@ def launch_jobs(spec):
     among them."""
     names = variants.stages_of(spec)
     if not names:
-        return 2
+        return PAIR
     arrays = sum(st in names for st in ("prep", "coarse", "solve"))
-    return 2 * arrays + FEEDERS + 2
+    return PAIR * arrays + FEEDERS + PAIR
 
 
 def first_rung(spec, dataset):
@@ -603,7 +626,8 @@ def test_every_rung_is_tried_again_once_at_the_same_memory(dry):
             assert step.opt("--array") is None and step.opt("--dependency") is None
             assert step.args[10] == "@EARLIER@"
             assert "--no-requeue" in step.words
-        watcher = jobs[last_job(run)]
+        watcher = links(jobs, last_job(run).rsplit("-retry", 1)[0])[0]
+        assert jobs[last_job(run)] is not watcher
         assert watcher.script == "retry.sbatch" and watcher.opt("--array") is None
         assert ("afterany", f"<{seq[0].name}>") in watcher.deps
         # the watcher has the first array's own dependencies too
@@ -746,8 +770,7 @@ def test_every_checking_run_has_a_selfcheck_that_climbs_in_memory(dry):
         # the first is submitted; the others are steps of the selfcheck's watcher
         assert [j.name in jobs for j in got] == [True, False, False], run
         assert got[1].args[10] == got[2].args[10] == "@PREVIOUS@"
-        watcher = jobs[f"rb-sc-{run}-retry"]
-        assert watcher.script == "retry.sbatch"
+        watcher = links(jobs, f"rb-sc-{run}")[0]
         assert ("afterany", f"<{got[0].name}>") in watcher.deps
         # a selfcheck's chain (no run of its own), of single jobs, not arrays
         assert watcher.args[0] == "-" and watcher.args[4] == "-"
@@ -784,9 +807,10 @@ def test_an_anchored_selfcheck_waits_afterany(dry):
     jobs, _, _ = dry
     job = jobs["rb-sc-affine_ashlar-64g"]
     assert job.args[7] == "stare"
-    assert job.deps == {("afterany", "<rb-sc-stare-retry>")}
+    stare_last = f"<rb-sc-stare-{retry_link(LINKS)}>"
+    assert job.deps == {("afterany", stare_last)}
     # its watcher has the same dependency, and so does nothing else of a selfcheck's
-    assert ("afterany", "<rb-sc-stare-retry>") in jobs["rb-sc-affine_ashlar-retry"].deps
+    assert ("afterany", stare_last) in jobs["rb-sc-affine_ashlar-retry"].deps
     for name, j in jobs.items():
         if name.startswith("rb-sc-"):
             assert {k for k, _ in j.deps} <= {"afterany"}, name
@@ -839,8 +863,8 @@ def test_a_failed_selfcheck_starts_the_run_and_is_in_the_verdicts(
         code = code_of(SLURM / name)
         assert "logs/gates" not in code and "blocked" not in code, name
     ends = {
-        0: "REGBENCH_END kind=run status=ok cause= whose=",
-        1: "REGBENCH_END kind=run status=failed cause=oom whose=method",
+        0: "REGBENCH_END kind=run status=ok cause= whose= wants=-",
+        1: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb",
     }
     out = tmp_path / "out"
     rec = out / "logs" / "selfcheck" / "stare" / "selfcheck.json"
@@ -937,7 +961,7 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     waited = {n.strip("<>") for _, n in settle.deps}
     for run in RUNS:
         # the scorer reports every selfcheck's verdict: it waits for each of them
-        assert f"rb-sc-{variants.checked_by(run)}-retry" in waited
+        assert f"rb-sc-{variants.checked_by(run)}-{retry_link(LINKS)}" in waited
         for dataset in COHORT_DATASETS:
             assert last_job(run, dataset) in waited, (run, dataset)
     # every array of the per-case scoring waits for it, and for nothing else directly
@@ -987,6 +1011,46 @@ def test_the_settle_step_of_the_batch_script():
     assert "settle" not in case
 
 
+def test_the_settle_job_asks_the_accounting_of_this_submissions_run_tasks_only(
+    dry, tmp_path
+):
+    """Fleet wave 2, F6: jobs.tsv holds every job ever submitted into the folder, the
+    tile arrays included (hundreds of tasks each). Only a run task writes a run.json
+    that can still say killed, so the settle job asks the accounting of THIS
+    submission's run tasks alone, and it has hours, not one."""
+    jobs, _, _ = dry
+    assert jobs["rb-settle"].opt("--time") == "0-04:00:00"
+    out, bin_ = tmp_path / "out", tmp_path / "bin"
+    (out / "logs" / "submitted").mkdir(parents=True)
+    bin_.mkdir()
+    (out / "logs" / "jobs.tsv").write_text(
+        "t\trb-palom-multiplex-16g\t11\n"  # this submission's run array
+        "t\trb-stare-multiplex-tile-1-0\t12\n"  # its tile array
+        "t\trb-palom-multiplex-64g-again\t13\n"  # a step its watcher submitted
+        "t\trb-stare-multiplex-last-16g\t14\n"  # a staged round's last job
+        "t\trb-palom-multiplex-16g\t9\n"  # an EARLIER submission's
+    )
+    (out / "logs" / "submitted" / "now.ids").write_text("11\n12\n13\n14\n")
+    calls = tmp_path / "sacct.args"
+    (bin_ / "sacct").write_text(f'#!/bin/bash\necho "$*" >> "{calls}"\n')
+    (bin_ / "sacct").chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "REGBENCH_REPO": str(REPO),
+        "REGBENCH_OUT": str(out),
+        "REGBENCH_SUBMISSION": "now",
+        "REGBENCH_SCORER_IMAGE": "STARE_REGBENCH",
+    }
+    done = subprocess.run(
+        ["bash", str(SLURM / "score_cohort.sbatch"), "settle"],
+        env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stdout + done.stderr
+    (asked,) = calls.read_text().splitlines()
+    assert asked.split()[asked.split().index("-j") + 1] == "11,13,14"
+
+
 def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     jobs, _, _ = dry
     tissue, scorer = jobs["rb-tissue"], jobs["rb-score"]
@@ -997,7 +1061,8 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     }
     assert tissue.deps == {("afterany", "<rb-score-case-multiplex>")}
     code = code_of(SLURM / "score_cohort.sbatch")
-    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 6
+    # settle, tissue x2, score-case, the verdict, score and the chain summary (status)
+    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 7
     # only what this submission ran or reused is scored, and nothing is dropped
     assert 'shared+=(--submission "$REGBENCH_SUBMISSION")' in code
     assert "--drop" not in code and "--gates" not in code
@@ -1059,9 +1124,9 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
         len(jobs)
         == N_JOBS
         == (
-            2 * len(CHECKERS)
-            + len(RUNS) * 2 * len(sizes)
-            + 2 * N_REALCHECKED
+            PAIR * len(CHECKERS)
+            + len(RUNS) * PAIR * len(sizes)
+            + PAIR * N_REALCHECKED
             + 1
             + len(sizes)
             + 2
@@ -1449,7 +1514,7 @@ def test_an_order_changes_the_order_of_submission_and_nothing_else(
             first = rungs(jobs, run, dataset)[0]
             assert ("afterany", f"<{last_job('stare', dataset)}>") in first.deps
     anchored = jobs["rb-sc-affine_ashlar-64g"]
-    assert ("afterany", "<rb-sc-stare-retry>") in anchored.deps
+    assert ("afterany", f"<rb-sc-stare-{retry_link(LINKS)}>") in anchored.deps
     # on lanes, each run starts behind the run dealt onto its lane before it
     if lanes:
         for i, run in enumerate(wanted):
@@ -1628,10 +1693,10 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
             # the first attempt after the stage before, whatever became of that one;
             # the watcher after the first attempt, and the next stage after the watcher
             assert after(chained[0]) == ({before} if before else set()), stage
-            watcher = jobs[f"rb-{run}-multiplex-{stage}-retry"]
-            assert watcher.script == "retry.sbatch"
+            chain_links = links(jobs, f"rb-{run}-multiplex-{stage}")
+            watcher = chain_links[0]
             assert after(watcher) == after(chained[0]) | {chained[0].name}
-            before = watcher.name
+            before = chain_links[-1].name
         # the writer: the round's last job, after SOLVE's last attempt
         last = rungs(jobs, run)[0]
         assert last.script == "run_rung.sbatch" and after(last) == {before}
@@ -2379,7 +2444,7 @@ def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
                 assert not [n for _, n in job.deps if "-first-" in n], job.name
             assert rest[0].deps == first[0].deps
             # and what waits for the run waits for both
-            assert {last_job(run, dataset), f"rb-{run}-{dataset}-first-retry"} <= settle
+            assert {last_job(run, dataset), f"rb-{run}-{dataset}-first-{retry_link(LINKS)}"} <= settle
     others = [
         j
         for j in jobs.values()
@@ -2811,7 +2876,9 @@ def test_prepare_is_a_step_of_its_own(site, tmp_path):
     done, _, _ = launch(site, "--prepare", env=env, log="prepare")
     jobs = jobs_of(done)
     # the nuclei step is never left out: it traces the outlines every case needs
-    assert set(jobs) == {"rb-nuclei", "rb-prepare-multiplex"}
+    assert set(jobs) == {
+        "rb-nuclei", "rb-nuclei-retry", "rb-nuclei-retry-2", "rb-prepare-multiplex",
+    }  # fmt: skip
     assert jobs["rb-prepare-multiplex"].args[:3] == [
         "multiplex",
         "--manifest",
@@ -2856,13 +2923,24 @@ def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
         site, "--prepare", "--datasets", "multiplex", env=env, log="nuc"
     )
     jobs = jobs_of(done)
-    assert list(jobs) == ["rb-nuclei", "rb-prepare-multiplex"]  # in this order
+    # in this order: the array, its watcher's links, then prepare
+    assert list(jobs) == [
+        "rb-nuclei", "rb-nuclei-retry", "rb-nuclei-retry-2", "rb-prepare-multiplex",
+    ]  # fmt: skip
     nuc, prep = jobs["rb-nuclei"], jobs["rb-prepare-multiplex"]
     assert nuc.script == "nuclei.sbatch" and nuc.args == []
     assert nuc.opt("--array") == "0-2%20"
     assert (nuc.opt("--cpus-per-task"), nuc.opt("--mem")) == ("8", "128G")
     assert GPU in nuc.line  # StarDist asks for the GPU, as the pipeline does
-    assert prep.deps == {("afterany", "<rb-nuclei>")}
+    # the slides StarDist ran out of memory on climb (F7): 256 GB, then 512 GB, each
+    # a step of the watcher's plan, for those slides only
+    watch = links(jobs, "rb-nuclei")
+    assert watch[0].args[0] == "-" and watch[0].args[4] == "0-2"
+    climbs = [jobs.later[f"rb-nuclei-{gb}g"] for gb in (256, 512)]
+    assert [j.opt("--mem") for j in climbs] == ["256G", "512G"]
+    assert all(j.script == "nuclei.sbatch" and GPU in j.line for j in climbs)
+    # prepare waits for the chain's last link: every rung has run
+    assert prep.deps == {("afterany", f"<rb-nuclei-{retry_link(LINKS)}>")}
     nuclei_dir = str(site[1] / "_nuclei")
     assert prep.args == [
         "multiplex", "--manifest", env["REGBENCH_MANIFEST"], "--nuclei-dir", nuclei_dir,
@@ -3006,9 +3084,16 @@ def test_extra_sbatch_arguments_reach_every_job(site):
 
 
 # ── the watcher: a retry is submitted after a failure, for the units that failed ──
-def _watch(tmp_path, ends, steps, range_="0-4", run="stare", single=None):
+def _watch(
+    tmp_path, ends, steps, range_="0-4", run="stare", single=None, link=None,
+    squeue="exit 0", python=None, sbatch_fails=None, plan_files=None,
+):  # fmt: skip
     """Run retry.sbatch against stand-in sbatch and squeue. ``ends``: {index: end line
-    of the unit's task in the first array, or None for no end line}."""
+    of the unit's task in the first array, or None for no end line}. ``link``: the
+    watcher link's number (the 6th argument); ``squeue``: the stand-in's body;
+    ``python``: a stand-in `python` that records its arguments in ``python.log``;
+    ``sbatch_fails``: a job name sbatch refuses; ``plan_files``: {name: text} an
+    earlier link left in the plan folder."""
     out, bin_, plan = tmp_path / "out", tmp_path / "bin", tmp_path / "plan"
     for d in (out / "logs" / "end", bin_, plan):
         d.mkdir(parents=True, exist_ok=True)
@@ -3019,14 +3104,27 @@ def _watch(tmp_path, ends, steps, range_="0-4", run="stare", single=None):
         (out / "logs" / "end" / "rb-x-16g-50.end").write_text(single + "\n")
     for k, items in enumerate(steps, 1):
         (plan / f"step-{k}").write_text("".join(f"{i}\n" for i in items))
+    for fname, text in (plan_files or {}).items():
+        (plan / fname).write_text(text)
     calls = tmp_path / "sbatch.log"
+    refuse = (
+        f'case "$*" in *--job-name={sbatch_fails}\\ *) echo "sbatch: error: '
+        'Memory specification can not be satisfied" >&2; exit 1 ;; esac\n'
+        if sbatch_fails
+        else ""
+    )
     (bin_ / "sbatch").write_text(
         "#!/bin/bash\n"
-        f'n=$(( $(cat "{tmp_path}/n" 2>/dev/null || echo 100) + 1 ))\n'
+        + refuse
+        + f'n=$(( $(cat "{tmp_path}/n" 2>/dev/null || echo 100) + 1 ))\n'
         f'echo $n > "{tmp_path}/n"; echo "$*" >> "{calls}"\n'
         'echo "sbatch: slurm_job_submit: a notice"; echo $n\n'
     )
-    (bin_ / "squeue").write_text("#!/bin/bash\nexit 0\n")
+    (bin_ / "squeue").write_text(f"#!/bin/bash\n{squeue}\n")
+    if python is not None:
+        (bin_ / "python").write_text(
+            f'#!/bin/bash\necho "$*" >> "{tmp_path}/python.log"\n{python}\n'
+        )
     for f in bin_.iterdir():
         f.chmod(0o755)
     env = {
@@ -3036,9 +3134,12 @@ def _watch(tmp_path, ends, steps, range_="0-4", run="stare", single=None):
         "REGBENCH_OUT": str(out),
         "REGBENCH_RETRY_POLL_S": "0",
         "REGBENCH_SUBMISSION": "t",
+        "REGBENCH_CASES": str(tmp_path / "cases"),
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
     }
     argv = ["bash", str(SLURM / "retry.sbatch"), run, str(plan), "50", "rb-x-16g"]
-    done = subprocess.run(argv + [range_], env=env, capture_output=True, text=True)
+    argv += [range_] + ([str(link)] if link is not None else [])
+    done = subprocess.run(argv, env=env, capture_output=True, text=True)
     sent = calls.read_text().splitlines() if calls.exists() else []
     return done, sent, out
 
@@ -3061,8 +3162,8 @@ def test_the_watcher_submits_nothing_when_every_unit_is_ok(tmp_path):
 def test_the_watcher_submits_a_step_only_for_the_units_that_failed_that_way(tmp_path):
     ends = {
         0: "REGBENCH_END kind=run status=ok cause= whose=",
-        1: "REGBENCH_END kind=run status=failed cause=oom whose=method",
-        2: "REGBENCH_END kind=run status=failed cause=exception whose=method",
+        1: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb",
+        2: "REGBENCH_END kind=run status=failed cause=exception whose=method wants=-",
         3: None,  # the task died or never started
         4: "REGBENCH_END kind=run status=ok cause= whose=",
     }
@@ -3112,12 +3213,308 @@ def test_the_watcher_of_single_jobs_ends_as_the_chains_last_job_did(tmp_path):
     assert done.returncode == 1 and "not ok" in done.stdout
 
 
-def test_the_watchers_cause_lists_are_the_ladders():
+def test_the_watcher_keeps_no_cause_list_of_its_own():
+    """Fleet wave 2, F3: the filter is ONE predicate (failure_log.chain_wants), written
+    on the run task's end line as `wants=`; the watcher reads it and keeps no list of
+    causes that could drift from the ladder's."""
     code = code_of(SLURM / "retry.sbatch")
-    assert f'AGAIN_CAUSES="{" ".join(ladder.AGAIN_CAUSES)}"' in code
-    assert f'CLIMB_CAUSES="{" ".join(ladder.CLIMB_CAUSES)}"' in code
+    assert "AGAIN_CAUSES" not in code and "CLIMB_CAUSES" not in code
+    assert "wants=" in code
     assert set(resources.MEMORY_CAUSES) < set(ladder.CLIMB_CAUSES)
     assert not set(resources.MEMORY_CAUSES) & set(ladder.AGAIN_CAUSES)
+
+
+def test_the_watcher_reads_what_a_unit_still_wants_off_its_end_line(tmp_path):
+    """F3: a patient whose first failed round is the writer's and whose second ran out
+    of memory climbs (its end line says wants=climb). F4: a unit no later task can run
+    (wants=-: killed with an end state, lost twice, the method's own cause) is
+    submitted for no step, and a unit that ran out of memory is not submitted again at
+    the same rung. A run end line written before `wants=` existed is taken by every
+    step, as one with no end line is."""
+    end = "REGBENCH_END kind=run status=failed whose=method rung=1"
+    ends = {
+        0: f"{end} cause=writer wants=climb",  # F3
+        1: f"{end} cause=killed wants=-",  # F4: final
+        2: f"{end} cause=oom wants=climb",  # F4: no same-rung retry
+        3: f"{end} cause=infrastructure wants=again,climb",
+        4: f"{end} cause=exception",  # no wants= key: every step
+    }
+    done, sent, _ = _watch(tmp_path, ends, STEPS)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert [s.split()[1:3] for s in sent] == [
+        ["--job-name=rb-x-16g-again", "--array=3-4%20"],
+        ["--job-name=rb-x-64g", "--array=0,2-4%20"],
+        ["--job-name=rb-x-64g-again", "--array=0,2-4%20"],
+    ]
+
+
+RUNG = ["/r/run_rung.sbatch", "palom", "palom", "-", "-", "PALOM", "0", "multiplex"]
+
+
+def test_a_later_link_of_a_finished_chain_ends_as_the_chain_did(tmp_path):
+    """Fleet wave 2, F1: the link that ends the chain writes `done`; a later link (it
+    waits `afterany` on the link before it) submits nothing and ends as the chain did,
+    so what waits for the last link sees the chain's outcome."""
+    ends = {1: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb"}
+    done, sent, _ = _watch(
+        tmp_path, ends, STEPS, link=2, plan_files={"done": "failed not_submitted 1\n"}
+    )
+    assert sent == [] and done.returncode == 1, done.stdout + done.stderr
+    assert "finished by an earlier link (failed)" in done.stdout
+    last = done.stdout.splitlines()[-1]
+    assert last.startswith("REGBENCH_END kind=retry") and " link=2 " in last
+    assert "status=failed cause=not_submitted whose=launcher" in last
+
+
+def test_a_successor_link_takes_over_the_step_an_earlier_link_submitted(tmp_path):
+    """F1: a link ended at its time limit (or lost with its node) after submitting a
+    step leaves `state`; its successor waits for that job, records it once, and goes
+    on with the NEXT step for the units still due, with every earlier id."""
+    end = "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb"
+    ok = "REGBENCH_END kind=run status=ok cause= whose="
+    ends = {0: ok, 1: end, 2: ok, 3: end, 4: ok}
+    plan_files = {
+        "state": "k=2\njob=rb-x-64g\nid=90\nearlier=50,90\nprevious=90\n",
+        "due-2": "1\n3\n",
+        "last": "".join(f"{i} rb-x-16g-50\n" for i in range(5)),
+    }
+    out = tmp_path / "out" / "logs" / "end"
+    out.mkdir(parents=True)
+    # at 64 GB unit 1 ran out of memory again; unit 3 left no end line (lost)
+    (out / "rb-x-64g-90_1.end").write_text(end + "\n")
+    done, sent, out = _watch(tmp_path, ends, STEPS, link=2, plan_files=plan_files)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "TAKING OVER the chain rb-x-16g" in done.stdout
+    # step 3 only (steps 1 and 2 were the earlier link's), read off the job the
+    # taken-over step submitted: the same rung again for the lost unit alone, never
+    # for the one that wants to climb
+    assert sent == [
+        "--parsable --job-name=rb-x-64g-again --array=3%20 --mem=64G "
+        "run_rung.sbatch 50,90 again"
+    ]
+    assert (out / "logs" / "submitted" / "t.ids").read_text().split() == ["90", "101"]
+    assert (tmp_path / "plan" / "done").read_text().split() == ["ok", "-", "0"]
+    # and a link after this one ends at once
+    again, sent2, _ = _watch(tmp_path, ends, STEPS, link=3)
+    assert again.returncode == 0 and sent2 == sent, again.stdout
+
+
+def test_a_step_an_earlier_link_was_submitting_is_looked_for_in_the_queue(tmp_path):
+    """F1: a link ended between sbatch and recording the id leaves `submitting`; the
+    successor finds the job by its name in the queue and does not submit it twice.
+    Not in the queue, it is submitted again."""
+    ends = {i: None for i in range(2)}
+    found = (
+        'case "$*" in *--name=rb-x-16g-again*) echo 77 ;; esac; exit 0'
+    )
+    done, sent, out = _watch(
+        tmp_path / "found", ends, STEPS, range_="0-1", link=2, squeue=found,
+        plan_files={"submitting": "1 rb-x-16g-again\n"},
+    )  # fmt: skip
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "it is in the queue as 77" in done.stdout
+    assert [s.split()[1] for s in sent] == [
+        "--job-name=rb-x-64g",
+        "--job-name=rb-x-64g-again",
+    ]
+    assert " 50,77,101 " in sent[1] + " "  # the found job is among the earlier ids
+    done, sent, _ = _watch(
+        tmp_path / "lost", ends, STEPS, range_="0-1", link=2,
+        plan_files={"submitting": "1 rb-x-16g-again\n"},
+    )  # fmt: skip
+    assert "may not have reached the queue" in done.stdout
+    assert [s.split()[1] for s in sent][0] == "--job-name=rb-x-16g-again"
+
+
+def test_a_rung_the_partition_cannot_grant_is_written_down_as_the_launchers(tmp_path):
+    """F2: a `cut` step is never submitted. The units that would climb to it are
+    written down by `regbench chain-mark` as not_submitted (the launcher's), and the
+    chain ends ok: the ladder stops at the rung below."""
+    steps = [
+        STEPS[0],
+        ["cut", "rb-x-64g", "the partition's largest node has 32000 MB", "--mem=64G"]
+        + RUNG + ["2", "64", "0", "@EARLIER@"],
+        STEPS[2],
+    ]
+    ends = {
+        0: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb",
+        1: "REGBENCH_END kind=run status=failed cause=writer whose=method wants=-",
+        2: "REGBENCH_END kind=run status=ok cause= whose=",
+    }
+    done, sent, _ = _watch(tmp_path, ends, steps, range_="0-2", python="exit 0")
+    assert done.returncode == 0 and sent == [], done.stdout + done.stderr
+    assert "NOT SUBMITTED, the partition cannot grant this rung" in done.stdout
+    (call,) = (tmp_path / "python.log").read_text().splitlines()
+    words = call.split()
+    assert words[words.index("-m") + 2] == "chain-mark"
+    got = dict(zip(words[::1], words[1::1]))
+    assert got["--method"] == "palom" and got["--dataset"] == "multiplex"
+    assert got["--rung-gb"] == "64" and got["--cause"] == "not_submitted"
+    assert words.count("--index") == 1 and got["--index"] == "0"
+    assert "--label" not in words
+    assert (tmp_path / "plan" / "done").read_text().split() == ["ok", "-", "0"]
+
+
+def test_a_step_sbatch_refuses_is_written_down_as_the_launchers(tmp_path):
+    """F2: sbatch refusing a climb step (a rung the site will not grant) is the
+    launcher's failure, written down for its units; the chain stops there."""
+    steps = [
+        STEPS[0],
+        ["climb", "rb-x-64g", "--mem=64G"] + RUNG + ["2", "64", "0", "@EARLIER@"],
+    ]
+    ends = {0: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb"}
+    done, sent, _ = _watch(
+        tmp_path, ends, steps, range_="0-0", python="exit 0", sbatch_fails="rb-x-64g"
+    )
+    assert done.returncode == 1 and sent == [], done.stdout + done.stderr
+    assert "sbatch REFUSED rb-x-64g" in done.stdout
+    call = (tmp_path / "python.log").read_text()
+    assert "chain-mark" in call and "--cause not_submitted" in call
+    assert "Memory specification can not be satisfied" in call
+    assert (tmp_path / "plan" / "done").read_text().split() == [
+        "failed", "not_submitted", "1"
+    ]  # fmt: skip
+
+
+def _rung_task(tmp_path, python_body):
+    """run_rung.sbatch as the scheduler starts it, with a stand-in `python`."""
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(parents=True, exist_ok=True)
+    (bin_ / "python").write_text("#!/bin/bash\n" + python_body + "\n")
+    (bin_ / "python").chmod(0o755)
+    env = {
+        **{k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")},
+        "PATH": f"{bin_}:/usr/bin:/bin",
+        "REGBENCH_REPO": str(REPO),
+        "REGBENCH_OUT": str(tmp_path / "out"),
+        "REGBENCH_CASES": str(tmp_path / "cases"),
+        "SLURM_JOB_ID": "51",
+        "SLURM_JOB_NAME": "rb-palom-multiplex-16g",
+        "SLURM_ARRAY_JOB_ID": "50",
+        "SLURM_ARRAY_TASK_ID": "3",
+    }
+    argv = ["bash", str(SLURM / "run_rung.sbatch"), "palom", "palom", "-", "-"]
+    argv += ["PALOM", "0", "multiplex", "1", "16", "0", "-", "first", "1-00:00:00", "-"]
+    done = subprocess.run(argv, env=env, capture_output=True, text=True)
+    end = tmp_path / "out" / "logs" / "end" / "rb-palom-multiplex-16g-50_3.end"
+    return done, end
+
+
+def test_a_task_the_kernel_killed_for_memory_says_so_on_its_end_line(tmp_path):
+    """Fleet wave 2, F4: Python killed by signal 9 while the script goes on is the
+    kernel's out-of-memory killer (the note ladder.settle reads). Its end line says
+    so, and that only the next rung can run the unit: the watcher submits no
+    same-rung retry for it, which would hold a full allocation only to exit."""
+    done, end = _rung_task(tmp_path, "kill -9 $$")
+    assert done.returncode == 0, done.stdout + done.stderr
+    line = end.read_text().strip()
+    assert " cause=oom whose=method " in f"{line} " and " wants=climb" in line
+    assert "exit=137" in line and "unit=index_3" in line and "rung=1" in line
+    assert [ln for ln in done.stdout.splitlines() if "REGBENCH_END" in ln][-1] == line
+    note = tmp_path / "out" / "logs" / "accounting" / "exits" / "50_3"
+    assert note.read_text().strip() == "137"
+    # any other death leaves no end line of the step's own: the fallback, every step
+    done, end = _rung_task(tmp_path / "other", "exit 3")
+    assert not end.exists()
+    last = [ln for ln in done.stdout.splitlines() if "REGBENCH_END" in ln][-1]
+    assert "status=no_end_line cause=killed" in last and "wants=" not in last
+
+
+def _with_sinfo(site, tmp_path, nodes):
+    """An env whose PATH has a stand-in `sinfo` printing ``nodes`` (`%P|%m|%f` lines)
+    and recording its arguments."""
+    bin_ = tmp_path / "sinfo-bin"
+    bin_.mkdir()
+    (bin_ / "sinfo").write_text(
+        f'#!/bin/bash\necho "$*" >> "{tmp_path}/sinfo.log"\ncat <<\'EOF\'\n'
+        + "".join(f"{n}\n" for n in nodes)
+        + "EOF\n"
+    )
+    (bin_ / "sinfo").chmod(0o755)
+    _, _, fake = site
+    return {"PATH": f"{bin_}:{fake}:{Path(sys.executable).parent}:{os.environ['PATH']}"}
+
+
+NODES = [
+    "cpu*|515000|icelake",  # the default partition: 503 GB nodes
+    "cpu*|257000|icelake",
+    "big|720000|sapphire",  # the site's 700 GB node, in a partition of its own
+]
+
+
+def test_a_rung_no_node_can_grant_is_not_planned_and_said_loudly(site, tmp_path):
+    """Fleet wave 2, F2: the launcher reads the partition's largest node off `sinfo`
+    before anything is submitted. A rung above it is never planned as a job (it
+    would pend for ever, or be refused days into the run): it is a `cut` step, and
+    the launch says so on stdout AND stderr."""
+    done, _, _ = launch(site, env=_with_sinfo(site, tmp_path, NODES), log="cut")
+    assert done.returncode == 0, done.stderr
+    jobs = jobs_of(done)
+    warn = "can NEVER be granted there"
+    assert warn in done.stdout and warn in done.stderr
+    assert "the rung(s) 512 GB, 700 GB can NEVER" in done.stdout
+    assert "# NOT PLANNED, no node of partition <the default> can grant it" in done.stdout
+    # the 512 GB rung of every run is a cut step, and nothing above it is planned
+    everything = {**jobs, **jobs.later}
+    assert not [n for n in everything if "-700g" in n]
+    assert "rb-palom-multiplex-512g" not in everything
+    assert "rb-palom-multiplex-256g-again" in jobs.later
+    # the selfcheck's 512 GB rung too
+    assert "rb-sc-stare-512g" not in everything and "rb-sc-stare-256g" in jobs.later
+    assert "ladder(s) stop below a rung no node of" in done.stdout
+    assert (tmp_path / "sinfo.log").read_text().split() == ["-h", "-N", "-o", "%P|%m|%f"]
+    # named on the command line, the partition with the large node plans the ladder
+    done, _, _ = launch(
+        site, "--", "--partition=big", env=_with_sinfo(site, tmp_path / "b", NODES),
+        log="big",
+    ) if (tmp_path / "b").mkdir() is None else None  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert "-p big" in (tmp_path / "b" / "sinfo.log").read_text()
+    assert "every rung (16, 64, 256, 512, 700 GB" in done.stdout
+    assert "rb-palom-multiplex-700g" in jobs_of(done).later
+
+
+def test_a_partition_that_cannot_grant_the_first_rung_stops_the_launch(site, tmp_path):
+    """F2: no run could start; nothing is submitted, in a dry run as in --preflight."""
+    env = _with_sinfo(site, tmp_path, ["tiny*|8000|"])
+    done, log, _ = launch(site, env=env, log="tiny")
+    assert done.returncode != 0 and "first rung, 16 GB" in done.stderr
+    assert not log.exists()
+    env["REGBENCH_ALLOW_PATH_PYTHON"] = "1"
+    done, log, _ = launch(site, "--preflight", env=env, dry=False, log="tiny-pre")
+    assert done.returncode != 0 and "first rung, 16 GB" in done.stderr
+    assert not log.exists()
+
+
+def test_an_earlier_default_results_folder_of_the_same_cases_is_named(site, tmp_path):
+    """Fleet wave 2, B3: the default REGBENCH_OUT is named after the commit, so a launch
+    from a newer commit starts an empty folder. An earlier default-named folder of the
+    same cases is named loudly, with the export that reuses it; the default stays."""
+    _, cases, _ = site
+    home = tmp_path / "home"
+    old = home / "regbench_results" / "mirage-0ld0ld0"
+    (old / "logs").mkdir(parents=True)
+    (old / "logs" / "cases").write_text(f"{cases}\n")
+    (old / "palom" / "multiplex" / "P1_a").mkdir(parents=True)
+    (old / "palom" / "multiplex" / "P1_a" / "run.json").write_text("{}")
+    other = home / "regbench_results" / "mirage-0th3r00"
+    (other / "logs").mkdir(parents=True)
+    (other / "logs" / "cases").write_text("/somewhere/else\n")
+    env = {"HOME": str(home), "REGBENCH_OUT": None}
+    done, _, _ = launch(site, "--runs", "palom", env=env, log="default-out")
+    assert done.returncode == 0, done.stderr
+    warn = f"an EARLIER default-named folder holds 1 result(s) of the same cases ({cases}): {old}"
+    assert warn in done.stdout and warn in done.stderr
+    assert f"export REGBENCH_OUT={old}" in done.stdout
+    assert str(other) not in done.stdout
+    # named by hand, nothing is said
+    done, _, _ = launch(site, "--runs", "palom", env={"HOME": str(home)}, log="named")
+    assert "EARLIER default-named folder" not in done.stdout
+    # a real launch writes down the cases its folder is of
+    done, _, out = launch(site, "--runs", "palom", dry=False, log="marker",
+                          env={"REGBENCH_ALLOW_PATH_PYTHON": "1"})  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert (out / "logs" / "cases").read_text().strip() == str(cases)
 
 
 def test_the_dry_run_plans_a_700g_rung(dry):

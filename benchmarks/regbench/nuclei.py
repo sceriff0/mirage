@@ -115,6 +115,11 @@ NEEDS_RERUN = (
     "(python -m benchmarks.regbench nuclei, slurm/nuclei.sbatch)"
 )
 TRACED = ".traced.json"  # beside an outlines GeoJSON this module traced
+# beside the outlines a slide's StarDist run FAILED to make (nuclei.sbatch: `--failed`):
+# what `prepare multiplex` names when it drops the slide's rounds, instead of "not
+# traced yet". Removed when the outlines are traced.
+SEGMENT_FAILED = ".segment_failed.json"
+EXIT_SIGKILL = 137
 NOT_RESOLVED = "not looked at yet (python -m benchmarks.regbench nuclei)"
 SOURCE_COLUMNS = {"ref": ("reference", "ref"), "mov": ("moving", "mov")}
 
@@ -455,7 +460,96 @@ def trace_outlines(slide, cell_mask):
     write_json(Path(str(path) + TRACED), made)
     made["n_outlines"] = outlines.trace(cell_mask, path, tol)
     write_json(Path(str(path) + TRACED), made)
+    Path(str(path) + SEGMENT_FAILED).unlink(missing_ok=True)
     return made
+
+
+def failure_text(code, mem_gb=None):
+    """What a StarDist exit code says, in words."""
+    at = f" at {float(mem_gb):g} GB" if mem_gb not in (None, "") else ""
+    if int(code) == EXIT_SIGKILL:
+        return (
+            f"the StarDist run (bin/segment.py) was killed by signal 9{at} (exit 137): "
+            "the kernel's out-of-memory killer, most likely"
+        )
+    return f"the StarDist run (bin/segment.py) exited {int(code)}{at}"
+
+
+def segment_failure(path):
+    """What the nuclei step left beside outlines its StarDist run failed to make, or
+    None."""
+    side = Path(str(path) + SEGMENT_FAILED)
+    if not path or not side.is_file():
+        return None
+    try:
+        return json.loads(side.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def record_failure(slide, out, code, mem_gb=None, job=""):
+    """Write down that this slide's StarDist run failed (nuclei.sbatch): beside its
+    outlines (``prepare multiplex`` names it when it drops the rounds) and in the
+    slide's record (``nuclei --list``). The slide still needs its run."""
+    note = {
+        "exit": int(code),
+        "mem_gb": None if mem_gb in (None, "") else float(mem_gb),
+        "job": job or "",
+        "reason": failure_text(code, mem_gb),
+    }
+    if slide.get("outlines") and is_ours(slide["outlines"]):
+        side = Path(str(slide["outlines"]) + SEGMENT_FAILED)
+        side.parent.mkdir(parents=True, exist_ok=True)
+        write_json(side, note)
+    store = store_of(out, slide)
+    rec = load(store) or {
+        **{k: slide[k] for k in ("key", "group", "slide", "image", "channel")},
+        "usable": False,
+        "exact": False,
+        "source": "",
+        "needs_rerun": True,
+    }
+    rec["reason"] = note["reason"]
+    rec["segment_failed"] = note
+    store.mkdir(parents=True, exist_ok=True)
+    write_json(store / "nuclei.json", rec)
+    return note
+
+
+def pending(all_slides, out, force=False):
+    """The indices of the slides the nuclei array has anything to do for: no record,
+    no usable or refused one, one made with other settings or of another image, or
+    outlines that are not there. Everything else would print "nothing to segment".
+    This is the HEAD's look, before submitting; each task still decides for itself."""
+    found = []
+    for i, slide in enumerate(all_slides):
+        rec = load(store_of(out, slide))
+        settled = bool(
+            rec
+            and (rec.get("usable") or rec.get("refused"))
+            and rec.get("image_fingerprint")
+            and not settings_changed(rec)
+            and not other_image(rec, slide)
+            and (not slide.get("outlines") or Path(slide["outlines"]).is_file())
+        )
+        if force or not settled:
+            found.append(i)
+    return found
+
+
+def fold(indices):
+    """``[0, 1, 2, 5, 7, 8]`` -> ``"0-2,5,7-8"`` (an --array list)."""
+    parts, run = [], []
+    for i in sorted(indices):
+        if run and i == run[-1] + 1:
+            run.append(i)
+            continue
+        if run:
+            parts.append(str(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+        run = [i]
+    if run:
+        parts.append(str(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+    return ",".join(parts)
 
 
 def set_outlines_aside(path):
@@ -488,7 +582,8 @@ def check_rerun(slide, store, a):
         "needs_rerun": True,
     }
     if not nuc_mask.is_file():
-        rec["reason"] = NEEDS_RERUN
+        failed = segment_failure(slide["outlines"]) if slide.get("outlines") else None
+        rec["reason"] = failed["reason"] if failed else NEEDS_RERUN
         return rec
     want = _shape(slide["image"])
     if _shape(nuc_mask) != want:
@@ -640,10 +735,28 @@ def _values(resolved):
     }
 
 
+def _same_value(key, text):
+    """One value as it is compared: a folder (a ``*_dir`` key, or any value with a
+    ``/``) by its normalised path, so ``/models/`` and ``/models`` are one folder; a
+    number by its value, so ``0.5`` and ``0.50`` are one number; anything else as it
+    is written. The site config and the environment are two routes to the same
+    settings, and each keeps a value as it was written (``site_config.py``)."""
+    import os
+
+    text = text.strip()
+    if text and (key.endswith("_dir") or "/" in text):
+        return os.path.normpath(os.path.expanduser(text))
+    try:
+        return repr(float(text))
+    except ValueError:
+        return text
+
+
 def settings_changed(rec):
     """What differs between the settings a kept re-run was made with and the ones that
-    resolve now, as ``["key: old -> new"]``. Empty for a record that is no re-run, that
-    recorded no settings, or when nothing resolves now (no model named)."""
+    resolve now, as ``["key: old -> new"]`` (each as it was written). Empty for a
+    record that is no re-run, that recorded no settings, or when nothing resolves now
+    (no model named). A value spelled another way is no change (:func:`_same_value`)."""
     if not rec or not (rec.get("source") == "stardist_rerun" or rec.get("refused")):
         return []
     old = _values(rec.get("settings"))
@@ -653,7 +766,7 @@ def settings_changed(rec):
     return [
         f"{k}: {old.get(k, '')!r} -> {now.get(k, '')!r}"
         for k in sorted(set(old) | set(now))
-        if old.get(k, "") != now.get(k, "")
+        if _same_value(k, old.get(k, "")) != _same_value(k, now.get(k, ""))
     ]
 
 
@@ -872,6 +985,11 @@ def main(a):
     if a.count:
         print(len(all_slides))
         return 0
+    if getattr(a, "pending", False):
+        # one line: the slides the array is submitted for, as an --array list (empty
+        # when every slide has what it needs)
+        print(fold(pending(all_slides, a.out, getattr(a, "force", False))))
+        return 0
     if a.list:
         rows = table(all_slides, a.out)
         print("\t".join(COLUMNS))
@@ -892,6 +1010,14 @@ def main(a):
         if not 0 <= a.index < len(all_slides):
             raise SystemExit(f"--index {a.index}: the manifest has {len(all_slides)}")
         chosen = [all_slides[a.index]]
+    if getattr(a, "failed", None) is not None:
+        for slide in chosen:
+            note = record_failure(
+                slide, a.out, a.failed, getattr(a, "mem_gb", None),
+                os.environ.get("REGBENCH_LOG", ""),
+            )  # fmt: skip
+            print(f"FAILED {slide['key']}: {note['reason']}", flush=True)
+        return 0
     if a.command:
         # what a slide still needs, as one shell line each; nothing for a slide that
         # has usable nuclei (the sbatch script runs the line in the StarDist image)

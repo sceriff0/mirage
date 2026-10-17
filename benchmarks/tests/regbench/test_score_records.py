@@ -907,7 +907,8 @@ def test_a_settle_job_that_cannot_ask_the_scheduler_says_so_and_blocks_nothing(
     )
     assert not (out / "logs" / "settled").exists()  # an older word is not left standing
     # a scheduler that answers nothing
-    (out / "logs" / "jobs.tsv").write_text("t\trb-x\t9\n")
+    # a run task (settle_ids asks the accounting of run tasks only: fleet wave 2, F6)
+    (out / "logs" / "jobs.tsv").write_text("t\trb-x-multiplex-16g\t9\n")
     fake = tmp_path / "bin"
     fake.mkdir()
     (fake / "sacct").write_text("#!/bin/bash\nexit 1\n")

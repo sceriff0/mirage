@@ -494,6 +494,40 @@ def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
     assert Path(ref["outlines"]).is_file()
 
 
+def test_a_setting_spelled_another_way_is_not_a_change(monkeypatch):
+    """Fleet wave 2, F8: the site config writes the model folder with a trailing slash,
+    the environment route without; a number may be written 0.5 or 0.50. The same value
+    spelled another way is not other settings: no slide is set aside for it. A value
+    that IS another one still is."""
+    rec = {
+        "source": "stardist_rerun",
+        "settings": {
+            "values": {
+                "segmentation_model_dir": {"value": "/hpc/models/"},
+                "segmentation_model": {"value": "site_model"},
+                "seg_prob_thresh": {"value": "0.50"},
+                "seg_n_tiles_y": {"value": "4"},
+            }
+        },
+    }
+    now = {
+        "values": {
+            "segmentation_model_dir": {"value": "/hpc/models"},
+            "segmentation_model": {"value": "site_model"},
+            "seg_prob_thresh": {"value": 0.5},
+            "seg_n_tiles_y": {"value": "4.0"},
+        }
+    }
+    monkeypatch.setattr(nuclei, "_settings_or_none", lambda: now)
+    assert nuclei.settings_changed(rec) == []
+    now["values"]["segmentation_model_dir"]["value"] = "/hpc/other_models"
+    now["values"]["seg_prob_thresh"]["value"] = "0.6"
+    assert nuclei.settings_changed(rec) == [
+        "seg_prob_thresh: '0.50' -> '0.6'",
+        "segmentation_model_dir: '/hpc/models/' -> '/hpc/other_models'",
+    ]
+
+
 def _one_slide(cohort, monkeypatch, labels, cells_from=None):
     """The first slide of the cohort, segmented by the stand-in with ``labels``."""
     tmp, _, row = cohort
@@ -745,6 +779,94 @@ def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
         cwd=REPO,
     )
     assert ok.returncode == 0 and "nothing to segment" in ok.stdout
+
+
+def test_a_stardist_run_that_fails_is_written_down_and_climbs(cohort, tmp_path):
+    """Fleet wave 2, F7: under `set -e` a StarDist run the kernel killed for memory
+    ended the task with nothing written: `prepare multiplex` then dropped the slide's
+    rounds as "outlines not traced yet", and the next --prepare repeated the same
+    128 GB. Now the task writes the failure down (the slide's record, beside its
+    outlines), its end line asks the watcher for the next rung (wants=climb), and the
+    drop reason names it."""
+    import os
+
+    tmp, lab, row = cohort
+    manifest = manifest_of(tmp, row)
+    # a `python` that the kernel kills (signal 9) when it runs segment.py, and is the
+    # real interpreter for everything else
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "python").write_text(
+        "#!/bin/bash\n"
+        'case "$1" in *segment.py) kill -9 $$ ;; esac\n'
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    (fake / "python").chmod(0o755)
+    env = {
+        k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
+    }
+    env.update(
+        PATH=f"{fake}:{env['PATH']}",
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES=str(tmp / "cases"),
+        REGBENCH_OUT=str(tmp / "out"),
+        REGBENCH_MANIFEST=str(manifest),
+        REGBENCH_NUCLEI=str(tmp / "nuc"),
+        REGBENCH_SITE_CONFIG="none",
+        SLURM_JOB_ID="51",
+        SLURM_JOB_NAME="rb-nuclei",
+        SLURM_ARRAY_JOB_ID="50",
+        SLURM_ARRAY_TASK_ID="0",
+        SLURM_MEM_PER_NODE="131072",
+        **ENV,
+    )
+    a = args(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.pending(nuclei.slides(multiplex.read_manifest(manifest)), a.out) == [0, 1]
+    script = REPO / "benchmarks" / "regbench" / "slurm" / "nuclei.sbatch"
+    done = subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True, cwd=REPO
+    )
+    assert done.returncode == 137, done.stdout + done.stderr
+    assert "StarDist FAILED (exit 137 at 128 GB)" in done.stdout
+    end = (tmp / "out" / "logs" / "end" / "rb-nuclei-50_0.end").read_text().strip()
+    assert end == done.stdout.strip().splitlines()[-1]
+    assert "status=failed cause=benchmark_oom whose=benchmark wants=climb exit=137" in end
+    (ref, _) = nuclei.slides(multiplex.read_manifest(manifest))
+    rec = nuclei.load(nuclei.store_of(tmp / "nuc", ref))
+    assert rec["segment_failed"]["exit"] == 137 and rec["segment_failed"]["mem_gb"] == 128
+    assert "killed by signal 9 at 128 GB" in rec["reason"]
+    assert nuclei.pending([ref], a.out) == [0]  # still to do, at the next rung
+    # the drop names the failure, not "not traced yet" alone
+    cases_root = tmp / "cases"
+    import io
+    from contextlib import redirect_stdout
+
+    said = io.StringIO()
+    with redirect_stdout(said):
+        assert multiplex.prepare(mx_args(cases_root, manifest)) == 1
+    assert "the nuclei step's StarDist run of this slide FAILED" in said.getvalue()
+    assert "killed by signal 9 at 128 GB (exit 137)" in said.getvalue()
+    # what nuclei --list says about it
+    rows = nuclei.table([ref], tmp / "nuc")
+    assert "killed by signal 9" in rows[0]["reason"]
+
+
+def test_the_nuclei_array_is_submitted_for_the_slides_with_anything_to_do(
+    cohort, monkeypatch
+):
+    """F9: a slide with usable nuclei and its outlines is left out of the array; a
+    forced one, one of other settings, or one whose outlines are gone is not."""
+    tmp, lab, row = cohort
+    fake_segment(tmp, lab, monkeypatch)
+    manifest = manifest_of(tmp, row)
+    all_slides = nuclei.slides(multiplex.read_manifest(manifest))
+    out = tmp / "nuc"
+    assert nuclei.main(args(manifest=manifest, out=out, segment=True, index=0)) == 0
+    assert nuclei.pending(all_slides, out) == [1]
+    assert nuclei.pending(all_slides, out, force=True) == [0, 1]
+    assert nuclei.fold([0, 1, 2, 5, 7, 8]) == "0-2,5,7-8" and nuclei.fold([]) == ""
+    Path(all_slides[0]["outlines"]).unlink()
+    assert nuclei.pending(all_slides, out) == [0, 1]
 
 
 def test_a_rerun_between_the_thresholds_is_still_kept_and_not_exact(

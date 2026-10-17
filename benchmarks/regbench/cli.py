@@ -136,6 +136,23 @@ def build_parser():
     mode = nu.add_mutually_exclusive_group()
     mode.add_argument("--count", action="store_true", help="print the number of slides")
     mode.add_argument(
+        "--pending",
+        action="store_true",
+        help="print the slides the nuclei array has anything to do for, as one "
+        "--array list (empty: every slide has usable nuclei and its outlines)",
+    )
+    mode.add_argument(
+        "--failed",
+        type=int,
+        default=None,
+        metavar="EXIT",
+        help="(nuclei.sbatch) write down that the StarDist run of the --index slide "
+        "exited EXIT: the slide's record and `prepare multiplex`'s drop reason say so",
+    )
+    nu.add_argument(
+        "--mem-gb", type=float, default=None, help="with --failed: the task's memory"
+    )
+    mode.add_argument(
         "--list",
         action="store_true",
         help="print one line per slide: usable nuclei and their source, or why not",
@@ -327,6 +344,49 @@ def build_parser():
         required=True,
         metavar="FILE",
         help="`sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU` of the jobs",
+    )
+    st.add_argument(
+        "--cases",
+        default=None,
+        help="the prepared cases: with it, the units of a chain no watcher link "
+        "finished whose last task had not ended are recorded as infrastructure "
+        "(chains.mark_in_flight)",
+    )
+
+    cm = sub.add_parser(
+        "chain-mark",
+        help="(the chains' watcher, slurm/retry.sbatch) write units whose ladder could "
+        "not go on down as the launcher's: a rung the partition cannot grant, or a "
+        "step sbatch refused (chains.mark)",
+    )
+    cm.add_argument("--cases", required=True)
+    cm.add_argument("--out", required=True)
+    cm.add_argument("--dataset", required=True, choices=DATASETS)
+    cm.add_argument("--method", required=True, choices=METHODS)
+    cm.add_argument("--label", default=None)
+    cm.add_argument("--index", type=int, action="append", required=True)
+    cm.add_argument("--rung-gb", type=float, required=True)
+    cm.add_argument("--cause", required=True, choices=("not_submitted",))
+    cm.add_argument("--why", required=True)
+
+    st = sub.add_parser(
+        "status",
+        help="where a results folder stands (read-only): per run and variant, ok / "
+        "reused / failed by cause / missing against the case list, the jobs still "
+        "queued (squeue, when there is one), and what to resubmit (status.py)",
+    )
+    st.add_argument("--out", required=True)
+    st.add_argument("--cases", default=None, help="default: REGBENCH_CASES")
+    st.add_argument("--dataset", default=None, choices=DATASETS)
+    st.add_argument("--submission", default=None, help="default: <out>/logs/submission")
+    st.add_argument("--runs", default=None, help="only these runs (space-separated)")
+    st.add_argument("--csv", action="store_true", help="the table as CSV")
+    st.add_argument("--no-queue", action="store_true", help="do not ask squeue")
+    st.add_argument(
+        "--summary-to",
+        default=None,
+        help="(score_cohort.sbatch) append the chains no watcher finished to this "
+        "summary.md, and print nothing",
     )
 
     sb = sub.add_parser(
@@ -946,6 +1006,11 @@ def _unit_end(a, picked):
         except (OSError, ValueError):
             records.append({})
     status, cause = failure_log.unit_end(records)
+    paths = ladder.unit_paths(a.out, a.method, a.label, picked)
+    peaks = [
+        (r.get("resources") or {}).get("peak_rss_mb") for r in records if r
+    ]
+    peaks = [float(p) for p in peaks if isinstance(p, (int, float))]
     failure_log.emit_end(
         "run",
         status,
@@ -954,6 +1019,11 @@ def _unit_end(a, picked):
         dataset=a.dataset,
         unit="+".join(c.case_id for c in picked),
         rung=next((r.get("attempt") for r in records if r), "-"),
+        # what the chain's watcher may still submit for it (failure_log.chain_wants)
+        wants=",".join(failure_log.chain_wants(records)) or "-",
+        peak_rss_mb=f"{max(peaks):.0f}" if peaks else "-",
+        record=str(paths[0]) if paths else "-",
+        records=len(paths),
     )
 
 
@@ -1368,17 +1438,48 @@ def _main(a):
                 print(f"{sub}\t{','.join(runs)}")
         return 0
     if a.cmd == "settle":
-        from . import ladder, resources
+        from . import chains, ladder, resources
 
-        changed = ladder.settle_all(
-            a.out,
-            ladder.read_accounting(a.accounting),
-            resources.host_info()["submission"],
-        )
+        accounting = ladder.read_accounting(a.accounting)
+        submission = resources.host_info()["submission"]
+        changed = ladder.settle_all(a.out, accounting, submission)
         print(
             "settle: "
             + (", ".join(f"{n} {c}" for c, n in sorted(changed.items())) or "nothing")
             + " (results that said `killed`, by the scheduler's accounting)"
+        )
+        # a chain no link of its watcher finished: what it was waiting for is still in
+        # the queue, and its results are not the method's (chains.mark_in_flight)
+        for plan in chains.unfinished(a.out, submission):
+            print(
+                f"settle: WARNING the chain {plan.name} was not finished by any link "
+                "of its watcher (time limit, a lost node): what it still had to "
+                "submit was not submitted"
+            )
+        flying = chains.mark_in_flight(a.out, accounting, submission, a.cases)
+        for where, n in sorted(flying.items()):
+            print(
+                f"settle: WARNING {n} result(s) of "
+                + ("tasks still running" if where == "-" else f"the chain {where}")
+                + " the scheduler had not ended: recorded as infrastructure, not the "
+                "method's"
+            )
+        return 0
+    if a.cmd == "status":
+        from . import status
+
+        return status.main(a)
+    if a.cmd == "chain-mark":
+        from . import chains, resources
+
+        n = chains.mark(
+            a.out, a.cases, a.dataset, a.method, a.label, a.index, a.rung_gb,
+            a.cause, a.why, resources.host_info()["submission"],
+        )  # fmt: skip
+        print(
+            f"chain-mark: {n} result(s) of {a.label or a.method} on {a.dataset} "
+            f"(unit(s) {', '.join(map(str, a.index))}) recorded as {a.cause}: the "
+            f"{a.rung_gb:g} GB rung was not submitted ({a.why})"
         )
         return 0
     from . import score, variants

@@ -11,7 +11,8 @@
 # this job ends at once. It runs on a compute node, OUTSIDE any image, and calls
 # `sbatch` and `squeue` itself, as the tile submitter (feed_tiles.sbatch) does.
 #
-#   retry.sbatch <run|-> <plan folder> <first job id> <first job name> <array range a-b|->
+#   retry.sbatch <run|-> <plan folder> <first job id> <first job name>
+#                <array range a-b[,c,...]|-> [<link>]
 #
 # A range of `-`: the chain is of SINGLE jobs, not arrays (a selfcheck). Then a step is
 # submitted without --array, the end line is <job name>-<job id>.end, and this job
@@ -21,56 +22,100 @@
 # THE PLAN is written by submit_cohort.sh: <plan folder>/step-<k>, one per step in the
 # order the chain runs, one item per line:
 #   line 1    the step's kind: `again` (the same rung once more), `climb` (the next rung),
-#             or anything else (`stage`, `notok`: the next attempt of a stage job or of
-#             a selfcheck)
+#             `cut` (a rung the partition cannot grant, below), or anything else
+#             (`stage`, `notok`: the next attempt of a stage job or of a selfcheck)
 #   line 2    the job name
 #   line 3..  the sbatch arguments (no --array, no --dependency), then the job script
 #             and its arguments. The item `@EARLIER@` is replaced by the ids of every
 #             job of this chain submitted so far (run_rung.sbatch asks the scheduler's
 #             accounting about them), and `@PREVIOUS@` by the id of the last one.
+#             A `cut` step has one more line before them, line 3: why the rung cannot
+#             be granted (submit_cohort.sh read it off `sinfo` before the first sbatch)
+#
+# A RUNG THAT CANNOT BE GRANTED. A `cut` step is never submitted: the units that would
+# climb to it are written down as the LAUNCHER's (`regbench chain-mark`: cause
+# not_submitted, the memory failure below kept in cause_from, `ladder_cut` = the rung),
+# so their rows are counted apart from the method's failures and say that the ladder
+# stopped there. The same is done for the units of a step sbatch REFUSES.
+#
+# THE WATCHER IS A CHAIN OF LINKS (REGBENCH_RETRY_WATCHERS, submit_cohort.sh): link 1
+# waits for the first array, each later link for the link before it (`afterany`), and
+# what waits for the chain waits for the LAST link. A link ended at its time limit, or
+# lost with its node, leaves its successor to go on: every step it submits is recorded
+# in <plan folder>/state before anything else (the step, the job id, the ids so far),
+# and a link that finds one waits for that job to leave the queue and goes on with the
+# next step. A step whose sbatch may have gone through without the id being recorded
+# (<plan folder>/submitting) is looked for in the queue by its name before it is
+# submitted again. The link that ends the chain writes <plan folder>/done; a later link
+# that finds it ends at once, as the chain ended. A chain no link finished (no `done`)
+# is named by the settle job, the scorer's summary and `regbench status`.
 #
 # WHICH UNITS A STEP IS SUBMITTED FOR. Each task leaves an end line in
 # $REGBENCH_OUT/logs/end/<job name>-<job id>_<index>.end (env.sh). The unit's LAST task
 # decides:
 #   no end line     the task died or never started: every kind of step takes it
 #   status=ok       nothing more, ever
-#   `again`         cause killed or infrastructure
-#   `climb`         a memory cause, killed or infrastructure
+#   `again`/`climb` the unit's end line names the step in `wants=` (a run task's: the
+#                   ONE predicate, failure_log.chain_wants, read from every record of
+#                   the unit; `wants=-` is no step). A run end line without the key
+#                   (written before it existed) is taken, as one with no end line is
 #   any other kind  anything that is not ok
-# (ladder.py: AGAIN_CAUSES, CLIMB_CAUSES; a test keeps the lists below equal to them.)
 # This is a FILTER, not the decision: the task that is submitted still decides for
 # itself, exactly as before (run_rung.sbatch, stage.sbatch), and exits at once when its
 # unit has nothing to do. The filter only keeps a unit that cannot need the step out of
-# the queue.
+# the queue; a test holds the predicate to never keeping out one the ladder would run.
 #
 # It gives up (exit 1, the rest of the chain is not submitted) when sbatch refuses a
 # step or the queue cannot be read REGBENCH_RETRY_SQUEUE_TRIES (30) times in a row.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
-name="$1" plan="$2" first_id="$3" first_name="$4" range="$5"
+name="$1" plan="$2" first_id="$3" first_name="$4" range="$5" link="${6:-1}"
 : "${REGBENCH_RETRY_POLL_S:=60}"
 : "${REGBENCH_RETRY_SQUEUE_TRIES:=30}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
-AGAIN_CAUSES="killed infrastructure"
-CLIMB_CAUSES="oom writer_oom benchmark_oom killed infrastructure"
 ends="$REGBENCH_OUT/logs/end"
 ids_file="${REGBENCH_IDS_FILE:-$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.ids}"
 mkdir -p "$(dirname "$ids_file")"
+state="$plan/state" done_file="$plan/done" submitting="$plan/submitting"
 
 end() {  # end <status> <cause|-> : the last line of the log
     local cause=""
     [ "$2" = - ] || cause=" cause=$2 whose=launcher"
-    echo "REGBENCH_END kind=retry run=$name chain=$first_name status=$1$cause log=${REGBENCH_LOG:--}"
+    regbench_say_end "REGBENCH_END kind=retry run=$name chain=$first_name link=$link status=$1$cause log=${REGBENCH_LOG:--}"
 }
+regbench_start retry "run=$name" "chain=$first_name" "link=$link"
+# finish <status> <cause|-> <exit code>: the chain is over; said for every later link
+finish() {
+    printf '%s %s %s\n' "$1" "$2" "$3" > "$done_file.new" && mv "$done_file.new" "$done_file"
+    end "$1" "$2"
+    exit "$3"
+}
+
+# a later link of a chain an earlier link finished: it ends as the chain did
+if [ -s "$done_file" ]; then
+    read -r was_status was_cause was_code < "$done_file"
+    echo "$first_name: the chain was finished by an earlier link ($was_status); link $link has nothing to do"
+    end "$was_status" "$was_cause"
+    exit "${was_code:-0}"
+fi
 
 # last: "<index> <job name>-<job id>" per unit, the last job that held the unit
 last="$plan/last"
 single=0
 [ "$range" = - ] && single=1
-lo="${range%%-*}" hi="${range#*-}"
+# indices <a-b,c,...>: the first array's tasks, one per line (a list: the nuclei step
+# is submitted for the slides that need it only)
+indices() {
+    local part
+    local -a parts
+    IFS=, read -r -a parts <<< "$1"
+    for part in "${parts[@]}"; do
+        case "$part" in *-*) seq "${part%%-*}" "${part#*-}" ;; *) echo "$part" ;; esac
+    done
+}
 if [ ! -s "$last" ]; then
-    { if [ "$single" = 1 ]; then echo -; else seq "$lo" "$hi"; fi; } \
-        | awk -v j="$first_name-$first_id" '{ print $1, j }' > "$last" \
+    { if [ "$single" = 1 ]; then echo -; else indices "$range"; fi; } \
+        | awk -v j="$first_name-$first_id" '{ print $1, j }' > "$last.new" && mv "$last.new" "$last" \
         || { echo "cannot write $last"; end failed not_submitted; exit 1; }
 fi
 earlier="$first_id" previous="$first_id"
@@ -81,16 +126,23 @@ end_file() {
 
 # wanted <kind>: the indices the step is submitted for, one per line
 wanted() {
-    local kind="$1" idx job file st cause causes
-    case "$kind" in again) causes=" $AGAIN_CAUSES " ;; climb) causes=" $CLIMB_CAUSES " ;; *) causes="" ;; esac
+    local kind="$1" idx job file st wants
+    [ "$kind" = cut ] && kind=climb  # a cut rung is for the units that would climb
     while read -r idx job; do
         file="$(end_file "$idx" "$job")"
         if [ ! -s "$file" ]; then echo "$idx"; continue; fi
         st="$(sed -nE 's/.* status=([^ ]+).*/\1/p' "$file" | tail -n 1)"
-        cause="$(sed -nE 's/.* cause=([^ ]+).*/\1/p' "$file" | tail -n 1)"
         [ "$st" = ok ] && continue
-        if [ -z "$causes" ]; then echo "$idx"; continue; fi
-        case "$causes" in *" $cause "*) echo "$idx" ;; esac
+        case "$kind" in
+            again|climb)
+                # `wants=` says which steps can still run the unit; none, for a line
+                # written before the key existed: then every step takes it
+                if ! grep -qE '(^| )wants=' "$file"; then echo "$idx"; continue; fi
+                wants="$(sed -nE 's/.* wants=([^ ]+).*/\1/p' "$file" | tail -n 1)"
+                case ",$wants," in *",$kind,"*) echo "$idx" ;; esac
+                ;;
+            *) echo "$idx" ;;
+        esac
     done < "$last"
 }
 
@@ -122,8 +174,85 @@ gone() {
     done
 }
 
+# recorded <k> <job name> <id>: a step's job is in the chain's files, each write made
+# so that doing it twice (a successor finishing what a lost link began) changes nothing
+recorded() {
+    local k="$1" jobname="$2" id="$3"
+    grep -qxF -- "$id" "$ids_file" 2>/dev/null || echo "$id" >> "$ids_file"
+    grep -qF -- "$(printf '\t%s\t%s' "$jobname" "$id")" "$REGBENCH_OUT/logs/jobs.tsv" 2>/dev/null \
+        || printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$jobname" "$id" >> "$REGBENCH_OUT/logs/jobs.tsv"
+    # these units' last job is now this one
+    awk -v j="$jobname-$id" 'NR == FNR { due[$1] = 1; next } ($1 in due) { print $1, j; next } { print }' \
+        "$plan/due-$k" "$last" > "$last.new" && mv "$last.new" "$last"
+}
+# save_state <k> <job name> <id>: the step this chain is at, for a successor
+save_state() {
+    printf 'k=%s\njob=%s\nid=%s\nearlier=%s\nprevious=%s\n' "$1" "$2" "$3" "$earlier" "$previous" \
+        > "$state.new" && mv "$state.new" "$state" && rm -f "$submitting"
+}
+# mark_cut <k> <cause> <why>: write the due units of step k down as the launcher's
+# (`regbench chain-mark`), in the scorer's image: the step's own job script arguments
+# name the run (run_rung.sbatch <name> <method> <label> <opts> <image> <gpu> <dataset>
+# <attempt> <GB> ...)
+mark_cut() {
+    local k="$1" cause="$2" why="$3" i at=-1 item
+    local -a items=() run=() marks=()
+    while IFS= read -r item; do items+=("$item"); done < "$plan/step-$k"
+    for i in "${!items[@]}"; do
+        case "${items[$i]}" in */run_rung.sbatch) at="$i" ;; esac
+    done
+    if [ "$at" -lt 0 ]; then
+        echo "step $k: not a step of a run's ladder; its units are not written down here (the selfcheck, stage and nuclei records say what became of them)"
+        return 0
+    fi
+    run=("${items[@]:$((at + 1)):9}")
+    while read -r i; do marks+=(--index "$i"); done < "$plan/due-$k"
+    local args=(chain-mark --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "${run[6]}"
+                --method "${run[1]}" --rung-gb "${run[8]}" --cause "$cause" --why "$why"
+                "${marks[@]}")
+    [ "${run[2]}" != - ] && args+=(--label "${run[2]}")
+    if ! regbench_py "${REGBENCH_SCORER_IMAGE:-STARE_REGBENCH}" "${args[@]}"; then
+        echo "step $k: the units could not be written down as $cause (regbench chain-mark failed above): their records still say the rung below's cause"
+    fi
+}
+
 n_steps=0 n_sent=0
 k=1
+# A LINK THAT TAKES OVER. What an earlier link of this chain left: the step it had
+# submitted, whose job is waited for before the chain goes on.
+if [ -s "$submitting" ] && { [ ! -s "$state" ] || [ "$(cut -d' ' -f1 "$submitting")" != "$(sed -n 's/^k=//p' "$state" 2>/dev/null)" ]; }; then
+    read -r k_was job_was < "$submitting"
+    found="$(squeue -h -u "$(id -un)" --name="$job_was" -o '%i' 2>/dev/null | sed -n 1p)" || found=""
+    found="${found%%_*}"
+    if [ -n "$found" ]; then
+        echo "link $link: step $k_was ($job_was) was submitted by an earlier link that ended before it recorded the id; it is in the queue as $found"
+        [ -s "$state" ] && while IFS='=' read -r key value; do
+            case "$key" in earlier) earlier="$value" ;; esac
+        done < "$state"
+        earlier="$earlier,$found" previous="$found"
+        recorded "$k_was" "$job_was" "$found"
+        save_state "$k_was" "$job_was" "$found"
+    else
+        echo "link $link: step $k_was ($job_was) may not have reached the queue (an earlier link ended while submitting it, and the queue does not have it): it is submitted again"
+        rm -f "$submitting"
+    fi
+fi
+if [ -s "$state" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            k) k_was="$value" ;; job) job_was="$value" ;; id) id_was="$value" ;;
+            earlier) earlier="$value" ;; previous) previous="$value" ;;
+        esac
+    done < "$state"
+    echo "link $link: TAKING OVER the chain $first_name from an earlier link that did not finish it (ended at its time limit, or lost with its node): step $k_was ($job_was) is job $id_was"
+    recorded "$k_was" "$job_was" "$id_was"
+    if ! gone "$id_was"; then
+        echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $job_was ($id_was) is left in the queue, and a later link of this chain (if any) goes on"
+        end failed not_submitted
+        exit 1
+    fi
+    k=$((k_was + 1)) n_steps="$k_was"
+fi
 while [ -s "$plan/step-$k" ]; do
     items=()
     while IFS= read -r line; do items+=("$line"); done < "$plan/step-$k"
@@ -135,6 +264,14 @@ while [ -s "$plan/step-$k" ]; do
         k=$((k + 1))
         continue
     fi
+    echo "$due" > "$plan/due-$k"
+    if [ "$kind" = cut ]; then
+        why="${items[2]}"
+        echo "step $k ($jobname): NOT SUBMITTED, the partition cannot grant this rung ($why): $(wc -l <<< "$due" | tr -d ' ') unit(s) that would climb to it are written down as the launcher's (not_submitted)"
+        mark_cut "$k" not_submitted "$why"
+        echo "$first_name: the ladder stops at the rung below; $n_sent retry step(s) were submitted"
+        finish ok - 0
+    fi
     args=() array="-"
     if [ "$single" != 1 ]; then
         array="$(spec <<< "$due")"
@@ -145,25 +282,29 @@ while [ -s "$plan/step-$k" ]; do
         [ "$item" = "@PREVIOUS@" ] && item="$previous"
         args+=("$item")
     done
+    printf '%s %s\n' "$k" "$jobname" > "$submitting"
     if ! got="$(sbatch --parsable --job-name="$jobname" "${args[@]}" < /dev/null 2>&1)"; then
+        rm -f "$submitting"
         echo "sbatch REFUSED $jobname (--array=$array): $got"
-        end failed not_submitted
-        exit 1
+        case "$kind" in
+            again|climb)
+                echo "$(wc -l <<< "$due" | tr -d ' ') unit(s) of this step are written down as the launcher's (not_submitted): $jobname was refused"
+                mark_cut "$k" not_submitted "sbatch refused $jobname: $(tr '\n' ' ' <<< "$got")" ;;
+        esac
+        finish failed not_submitted 1
     fi
     id="$(awk 'NF { last = $0 } END { print last }' <<< "$got")"
     [ "$id" = "$got" ] || awk -v id="$id" '$0 != id && NF { print "sbatch said: " $0 }' <<< "$got"
     id="${id%%;*}"
-    case "$id" in ''|*[!0-9_]*) echo "sbatch printed no job id for $jobname: $got"; end failed not_submitted; exit 1 ;; esac
-    echo "$id" >> "$ids_file"
-    printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$jobname" "$id" >> "$REGBENCH_OUT/logs/jobs.tsv"
+    case "$id" in ''|*[!0-9_]*) rm -f "$submitting"; echo "sbatch printed no job id for $jobname: $got"; finish failed not_submitted 1 ;; esac
+    earlier="$earlier,$id" previous="$id"
+    # the state first: whatever ends this link after this line, its successor knows
+    save_state "$k" "$jobname" "$id"
+    recorded "$k" "$jobname" "$id"
     n_sent=$((n_sent + 1))
     echo "step $k ($jobname, $kind): submitted as $id for $(wc -l <<< "$due" | tr -d ' ') unit(s): --array=$array"
-    earlier="$earlier,$id" previous="$id"
-    # these units' last job is now this one
-    awk -v j="$jobname-$id" 'NR == FNR { due[$1] = 1; next } ($1 in due) { print $1, j; next } { print }' \
-        <(echo "$due") "$last" > "$last.new" && mv "$last.new" "$last"
     if ! gone "$id"; then
-        echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $jobname ($id) is left in the queue and the steps after it are not submitted"
+        echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $jobname ($id) is left in the queue, and a later link of this chain (if any) goes on"
         end failed not_submitted
         exit 1
     fi
@@ -178,9 +319,7 @@ if [ "$single" = 1 ]; then
     [ -s "$file" ] && st="$(sed -nE 's/.* status=([^ ]+).*/\1/p' "$file" | tail -n 1)"
     if [ "$st" != ok ]; then
         echo "$first_name: the chain's last job ($job) ended ${st:-without an end line}, not ok"
-        end failed -
-        exit 1
+        finish failed - 1
     fi
 fi
-end ok -
-exit 0
+finish ok - 0

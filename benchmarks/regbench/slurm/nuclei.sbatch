@@ -33,6 +33,16 @@ source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 : "${REGBENCH_NUCLEI:?export REGBENCH_NUCLEI (the folder that keeps the nuclei of each slide)}"
 : "${SLURM_ARRAY_TASK_ID:?this task is one slide of an array: submit with --array}"
 scorer="${REGBENCH_PREPARE_IMAGE:-STARE_REGBENCH}"
+# nuclei_end <status> <cause|-> <wants|-> <exit>: the task's end line, where the chain's
+# watcher reads it (REGBENCH_END_FILE), and as the log's last line
+nuclei_end() {
+    local cause="" line
+    [ "$2" = - ] || cause=" cause=$2 whose=benchmark"
+    line="REGBENCH_END kind=nuclei unit=index_$SLURM_ARRAY_TASK_ID status=$1$cause wants=$3 exit=$4 log=${REGBENCH_LOG:--}"
+    if [ -n "${REGBENCH_END_FILE:-}" ]; then echo "$line" > "$REGBENCH_END_FILE"; fi
+    regbench_say_end "$line"
+}
+regbench_start nuclei "unit=index_$SLURM_ARRAY_TASK_ID" "rung_gb=$(awk '{ printf "%g", $1 / 1024 }' <<< "${SLURM_MEM_PER_NODE:-0}")"
 what=(nuclei --manifest "$REGBENCH_MANIFEST" --out "$REGBENCH_NUCLEI"
       --index "$SLURM_ARRAY_TASK_ID" --workers "${SLURM_CPUS_PER_TASK:-1}")
 mkdir -p "$REGBENCH_NUCLEI"
@@ -51,9 +61,11 @@ line="$(regbench_py "$scorer" "${what[@]}" --command ${force[@]+"${force[@]}"})"
 if [ -z "$line" ]; then
     if [ "$first" -ne 0 ]; then
         echo "slide $SLURM_ARRAY_TASK_ID: its StarDist re-run was REFUSED and is not run again (nuclei --list has the reason). Correct the model or the settings, then REGBENCH_NUCLEI_FORCE=1 runs it again. This task fails."
+        nuclei_end failed benchmark - "$first"
         exit "$first"
     fi
     echo "slide $SLURM_ARRAY_TASK_ID: nothing to segment (usable nuclei exist: nuclei --list); StarDist is not run"
+    nuclei_end ok - - 0
     exit 0
 fi
 echo "+ $line"
@@ -66,12 +78,36 @@ if [ -n "$model_dir" ] && [ -z "${REGBENCH_STARDIST_MODEL_DIR:-}" ]; then
     export REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$model_dir"
 fi
 script="$(mktemp "$REGBENCH_NUCLEI/.segment-$SLURM_ARRAY_TASK_ID-XXXXXX.sh")"
-trap 'rm -f "$script"' EXIT
+# shellcheck disable=SC2329  # the EXIT trap
+on_exit() {
+    local code=$?
+    rm -f "$script"
+    regbench_exit_said "$code"
+}
+trap on_exit EXIT
 # the line starts with `python`: where the StarDist image has python3 only, that is it
 printf 'set -euo pipefail\n%s\n%s\n' \
     'command -v python >/dev/null 2>&1 || python() { python3 "$@"; }' "$line" > "$script"
 # the GPU reaches the StarDist image only (REGBENCH_GPU=1 passes --nv)
 gpu=1
 [ "${REGBENCH_STARDIST_CPU:-0}" != 0 ] && gpu=0
-REGBENCH_GPU="$gpu" regbench_exec STARDIST bash "$script"
+# A StarDist run that fails is WRITTEN DOWN (`nuclei --failed`): the slide's record and
+# the drop reason of `prepare multiplex` name the exit code (137: the kernel's
+# out-of-memory killer) instead of "outlines not traced yet". The end line asks the
+# chain's watcher (retry.sbatch, submit_cohort.sh) for the next memory rung only then.
+code=0
+REGBENCH_GPU="$gpu" regbench_exec STARDIST bash "$script" || code=$?
+if [ "$code" -ne 0 ]; then
+    mem_gb="$(awk '{ printf "%g", $1 / 1024 }' <<< "${SLURM_MEM_PER_NODE:-0}")"
+    [ "$mem_gb" = 0 ] && mem_gb=""
+    echo "slide $SLURM_ARRAY_TASK_ID: StarDist FAILED (exit $code${mem_gb:+ at $mem_gb GB}); written down for the slide"
+    regbench_py "$scorer" "${what[@]}" --failed "$code" ${mem_gb:+--mem-gb "$mem_gb"} \
+        || echo "slide $SLURM_ARRAY_TASK_ID: the failure could not be written down (nuclei --failed failed above)"
+    # the benchmark's own step (resources.CAUSES): its out-of-memory is benchmark_oom
+    cause=benchmark wants=-
+    if [ "$code" = 137 ]; then cause=benchmark_oom wants=climb; fi
+    nuclei_end failed "$cause" "$wants" "$code"
+    exit "$code"
+fi
 REGBENCH_GPU=0 regbench_py "$scorer" "${what[@]}"
+nuclei_end ok - - 0

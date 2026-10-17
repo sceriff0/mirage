@@ -331,10 +331,12 @@ def test_prepare_builds_the_rounds_from_the_input_step(tmp_path):
     jobs = [ln for ln in done.stdout.splitlines() if ln.startswith("sbatch ")]
     assert [re.search(r"--job-name=(\S+)", j).group(1) for j in jobs] == [
         "rb-nuclei",
+        "rb-nuclei-retry",  # the nuclei step's memory ladder (fleet wave 2, F7)
+        "rb-nuclei-retry-2",
         "rb-prepare-multiplex",
     ]
     assert "--array=0-2%" in jobs[0]  # three slides
-    assert f"--manifest {rounds}" in jobs[1]
+    assert f"--manifest {rounds}" in jobs[-1]
     # a rounds.csv named by hand is taken as it is (one written from the arms' results)
     old = tmp_path / "old_rounds.csv"
     old.write_text(text)

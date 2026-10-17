@@ -49,6 +49,8 @@ export REGBENCH_RETRY="$retry" REGBENCH_TIME_LIMIT="$limit"
 # read its verdict (the scorer reads it from logs/verdicts.tsv).
 
 index="${SLURM_ARRAY_TASK_ID:-0}"
+regbench_start run "run=$name" "label=$label" "dataset=$dataset" "unit=index_$index" \
+    "rung_gb=$mem_gb" "attempt=$attempt" "task=$task"
 work="${REGBENCH_WORK:-${TMPDIR:-/tmp}}/regbench-$name-${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}-$index"
 args=(run --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "$dataset"
       --method "$method" --index "$index" --work "$work")
@@ -141,6 +143,13 @@ if [ "$code" = 137 ]; then
     fi
     if [ -n "$launch" ]; then
         mkdir -p "$acct_dir/exits" && echo "$code" > "$acct_dir/exits/$launch"
+    fi
+    # and on the end line, which Python never wrote: the cause that note settles to
+    # (ladder.settle: oom), and that only the next rung can run the unit
+    # (failure_log.chain_wants): the watcher submits no same-rung retry for it
+    if [ -n "${REGBENCH_END_FILE:-}" ] && [ ! -s "$REGBENCH_END_FILE" ]; then
+        echo "REGBENCH_END kind=run run=$name dataset=$dataset unit=index_$index rung=$attempt status=failed cause=oom whose=method exit=$code wants=climb log=${REGBENCH_LOG:--}" \
+            > "$REGBENCH_END_FILE"
     fi
 fi
 rm -rf "$work"

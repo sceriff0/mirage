@@ -82,7 +82,18 @@
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
-: "${REGBENCH_OUT:=$HOME/regbench_results/mirage-$(git -C "$REGBENCH_REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+# the commit the jobs run from: the submitting checkout's (--export=ALL carries it to
+# every job), named on each job's `[regbench] start` line
+: "${REGBENCH_COMMIT:=$(git -C "$REGBENCH_REPO" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+export REGBENCH_COMMIT
+# whether REGBENCH_OUT is the commit-hash default (submit_cohort.sh warns when an earlier
+# default-named folder holds results of the same cases: a new commit is a new folder)
+# (read by submit_cohort.sh, which sources this file)
+REGBENCH_OUT_DEFAULTED=0
+[ -n "${REGBENCH_OUT:-}" ] || REGBENCH_OUT_DEFAULTED=1
+export REGBENCH_OUT_DEFAULTED
+REGBENCH_RESULTS_HOME="${HOME:-}/regbench_results"
+: "${REGBENCH_OUT:=$REGBENCH_RESULTS_HOME/mirage-$(git -C "$REGBENCH_REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 : "${REGBENCH_CPUS:=4}"
 : "${REGBENCH_MEM:=16G}"
 : "${REGBENCH_WRITABLE_TMPFS_IMAGES:=VALIS120}"
@@ -156,16 +167,97 @@ regbench_task_log() {
 }
 regbench_task_log
 
+# ── what the operator greps: one start line and one end line per job ────────────────
+# Every regbench job prints, in the same format whatever it is:
+#   [regbench] start kind=<kind> job=<name>-<id> run=... label=... dataset=... unit=...
+#              rung_gb=... attempt=... out=<REGBENCH_OUT> commit=<sha> host=... at=<time>
+#   [regbench] end kind=<kind> job=<name>-<id> outcome=<ok|status[/cause]> wall=<s>s
+#              peak_rss=<MB>MB|- record=<path>|- exit=<code>
+# (one line each; a field the job does not have is `-`). The end line comes just BEFORE
+# the job's REGBENCH_END line, which stays the log's last. A job that ends without one
+# (a refusal under `set -e`, a signal) still prints its end line, from the EXIT trap.
+#   grep -h '^\[regbench\] end' $REGBENCH_OUT/logs/*.log | grep -v outcome=ok
+REGBENCH_JOB_KIND="" REGBENCH_T0="" REGBENCH_SAID_END=0
+_regbench_job() {
+    local id="${SLURM_JOB_ID:--}"
+    if [ -n "${SLURM_ARRAY_JOB_ID:-}" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+        id="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+    fi
+    echo "${SLURM_JOB_NAME:-local}-$id"
+}
+# regbench_start <kind> [key=value ...]: the start line; arms the EXIT trap
+regbench_start() {
+    REGBENCH_JOB_KIND="$1"; shift
+    REGBENCH_T0="$(date +%s)"
+    local f k v line more=""
+    line="[regbench] start kind=$REGBENCH_JOB_KIND job=$(_regbench_job)"
+    # the six fields every job has, in this order (`-` when it has none), then its own
+    for k in run label dataset unit rung_gb attempt; do
+        v=-
+        for f in "$@"; do [ "${f%%=*}" = "$k" ] && v="${f#*=}"; done
+        line="$line $k=${v:--}"
+    done
+    for f in "$@"; do
+        # shellcheck disable=SC2194  # the fixed fields are the subject; ${f%%=*} is the pattern
+        case " run label dataset unit rung_gb attempt " in
+            *" ${f%%=*} "*) ;;
+            *) more="$more ${f%%=*}=${f#*=}" ;;
+        esac
+    done
+    line="$line$more"
+    echo "$line out=${REGBENCH_OUT:--} commit=${REGBENCH_COMMIT:-unknown} host=$(hostname 2>/dev/null || echo -) at=$(date +%FT%T)"
+    trap 'regbench_exit_said $?' EXIT
+}
+# the peak memory of this job's cgroup in MB (cgroup v2 memory.peak, v1
+# memory.max_usage_in_bytes), or `-` when it cannot be read here
+_regbench_peak_mb() {
+    local path f
+    path="$(awk -F: '$1 == "0" || $2 ~ /memory/ { print $3; exit }' /proc/self/cgroup 2>/dev/null)" || path=""
+    for f in "/sys/fs/cgroup$path/memory.peak" "/sys/fs/cgroup/memory$path/memory.max_usage_in_bytes"; do
+        if [ -n "$path" ] && [ -r "$f" ]; then
+            awk '{ printf "%d\n", $1 / 1048576 }' "$f" && return 0
+        fi
+    done
+    echo -
+}
+# regbench_say_end <REGBENCH_END line>: the `[regbench] end` line read off it, then it
+regbench_say_end() {
+    local line="$1" status cause record peak code wall="-"
+    status="$(sed -nE 's/.* status=([^ ]+).*/\1/p' <<< "$line")"
+    cause="$(sed -nE 's/.* cause=([^ ]*).*/\1/p' <<< "$line")"
+    record="$(sed -nE 's/.* record=([^ ]+).*/\1/p' <<< "$line")"
+    peak="$(sed -nE 's/.* peak_rss_mb=([^ ]+).*/\1/p' <<< "$line")"
+    code="$(sed -nE 's/.* exit=([^ ]+).*/\1/p' <<< "$line")"
+    [ -n "$peak" ] && [ "$peak" != - ] || peak="$(_regbench_peak_mb)"
+    [ "$peak" = - ] || peak="${peak}MB"
+    [ -n "$REGBENCH_T0" ] && wall="$(( $(date +%s) - REGBENCH_T0 ))s"
+    local outcome="${status:-unknown}"
+    [ "$outcome" = ok ] || [ -z "$cause" ] || [ "$cause" = - ] || outcome="$outcome/$cause"
+    echo "[regbench] end kind=${REGBENCH_JOB_KIND:-?} job=$(_regbench_job) outcome=$outcome wall=$wall peak_rss=$peak record=${record:-${REGBENCH_RECORD:--}} exit=${code:--}"
+    REGBENCH_SAID_END=1
+    echo "$line"
+}
+# the EXIT trap: a job that ended without its end line (a refusal under `set -e`, a
+# `die`, a signal) still says how it ended
+regbench_exit_said() {
+    [ "$REGBENCH_SAID_END" = 1 ] && return 0
+    [ -n "$REGBENCH_JOB_KIND" ] || return 0
+    local wall="-"
+    [ -n "$REGBENCH_T0" ] && wall="$(( $(date +%s) - REGBENCH_T0 ))s"
+    echo "[regbench] end kind=$REGBENCH_JOB_KIND job=$(_regbench_job) outcome=$([ "$1" = 0 ] && echo ok || echo "exit_$1") wall=$wall peak_rss=$(_regbench_peak_mb | sed -E 's/^([0-9]+)$/\1MB/') record=${REGBENCH_RECORD:--} exit=$1"
+}
+
 # regbench_end <kind> <exit code of the Python step> [key=value ...]
 regbench_end() {
     local kind="$1" code="$2"; shift 2
     if [ -n "${REGBENCH_END_FILE:-}" ] && [ -s "$REGBENCH_END_FILE" ]; then
-        cat "$REGBENCH_END_FILE"
+        sed '$d' "$REGBENCH_END_FILE"
+        regbench_say_end "$(tail -n 1 "$REGBENCH_END_FILE")"
     else
         # the step wrote no end line: it died (killed for memory or time, a crash of the
         # interpreter, a container that did not start). The scheduler's accounting may
         # later say `infrastructure`; until then a dead process is counted as the method's.
-        echo "REGBENCH_END kind=$kind $* status=no_end_line cause=killed whose=method exit=$code log=${REGBENCH_LOG:--}"
+        regbench_say_end "REGBENCH_END kind=$kind $* status=no_end_line cause=killed whose=method exit=$code log=${REGBENCH_LOG:--}"
     fi
 }
 

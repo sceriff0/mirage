@@ -953,7 +953,7 @@ def test_a_unit_is_not_reused_when_it_was_computed_another_way(
     assert _run(root, out) == 0 and "reused" in capsys.readouterr().out
     # made by other code
     path.write_text(json.dumps({**first, "reuse_key": {**key, "code": "0" * 64}}))
-    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+    assert _run(root, out) == 0 and "already ok for this configuration: reused" not in capsys.readouterr().out
     second = json.loads(path.read_text())
     assert second["launch_id"] != first["launch_id"] and second["reuse_key"] == key
     # a statement of who starts stage processes is nothing to a method without
@@ -971,11 +971,11 @@ def test_a_unit_is_not_reused_when_it_was_computed_another_way(
     assert methods.reuse_key("initial", [], out, {}, None)["execution"] == "one process"
     # executed in another shape
     path.write_text(json.dumps({**second, "reuse_key": {**key, "execution": "jobs"}}))
-    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+    assert _run(root, out) == 0 and "already ok for this configuration: reused" not in capsys.readouterr().out
     # a record of before the key existed
     old = {k: v for k, v in second.items() if k != "reuse_key"}
     path.write_text(json.dumps(old))
-    assert _run(root, out) == 0 and "reused" not in capsys.readouterr().out
+    assert _run(root, out) == 0 and "already ok for this configuration: reused" not in capsys.readouterr().out
 
 
 def test_a_file_fingerprint_is_its_size_time_and_sampled_bytes(tmp_path):
@@ -1081,7 +1081,7 @@ def test_a_unit_is_reused_only_for_the_same_configuration(tmp_path, capsys):
     first = json.loads(path.read_text())["launch_id"]
     capsys.readouterr()
     assert _run(root, out, "--opt", "workers=3") == 0  # other options: run again
-    assert "reused" not in capsys.readouterr().out
+    assert "already ok for this configuration: reused" not in capsys.readouterr().out
     assert json.loads(path.read_text())["launch_id"] != first
     record(path, cause="exception", marker=1)  # a failed unit is never reused
     assert _run(root, out, "--opt", "workers=3") == 0

@@ -713,6 +713,53 @@ def emit_end(kind, status, cause="", **fields):
     return line
 
 
+def chain_wants(records):
+    """The steps of a chain's watcher (``slurm/retry.sbatch``) that may still run this
+    unit, from the ``run.json`` records of its results after its last task: a tuple of
+    ``"again"`` (the same rung once more) and ``"climb"`` (the next rung), empty when
+    no later task of the chain can run it. Written on the task's end line
+    (``wants=``), and the watcher submits a step only for the units that want it.
+
+    THE ONE PREDICATE of the watcher's filter. It is read from every record of the
+    unit, not from the first failed one: a patient goes up as a whole when ANY of its
+    records ran out of memory (``ladder.unit_decision``), whatever cause another round
+    failed with first. It answers for a SUPERSET of what the ladder will run (a test
+    holds it to that: ``test_failure_log.py``): the task submitted still decides for
+    itself, and a unit the filter takes may find nothing to do; a unit it leaves out
+    would be one the ladder never got to decide.
+
+    * no record of this submission: the task never started; both (``again`` runs it at
+      rung 1, ``climb`` writes it down as lost)
+    * a memory cause (``resources.MEMORY_CAUSES``): ``climb``; never ``again``, which
+      retries an attempt lost to the scheduler and not one that ran out of memory
+    * ``infrastructure`` not yet tried again (``retry`` 0): both; tried again: neither
+    * ``killed`` with no end state recorded: both (the accounting may still say memory,
+      a lost node or nothing); with one (``scheduler.state``, written when it was
+      settled): neither, the process died on its own and that is final
+    * a record already retried where it failed (``no_rerun``) and any other cause:
+      neither
+    """
+    from . import ladder, resources
+
+    records = [r for r in records if r]
+    if not records:
+        return (ladder.AGAIN, ladder.CLIMB)
+    wants = set()
+    for r in records:
+        if r.get("ok") or r.get("no_rerun"):
+            continue
+        cause = r.get("cause") or "exception"
+        if cause in resources.MEMORY_CAUSES:
+            wants.add(ladder.CLIMB)
+        elif cause == ladder.INFRASTRUCTURE:
+            if int(r.get("retry") or 0) < ladder.RETRIES_PER_RUNG:
+                wants.update((ladder.AGAIN, ladder.CLIMB))
+        elif cause == ladder.KILLED:
+            if not ladder.ended((r.get("scheduler") or {}).get("state")):
+                wants.update((ladder.AGAIN, ladder.CLIMB))
+    return tuple(k for k in (ladder.AGAIN, ladder.CLIMB) if k in wants)
+
+
 def unit_end(records):
     """``(status, cause)`` of one unit from the ``run.json`` records of its results:
     ``ok`` when every one is, else the first failed one's cause and ``failed`` (the

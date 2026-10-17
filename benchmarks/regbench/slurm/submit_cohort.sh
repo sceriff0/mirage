@@ -193,6 +193,21 @@
 #   REGBENCH_SCORE_TIME (24:00:00)    per task of those arrays. A task that runs out of
 #                                     it keeps the pair records it finished: submit
 #                                     again with --score-only and it goes on from there
+#   REGBENCH_SETTLE_TIME (04:00:00)   the settle job's time limit
+#   REGBENCH_RETRY_WATCHERS (2)       links of each chain's watcher (retry.sbatch), one
+#                                     after the other (`afterany`), each with the site's
+#                                     longest time: a link ended at its limit or lost
+#                                     with its node leaves the next to go on from the
+#                                     step it was at. What waits for a chain waits for
+#                                     its LAST link
+#   REGBENCH_RUNG_CHECK (1)           before the first sbatch (and with --preflight):
+#                                     ask `sinfo` for the largest node of the partition
+#                                     (and constraint) the jobs are given. A rung no
+#                                     node can grant is said loudly and is NOT planned:
+#                                     the units that would climb to it are written down
+#                                     as the launcher's (not_submitted, ladder_cut_gb),
+#                                     never left at the rung below as the method's
+#                                     out-of-memory. 0: not asked
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
@@ -270,6 +285,9 @@ unset REGBENCH_STAGES
 source "$HERE/env.sh"
 
 RUNGS_GB="16 64 256 512 700"
+# the nuclei step's rungs above its first request (REGBENCH_NUCLEI_MEM, 128G): the
+# pipeline's SEGMENT is 128 GB x task.attempt
+NUCLEI_RUNGS_GB="256 512"
 SELFCHECK_RUNGS_GB="64 256 512"
 CPUS=4
 MAX_SECONDS=$((7 * 24 * 3600))
@@ -286,6 +304,9 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_STAGE_FEED_TIME:=7-00:00:00}"
 : "${REGBENCH_SCORE_CPUS:=8}"
 : "${REGBENCH_SCORE_MEM:=64G}"
+: "${REGBENCH_SETTLE_TIME:=04:00:00}"
+: "${REGBENCH_RETRY_WATCHERS:=2}"
+: "${REGBENCH_RUNG_CHECK:=1}"
 : "${REGBENCH_FORCE:=0}"
 export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
@@ -337,6 +358,10 @@ scratch_is_temporary=0
 on_exit() {
     local code=$?
     [ "$scratch_is_temporary" = 1 ] && rm -rf "$scratch"
+    # in the launch job (launch.sbatch): its `[regbench] end` line
+    if [ -n "${REGBENCH_LAUNCH_T0:-}" ]; then
+        echo "[regbench] end kind=launch job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:--} outcome=$([ "$code" = 0 ] && echo ok || echo "exit_$code") wall=$(( $(date +%s) - REGBENCH_LAUNCH_T0 ))s peak_rss=- record=${IDS_FILE:--} exit=$code queued=$N_QUEUED"
+    fi
     if [ "$FINISHED" != 1 ] && [ "$N_QUEUED" -gt 0 ]; then
         {
             echo "submit_cohort: stopped with exit $code after the first sbatch (${STOPPED_BY:-the reason is above})."
@@ -383,6 +408,7 @@ need_int REGBENCH_STAGE_POLL_S 1
 need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
 need_int REGBENCH_SCORE_CPUS 1
+need_int REGBENCH_RETRY_WATCHERS 1
 # read by the jobs, not here (feed_tiles.sbatch and run_rung.sbatch have the defaults):
 # a value that is no whole number stops the launch, not a job days later
 for pair in REGBENCH_STAGE_STALL_S:1 REGBENCH_STAGE_STALL_MAX_S:1 REGBENCH_STAGE_SQUEUE_TRIES:1 \
@@ -462,13 +488,17 @@ N_JOBS=0
 N_TASKS=0
 JOB_ID=""
 JOBS_FILE=""
+# array_size <a-b,c,...>: how many tasks an --array list has
+array_size() {
+    awk -F, '{ for (i = 1; i <= NF; i++) { n = split($i, r, "-"); t += (n == 2 ? r[2] - r[1] + 1 : 1) } } END { print t + 0 }' <<< "$1"
+}
 submit() {
     local name="$1" arg range; shift
     N_JOBS=$((N_JOBS + 1))
     range=""
     for arg in "$@"; do case "$arg" in --array=*) range="${arg#--array=}"; range="${range%%\%*}" ;; esac; done
     if [ -n "$range" ]; then
-        N_TASKS=$((N_TASKS + ${range#*-} - ${range%%-*} + 1))
+        N_TASKS=$((N_TASKS + $(array_size "$range")))
     else
         N_TASKS=$((N_TASKS + 1))
     fi
@@ -541,6 +571,7 @@ prep_s="$(seconds "${REGBENCH_PREPARE_TIME:-24:00:00}")"
 feed_s="$(seconds "$REGBENCH_STAGE_FEED_TIME")"
 score_s="$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")"
 nuclei_s="$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")"
+settle_s="$(seconds "$REGBENCH_SETTLE_TIME")"
 # shellcheck disable=SC2206  # the site's GPU request is several words on purpose
 GPU_ARGS=(${REGBENCH_SBATCH_GPU:-})
 
@@ -570,11 +601,41 @@ if [ "$inputs" = 1 ]; then
     exit 0
 fi
 
+# AN EARLIER RESULTS FOLDER OF THE SAME CASES. The default REGBENCH_OUT is named after
+# the checkout's commit (env.sh), so a launch from a newer commit starts an EMPTY folder
+# and reuses nothing an earlier launch finished. Said loudly; the default is not changed.
+# An earlier folder is one of the same cases when its logs/cases (written below by every
+# launch) names them; a folder written before that file existed is named as unknown.
+earlier_default_folders() {
+    local dir cases n
+    [ "${REGBENCH_OUT_DEFAULTED:-0}" = 1 ] || return 0
+    for dir in "$REGBENCH_RESULTS_HOME"/mirage-*; do
+        [ -d "$dir/logs" ] || continue
+        [ "$dir" -ef "$REGBENCH_OUT" ] && continue
+        cases=""
+        [ -s "$dir/logs/cases" ] && cases="$(head -n 1 "$dir/logs/cases")"
+        if [ -n "$cases" ] && [ "$cases" != "$REGBENCH_CASES" ] && ! [ "$cases" -ef "$REGBENCH_CASES" ]; then
+            continue
+        fi
+        n="$(find "$dir" -mindepth 4 -maxdepth 4 -name run.json 2>/dev/null | wc -l | tr -d ' ')"
+        [ -n "$cases" ] || [ "$n" -gt 0 ] || continue
+        {
+            echo "# WARNING results folder: REGBENCH_OUT is the default for this commit ($REGBENCH_OUT), and an EARLIER default-named folder holds $n result(s) $([ -n "$cases" ] && echo "of the same cases ($cases)" || echo "of cases it did not record (written before logs/cases existed)"): $dir"
+            echo "# WARNING results folder: nothing in it is reused by this launch. To reuse it (every unit that is ok there is not run again): export REGBENCH_OUT=$dir"
+        } | tee /dev/stderr
+    done
+    return 0
+}
+earlier_default_folders
+
 if [ "$DRY" = 1 ]; then
     scratch="$(mktemp -d)"
     scratch_is_temporary=1
 else
     mkdir -p "$REGBENCH_OUT/logs/selfcheck"
+    # the cases this folder's results are of (read by a later launch's warning above)
+    printf '%s\n' "$REGBENCH_CASES" > "$REGBENCH_OUT/logs/cases" \
+        || die "cannot write $REGBENCH_OUT/logs/cases. Nothing was submitted."
     scratch="$REGBENCH_OUT/logs"
     JOBS_FILE="$REGBENCH_OUT/logs/jobs.tsv"
     mkdir -p "$REGBENCH_OUT/logs/submitted"
@@ -650,6 +711,145 @@ if [ "$computing" = 1 ]; then
     compute_s="$(seconds "${REGBENCH_COMPUTE_TIME:-7-00:00:00}")"
     echo "# compute-all: $(wc -l <<< "$COMPUTE_PLAN" | tr -d ' ') run(s) of the whole pipeline ($REGBENCH_INPUT, profile $REGBENCH_NF_PROFILE), on $REGBENCH_COMPUTE_LANES lane(s), after $([ "$compute_only" = 1 ] && echo "nothing (--compute-only)" || echo "the scorer")"
 fi
+# ── the memory ladder against the partition: can a node grant each rung? ─────────────
+# The partition and constraint the jobs are given (the caller's sbatch arguments, else
+# SBATCH_PARTITION / SBATCH_CONSTRAINT, else the cluster's default partition), and the
+# largest node's memory there, from `sinfo -N -o '%P|%m|%f'` (%m: the node's memory in
+# MB; %f: its features; a `*` after the partition marks the default one: the sinfo
+# manual's -o field list `[MEMORY]`, not retrieved while this was written). Sets
+# GRANT_MB (empty: not known) and GRANT_WHERE. A request above every node's memory is
+# refused by sbatch or pends for ever: the rungs above GRANT_MB are not planned (ladder,
+# below), and the units that would climb to them are written down as the launcher's.
+GRANT_MB="" GRANT_WHERE=""
+rung_check() {
+    local part="${SBATCH_PARTITION:-}" cons="${SBATCH_CONSTRAINT:-}" i nodes want
+    local -a args=(${extra[@]+"${extra[@]}"})
+    [ "$REGBENCH_RUNG_CHECK" = 0 ] && { echo "# memory ladder: not checked against the partition (REGBENCH_RUNG_CHECK=0)"; return 0; }
+    for i in "${!args[@]}"; do
+        case "${args[$i]}" in
+            --partition=*) part="${args[$i]#--partition=}" ;;
+            --partition|-p) part="${args[$((i + 1))]:-}" ;;
+            -p?*) part="${args[$i]#-p}" ;;
+            --constraint=*) cons="${args[$i]#--constraint=}" ;;
+            --constraint|-C) cons="${args[$((i + 1))]:-}" ;;
+            -C?*) cons="${args[$i]#-C}" ;;
+        esac
+    done
+    if ! command -v sinfo >/dev/null; then
+        echo "# memory ladder: NOT checked against the partition (no sinfo here): a rung no node can grant would be found only when its step is refused, days into the run"
+        return 0
+    fi
+    if ! nodes="$(sinfo -h -N -o '%P|%m|%f' ${part:+-p "$part"} 2>&1)"; then
+        echo "# memory ladder: NOT checked against the partition (sinfo failed: $(head -n 1 <<< "$nodes"))"
+        return 0
+    fi
+    # the default partition's nodes when none is named; every term of an `&` constraint
+    # (any of an `|` one) among the node's features
+    GRANT_MB="$(awk -F'|' -v part="$part" -v cons="$cons" '
+        BEGIN { gsub(/[][()]/, "", cons); gsub(/\*[0-9]+/, "", cons)
+                n_any = split(cons, any, "|"); n_all = split(cons, all, "&") }
+        function has(f, w,   k, n, list) { n = split(f, list, ","); for (k = 1; k <= n; k++) if (list[k] == w) return 1; return 0 }
+        { p = $1; m = $2; f = $3; gsub(/[^0-9]/, "", m) }
+        part == "" && p !~ /\*$/ { next }
+        { ok = 1
+          if (cons != "" && n_any > 1) { ok = 0; for (k = 1; k <= n_any; k++) if (has(f, any[k])) ok = 1 }
+          else if (cons != "") { for (k = 1; k <= n_all; k++) if (!has(f, all[k])) ok = 0 }
+          if (ok && m + 0 > best) best = m + 0; seen = 1 }
+        END { if (seen) print best }' <<< "$nodes")"
+    if [ -z "$GRANT_MB" ] && [ -z "$part" ]; then
+        # no partition is marked as the default: every node
+        GRANT_MB="$(awk -F'|' '{ m = $2; gsub(/[^0-9]/, "", m); if (m + 0 > best) best = m + 0 } END { if (NR) print best }' <<< "$nodes")"
+    fi
+    GRANT_WHERE="partition ${part:-<the default>}${cons:+, constraint $cons}"
+    if [ -z "$GRANT_MB" ] || [ "$GRANT_MB" = 0 ]; then
+        GRANT_MB=""
+        echo "# memory ladder: NOT checked: sinfo lists no node of $GRANT_WHERE"
+        return 0
+    fi
+    want="$(awk '{ print $1 * 1024 }' <<< "${RUNGS_GB%% *}")"
+    [ "$want" -le "$GRANT_MB" ] || die "the memory ladder's first rung, ${RUNGS_GB%% *} GB, is more than the largest node of $GRANT_WHERE has ($GRANT_MB MB, sinfo): no run could start. Name a partition with larger nodes (-- --partition=...). Nothing was submitted."
+    local cut="" gb
+    for gb in $RUNGS_GB $SELFCHECK_RUNGS_GB; do
+        [ $((gb * 1024)) -le "$GRANT_MB" ] || has "$cut" "$gb" || cut="$cut $gb"
+    done
+    if [ -n "$cut" ]; then
+        cut="$(sed -e 's/^ //' -e 's/ / GB, /g' <<< "$cut") GB"
+        {
+            echo "# WARNING memory ladder: the largest node of $GRANT_WHERE has $GRANT_MB MB (sinfo), so the rung(s) $cut can NEVER be granted there."
+            echo "# WARNING memory ladder: those rungs are NOT planned: a unit that runs out of memory below them is written down as the launcher's (not_submitted, ladder_cut_gb), not as the method's out-of-memory. For the full ladder (16-700 GB for every method, the user's ruling) name a partition, or drop a constraint, that reaches the site's largest node: -- --partition=..."
+        } | tee /dev/stderr
+    else
+        echo "# memory ladder: every rung (${RUNGS_GB// /, } GB; selfcheck ${SELFCHECK_RUNGS_GB// /, } GB) fits the largest node of $GRANT_WHERE ($GRANT_MB MB, sinfo)"
+    fi
+}
+# grantable <GB>: can a node of the partition grant it (yes when it is not known)
+grantable() { [ -z "$GRANT_MB" ] || [ $(($1 * 1024)) -le "$GRANT_MB" ]; }
+
+# RETRIES ARE SUBMITTED AFTER A FAILURE, NEVER BEFORE IT. Of a chain (a memory ladder, the
+# attempts of a stage) only the FIRST array is submitted here, with one small job after
+# it, the chain's watcher (retry.sbatch). The other steps are written down as a plan
+# (plan_step: $REGBENCH_OUT/logs/retry/<submission>/<job prefix>/step-<k>), and the
+# watcher submits a step only for the units whose last task failed in a way that step
+# retries, then waits for it. A chain whose units are all ok puts nothing more in the
+# queue. Everything that waited for a chain's last array waits for its watcher.
+N_LATER=0 PLAN="" PLAN_SHOWN="" PLAN_N=0
+plan_open() {  # plan_open <job prefix>
+    PLAN_N=0
+    PLAN_SHOWN="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION/$1"
+    PLAN="$PLAN_SHOWN"
+    if [ "$DRY" = 1 ]; then
+        PLAN="$scratch/retry/$1"
+        PLAN_SHOWN="$REGBENCH_OUT/logs/retry/<submission>/$1"
+    fi
+    # the folder above it was made, and shown to be writable, before the first sbatch
+    rm -rf "$PLAN"
+    mkdir -p "$PLAN"
+}
+plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
+    local kind="$1" jobname="$2"; shift 2
+    PLAN_N=$((PLAN_N + 1))
+    N_LATER=$((N_LATER + 1))
+    printf '%s\n' "$kind" "$jobname" "$@" > "$PLAN/step-$PLAN_N"
+    if [ "$DRY" = 1 ]; then
+        printf '# later, only after a failure: sbatch --parsable --job-name=%s' "$jobname"
+        printf ' %s' "$@"
+        printf '\n'
+    fi
+}
+# plan_cut <job name> <sbatch arguments...>: a rung no node of the partition can grant
+# (rung_check). Never submitted: the watcher writes the units that would climb to it
+# down as the launcher's (retry.sbatch, `cut`), and the ladder ends there.
+N_CUT=0
+plan_cut() {
+    local jobname="$1"; shift
+    PLAN_N=$((PLAN_N + 1))
+    N_CUT=$((N_CUT + 1))
+    printf '%s\n' cut "$jobname" "the largest node of $GRANT_WHERE has $GRANT_MB MB (sinfo at launch)" "$@" > "$PLAN/step-$PLAN_N"
+    [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_WHERE can grant it ($GRANT_MB MB): $jobname"
+    return 0
+}
+# plan_watch <job prefix> <first job id> <first job name> <array range|-> <dependencies
+# of the first job> [<run|->]: the chain's watcher; sets JOB_ID. It has the first job's
+# own dependencies too. A range of `-` is a chain of single jobs (a selfcheck), and a
+# run of `-` a selfcheck's chain.
+# A watcher is REGBENCH_RETRY_WATCHERS links: link 1 (`<prefix>-retry`) after the first
+# job, each later link (`<prefix>-retry-<n>`) after the link before it, whatever became
+# of that one (afterany). A link ended at its time limit, or lost with its node, leaves
+# the next to go on from the step it was at (retry.sbatch: state); one that finds the
+# chain finished ends at once. JOB_ID is the LAST link: what waits for the chain.
+plan_watch() {
+    local dep="afterany:$2" n jobname
+    [ -z "$5" ] || dep="$5,$dep"
+    for n in $(seq 1 "$REGBENCH_RETRY_WATCHERS"); do
+        jobname="$1-retry"
+        [ "$n" = 1 ] || jobname="$1-retry-$n"
+        submit "$jobname" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
+            --cpus-per-task=1 --mem=1G --time="$(limit "$MAX_SECONDS")" \
+            "$HERE/retry.sbatch" "${6:-$name}" "$PLAN_SHOWN" "$2" "$3" "$4" "$n"
+        dep="afterany:$JOB_ID"
+    done
+}
+
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
     if [ -z "${REGBENCH_MANIFEST:-}" ]; then
@@ -710,15 +910,60 @@ if [ "$prepare" = 1 ]; then
                 fi
                 n_slides="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
                     --out "$REGBENCH_NUCLEI" --count)" || die "cannot size the nuclei array from $REGBENCH_MANIFEST"
-                [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && echo "# REGBENCH_NUCLEI_FORCE=1: every slide is segmented and traced again (--export=ALL carries it to the array)"
-                submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" \
-                    --cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --mem="${REGBENCH_NUCLEI_MEM:-128G}" \
-                    --time="$(limit "$nuclei_s")" \
-                    ${nuc_gpu[@]+"${nuc_gpu[@]}"} \
-                    --array="0-$((n_slides - 1))%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
-                # afterany: a slide whose run failed has no outlines, and `prepare
-                # multiplex` drops its rounds with the reason
-                after=(--dependency="afterany:$JOB_ID")
+                nuc_force=()
+                if [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ]; then
+                    echo "# REGBENCH_NUCLEI_FORCE=1: every slide is segmented and traced again (--export=ALL carries it to the array)"
+                    nuc_force=(--force)
+                fi
+                # only the slides that have anything to do (fleet wave 2, F9): one that
+                # has usable nuclei and its outlines would hold a GPU and 128 GB only
+                # to print "nothing to segment". Each task still decides for itself.
+                pending="$(regbench_py "$REGBENCH_HEAD_IMAGE" nuclei --manifest "$REGBENCH_MANIFEST" \
+                    --out "$REGBENCH_NUCLEI" --pending ${nuc_force[@]+"${nuc_force[@]}"})" \
+                    || die "cannot read which slides need the nuclei step from $REGBENCH_NUCLEI (nuclei --pending failed above). Nothing was submitted."
+                pending="$(awk 'NF { last = $0 } END { print last }' <<< "$pending")"
+                if [ -z "$pending" ]; then
+                    echo "# nuclei: all $n_slides slide(s) have usable nuclei and their outlines (nuclei --pending): no nuclei job"
+                else
+                    echo "# nuclei: slide(s) $pending of $n_slides (nuclei --pending)"
+                    rung_check
+                    # THE NUCLEI STEP HAS A MEMORY LADDER (fleet wave 2, F7): a task whose
+                    # StarDist run the kernel killed for memory says so on its end line
+                    # (nuclei.sbatch: wants=climb), and the chain's watcher submits the
+                    # next rung for those slides only. The pipeline's SEGMENT block is
+                    # 128 GB x task.attempt (conf/modules.config).
+                    nuc_mem="${REGBENCH_NUCLEI_MEM:-128G}"
+                    nuc_alloc=(--cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --time="$(limit "$nuclei_s")"
+                               ${nuc_gpu[@]+"${nuc_gpu[@]}"})
+                    submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" --mem="$nuc_mem" "${nuc_alloc[@]}" \
+                        --array="$pending%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
+                    nuc_first="$JOB_ID"
+                    mkdir -p "$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION" 2>/dev/null \
+                        || die "cannot write the retry plans under $REGBENCH_OUT/logs/retry. Nothing more was submitted."
+                    plan_open rb-nuclei
+                    case "$nuc_mem" in
+                        *[0-9]G) nuc_gb="${nuc_mem%G}" ;;
+                        *) nuc_gb="" ;;
+                    esac
+                    if [ -z "$nuc_gb" ] || [ -n "${nuc_gb//[0-9]/}" ]; then
+                        echo "# nuclei: REGBENCH_NUCLEI_MEM=$nuc_mem is not <N>G: no memory ladder above it"
+                    else
+                        for gb in $NUCLEI_RUNGS_GB; do
+                            [ "$gb" -gt "$nuc_gb" ] || continue
+                            if ! grantable "$gb"; then
+                                plan_cut "rb-nuclei-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" --mem="${gb}G" \
+                                    "${nuc_alloc[@]}" "$HERE/nuclei.sbatch"
+                                break
+                            fi
+                            plan_step climb "rb-nuclei-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" --mem="${gb}G" \
+                                "${nuc_alloc[@]}" "$HERE/nuclei.sbatch"
+                        done
+                    fi
+                    plan_watch rb-nuclei "$nuc_first" rb-nuclei "$pending" "" -
+                    # afterany: a slide whose run failed has no outlines, and `prepare
+                    # multiplex` drops its rounds with the reason its task wrote down
+                    after=(--dependency="afterany:$JOB_ID")
+                fi
                 what+=(--nuclei-dir "$REGBENCH_NUCLEI")
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
@@ -833,7 +1078,9 @@ preflight() {
     [ "$failed" = 0 ] || die "the preflight failed (the 'preflight FAIL' lines above, one per failure). Nothing was submitted."
     echo "# preflight: ok"
 }
+
 if [ "$preflight_only" = 1 ]; then
+    rung_check
     fetch_stare_source
     preflight
     echo "# --preflight: nothing was submitted"
@@ -846,6 +1093,8 @@ else
     fetch_stare_source
     preflight
 fi
+# a dry run asks too: it reads the scheduler and submits nothing
+rung_check
 
 # ── everything else that can stop this script, read before the first sbatch ───────────
 # the pipeline's allocation per stage and attempt, for the runs that are several jobs
@@ -955,48 +1204,6 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
 done < "$table"
 
-# RETRIES ARE SUBMITTED AFTER A FAILURE, NEVER BEFORE IT. Of a chain (a memory ladder, the
-# attempts of a stage) only the FIRST array is submitted here, with one small job after
-# it, the chain's watcher (retry.sbatch). The other steps are written down as a plan
-# (plan_step: $REGBENCH_OUT/logs/retry/<submission>/<job prefix>/step-<k>), and the
-# watcher submits a step only for the units whose last task failed in a way that step
-# retries, then waits for it. A chain whose units are all ok puts nothing more in the
-# queue. Everything that waited for a chain's last array waits for its watcher.
-N_LATER=0 PLAN="" PLAN_SHOWN="" PLAN_N=0
-plan_open() {  # plan_open <job prefix>
-    PLAN_N=0
-    PLAN_SHOWN="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION/$1"
-    PLAN="$PLAN_SHOWN"
-    if [ "$DRY" = 1 ]; then
-        PLAN="$scratch/retry/$1"
-        PLAN_SHOWN="$REGBENCH_OUT/logs/retry/<submission>/$1"
-    fi
-    # the folder above it was made, and shown to be writable, before the first sbatch
-    rm -rf "$PLAN"
-    mkdir -p "$PLAN"
-}
-plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
-    local kind="$1" jobname="$2"; shift 2
-    PLAN_N=$((PLAN_N + 1))
-    N_LATER=$((N_LATER + 1))
-    printf '%s\n' "$kind" "$jobname" "$@" > "$PLAN/step-$PLAN_N"
-    if [ "$DRY" = 1 ]; then
-        printf '# later, only after a failure: sbatch --parsable --job-name=%s' "$jobname"
-        printf ' %s' "$@"
-        printf '\n'
-    fi
-}
-# plan_watch <job prefix> <first job id> <first job name> <array range|-> <dependencies
-# of the first job> [<run|->]: the chain's watcher; sets JOB_ID. It has the first job's
-# own dependencies too. A range of `-` is a chain of single jobs (a selfcheck), and a
-# run of `-` a selfcheck's chain.
-plan_watch() {
-    local dep="afterany:$2"
-    [ -z "$5" ] || dep="$5,$dep"
-    submit "$1-retry" "${COMMON[@]}" "$LOG_ONE" --dependency="$dep" \
-        --cpus-per-task=1 --mem=1G --time="$(limit "$MAX_SECONDS")" \
-        "$HERE/retry.sbatch" "${6:-$name}" "$PLAN_SHOWN" "$2" "$3" "$4"
-}
 
 # The chains' retry plans (plan_open, above) are written while the jobs are submitted.
 # Their folder is made HERE, where one that cannot be written still stops the launch
@@ -1025,6 +1232,12 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     plan_open "rb-sc-$name"
     for gb in $SELFCHECK_RUNGS_GB; do
         attempt=$((attempt + 1))
+        # a rung no node can grant: the selfcheck stops below it (it reports, and its
+        # record says what the last attempt left)
+        if [ "$attempt" -gt 1 ] && ! grantable "$gb"; then
+            [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_WHERE can grant it ($GRANT_MB MB): rb-sc-$name-${gb}g"
+            break
+        fi
         if [ "$attempt" = 1 ]; then
             deps=()
             [ -n "$base" ] && deps=(--dependency="$base")
@@ -1044,8 +1257,10 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     printf -v "SC_LAST_$name" '%s' "$JOB_ID"
 done < "$table"
 
-# the small jobs: the settle job
-small=(--cpus-per-task=1 --mem=4G --time=0-01:00:00)
+# the small jobs: the settle job. One sacct over this submission's run jobs and their
+# steps (score_cohort.sbatch: settle_ids), then one pass over the run.json files: hours
+# at most, never the day-scale scorer that would settle again if this one timed out
+small=(--cpus-per-task=1 --mem=4G --time="$(limit "$settle_s")")
 
 # ── 3 and 4. the ladders ──────────────────────────────────────────────────────────────
 # deps_and <a> <b>: two --dependency lists joined with `,` (all of them), either empty
@@ -1070,8 +1285,19 @@ ladder() {
     # STITCH_S: the writer's four attempts, summed before the first sbatch
     [ "$staged" = - ] || time="$(limit $((round_s + STITCH_S)))"
     plan_open "$prefix"
+    # the row this ladder is of, for the harness that reads the chain back (chains.py)
+    printf '%s\n' "$name" "$method" "$label" "$opts" "$ds" > "$PLAN/run"
     for gb in $rungs; do
         attempt=$((attempt + 1))
+        if ! grantable "$gb"; then
+            # rung_check stopped the launch when the first rung is not grantable
+            plan_cut "$prefix-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" \
+                --cpus-per-task="$cpus" --mem="${gb}G" \
+                --time="$time" ${gres[@]+"${gres[@]}"} \
+                "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
+                "$ds" "$attempt" "$gb" "$real" "@EARLIER@" climb "$time" "$staged"
+            break
+        fi
         for task in attempt again; do
             jobname="$prefix-${gb}g"
             if [ "$task" = again ]; then
@@ -1327,6 +1553,7 @@ if [ "$computing" = 1 ]; then
     echo "# compute-all: $i head(s) -> $REGBENCH_OUT/compute/<backend>/<patient>/ (trace/trace.txt); their end lines in $REGBENCH_OUT/logs/compute/; the tables pipeline_cost*.csv from rb-score-compute"
 fi
 
+[ "$N_CUT" = 0 ] || echo "# WARNING memory ladder: $N_CUT ladder(s) stop below a rung no node of $GRANT_WHERE can grant ($GRANT_MB MB): their units that would climb to it are written down as the launcher's (not_submitted), not the method's"
 [ "$N_LATER" = 0 ] || echo "# retries: none is in the queue. Up to $N_LATER retry array(s) are written down as plans ($REGBENCH_OUT/logs/retry/) and submitted by the chains' watchers (retry.sbatch) only after a failure, for the units that failed"
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
 if [ "$N_FED" -gt 0 ]; then

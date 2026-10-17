@@ -730,6 +730,25 @@ def _missing(case, variant, reason):
     }
 
 
+def _plane_of_an_earlier_attempt(plane, source, reduced):
+    """Why the plane on disk cannot be this run's, or "" when it can. The driver
+    reduces right after the writer and records the outcome (``run.json: tissue``); a
+    run whose reduction FAILED leaves the plane an earlier attempt of the unit reduced
+    from its own image (the driver removes only ``warped.npz`` and ``realcheck.json``
+    before a re-run). So a plane is this run's only when this run's reduction did not
+    fail and the plane is not older than the image this run wrote."""
+    if not plane.exists():
+        return ""
+    if reduced.get("error"):
+        return f"this run's reduction failed: {reduced['error']}"
+    try:
+        if source.exists() and plane.stat().st_mtime < source.stat().st_mtime:
+            return "it is older than the image this run wrote"
+    except OSError:
+        return ""
+    return ""
+
+
 def _variant_plane(out, case, variant):
     """``(path of the reduced plane, None)`` or ``(None, why there is none)``."""
     d = result_dir(out, variant, case)
@@ -749,11 +768,17 @@ def _variant_plane(out, case, variant):
     if native.get("error") or not native.get("files"):
         return None, f"the method's writer failed: {native.get('error') or 'no file'}"
     plane = d / "tissue" / MOVING_PLANE
-    if plane.exists():
-        return plane, None
     source = Path(native.get("nuclear_file") or native["files"][0])
+    reduced = run.get("tissue") or {}
+    earlier = _plane_of_an_earlier_attempt(plane, source, reduced)
+    if plane.exists() and not earlier:
+        return plane, None
     if not source.exists():  # nothing to back-fill from
-        reduced = run.get("tissue") or {}
+        if earlier:
+            return None, (
+                f"the reduced plane on disk is of an earlier attempt ({earlier}) and "
+                "this run's written image is gone"
+            )
         why = reduced.get("error") or "it was not reduced when it was written"
         return None, f"no reduced plane ({why}) and the written image is gone"
     try:

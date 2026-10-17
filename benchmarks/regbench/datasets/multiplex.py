@@ -345,6 +345,12 @@ def _require_outlines(row):
         if not path or not cells.is_geojson(path):
             continue
         if not Path(path).is_file():
+            failed = nuclei.segment_failure(path)
+            if failed:
+                raise Dropped(
+                    f"{NOT_TRACED}: {path}: the nuclei step's StarDist run of this "
+                    f"slide FAILED ({failed.get('reason') or 'no reason left'})"
+                )
             raise Dropped(f"{NOT_TRACED}: {path}")
         made = nuclei.traced_record(path)
         if made and made.get("image_fingerprint") != file_fingerprint(row[image_col]):

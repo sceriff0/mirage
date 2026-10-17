@@ -2114,10 +2114,35 @@ script names no method.
    steps are written down as a plan (`<out>/logs/retry/<submission>/<job prefix>/`).
    When the first array has ended, the watcher reads each unit's last end line
    (`<out>/logs/end/`) and submits a step only for the units that step can retry, as
-   `--array=<those units>`, waits for it to leave the queue, and goes on: `again` for a
-   unit whose last cause is `killed` or `infrastructure`, `climb` for those and for a
-   memory cause, every step for a unit that left no end line (`ladder.AGAIN_CAUSES`,
-   `CLIMB_CAUSES`). A ladder whose units are all ok puts nothing more in the queue.
+   `--array=<those units>`, waits for it to leave the queue, and goes on. Which step a
+   unit can still use is written ON ITS END LINE by the task (`wants=again,climb`,
+   `wants=climb`, `wants=-`), from ONE predicate, `failure_log.chain_wants`, read off every
+   record of the unit; a test holds it to never keeping out a unit `ladder.unit_decision`
+   would run (fleet wave 2, F3: the watcher kept cause lists of its own that disagreed
+   with the ladder, so a patient whose first failed round was the writer's never
+   climbed). A task the kernel killed for memory says `cause=oom wants=climb` on its end
+   line (F4), so no same-rung retry holds a full allocation only to exit. Every step
+   takes a unit that left no end line. A ladder whose units are all ok puts nothing
+   more in the queue.
+   **The watcher is a chain of links** (`REGBENCH_RETRY_WATCHERS`, default 2; F1): link
+   1 (`<prefix>-retry`) waits for the first array, each later link
+   (`<prefix>-retry-<n>`) for the link before it (`afterany`), and what waits for the
+   chain waits for the LAST link. Each step is written down in the plan folder
+   (`state`; `submitting` while sbatch runs) before anything else, so a link ended at
+   its 7-day limit, or lost with its node, leaves its successor to go on from the step it
+   was at; the link that ends the chain writes `done`, and a later link ends as the chain
+   did. A chain no link finished is named by the settle job, by `regbench status` and in
+   `summary.md` ("Chains no watcher finished"), and the settle job writes the results
+   whose task the scheduler had not ended as `infrastructure` (`chains.mark_in_flight`).
+   **A rung no node can grant** (F2): before the first sbatch (and in `--preflight` and
+   a dry run) the launcher reads the largest node of the partition the jobs are given
+   (`sinfo -N -o '%P|%m|%f'`; the caller's `--partition`/`--constraint`, or
+   SBATCH_PARTITION/SBATCH_CONSTRAINT, else the default partition). It stops when the 16
+   GB rung cannot be granted, and says loudly (stdout and stderr) which rungs cannot be.
+   Those are not planned: the watcher writes the units that would climb to them down as
+   the launcher's (`regbench chain-mark`: cause `not_submitted`, the memory failure below
+   kept in `cause_from`, `ladder_cut_gb`), and does the same for the units of a step
+   `sbatch` refuses. `REGBENCH_RUNG_CHECK=0` skips the check.
    That reading is a filter and not the decision: the task that is submitted decides
    for itself by the two rules below, as before. Everything that waited for a ladder's
    last array waits for its watcher. The attempts 2 to 4 of a stage job (COARSE, SOLVE) are submitted the same way, by that stage's watcher. The selfchecks' three
@@ -2451,6 +2476,47 @@ GPU (`--nv`) only for those runs. VALIS 1.2.0's image is started with `--writabl
 No job asks for more than 7 days: a run that works per patient gets `REGBENCH_TIME`
 times the rounds of the largest patient, capped there ("Cost" says what that means per
 round).
+
+### What a job prints, and `regbench status`
+
+Every regbench job prints one `[regbench] start` line first and one `[regbench] end`
+line just before its `REGBENCH_END` line (which stays the log's last), in one format
+(`slurm/env.sh`: `regbench_start`, `regbench_say_end`; fleet wave 2, B1):
+
+```
+[regbench] start kind=<kind> job=<name>-<id> run=<run|-> label=<label|-> dataset=<ds|-> unit=<unit|-> rung_gb=<GB|-> attempt=<n|-> [<key>=<value> ...] out=<REGBENCH_OUT> commit=<sha> host=<node> at=<time>
+[regbench] end kind=<kind> job=<name>-<id> outcome=<ok|status/cause> wall=<s>s peak_rss=<MB>MB|- record=<path|-> exit=<code>
+```
+
+`peak_rss` is the run's own peak (`run.json: resources.peak_rss_mb`, carried on its end
+line) or the job cgroup's peak where it can be read from inside the job, else `-`. A job
+that ends without its end line (a refusal under `set -e`, a signal) still prints its
+`[regbench] end` line from the EXIT trap (`outcome=exit_<code>`). To find every job that
+did not end ok:
+
+```bash
+grep -h '^\[regbench\] end' "$REGBENCH_OUT"/logs/*.log | grep -v ' outcome=ok '
+```
+
+`python -m benchmarks.regbench status --out "$REGBENCH_OUT" [--cases C] [--dataset D]
+[--runs "a b"] [--csv]` (read-only, `status.py`; B2) prints, per run, result name and
+dataset, how many results are expected (the case list), `ok` (and of those `reused` by
+the last submission), `failed` (with the causes), `missing`; the folder's jobs still in
+the queue when `squeue` is there (`# queue: not read (no squeue on this node)`
+otherwise); the chains no watcher finished; and a last line of what to do next (wait,
+or the `submit_cohort.sh --runs ...` that resubmits into the same folder, which reuses
+every ok unit). `--csv` gives the table as CSV.
+
+When `REGBENCH_OUT` is the commit-hash default and an earlier default-named folder under
+`~/regbench_results/` holds results of the same cases (`<out>/logs/cases`, written by
+every launch), the launcher says so loudly with the `export REGBENCH_OUT=...` that
+reuses it (B3). The default itself is unchanged.
+
+The nuclei step (`--prepare`) is submitted only for the slides that have anything to do
+(`nuclei --pending`; F9), and has a memory ladder (128, then 256 and 512 GB, by its own
+watcher; F7): a StarDist run that fails is written down (`nuclei --failed`), so the
+slide's record and `prepare multiplex`'s drop reason name the exit code instead of
+"outlines not traced yet".
 
 ### What to export
 
@@ -3884,6 +3950,17 @@ traces (the tables, the pins against the schema, the plan of the runs, the `-par
 `test_scene.py` the input step, the manifest and the outline definition, and
 `test_docs_are_cohort_only.py` that this README, `benchmarks/README.md` and `docs/benchmarks.md`
 name nothing that was removed and only `submit_cohort.sh` flags that exist.
+`test_launcher_e2e.py` runs `submit_cohort.sh` for real (not `--dry-run`) on the toy
+cases against a stand-in SLURM (`slurm_sim.py`: `sbatch`, `squeue`, `sacct`, `sinfo`,
+`scancel`; a job submitted from inside a job runs at once, the launcher's own are run in
+submission order after it, which honours every dependency), with `fake_palom.py` as the
+method (out of memory below a set GB) and the jobs on the host python
+(`REGBENCH_ALLOW_PATH_PYTHON=1`); the selfcheck jobs are stubbed. Its scenarios: all ok
+(settle and the scorer run, `regbench status` says all ok), an out-of-memory at 16 GB
+that climbs to 64 GB, a unit out of memory up to the top rung (the method's `oom`) and
+one whose next rung no node can grant (`not_submitted`, the launcher's), a watcher
+killed mid-chain whose successor link finishes the chain, and a second submission into
+the same folder that runs the method for nothing.
 `test_selfcheck.py` runs STARE once for real, on a 1024 x 1280 pair;
 `test_stare_adapter.py` runs STARE's selfcheck on its own two pairs and two real
 registrations; `test_stages.py` registers the 2048 x 2560 pair stage by stage, as the
