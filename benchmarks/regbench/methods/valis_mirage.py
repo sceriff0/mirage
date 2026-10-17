@@ -59,7 +59,8 @@ stages are taken from the final capture (``M`` is not touched after ``register()
 returns; the rigid row drops the field), no stage image is written, and a final row
 without a micro pass is by design, not a ``problem``. The runs ``valis_mirage_<tier>_m<k>``
 (``variants.py``) are the eight cells other than (``high``, 2), which is ``valis_mirage``
-itself. A label of that form must agree with the two options.
+itself. A label of that form (or ``valis_mirage``) must agree with the two options;
+any other label is free.
 
 **Memory failures.** ``Valis.register()`` swallows its exception and the pipeline raises
 a fixed text; the wrapper around ``valtils.print_warning`` (``_valis_points.
@@ -136,6 +137,7 @@ import contextlib
 import functools
 import importlib.util
 import multiprocessing
+import re
 import shutil
 import sys
 import time
@@ -185,12 +187,15 @@ STAGES_AT_DEPTH = {
     2: ("rigid", "micro_rigid", "nonrigid", "micro"),
 }
 LABEL = "valis_mirage"
+# a label that names a cell of the grid; any other label is free
+GRID_LABEL = re.compile(rf"{LABEL}_(?:{'|'.join(TIERS)})_m[{''.join(map(str, MICRO))}]")
 
 
 def call_args(opts):
     """``ARGS`` with the run's tier and micro-registration depth (unset: the shipped
-    values, ``high`` and 2). Anything else is refused, and so is a label of the form
-    ``valis_mirage_<tier>_m<depth>`` (or ``valis_mirage`` itself) naming another cell."""
+    values, ``high`` and 2). Anything else is refused, and so is a label that names
+    ANOTHER cell: ``valis_mirage_<high|medium|low>_m<0|1|2>``, or ``valis_mirage`` itself
+    (the shipped call's results). Any other label is free (``valis_mirage_try2``)."""
     tier = str(opts.get("memory_mode", ARGS["memory_mode"])).strip()
     micro = str(opts.get("micro_reg", ARGS["micro_reg"])).strip()
     if tier not in TIERS:
@@ -198,7 +203,7 @@ def call_args(opts):
     if micro not in {str(m) for m in MICRO}:
         raise ValueError(f"micro_reg={micro!r}: expected 0, 1 or 2")
     label = str(opts.get("label") or "")
-    if label == LABEL or label.startswith(LABEL + "_"):
+    if label == LABEL or GRID_LABEL.fullmatch(label):
         own = (
             LABEL
             if (tier, int(micro)) == (ARGS["memory_mode"], ARGS["micro_reg"])

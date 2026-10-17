@@ -1355,29 +1355,90 @@ def test_the_shipped_call_is_unchanged():
     assert valis_mirage.call_args({"label": ""}) == SHIPPED_ARGS
 
 
-def test_the_tiers_and_depths_are_the_pipelines():
-    assert valis_mirage.TIERS == ("high", "medium", "low")
-    assert valis_mirage.MICRO == (0, 1, 2)
-    # bin/utils/valis_config.py MEMORY_PRESETS (the tier table) and the depths of
-    # bin/register.py's micro_reg, read from the source without importing VALIS
+def _preset_rows():
+    """bin/utils/valis_config.py ``MEMORY_PRESETS``, read from the source without
+    importing VALIS: ``{tier: {key: the value's source text}}``."""
+    import re
+
     src = (ROOT / "bin" / "utils" / "valis_config.py").read_text()
     table = src[src.index("MEMORY_PRESETS = {") :]
     table = table[: table.index("\n}\n")]
     rows = {}
     for tier in ("high", "medium", "low"):
         body = table[table.index(f'"{tier}": {{') :]
-        body = body[: body.index("}")]
-        rows[tier] = tuple(
-            int(body.split(f'"{k}": ')[1].split(",")[0])
-            for k in ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px")
-        )
-    assert rows == {"high": (2048, 2048), "medium": (1024, 1024), "low": (512, 512)}
+        body = body[: body.index("\n    }")]
+        rows[tier] = dict(re.findall(r'^\s+"(\w+)": (.+?),$', body, re.M))
+    return rows
+
+
+# the preset keys a row may differ in: the two sizes, and two keys nothing reads
+SIZE_KEYS = ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px")
+DEAD_KEYS = ("tile_wh", "tile_buffer")  # nextflow.config:241-244
+
+
+def test_the_tiers_and_depths_are_the_pipelines():
+    assert valis_mirage.TIERS == ("high", "medium", "low")
+    assert valis_mirage.MICRO == (0, 1, 2)
+    rows = _preset_rows()
     assert set(rows) == set(valis_mirage.TIERS)
-    # the pipeline's tier moves ONLY --memory-mode: modules/local/register.nf passes the
-    # same --max-image-dim, --micro-reg-fraction and no keypoint cap at every tier
+    assert {t: tuple(int(r[k]) for k in SIZE_KEYS) for t, r in rows.items()} == {
+        "high": (2048, 2048),
+        "medium": (1024, 1024),
+        "low": (512, 512),
+    }
+    # the rows differ in the two sizes and in two keys no code reads, nothing else
+    keys = set().union(*rows.values())
+    differ = {k for k in keys if len({r.get(k) for r in rows.values()}) > 1}
+    assert differ == {*SIZE_KEYS, *DEAD_KEYS}
+    assert "max_image_dim_px" not in keys  # so the call's 4000 stands at every tier
+    import re
+
+    read = set()
+    for path in ("bin/register.py", "bin/utils/valis_config.py"):
+        text = (ROOT / path).read_text()
+        read |= set(re.findall(r'preset\[\s*"(\w+)"\s*\]', text))
+        read |= set(re.findall(r'preset\.get\(\s*"(\w+)"', text))
+    assert read & differ == set(SIZE_KEYS)
+    # modules/local/register.nf: of every param its script: block reads, memory_mode
+    # is the only one that names a tier. The three tier-owned overrides are null by
+    # default (rendered only when set), so at a named tier the rendered command
+    # differs in --memory-mode alone.
     nf = (ROOT / "modules" / "local" / "register.nf").read_text()
-    assert "--memory-mode ${memory_mode}" in nf
-    assert "--max-image-dim ${max_image_dim}" in nf
+    script = nf[nf.index("script:") : nf.index("stub:")]
+    read_nf = set(re.findall(r"params\.(\w+)", script))
+    assert read_nf == {
+        "memory_mode",
+        "reg_jvm_heap_gb",
+        "reg_max_image_dim",
+        "reg_micro_reg",
+        "reg_micro_reg_fraction",
+        "reg_qc",
+        "reg_valis_max_keypoints",
+        "reg_valis_max_non_rigid_dim",
+        "reg_valis_max_processed_dim",
+        "skip_registration_qc",
+    }
+    config = (ROOT / "nextflow.config").read_text()
+
+    def default(name):
+        (value,) = re.findall(rf"^\s+{name}\s+=\s+(\S+)", config, re.M)
+        return value
+
+    assert default("memory_mode") == "'high'"
+    for name in (
+        "reg_valis_max_processed_dim",
+        "reg_valis_max_non_rigid_dim",
+        "reg_valis_max_keypoints",
+        "reg_jvm_heap_gb",
+    ):
+        assert default(name) == "null", name
+    assert (default("reg_max_image_dim"), default("reg_micro_reg_fraction")) == (
+        "4000",
+        "0.125",
+    )
+    assert "--memory-mode ${memory_mode}" in script
+    assert "--max-image-dim ${max_image_dim}" in script
+    assert "--micro-reg-fraction ${micro_reg_fraction}" in script
 
 
 @pytest.mark.parametrize("tier", ["high", "medium", "low"])
@@ -1423,16 +1484,39 @@ def test_a_label_naming_another_tier_or_depth_is_refused():
         valis_mirage.call_args({"memory_mode": "low", "label": "valis_mirage"})
 
 
+@pytest.mark.parametrize(
+    "label", ["valis_mirage_try2", "valis_mirage_high", "valis_mirage_low_m9", "mine"]
+)
+def test_a_free_label_runs_the_shipped_call_or_its_options(label):
+    """Only a label of the grid's form (``valis_mirage_<tier>_m<0-2>``, or the primary's
+    own ``valis_mirage``) names a cell; any other label is free."""
+    assert valis_mirage.call_args({"label": label}) == SHIPPED_ARGS
+    got = valis_mirage.call_args(
+        {"label": label, "memory_mode": "low", "micro_reg": "0"}
+    )
+    assert (got["memory_mode"], got["micro_reg"]) == ("low", 0)
+
+
 def test_each_depth_names_the_stages_it_has():
-    """R18: bin/register.py:253-257. Depth 1 is micro-RIGID only; a non-rigid `micro`
+    """R18: ``valis_registration``'s docstring (bin/register.py:253-257 when written).
+    Depth 1 is micro-RIGID only; a non-rigid `micro`
     stage exists only at depth 2."""
     assert valis_mirage.STAGES_AT_DEPTH == {
         0: ("rigid", "nonrigid"),
         1: ("rigid", "micro_rigid", "nonrigid"),
         2: ("rigid", "micro_rigid", "nonrigid", "micro"),
     }
-    src = (ROOT / "bin" / "register.py").read_text().splitlines()
-    said = "\n".join(src[252:257])
+    import ast
+
+    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
+    (fn,) = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
+    ]
+    doc = " ".join(ast.get_docstring(fn).split())
+    said = doc[doc.index("micro_reg : int") :]
+    said = said[: said.index("stage_checkpoint_dir")]
     assert "0 = neither micro pass" in said
     assert "1 = micro-rigid only" in said
     assert "2 = also the micro non-rigid pass" in said
