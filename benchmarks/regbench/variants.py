@@ -61,6 +61,10 @@ only ever added at the end, so a position never changes.
 The STARE runs of the cohort are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``), and two tier runs, ``stare_medium`` and ``stare_low``
 (``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
+The pipeline's VALIS runs at its three tiers x micro-registration depth 0, 1, 2
+(``_valis_mirage_runs``): ``valis_mirage`` is (``high``, 2), the shipped call, and the
+other eight are ``valis_mirage_<tier>_m<depth>``, checked by ``valis_mirage``'s selfcheck,
+with no realcheck (only the primary row has one).
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -82,6 +86,7 @@ from typing import NamedTuple
 
 from . import methods, plugins, regimes
 from .methods import ashlar as _ashlar
+from .methods import valis_mirage as _valis_mirage
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
 # list starts no adapter; the tests hold the two equal.
@@ -155,6 +160,33 @@ def _stare_tier_runs():
     )
 
 
+def _valis_mirage_runs():
+    """The pipeline's VALIS at its three tiers x micro-registration depth 0, 1, 2
+    (``methods.valis_mirage.TIERS`` x ``MICRO``): ``valis_mirage`` (``high``, 2, the shipped
+    call, no options) first, then the other eight as ``valis_mirage_<tier>_m<depth>``.
+    Depth 1 is micro-rigid only; a non-rigid ``micro`` stage exists only at depth 2
+    (``methods.valis_mirage.STAGES_AT_DEPTH``)."""
+    out = [Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None)]
+    for t in _valis_mirage.TIERS:
+        for m in _valis_mirage.MICRO:
+            if (t, m) == (
+                _valis_mirage.ARGS["memory_mode"],
+                _valis_mirage.ARGS["micro_reg"],
+            ):
+                continue  # the shipped call: `valis_mirage` itself
+            out.append(
+                Run(
+                    "valis_mirage",
+                    f"valis_mirage_{t}_m{m}",
+                    {"memory_mode": t, "micro_reg": str(m)},
+                    "VALIS_MIRAGE",
+                    False,
+                    None,
+                )
+            )
+    return tuple(out)
+
+
 ASHLAR_AFFINES = _ashlar.AFFINES
 ASHLAR_NOISES = _ashlar.NOISE_FRACS
 ASHLAR_SHIFTS = _ashlar.MAX_SHIFTS_UM
@@ -180,7 +212,7 @@ def _ashlar_runs():
 RUNS = (
     *_stare_runs(),
     *_stare_tier_runs(),
-    Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None),
+    *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
     Run(
@@ -300,6 +332,8 @@ CHECKED_BY = {
     **{run_label: "stare" for r in _stare_runs() if (run_label := r.label) is not None},
     # the tier runs too: the same adapter and pointing path at other tile sizes
     **{r.label: "stare" for r in _stare_tier_runs()},
+    # the pipeline's VALIS at its other tier x depth cells: the same adapter and point path
+    **{r.label: "valis_mirage" for r in _valis_mirage_runs() if r.label is not None},
 }
 
 # the private plug-in's key keeps its older name

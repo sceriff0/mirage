@@ -19,6 +19,48 @@ registrar (``bin/utils/valis_config.py:273-286``), and
 longest side), reference_img_f=<reference>, align_to_reference=True, tile_wh=2048)``
 (``bin/register.py:785-799``).
 
+**Tier and micro-registration depth** (``--opt memory_mode=<high|medium|low>``,
+``--opt micro_reg=<0|1|2>``; unset: ``high`` and ``2``, the shipped call). ``call_args``
+puts the two into ``ARGS`` and changes nothing else, as the pipeline does: its tier moves
+``--memory-mode`` alone (``modules/local/register.nf``), and ``memory_mode`` picks a row
+of ``bin/utils/valis_config.py`` ``MEMORY_PRESETS`` (``max_processed_image_dim_px`` /
+``max_non_rigid_registration_dim_px``: ``high`` 2048 / 2048, ``medium`` 1024 / 1024,
+``low`` 512 / 512; the ``num_features``, ``tile_wh`` and ``tile_buffer`` keys of a row
+are never passed to ``Valis``, ``nextflow.config:241-244``). ``max_image_dim_px`` 4000,
+the micro fraction 0.125 (so the micro size, ``floor(0.125 x the smallest slide's longest
+side)``), the keypoint ceiling (VALIS's 20000) and the JVM heap formula are the same at
+every tier; so is the pipeline's REGISTER allocation (``conf/modules.config``: 64 GB
+doubling per attempt, at every tier). The depth is ``bin/register.py``'s ``micro_reg``,
+whose own words are (``bin/register.py:253-257``): "0 = neither micro pass; 1 =
+micro-rigid only (``MicroRigidRegistrar`` refines ``slide.M`` inside ``register()``); 2 =
+also the micro non-rigid pass (``register_micro()``)". The micro-rigid registrar is passed
+to ``Valis`` at depth >= 1 (``bin/utils/valis_config.py:284``), and ``register_micro`` is
+called at depth 2 only (``bin/register.py:775-799``: below 2 it logs "Skipping micro
+non-rigid registration"). So **depth 1 is micro-RIGID only, and a non-rigid ``micro``
+stage exists only at depth 2** (ruling R18). The stages a run has (``STAGES_AT_DEPTH``,
+recorded in ``info["implementation"]["stages"]``):
+
+=====  ==============================================  =============================
+depth  stages, in order                                what the three rows are
+=====  ==============================================  =============================
+0      ``rigid``, ``nonrigid``                         ``_rigid`` the affine; ``_nonrigid``
+                                                       and the final row are both
+                                                       affine + non-rigid (identical)
+1      ``rigid``, ``micro_rigid``, ``nonrigid``        ``_rigid`` affine + micro-rigid;
+                                                       ``_nonrigid`` and the final row
+                                                       both + non-rigid (identical)
+2      ``rigid``, ``micro_rigid``, ``nonrigid``,       ``_rigid`` affine + micro-rigid;
+       ``micro``                                       ``_nonrigid`` + non-rigid; the
+                                                       final row + ``micro``
+=====  ==============================================  =============================
+
+Below depth 2 the ``register_micro`` wrapper never runs, so the rigid and non-rigid
+stages are taken from the final capture (``M`` is not touched after ``register()``
+returns; the rigid row drops the field), no stage image is written, and a final row
+without a micro pass is by design, not a ``problem``. The runs ``valis_mirage_<tier>_m<k>``
+(``variants.py``) are the eight cells other than (``high``, 2), which is ``valis_mirage``
+itself. A label of that form must agree with the two options.
+
 **Memory failures.** ``Valis.register()`` swallows its exception and the pipeline raises
 a fixed text; the wrapper around ``valtils.print_warning`` (``_valis_points.
 swallowed_errors``) puts what VALIS printed back into the error, so a Java
@@ -110,7 +152,14 @@ RIGID, NONRIGID, FINAL = VARIANTS
 SELFCHECK_SUBPROCESS = True  # valis_registration kills the JVM, which cannot restart
 VERSION = "1.0.0"
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
-OPTIONS = ("points", "crop_round", "any_version", "jvm_heap_gb")
+OPTIONS = (
+    "points",
+    "crop_round",
+    "any_version",
+    "jvm_heap_gb",
+    "memory_mode",
+    "micro_reg",
+)
 # The shipped call (module docstring). tests/regbench/test_valis_adapters.py checks that
 # ARGS and RUN_ARGS together are exactly the parameters of valis_registration.
 ARGS = {
@@ -126,6 +175,44 @@ ARGS = {
     "max_keypoints": None,
 }
 RUN_ARGS = ("input_dir", "out", "reference", "jvm_heap_gb", "n_cpus")
+# the rows of bin/utils/valis_config.py MEMORY_PRESETS, and bin/register.py's depths
+TIERS = ("high", "medium", "low")
+MICRO = (0, 1, 2)
+# R18 (module docstring): depth 1 is micro-rigid only; `micro` exists only at depth 2
+STAGES_AT_DEPTH = {
+    0: ("rigid", "nonrigid"),
+    1: ("rigid", "micro_rigid", "nonrigid"),
+    2: ("rigid", "micro_rigid", "nonrigid", "micro"),
+}
+LABEL = "valis_mirage"
+
+
+def call_args(opts):
+    """``ARGS`` with the run's tier and micro-registration depth (unset: the shipped
+    values, ``high`` and 2). Anything else is refused, and so is a label of the form
+    ``valis_mirage_<tier>_m<depth>`` (or ``valis_mirage`` itself) naming another cell."""
+    tier = str(opts.get("memory_mode", ARGS["memory_mode"])).strip()
+    micro = str(opts.get("micro_reg", ARGS["micro_reg"])).strip()
+    if tier not in TIERS:
+        raise ValueError(f"memory_mode={tier!r}: expected one of {', '.join(TIERS)}")
+    if micro not in {str(m) for m in MICRO}:
+        raise ValueError(f"micro_reg={micro!r}: expected 0, 1 or 2")
+    label = str(opts.get("label") or "")
+    if label == LABEL or label.startswith(LABEL + "_"):
+        own = (
+            LABEL
+            if (tier, int(micro)) == (ARGS["memory_mode"], ARGS["micro_reg"])
+            else f"{LABEL}_{tier}_m{micro}"
+        )
+        if label != own:
+            raise ValueError(
+                f"the label {label!r} does not name memory_mode={tier}, "
+                f"micro_reg={micro} (that run is {own!r}): a label and its options "
+                "must agree"
+            )
+    return {**ARGS, "memory_mode": tier, "micro_reg": int(micro)}
+
+
 INPUT_DIR, OUT_DIR = "preprocessed", "registered_slides"
 WRITER = "valis.registration.Slide.warp_and_save_slide, called by bin/register.py"
 FILL = "Slide.bg_color (the value of the slide's darkest pixel) or zero"
@@ -365,6 +452,7 @@ def register_group(cases, work, opts):
             f"points={points!r} (one of {vp.POINTS}), "
             f"crop_round={crop_round!r} (one of {vp.ROUNDINGS})"
         )
+    args = call_args(opts)  # before anything starts: a refused option fails here
     mon = vp.monitor_of(opts)
     for case in cases:
         require_fluorescence(case, "valis_mirage")
@@ -387,7 +475,7 @@ def register_group(cases, work, opts):
     )
     host = resources.host_info()
     call = {
-        **ARGS,
+        **args,
         "input_dir": str(input_dir),
         "out": str(out_dir),
         "reference": Path(placed[ref_path]).name,
@@ -474,6 +562,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
         names[cid] = (
             str(slide.name) if slide is not None else vp.slide_name(placed[path])
         )
+    tier, depth = str(call["memory_mode"]), int(call["micro_reg"])
     seen = multiprocessing.cpu_count()  # what bound_cpu_count left for VALIS's pools
     torch = sys.modules.get("torch")
     info = {
@@ -512,7 +601,16 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
             "package": "valis-wsi, through the pipeline",
             "source": str(Path(valis.__file__).parent),
             "registration": "bin/register.py::valis_registration",
-            "parameters": "the pipeline's shipped call (ARGS; nextflow.config defaults)",
+            "parameters": (
+                "the pipeline's shipped call (ARGS; nextflow.config defaults)"
+                if depth == ARGS["micro_reg"] and tier == ARGS["memory_mode"]
+                else "the pipeline's call (ARGS; nextflow.config defaults) at "
+                f"memory_mode={tier}, micro_reg={depth}"
+            ),
+            "tier": tier,
+            "micro_reg": depth,
+            # R18: which stages this run has (STAGES_AT_DEPTH, module docstring)
+            "stages": list(STAGES_AT_DEPTH[depth]),
             "changed_from_defaults": {
                 "stage_checkpoint_dir": "None (the arm writes checkpoints: files only)",
                 "n_cpus": "the allocation (4 on every rung; the pipeline's REGISTER "
@@ -580,7 +678,7 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                 "final_non_rigid": bool(state["final_non_rigid"].get(name, True)),
             }
             problems = list(state["errors"].get(name, []))
-            if variant == FINAL and not state["micro_ran"]:
+            if variant == FINAL and depth >= 2 and not state["micro_ran"]:
                 problems.append(
                     "the micro pass did not run"
                     + (f" ({state['micro_error']})" if state.get("micro_error") else "")

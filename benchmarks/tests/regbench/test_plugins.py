@@ -104,10 +104,12 @@ def public_counts():
         for k, lv in rg.stare_levels(reg)
         for s_ in variants.STARE_STRIDES
     } | tiers
-    others = 12  # 3 VALIS + 8 DeeperHistReg + PALOM
+    # 11 VALIS (the pipeline's at 3 tiers x 3 micro depths, 1.2.0 twice) + 8 DeeperHistReg
+    # + PALOM
+    others = 20
     other_names = (
-        3 + 3 + 3 + 8 * 2 + 2
-    )  # valis_mirage, valis120, valis120_hires, dhr, palom
+        9 * 3 + 3 + 3 + 8 * 2 + 2
+    )  # valis_mirage x 9, valis120, valis120_hires, dhr, palom
     cohort = {
         variants.stare_cell(s_, k, lv)[0]
         for k, lv in rg.stare_levels(rg.COHORT_REGIME)
@@ -117,7 +119,7 @@ def public_counts():
     # the cohort's own list (runs_for(None), the table, the expected names) is its regime's
     cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS)
     names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS)
-    return runs, 4, 3 + len(ashlar.ASHLAR_CELLS), names, cohort_runs
+    return runs, 4, 11 + len(ashlar.ASHLAR_CELLS), names, cohort_runs
 
 
 def public(got):

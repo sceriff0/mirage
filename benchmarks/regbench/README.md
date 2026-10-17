@@ -54,7 +54,7 @@ step with the run list, `score.TABLES` and the launcher's job names).
 | selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
 | tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 47 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, VALIS, DeeperHistReg, PALOM), six primary rows |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 55 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, the pipeline's VALIS at three tiers x micro depth 0, 1, 2 and VALIS 1.2.0, DeeperHistReg, PALOM), six primary rows |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster". **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | cost by step (`cost.py`, `cost_end_to_end.csv`, secondary) | here: every number in it is measured by this benchmark |
 | full pipeline cost (`compute_all.py`, `trace.py`, `slurm/compute_all.sbatch`, `pipeline_cost*.csv`, secondary) | here, as in "Cost". Reads Nextflow traces of the whole pipeline run per patient and backend; tested on generated traces, never run |
@@ -189,7 +189,7 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-47 runs, 4 on a GPU, 27 per patient (`variants.counts()`; the list is generated from
+55 runs, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `score` expects exactly that list's result
@@ -3067,6 +3067,28 @@ example; both run, and `valis120_hires` is the primary row by the user's ruling 
 | `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x rung, GiB - 4)` (the module's formula: 12, 60, 80, 96 GiB on the four rungs), `stage_checkpoint_dir=None` (files only) |
 | `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()`, `.register_micro()` with no argument | the reference slide. `align_to_reference` stays `False` |
 | `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
+
+**The pipeline's VALIS at three tiers x micro-registration depth 0, 1, 2** (Plan F, the
+paper's tier / micro table). `--opt memory_mode=<high|medium|low>` and
+`--opt micro_reg=<0|1|2>` (unset: `high` and 2) go into the call through
+`valis_mirage.call_args`, which changes those two values of `ARGS` and nothing else, as
+the pipeline's own tier moves `--memory-mode` alone (`modules/local/register.nf`). The
+tier picks a row of `bin/utils/valis_config.py` `MEMORY_PRESETS`: processed / non-rigid
+size `high` 2048 / 2048, `medium` 1024 / 1024, `low` 512 / 512 px. `max_image_dim_px`
+4000, the micro fraction 0.125, the keypoint ceiling, the JVM heap formula and the
+pipeline's REGISTER allocation are the same at every tier. The depth is
+`bin/register.py`'s `micro_reg` (`bin/register.py:253-257`): 0 is neither micro pass,
+**1 is micro-RIGID only** (the `MicroRigidRegistrar` inside `register()`), and 2 adds the
+micro non-rigid pass (`register_micro`). A non-rigid `micro` stage exists only at depth 2,
+so at depth 0 and 1 the `_nonrigid` row and the final row are the same transform, and at
+depth 0 the `_rigid` row is the affine alone. `run.json: info.implementation` records
+`tier`, `micro_reg` and `stages` (`valis_mirage.STAGES_AT_DEPTH`). The runs are
+`valis_mirage` (`high`, 2: the shipped call, unchanged) and eight more,
+`valis_mirage_<tier>_m<depth>` (`variants._valis_mirage_runs`), each writing
+`<label>_rigid`, `<label>_nonrigid` and `<label>`, checked by `valis_mirage`'s selfcheck,
+with no realcheck (only the primary row has one). A label of that form must agree with
+the two options, or the run is refused. Each is one job per patient on the ladder, at 4
+CPUs.
 
 **Memory failures, and the heap.** `Valis.register()` catches its own exception, prints
 it and returns `(None, None, None)`; the adapters used to raise a fixed text, so a Java

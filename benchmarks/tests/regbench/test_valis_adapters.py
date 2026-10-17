@@ -1328,3 +1328,170 @@ def test_a_brightfield_case_is_refused(tmp_path, pair, module):
     ]
     with pytest.raises(ValueError, match="brightfield cases are not part of this"):
         next(iter(module.register_group(cases, tmp_path / "work", {})))
+
+
+# ── the pipeline's three tiers x micro-registration depth 0, 1, 2 ─────────────
+# the shipped call, written out: nextflow.config's defaults as modules/local/register.nf
+# passes them. `valis_mirage` (high, depth 2) is made with exactly this.
+SHIPPED_ARGS = {
+    "reference_markers": None,
+    "memory_mode": "high",
+    "max_processed_dim": None,
+    "max_non_rigid_dim": None,
+    "micro_reg_fraction": 0.125,
+    "max_image_dim_px": 4000,
+    "micro_reg": 2,
+    "interp_method": "bicubic",
+    "stage_checkpoint_dir": None,
+    "max_keypoints": None,
+}
+
+
+def test_the_shipped_call_is_unchanged():
+    assert valis_mirage.call_args({}) == valis_mirage.ARGS == SHIPPED_ARGS
+    assert list(valis_mirage.call_args({})) == list(SHIPPED_ARGS)
+    # the primary's own label and options name the same call
+    assert valis_mirage.call_args({"label": "valis_mirage"}) == SHIPPED_ARGS
+    assert valis_mirage.call_args({"label": ""}) == SHIPPED_ARGS
+
+
+def test_the_tiers_and_depths_are_the_pipelines():
+    assert valis_mirage.TIERS == ("high", "medium", "low")
+    assert valis_mirage.MICRO == (0, 1, 2)
+    # bin/utils/valis_config.py MEMORY_PRESETS (the tier table) and the depths of
+    # bin/register.py's micro_reg, read from the source without importing VALIS
+    src = (ROOT / "bin" / "utils" / "valis_config.py").read_text()
+    table = src[src.index("MEMORY_PRESETS = {") :]
+    table = table[: table.index("\n}\n")]
+    rows = {}
+    for tier in ("high", "medium", "low"):
+        body = table[table.index(f'"{tier}": {{') :]
+        body = body[: body.index("}")]
+        rows[tier] = tuple(
+            int(body.split(f'"{k}": ')[1].split(",")[0])
+            for k in ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px")
+        )
+    assert rows == {"high": (2048, 2048), "medium": (1024, 1024), "low": (512, 512)}
+    assert set(rows) == set(valis_mirage.TIERS)
+    # the pipeline's tier moves ONLY --memory-mode: modules/local/register.nf passes the
+    # same --max-image-dim, --micro-reg-fraction and no keypoint cap at every tier
+    nf = (ROOT / "modules" / "local" / "register.nf").read_text()
+    assert "--memory-mode ${memory_mode}" in nf
+    assert "--max-image-dim ${max_image_dim}" in nf
+
+
+@pytest.mark.parametrize("tier", ["high", "medium", "low"])
+@pytest.mark.parametrize("micro", [0, 1, 2])
+def test_a_tier_and_depth_reach_the_pipelines_function(tier, micro):
+    got = valis_mirage.call_args({"memory_mode": tier, "micro_reg": str(micro)})
+    assert got["memory_mode"] == tier and got["micro_reg"] == micro
+    assert isinstance(got["micro_reg"], int)
+    assert {k: v for k, v in got.items() if k not in ("memory_mode", "micro_reg")} == {
+        k: v for k, v in SHIPPED_ARGS.items() if k not in ("memory_mode", "micro_reg")
+    }
+    # its own label agrees with it
+    label = (
+        "valis_mirage"
+        if (tier, micro) == ("high", 2)
+        else f"valis_mirage_{tier}_m{micro}"
+    )
+    assert (
+        valis_mirage.call_args(
+            {"memory_mode": tier, "micro_reg": str(micro), "label": label}
+        )
+        == got
+    )
+
+
+def test_other_values_are_refused():
+    with pytest.raises(ValueError):
+        valis_mirage.call_args({"memory_mode": "custom"})
+    with pytest.raises(ValueError):
+        valis_mirage.call_args({"micro_reg": "3"})
+    with pytest.raises(ValueError):
+        valis_mirage.call_args({"micro_reg": "-1"})
+
+
+def test_a_label_naming_another_tier_or_depth_is_refused():
+    with pytest.raises(ValueError, match="label"):
+        valis_mirage.call_args({"label": "valis_mirage_low_m0"})
+    with pytest.raises(ValueError, match="label"):
+        valis_mirage.call_args(
+            {"memory_mode": "low", "micro_reg": "1", "label": "valis_mirage_low_m0"}
+        )
+    with pytest.raises(ValueError, match="label"):
+        valis_mirage.call_args({"memory_mode": "low", "label": "valis_mirage"})
+
+
+def test_each_depth_names_the_stages_it_has():
+    """R18: bin/register.py:253-257. Depth 1 is micro-RIGID only; a non-rigid `micro`
+    stage exists only at depth 2."""
+    assert valis_mirage.STAGES_AT_DEPTH == {
+        0: ("rigid", "nonrigid"),
+        1: ("rigid", "micro_rigid", "nonrigid"),
+        2: ("rigid", "micro_rigid", "nonrigid", "micro"),
+    }
+    src = (ROOT / "bin" / "register.py").read_text().splitlines()
+    said = "\n".join(src[252:257])
+    assert "0 = neither micro pass" in said
+    assert "1 = micro-rigid only" in said
+    assert "2 = also the micro non-rigid pass" in said
+
+
+def test_a_low_tier_at_depth_0_reaches_valis_and_has_no_micro_pass(tmp_path):
+    """The real bin/register.py on the stand-in VALIS, at memory_mode=low, micro_reg=0:
+    the low row's sizes reach Valis, no micro-rigid registrar, no register_micro, and
+    the final row is the non-rigid row (with no problem: depth 0 has no micro pass)."""
+    answer, done = run_mirage(
+        tmp_path / "w", opts={"memory_mode": "low", "micro_reg": "0"}
+    )
+    log = (done.stdout + done.stderr)[-3000:]
+    (built,) = named(answer["calls"], "Valis")
+    assert built["kwargs"]["max_processed_image_dim_px"] == 512, log
+    assert built["kwargs"]["max_non_rigid_registration_dim_px"] == 512
+    assert built["kwargs"]["max_image_dim_px"] == 4000
+    assert built["kwargs"]["micro_rigid_registrar_cls"] is None
+    assert not named(answer["calls"], "register_micro")
+    final = mirage_run_json(tmp_path / "w", "valis_mirage")
+    nonrigid = mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")
+    rigid = mirage_run_json(tmp_path / "w", "valis_mirage_rigid")
+    info = final["info"]
+    assert info["ARGS"]["memory_mode"] == "low" and info["ARGS"]["micro_reg"] == 0
+    assert info["ARGS"] == {**SHIPPED_ARGS, "memory_mode": "low", "micro_reg": 0}
+    assert info["implementation"]["tier"] == "low"
+    assert info["implementation"]["micro_reg"] == 0
+    assert info["implementation"]["stages"] == ["rigid", "nonrigid"]
+    assert "memory_mode=low, micro_reg=0" in info["implementation"]["parameters"]
+    assert not info["micro_called"] and not info["micro_ran"]
+    assert final["ok"] and nonrigid["ok"] and rigid["ok"]
+    assert final["problem"] == "" and nonrigid["problem"] == ""
+    assert final["info"]["stage"] == nonrigid["info"]["stage"]
+    assert rigid["info"]["stage"]["field_shape"] is None
+    assert nonrigid["info"]["stage"]["field_shape"] is not None
+
+
+def test_depth_1_has_the_micro_rigid_registrar_and_no_micro_pass(tmp_path):
+    answer, done = run_mirage(
+        tmp_path / "w", opts={"memory_mode": "medium", "micro_reg": "1"}
+    )
+    (built,) = named(answer["calls"], "Valis")
+    assert built["kwargs"]["max_processed_image_dim_px"] == 1024, done.stdout[-2000:]
+    assert built["kwargs"]["micro_rigid_registrar_cls"] == "MicroRigidRegistrar"
+    assert not named(answer["calls"], "register_micro")
+    final = mirage_run_json(tmp_path / "w", "valis_mirage")
+    assert final["info"]["implementation"]["stages"] == [
+        "rigid",
+        "micro_rigid",
+        "nonrigid",
+    ]
+    assert final["problem"] == ""
+    assert (
+        final["info"]["stage"]
+        == mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["info"]["stage"]
+    )
+
+
+def test_the_shipped_run_records_its_four_stages(mirage):
+    impl = mirage_run_json(mirage.work, "valis_mirage")["info"]["implementation"]
+    assert impl["tier"] == "high" and impl["micro_reg"] == 2
+    assert impl["stages"] == ["rigid", "micro_rigid", "nonrigid", "micro"]
