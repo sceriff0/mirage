@@ -3,7 +3,12 @@
 Per run and result name (variant) and dataset, against what the cohort must have (every
 unit of the case list, ``variants.runs_for``): how many results are ``ok``, how many of
 those this submission REUSED from an earlier one, how many failed (by cause), and how
-many are MISSING (no ``run.json``). The jobs of the results folder still in the queue
+many are MISSING (no ``run.json``). ``ok`` counts only what the scorer would load for
+the submission (``score._load_run``: the record is this submission's, ``ladder.mine``,
+and was made for the case's points and landmarks as they are now,
+``methods.record_gaps``); an ok record of ANOTHER submission is ``other_sub``, and one
+made for points or landmarks the case no longer has is ``stale``. Both are reported
+apart, so the counts agree with the tables. The jobs of the results folder still in the queue
 are counted when ``squeue`` can be asked (a node without it says so). Chains no link
 of whose watcher finished (``chains.unfinished``) are named. The last line says what to
 do next: wait for the queue, submit again into the same folder (every ok unit is
@@ -31,8 +36,9 @@ from pathlib import Path
 
 COLUMNS = (
     "run", "variant", "dataset", "expected", "ok", "reused", "failed", "missing",
-    "causes",
+    "other_sub", "stale", "causes",
 )  # fmt: skip
+COUNTS = ("expected", "ok", "reused", "failed", "missing", "other_sub", "stale")
 
 
 def _read(path):
@@ -64,8 +70,15 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
     """``[row]``, one per run, variant and dataset (``COLUMNS``), and
     ``{run name: [unit index, ...]}`` of the units that are not all ok. ``runs``: only
     these run names (default: every active run)."""
-    from . import ladder, variants
+    from . import ladder, landmark_io, variants
+    from .cases import stale_points
     from .chains import _units
+
+    def fresh(rec, case):
+        made_for = rec.get("points_sha256")
+        return not stale_points(made_for, case) and (
+            rec.get("truth_sha256") == landmark_io.truth_sha256(case)
+        )
 
     rows, todo = [], {}
     for run in variants.runs_for(None):
@@ -73,25 +86,18 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
         if runs and name not in runs:
             continue
         units = _units(cases_root, dataset, run.method)
-        by_variant = {
-            v: {
-                "ok": 0,
-                "reused": 0,
-                "failed": 0,
-                "missing": 0,
-                "expected": 0,
-                "causes": {},
-            }  # fmt: skip
-            for v in variants.variants_of(run)
-        }
+
+        def zero():
+            return {**dict.fromkeys(COUNTS, 0), "causes": {}}
+
+        by_variant = {v: zero() for v in variants.variants_of(run)}
         for index, cases in enumerate(units):
             unit_ok = True
-            for path in ladder.unit_paths(out, run.method, run.label, cases):
-                variant = Path(path).parents[2].name
-                c = by_variant.setdefault(
-                    variant, {"ok": 0, "reused": 0, "failed": 0, "missing": 0,
-                              "expected": 0, "causes": {}},
-                )  # fmt: skip
+            heads = ladder.unit_heads(out, run.method, run.label, cases)
+            by_id = {c.case_id: c for c in cases}
+            for path, head in heads.items():
+                variant = head["variant"]
+                c = by_variant.setdefault(variant, zero())
                 c["expected"] += 1
                 rec = _read(path)
                 if not isinstance(rec, dict):
@@ -99,8 +105,15 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
                     unit_ok = False
                     continue
                 if rec.get("ok"):
-                    c["ok"] += 1
-                    c["reused"] += _reused(rec, submission)
+                    if not ladder.mine(rec, submission):
+                        c["other_sub"] += 1
+                        unit_ok = False
+                    elif not fresh(rec, by_id[head["case_id"]]):
+                        c["stale"] += 1
+                        unit_ok = False
+                    else:
+                        c["ok"] += 1
+                        c["reused"] += _reused(rec, submission)
                     continue
                 cause = str(rec.get("cause") or "exception")
                 c["failed"] += 1
@@ -114,10 +127,7 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
                     "run": name,
                     "variant": variant,
                     "dataset": dataset,
-                    **{
-                        k: c[k]
-                        for k in ("expected", "ok", "reused", "failed", "missing")
-                    },
+                    **{k: c[k] for k in COUNTS},
                     "causes": ";".join(
                         f"{k}:{v}" for k, v in sorted(c["causes"].items())
                     ),
@@ -128,20 +138,24 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
 
 def queued(out):
     """``(jobs, note)``: the jobs of this results folder still in the queue
-    (``[(job id, name, state)]`` of the names its ``logs/jobs.tsv`` lists), or None
-    with why they were not read."""
+    (``[(job id, name, state)]``), or None with why they were not read. A job is the
+    folder's when its id is one ``logs/jobs.tsv`` lists (column 3, an array task's
+    ``_<task>`` stripped): squeue's ``%F`` (the array job id; the job id of a job
+    that is not an array) or ``%A`` (the job's own id). Not by name: another folder's
+    submission names its jobs the same."""
     if not shutil.which("squeue"):
         return None, "not read (no squeue on this node)"
     try:
-        names = {
-            line.split("\t")[1]
+        ids = {
+            line.split("\t")[2].strip().split("_")[0]
             for line in Path(out, "logs", "jobs.tsv").read_text().splitlines()
             if line.count("\t") >= 2
         }
     except OSError:
-        names = set()
+        ids = set()
+    ids.discard("")
     user = os.environ.get("USER") or ""
-    argv = ["squeue", "-h", "-o", "%i|%j|%T"] + (["-u", user] if user else [])
+    argv = ["squeue", "-h", "-o", "%i|%j|%T|%F|%A"] + (["-u", user] if user else [])
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
@@ -154,10 +168,8 @@ def queued(out):
     jobs = []
     for line in done.stdout.splitlines():
         parts = line.strip().split("|")
-        if len(parts) == 3 and (
-            parts[1] in names or (not names and parts[1].startswith("rb-"))
-        ):
-            jobs.append(tuple(parts))
+        if len(parts) == 5 and (parts[3] in ids or parts[4] in ids):
+            jobs.append(tuple(parts[:3]))
     return jobs, ""
 
 
@@ -190,13 +202,18 @@ def report(out, cases_root, datasets=("multiplex",), submission="", as_csv=False
     say("  ".join(c.ljust(widths[c]) for c in COLUMNS).rstrip() + "\n")
     for r in rows:
         say("  ".join(str(r[c]).ljust(widths[c]) for c in COLUMNS).rstrip() + "\n")
-    total = {
-        k: sum(r[k] for r in rows)
-        for k in ("expected", "ok", "reused", "failed", "missing")
-    }
+    total = {k: sum(r[k] for r in rows) for k in COUNTS}
     say(
         f"# {total['expected']} result(s) expected: {total['ok']} ok "
-        f"({total['reused']} reused), {total['failed']} failed, {total['missing']} missing\n"
+        f"({total['reused']} reused), {total['failed']} failed, {total['missing']} missing"
+        + (
+            f"; not scored for this submission: {total['other_sub']} ok of another "
+            f"submission, {total['stale']} made for points or landmarks the case no "
+            "longer has"
+            if total["other_sub"] or total["stale"]
+            else ""
+        )
+        + "\n"
     )
     jobs, note = queued(out) if queue else (None, "not read (--no-queue)")
     if jobs is None:
@@ -208,9 +225,19 @@ def report(out, cases_root, datasets=("multiplex",), submission="", as_csv=False
         if len(jobs) > 20:
             say(f"#   ... and {len(jobs) - 20} more\n")
     left = chains.unfinished(out, submission) if submission else []
+    queued_names = {name for _, name, _ in jobs or []}
     for plan in left:
+        # a watcher still in the queue is finishing its chain: not a warning (its links
+        # are <prefix>-retry and <prefix>-retry-<n>)
+        if any(
+            n == f"{plan.name}-retry" or n.startswith(f"{plan.name}-retry-")
+            for n in queued_names
+        ):
+            continue
         say(
-            f"# WARNING chain not finished by any link of its watcher: {plan.name} ({plan})\n"
+            f"# WARNING chain not finished by any link of its watcher: {plan.name} ({plan})"
+            + (" (the queue was not read)" if jobs is None else "")
+            + "\n"
         )
     if jobs:
         say(
@@ -219,10 +246,15 @@ def report(out, cases_root, datasets=("multiplex",), submission="", as_csv=False
     elif todo:
         runs = " ".join(sorted(todo))
         n = sum(len(v) for v in todo.values())
+        # the FULL run list: the scorer loads only what the LAST submission into the
+        # folder ran or reused, so a --runs subset here would leave every other run
+        # `not run` in the tables (README, "A subset submitted into a results folder")
         say(
-            f"# next: {n} unit(s) of {len(todo)} run(s) are not all ok: submit again into "
-            f"the same folder, which reuses every ok unit: REGBENCH_OUT={out} "
-            f'submit_cohort.sh --runs "{runs}"\n'
+            f"# next: {n} unit(s) of {len(todo)} run(s) ({runs}) are not all ok: submit "
+            f"the FULL run list again into the same folder, which reuses every ok unit: "
+            f"REGBENCH_OUT={out} submit_cohort.sh\n"
+            "#   (a --runs subset needs its own REGBENCH_OUT: submitted here, it leaves "
+            "every other run `not run` in the tables)\n"
         )
     else:
         say("# next: nothing; every expected result is ok\n")

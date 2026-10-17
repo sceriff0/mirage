@@ -740,6 +740,9 @@ def _stages_refused(a, picked):
             dataset=a.dataset,
             unit="+".join(c.case_id for c in picked),
             rung=resources.host_info()["attempt"],
+            # no later step of the chain cures this: the watcher (retry.sbatch) takes a
+            # run end line WITHOUT `wants=` for every step, which would climb every rung
+            wants="-",
         )
         return True
     return False

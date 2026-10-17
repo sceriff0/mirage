@@ -2136,13 +2136,22 @@ script names no method.
    whose task the scheduler had not ended as `infrastructure` (`chains.mark_in_flight`).
    **A rung no node can grant** (F2): before the first sbatch (and in `--preflight` and
    a dry run) the launcher reads the largest node of the partition the jobs are given
-   (`sinfo -N -o '%P|%m|%f'`; the caller's `--partition`/`--constraint`, or
-   SBATCH_PARTITION/SBATCH_CONSTRAINT, else the default partition). It stops when the 16
+   (`sinfo -N -o '%P|%m|%f|%G'`; the caller's `--partition`/`--constraint`, or
+   SBATCH_PARTITION/SBATCH_CONSTRAINT, else the default partition). A run that needs a
+   GPU is checked against the nodes `REGBENCH_SBATCH_GPU` gives it: its partition and
+   constraint where it names them, and only nodes that HAVE its gres (`%G`); when sinfo
+   lists none, against the CPU runs' nodes as before. The nuclei array's first request
+   (`REGBENCH_NUCLEI_MEM`, 128G) is checked the same way and stops `--prepare` when no
+   node can grant it. It stops when the 16
    GB rung cannot be granted, and says loudly (stdout and stderr) which rungs cannot be.
    Those are not planned: the watcher writes the units that would climb to them down as
    the launcher's (`regbench chain-mark`: cause `not_submitted`, the memory failure below
    kept in `cause_from`, `ladder_cut_gb`), and does the same for the units of a step
-   `sbatch` refuses. `REGBENCH_RUNG_CHECK=0` skips the check.
+   `sbatch` refuses. `REGBENCH_RUNG_CHECK=0` skips the check. At settle time, a chain
+   no link finished has its units that wanted a later step no link submitted written
+   down the same way (`chains.mark_in_flight`). A successor link that looks in the
+   queue for a step an earlier link was submitting asks again when squeue fails, and
+   stops (submitting nothing) after 30 failed looks: a failed look is not "not there".
    That reading is a filter and not the decision: the task that is submitted decides
    for itself by the two rules below, as before. Everything that waited for a ladder's
    last array waits for its watcher. The attempts 2 to 4 of a stage job (COARSE, SOLVE) are submitted the same way, by that stage's watcher. The selfchecks' three
@@ -2431,9 +2440,11 @@ folder; these rules keep one from answering for the other:
   rebuilding or re-pulling an image, submit with `REGBENCH_FORCE=1`.
 - A unit the scheduler lost (`ladder.mark_lost`) gets an `infrastructure` record for
   the current submission. A record another submission left in that folder is not
-  destroyed: `run.json` and `warped.npz` are moved to `<result>/earlier/<n>/` and the
-  new record names the folder (`earlier_result`). The current submission's row reads
-  `infrastructure`, not that earlier result; moving the two files back restores it.
+  destroyed: `run.json`, `warped.npz` and `native/` (the method's own image) are moved
+  to `<result>/earlier/<n>/` and the new record names the folder (`earlier_result`).
+  The current submission's row reads `infrastructure`, not that earlier result; moving
+  the three back restores it. The rest of the result folder (the tissue plane, stage
+  files) is not kept: a re-run overwrites it, and it is made again from the image.
 - A unit whose input images cannot be read (`methods.check_inputs`) is not run and
   touches no `ok` record: those stay as they are until the inputs can be read and are
   known to have changed. Its other rows read `infrastructure`. An `ok` record of another
@@ -2501,11 +2512,17 @@ grep -h '^\[regbench\] end' "$REGBENCH_OUT"/logs/*.log | grep -v ' outcome=ok '
 `python -m benchmarks.regbench status --out "$REGBENCH_OUT" [--cases C] [--dataset D]
 [--runs "a b"] [--csv]` (read-only, `status.py`; B2) prints, per run, result name and
 dataset, how many results are expected (the case list), `ok` (and of those `reused` by
-the last submission), `failed` (with the causes), `missing`; the folder's jobs still in
-the queue when `squeue` is there (`# queue: not read (no squeue on this node)`
-otherwise); the chains no watcher finished; and a last line of what to do next (wait,
-or the `submit_cohort.sh --runs ...` that resubmits into the same folder, which reuses
-every ok unit). `--csv` gives the table as CSV.
+the last submission), `failed` (with the causes), `missing`, and two counts the scorer
+would NOT load for the submission, so that `ok` agrees with the tables: `other_sub`
+(an ok record of another submission, not reused by this one) and `stale` (made for
+points or landmarks the case no longer has). Then the folder's jobs still in the queue,
+matched by the job ids in `logs/jobs.tsv` (not by name: another folder names its jobs
+the same), when `squeue` is there (`# queue: not read (no squeue on this node)`
+otherwise); the chains no watcher finished and none of whose watcher links is still
+queued; and a last line of what to do next: wait, or submit the FULL run list again
+into the same folder (`REGBENCH_OUT=... submit_cohort.sh`, which reuses every ok unit).
+A `--runs` subset needs its own `REGBENCH_OUT`: submitted into this one, it would leave
+every other run `not run` in the tables. `--csv` gives the table as CSV.
 
 When `REGBENCH_OUT` is the commit-hash default and an earlier default-named folder under
 `~/regbench_results/` holds results of the same cases (`<out>/logs/cases`, written by

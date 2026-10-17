@@ -244,7 +244,7 @@ refused() {  # refused <attempt> <what> <the scheduler's words>
 # the_due <attempt>: writes $state.due.a<attempt> once (tile indices over every round's
 # tiles laid end to end for attempt 1, round indices above it)
 the_due() {
-    local attempt="$1" file="$state.due.a$1" args items o dropped
+    local attempt="$1" file="$state.due.a$1" args items o dropped rc
     [ -e "$file" ] && return 0
     args=(stages --cases "$REGBENCH_CASES" --dataset "$dataset" --method "$method"
           --layout "$layout" --out "$REGBENCH_OUT" --due "$attempt")
@@ -257,8 +257,11 @@ the_due() {
         # an index per line and nothing else: a line that is not one (a warning some
         # library wrote among them) is no tile, and would be an array no scheduler takes
         # exit 1 is "no line is an index" (an empty list); only 2 is grep's own error
-        if ! grep -E '^[0-9]+$' "$file.tmp" > "$file.clean"; then
-            [ -s "$file.clean" ] || : > "$file.clean"
+        rc=0
+        grep -E '^[0-9]+$' "$file.tmp" > "$file.clean" || rc=$?
+        if [ "$rc" -ge 2 ]; then
+            rm -f "$file.clean" "$file.tmp"
+            gave_up "attempt $attempt: the list of what is due could not be read (grep exited $rc); nothing of this attempt was submitted"
         fi
         dropped=$(( $(wc -l < "$file.tmp") - $(wc -l < "$file.clean") ))
         [ "$dropped" = 0 ] || echo "attempt $attempt: $dropped line(s) of the list of what is due were not an index and were dropped (the first: $(grep -vE '^[0-9]+$' "$file.tmp" | head -n 1))" >&2

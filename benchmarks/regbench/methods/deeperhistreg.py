@@ -523,15 +523,17 @@ def printed_memory_failure(printed):
     """Did the package swallow a HOST memory failure? It catches the pipeline's
     exception and prints only ``Exception: {e}``, without the type (``run.py:40-46``,
     as quoted in the pre-freeze review `[not re-read this session]`), so the type is
-    gone. Two texts are still a memory failure: nothing after the colon (a bare
-    ``MemoryError`` has an empty message) and libvips' "out of memory" (its allocation
-    failure, ``out of memory --- size == ...MB``). A CUDA one stays ``gpu_oom``
-    (``resources.classify_text``); every other text is classified as before."""
+    gone. One text is still a host memory failure: libvips' "out of memory" (its
+    allocation failure, ``out of memory --- size == ...MB``). A text naming CUDA is
+    the GPU's (``gpu_oom`` through ``resources.classify_error``, never a RAM climb), and
+    nothing after the colon names no cause at all: ``exception`` (a bare
+    ``MemoryError`` would print that too, but so does any exception with an empty
+    message, and no rung of RAM cures those)."""
     for line in str(printed or "").splitlines():
         if not line.startswith("Exception:"):
             continue
         said = line[len("Exception:") :].strip()
-        if not said or ("out of memory" in said and "CUDA out of memory" not in said):
+        if said and "CUDA" not in said and "out of memory" in said:
             return True
     return False
 

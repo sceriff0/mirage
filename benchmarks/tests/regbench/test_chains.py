@@ -133,3 +133,26 @@ def test_a_result_the_scheduler_had_not_ended_is_not_the_methods(tmp_path):
     )
     assert [p.name for p in chains.unfinished(out, SUB)] == ["rb-palom-multiplex"]
     assert chains.summary_lines(out, "s0") == []
+
+
+def test_a_unit_whose_next_step_no_link_submitted_is_the_launchers(tmp_path):
+    """T1: the chain's links all ended before its 64 GB step was submitted. A unit
+    whose task the scheduler DID end, out of memory at 16 GB, never got the rungs above:
+    that is the launcher's (`not_submitted`), not the method's `oom`. A unit no later
+    step could run (`writer`) keeps its cause."""
+    root, (c0, c1) = _cases(tmp_path)
+    out = tmp_path / "out"
+    oom = _rec(out, c0, attempt=1, mem_requested_gb=16)
+    writer = _rec(out, c1, cause="writer", attempt=1)
+    plan = _plan(out, "rb-palom-multiplex",
+                 "0 rb-palom-multiplex-16g-60\n1 rb-palom-multiplex-16g-60\n",
+                 state="k=1\njob=rb-palom-multiplex-16g-again\nid=61\n")  # fmt: skip
+    (plan / "step-1").write_text("again\nrb-palom-multiplex-16g-again\n--mem=16G\n")
+    (plan / "step-2").write_text("climb\nrb-palom-multiplex-64g\n--mem=64G\n")
+    accounting = {"60_0": {"state": "COMPLETED"}, "60_1": {"state": "COMPLETED"}}
+    changed = chains.mark_in_flight(out, accounting, SUB, root)
+    rec = _read(oom)
+    assert rec["cause"] == "not_submitted" and rec[chains.LADDER_CUT] == 64.0
+    assert "step 2 (rb-palom-multiplex-64g)" in rec["cause_from"]
+    assert _read(writer)["cause"] == "writer"
+    assert changed == {"rb-palom-multiplex": 1}

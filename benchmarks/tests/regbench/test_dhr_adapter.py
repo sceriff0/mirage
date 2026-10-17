@@ -717,6 +717,8 @@ def test_a_cpu_row_must_rewrite_the_nested_devices(tmp_path, case, monkeypatch):
     [
         ("boom at pyramid level 3", "exception"),
         ("CUDA out of memory. Tried to allocate 20.00 GiB", "gpu_oom"),
+        # S3: the CUDA runtime's own wording is the GPU's memory, never the host's
+        ("CUDA error: out of memory", "gpu_oom"),
         ("DefaultCPUAllocator: can't allocate memory", "oom"),
     ],
 )
@@ -734,14 +736,13 @@ def test_a_swallowed_failure_is_raised_with_what_the_package_printed(
 @pytest.mark.parametrize(
     "fail",
     [
-        MemoryError(),  # printed as "Exception: ", nothing after the colon
         "out of memory --- size == 48MB",  # libvips' allocation failure (F13)
     ],
 )
 def test_a_swallowed_host_memory_failure_climbs(tmp_path, case, fake, fail):
-    """F13: the package prints only ``Exception: {e}``: a bare MemoryError leaves
-    nothing after the colon and libvips says "out of memory". Both are host memory
-    failures (``oom``, the unit goes up a rung), never the method's ``exception``."""
+    """F13: the package prints only ``Exception: {e}``: libvips says "out of memory".
+    That is a host memory failure (``oom``, the unit goes up a rung), never the
+    method's ``exception``."""
     fake.configure(fail=fail, initial_resolution=EXACT_RESOLUTION)
     assert methods.run_case("deeperhistreg", case, tmp_path) == []
     run = run_json(tmp_path, dhr.VARIANTS[-1], case)
@@ -749,10 +750,21 @@ def test_a_swallowed_host_memory_failure_climbs(tmp_path, case, fake, fail):
     assert "wrote no displacement field" in run["error"]
 
 
+def test_an_empty_printed_exception_is_the_methods_exception(tmp_path, case, fake):
+    """S3: nothing after the colon names no cause. It is ``exception``; reading it as
+    host ``oom`` would climb every rung of RAM for a failure no rung can cure."""
+    fake.configure(fail=MemoryError(), initial_resolution=EXACT_RESOLUTION)
+    assert methods.run_case("deeperhistreg", case, tmp_path) == []
+    run = run_json(tmp_path, dhr.VARIANTS[-1], case)
+    assert run["ok"] is False and run["cause"] == "exception"
+
+
 def test_a_printed_failure_is_read_for_host_memory_only():
     said = dhr.printed_memory_failure
-    assert said("Exception: \n") and said("x\nException: out of memory --- size")
+    assert said("x\nException: out of memory --- size")
+    assert not said("Exception: \n")
     assert not said("Exception: CUDA out of memory. Tried to allocate 2 GiB")
+    assert not said("Exception: CUDA error: out of memory")
     assert not said("Exception: boom") and not said("") and not said("Exception")
 
 

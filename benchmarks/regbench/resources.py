@@ -424,7 +424,9 @@ MEMORY_ERRORS = (
     "Cannot allocate memory",
     "std::bad_alloc",
 )
-GPU_MEMORY_ERRORS = ("CUDA out of memory",)
+# torch's allocator says the first; the CUDA runtime itself (a kernel launch, cudaMalloc
+# outside torch's caching allocator) says the second
+GPU_MEMORY_ERRORS = ("CUDA out of memory", "CUDA error: out of memory")
 # Every cause a run.json can end with (the scorer adds ``not_run``):
 #   exception      the method raised, or reported a failed round
 #   oom            the method ran out of host memory while registering

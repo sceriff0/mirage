@@ -174,6 +174,26 @@ gone() {
     done
 }
 
+# in_queue <job name>: the id of this user's queued job of that name (the first), or
+# nothing when the queue has none. The queue is looked at as gone() looks: a failed
+# squeue is asked again, up to REGBENCH_RETRY_SQUEUE_TRIES times in a row, and then it
+# returns 1. "Not there" is only ever an answer the queue GAVE: a successor that
+# resubmits on a failed look would put the step in the queue twice.
+in_queue() {
+    local name="$1" got bad=0
+    while :; do
+        if got="$(squeue -h -u "$(id -un)" --name="$name" -o '%i' 2>&1)"; then
+            got="$(sed -n 1p <<< "$got")"
+            echo "${got%%_*}"
+            return 0
+        fi
+        bad=$((bad + 1))
+        echo "$(date +%FT%T) the queue could not be read (squeue --name=$name), look $bad of at most $REGBENCH_RETRY_SQUEUE_TRIES in a row: $got" >&2
+        [ "$bad" -ge "$REGBENCH_RETRY_SQUEUE_TRIES" ] && return 1
+        sleep "$REGBENCH_RETRY_POLL_S"
+    done
+}
+
 # recorded <k> <job name> <id>: a step's job is in the chain's files, each write made
 # so that doing it twice (a successor finishing what a lost link began) changes nothing
 recorded() {
@@ -222,8 +242,11 @@ k=1
 # submitted, whose job is waited for before the chain goes on.
 if [ -s "$submitting" ] && { [ ! -s "$state" ] || [ "$(cut -d' ' -f1 "$submitting")" != "$(sed -n 's/^k=//p' "$state" 2>/dev/null)" ]; }; then
     read -r k_was job_was < "$submitting"
-    found="$(squeue -h -u "$(id -un)" --name="$job_was" -o '%i' 2>/dev/null | sed -n 1p)" || found=""
-    found="${found%%_*}"
+    if ! found="$(in_queue "$job_was")"; then
+        echo "link $link: the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row while looking for step $k_was ($job_was), which an earlier link was submitting when it ended: it is NOT submitted again (it may be in the queue already). This link stops here; submit again into the same results folder once the queue answers"
+        end failed not_submitted
+        exit 1
+    fi
     if [ -n "$found" ]; then
         echo "link $link: step $k_was ($job_was) was submitted by an earlier link that ended before it recorded the id; it is in the queue as $found"
         [ -s "$state" ] && while IFS='=' read -r key value; do

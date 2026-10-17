@@ -927,7 +927,8 @@ def test_a_lost_unit_keeps_the_valid_result_of_an_earlier_submission(tmp_path):
     assert now["earlier_result"]["ok"] is True and "is kept under" in now["error"]
     assert json.loads((kept / "run.json").read_text()) == good
     assert (kept / "warped.npz").read_bytes() == b"the points A moved"
-    assert (path.parent / "native").is_dir()  # the image stays where it is
+    # the image goes with its record (S5): a re-run would overwrite it in place
+    assert (kept / "native").is_dir() and not (path.parent / "native").exists()
     # a second loss (submission C) sets B's record aside too, beside A's
     assert ladder.mark_lost(heads, 1, "C") == 1
     assert sorted(p.name for p in (path.parent / "earlier").iterdir()) == ["1", "2"]
@@ -1092,3 +1093,21 @@ def test_the_ladder_ends_at_the_sites_largest_node():
     assert ladder.RUNGS_GB == (16, 64, 256, 512, 700)
     assert ladder.MAX_RUNG_GB == 700 == ladder.RUNGS_GB[-1]
     assert 700 not in ladder.SELFCHECK_RUNGS_GB
+
+
+def test_a_result_set_aside_keeps_its_image_with_its_record(tmp_path):
+    """S5: the record names its image under ``native/``, and a re-run writes its own
+    image there. Set aside with the record, the earlier image survives the re-run, and
+    moving the folder's contents back restores the result whole."""
+    d = tmp_path / "palom" / "multiplex" / "P1_a"
+    (d / "native").mkdir(parents=True)
+    (d / "native" / "moving.ome.tif").write_bytes(b"image")
+    (d / "run.json").write_text('{"ok": true}')
+    (d / "warped.npz").write_bytes(b"npz")
+    (d / "other.txt").write_text("stays")
+    kept = ladder.set_aside(d / "run.json")
+    assert kept == d / ladder.SET_ASIDE / "1"
+    assert (kept / "native" / "moving.ome.tif").read_bytes() == b"image"
+    assert (kept / "run.json").exists() and (kept / "warped.npz").exists()
+    assert not (d / "native").exists() and not (d / "run.json").exists()
+    assert (d / "other.txt").read_text() == "stays"

@@ -605,10 +605,13 @@ SET_ASIDE = "earlier"
 
 
 def set_aside(path):
-    """Move a result's ``run.json`` and ``warped.npz`` into ``<result>/earlier/<n>/``
-    (the first free ``n``) and return that folder, or None when there is no record.
-    The image, the stage files and everything else of the result stay where they are:
-    moving the two files back restores it."""
+    """Move a result's ``run.json``, ``warped.npz`` and ``native/`` (the image the
+    method's own writer drew, which the record names and a re-run overwrites) into
+    ``<result>/earlier/<n>/`` (the first free ``n``) and return that folder, or None
+    when there is no record. A rename on one file system: nothing is copied. Moving
+    the three back restores the record, its warped points and its image. What else
+    the result folder holds (the tissue plane, stage files) stays where it is and is
+    overwritten by a re-run: those are made again from the image."""
     path = Path(path)
     if not path.exists():
         return None
@@ -617,7 +620,7 @@ def set_aside(path):
         n += 1
     dest = path.parent / SET_ASIDE / str(n)
     dest.mkdir(parents=True)
-    for name in ("run.json", "warped.npz"):
+    for name in ("run.json", "warped.npz", "native"):
         if (path.parent / name).exists():
             (path.parent / name).rename(dest / name)
     return dest

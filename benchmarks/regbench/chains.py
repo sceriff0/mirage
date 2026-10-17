@@ -23,7 +23,10 @@ Two writers here, both of RECORDS (``run.json``) and both in the vocabulary that
                        submitted. ``regbench chain-mark`` (the watcher calls it).
 :func:`mark_in_flight` at settle time, the results of tasks the scheduler had NOT ENDED
                        (a chain no link finished leaves them in the queue):
-                       ``infrastructure``, never the method's ``killed``.
+                       ``infrastructure``, never the method's ``killed``. And, of a
+                       chain no link finished, a unit whose task WAS ended but whose
+                       next step (``failure_log.chain_wants``) was never submitted:
+                       ``not_submitted`` through :func:`mark`, the rungs above it untried.
 """
 
 from __future__ import annotations
@@ -84,6 +87,36 @@ def last_jobs(plan):
         if idx and job:
             out[idx] = job
     return out
+
+
+def read_state(plan):
+    """``{k, job, id}`` of the step the chain is at (``state``), ``{}`` before any."""
+    state = {}
+    try:
+        for line in Path(plan, STATE).read_text().splitlines():
+            key, _, value = line.partition("=")
+            state[key] = value
+    except OSError:
+        pass
+    return state
+
+
+def later_steps(plan):
+    """``[(k, kind, job name)]`` of the plan's steps after the one it is at, in order."""
+    try:
+        at = int(read_state(plan).get("k") or 0)
+    except ValueError:
+        at = 0
+    steps = []
+    for f in Path(plan).glob("step-*"):
+        try:
+            k = int(f.name.split("-", 1)[1])
+            lines = f.read_text().splitlines()
+        except (ValueError, OSError):
+            continue
+        if k > at and len(lines) >= 2:
+            steps.append((k, lines[0], lines[1]))
+    return sorted(steps)
 
 
 def unfinished(out, submission):
@@ -167,13 +200,23 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
       ended (pending, running, or not there yet), the rung below's failure included,
       since a later rung of it is still to run.
 
-    Each becomes ``infrastructure`` (``cause_from`` says why). Returns
-    ``{plan or "-": records changed}``."""
-    from . import ladder
+    Each becomes ``infrastructure`` (``cause_from`` says why).
+
+    * with ``cases_root``, for the same chains: a unit none of whose tasks is still in
+      flight, whose records want a later step (``failure_log.chain_wants``) the plan
+      has and no link submitted (after ``state``'s step): ``not_submitted`` (:func:`mark`,
+      ``ladder_cut_gb`` the rung of that step). An oom at 16 GB whose 64 GB step was
+      never submitted is the launcher's, not the method's.
+
+    Returns ``{plan or "-": records changed}``."""
+    import re
+
+    from . import failure_log, ladder
     from .cases import write_json
 
     changed = {}
     pending = {}
+    cut = []
     if cases_root:
         for plan in unfinished(out, submission):
             row = read_run(plan)
@@ -184,6 +227,50 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
                 state = (accounting.get(f"{job_id}_{idx}") or {}).get("state", "")
                 if not ladder.ended(state):
                     pending.setdefault(plan, []).append((idx, state or "not in sacct"))
+            later = later_steps(plan)
+            if not later:
+                continue
+            try:
+                all_units = _units(cases_root, row["dataset"], row["method"])
+            except (SystemExit, Exception):  # noqa: BLE001 - a run this checkout lacks
+                continue
+            held = {str(i) for i, _ in pending.get(plan, [])}
+            for index, unit in enumerate(all_units):
+                if str(index) in held:
+                    continue
+                paths = ladder.unit_paths(out, row["method"], row["label"], unit)
+                records = [rec for _, rec in _records(paths, submission)]
+                if any(
+                    r.get("cause") == ladder.KILLED
+                    and not ladder.ended(
+                        (accounting.get(str(r.get("launch_id") or "")) or {}).get(
+                            "state"
+                        )
+                        or "COMPLETED"
+                    )
+                    for r in records
+                    if not r.get("ok")
+                ):
+                    continue  # still in flight: the pass below makes it infrastructure
+                wants = failure_log.chain_wants(records)
+                for k, kind, jobname in later:
+                    taken = kind if kind != "cut" else ladder.CLIMB
+                    if taken not in wants:
+                        continue
+                    gb = re.search(r"-(\d+)g(-again)?$", jobname)
+                    if gb:
+                        cut.append((plan, row, index, k, jobname, int(gb.group(1))))
+                    break
+    for plan, row, index, k, jobname, gb in cut:
+        n = mark(
+            out, cases_root, row["dataset"], row["method"], row["label"], [index], gb,
+            "not_submitted",
+            f"the chain's watcher did not finish ({plan.name}): step {k} ({jobname}) "
+            "was never submitted by any of its links",
+            submission,
+        )  # fmt: skip
+        if n:
+            changed[plan.name] = changed.get(plan.name, 0) + n
     for path in sorted(Path(out).glob("*/*/*/run.json")):
         rec = ladder._read(path)
         if not isinstance(rec, dict) or not ladder.mine(rec, submission):
@@ -238,13 +325,7 @@ def summary_lines(out, submission):
         "same results folder: every unit that is ok is reused.\n",
     ]
     for plan in left:
-        state = {}
-        try:
-            for line in Path(plan, STATE).read_text().splitlines():
-                key, _, value = line.partition("=")
-                state[key] = value
-        except OSError:
-            pass
+        state = read_state(plan)
         at = (
             f"at step {state['k']} ({state.get('job', '?')}, job {state.get('id', '?')})"
             if state.get("k")

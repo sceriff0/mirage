@@ -720,11 +720,12 @@ fi
 # GRANT_MB (empty: not known) and GRANT_WHERE. A request above every node's memory is
 # refused by sbatch or pends for ever: the rungs above GRANT_MB are not planned (ladder,
 # below), and the units that would climb to them are written down as the launcher's.
-GRANT_MB="" GRANT_WHERE=""
-rung_check() {
-    local part="${SBATCH_PARTITION:-}" cons="${SBATCH_CONSTRAINT:-}" i nodes want
-    local -a args=(${extra[@]+"${extra[@]}"})
-    [ "$REGBENCH_RUNG_CHECK" = 0 ] && { echo "# memory ladder: not checked against the partition (REGBENCH_RUNG_CHECK=0)"; return 0; }
+GRANT_MB="" GRANT_WHERE="" GRANT_GPU_MB="" GRANT_GPU_WHERE="" GRANT_SAID="" GRANT_AT="" GRANT_AT_MB=""
+# where <sbatch arguments...>: "<partition>|<constraint>" those arguments name (the last
+# of each wins, as sbatch reads them); empty fields when they name none
+where() {
+    local part="" cons="" i
+    local -a args=("$@")
     for i in "${!args[@]}"; do
         case "${args[$i]}" in
             --partition=*) part="${args[$i]#--partition=}" ;;
@@ -735,55 +736,127 @@ rung_check() {
             -C?*) cons="${args[$i]#-C}" ;;
         esac
     done
-    if ! command -v sinfo >/dev/null; then
-        echo "# memory ladder: NOT checked against the partition (no sinfo here): a rung no node can grant would be found only when its step is refused, days into the run"
-        return 0
-    fi
-    if ! nodes="$(sinfo -h -N -o '%P|%m|%f' ${part:+-p "$part"} 2>&1)"; then
-        echo "# memory ladder: NOT checked against the partition (sinfo failed: $(head -n 1 <<< "$nodes"))"
+    echo "$part|$cons"
+}
+# largest <partition> <constraint> <gres name|-> : the largest node's memory in MB among
+# the nodes of the partition (the default one when empty) that meet the constraint and,
+# with a gres name (`gpu`, `gpu:nvidia_h200`), have that gres (sinfo %G); empty when sinfo
+# lists none. Sets SINFO_ERR when sinfo failed.
+SINFO_ERR=""
+largest() {
+    local part="$1" cons="$2" gres="$3" nodes best
+    if ! nodes="$(sinfo -h -N -o '%P|%m|%f|%G' ${part:+-p "$part"} 2>&1)"; then
+        SINFO_ERR="$(head -n 1 <<< "$nodes")"
         return 0
     fi
     # the default partition's nodes when none is named; every term of an `&` constraint
-    # (any of an `|` one) among the node's features
-    GRANT_MB="$(awk -F'|' -v part="$part" -v cons="$cons" '
+    # (any of an `|` one) among the node's features; the gres among the node's
+    best="$(awk -F'|' -v part="$part" -v cons="$cons" -v gres="$gres" -v any_part=0 '
         BEGIN { gsub(/[][()]/, "", cons); gsub(/\*[0-9]+/, "", cons)
                 n_any = split(cons, any, "|"); n_all = split(cons, all, "&") }
         function has(f, w,   k, n, list) { n = split(f, list, ","); for (k = 1; k <= n; k++) if (list[k] == w) return 1; return 0 }
-        { p = $1; m = $2; f = $3; gsub(/[^0-9]/, "", m) }
+        function has_gres(g, w,   k, n, list) { n = split(g, list, ","); for (k = 1; k <= n; k++) if (index(list[k] ":", w ":") == 1) return 1; return 0 }
+        { p = $1; m = $2; f = $3; g = $4; gsub(/[^0-9]/, "", m) }
         part == "" && p !~ /\*$/ { next }
+        gres != "-" && !has_gres(g, gres) { next }
         { ok = 1
           if (cons != "" && n_any > 1) { ok = 0; for (k = 1; k <= n_any; k++) if (has(f, any[k])) ok = 1 }
           else if (cons != "") { for (k = 1; k <= n_all; k++) if (!has(f, all[k])) ok = 0 }
           if (ok && m + 0 > best) best = m + 0; seen = 1 }
         END { if (seen) print best }' <<< "$nodes")"
-    if [ -z "$GRANT_MB" ] && [ -z "$part" ]; then
-        # no partition is marked as the default: every node
-        GRANT_MB="$(awk -F'|' '{ m = $2; gsub(/[^0-9]/, "", m); if (m + 0 > best) best = m + 0 } END { if (NR) print best }' <<< "$nodes")"
+    if [ -z "$best" ] && [ -z "$part" ]; then
+        # no partition is marked as the default: every node (with the gres)
+        best="$(awk -F'|' -v gres="$gres" '
+            function has_gres(g, w,   k, n, list) { n = split(g, list, ","); for (k = 1; k <= n; k++) if (index(list[k] ":", w ":") == 1) return 1; return 0 }
+            gres != "-" && !has_gres($4, gres) { next }
+            { m = $2; gsub(/[^0-9]/, "", m); if (m + 0 > best) best = m + 0; seen = 1 } END { if (seen) print best }' <<< "$nodes")"
     fi
-    GRANT_WHERE="partition ${part:-<the default>}${cons:+, constraint $cons}"
-    if [ -z "$GRANT_MB" ] || [ "$GRANT_MB" = 0 ]; then
-        GRANT_MB=""
-        echo "# memory ladder: NOT checked: sinfo lists no node of $GRANT_WHERE"
-        return 0
-    fi
-    want="$(awk '{ print $1 * 1024 }' <<< "${RUNGS_GB%% *}")"
-    [ "$want" -le "$GRANT_MB" ] || die "the memory ladder's first rung, ${RUNGS_GB%% *} GB, is more than the largest node of $GRANT_WHERE has ($GRANT_MB MB, sinfo): no run could start. Name a partition with larger nodes (-- --partition=...). Nothing was submitted."
-    local cut="" gb
-    for gb in $RUNGS_GB $SELFCHECK_RUNGS_GB; do
-        [ $((gb * 1024)) -le "$GRANT_MB" ] || has "$cut" "$gb" || cut="$cut $gb"
+    [ "$best" = 0 ] && best=""
+    echo "$best"
+}
+# rung_cut_said <MB> <where> <label> <rungs...>: the warning for the rungs above <MB>
+rung_cut_said() {
+    local mb="$1" at="$2" label="$3" cut="" gb; shift 3
+    for gb in "$@"; do
+        [ $((gb * 1024)) -le "$mb" ] || has "$cut" "$gb" || cut="$cut $gb"
     done
     if [ -n "$cut" ]; then
         cut="$(sed -e 's/^ //' -e 's/ / GB, /g' <<< "$cut") GB"
         {
-            echo "# WARNING memory ladder: the largest node of $GRANT_WHERE has $GRANT_MB MB (sinfo), so the rung(s) $cut can NEVER be granted there."
+            echo "# WARNING memory ladder: ${label}the largest node of $at has $mb MB (sinfo), so the rung(s) $cut can NEVER be granted there."
             echo "# WARNING memory ladder: those rungs are NOT planned: a unit that runs out of memory below them is written down as the launcher's (not_submitted, ladder_cut_gb), not as the method's out-of-memory. For the full ladder (16-700 GB for every method, the user's ruling) name a partition, or drop a constraint, that reaches the site's largest node: -- --partition=..."
         } | tee /dev/stderr
-    else
-        echo "# memory ladder: every rung (${RUNGS_GB// /, } GB; selfcheck ${SELFCHECK_RUNGS_GB// /, } GB) fits the largest node of $GRANT_WHERE ($GRANT_MB MB, sinfo)"
+        return 1
     fi
+    return 0
 }
-# grantable <GB>: can a node of the partition grant it (yes when it is not known)
-grantable() { [ -z "$GRANT_MB" ] || [ $(($1 * 1024)) -le "$GRANT_MB" ]; }
+rung_check() {
+    local part cons w want gpu_part gpu_cons gres
+    [ "$REGBENCH_RUNG_CHECK" = 0 ] && { echo "# memory ladder: not checked against the partition (REGBENCH_RUNG_CHECK=0)"; return 0; }
+    w="$(where ${extra[@]+"${extra[@]}"})"
+    part="${w%%|*}" cons="${w#*|}"
+    [ -n "$part" ] || part="${SBATCH_PARTITION:-}"
+    [ -n "$cons" ] || cons="${SBATCH_CONSTRAINT:-}"
+    if ! command -v sinfo >/dev/null; then
+        echo "# memory ladder: NOT checked against the partition (no sinfo here): a rung no node can grant would be found only when its step is refused, days into the run"
+        return 0
+    fi
+    SINFO_ERR=""
+    GRANT_MB="$(largest "$part" "$cons" -)"
+    if [ -n "$SINFO_ERR" ]; then
+        GRANT_MB=""
+        echo "# memory ladder: NOT checked against the partition (sinfo failed: $SINFO_ERR)"
+        return 0
+    fi
+    GRANT_WHERE="partition ${part:-<the default>}${cons:+, constraint $cons}"
+    if [ -z "$GRANT_MB" ]; then
+        echo "# memory ladder: NOT checked: sinfo lists no node of $GRANT_WHERE"
+    else
+        want="$(awk '{ print $1 * 1024 }' <<< "${RUNGS_GB%% *}")"
+        [ "$want" -le "$GRANT_MB" ] || die "the memory ladder's first rung, ${RUNGS_GB%% *} GB, is more than the largest node of $GRANT_WHERE has ($GRANT_MB MB, sinfo): no run could start. Name a partition with larger nodes (-- --partition=...). Nothing was submitted."
+        # shellcheck disable=SC2086  # the rungs are words
+        rung_cut_said "$GRANT_MB" "$GRANT_WHERE" "" $RUNGS_GB $SELFCHECK_RUNGS_GB \
+            && echo "# memory ladder: every rung (${RUNGS_GB// /, } GB; selfcheck ${SELFCHECK_RUNGS_GB// /, } GB) fits the largest node of $GRANT_WHERE ($GRANT_MB MB, sinfo)"
+    fi
+    # A TASK THAT NEEDS A GPU is given REGBENCH_SBATCH_GPU after the caller's arguments
+    # (sbatch takes the last): its partition and constraint where it names them, and a
+    # node that has the gres it asks for (`--gres=gpu[:type]:n`)
+    GRANT_GPU_MB="" GRANT_GPU_WHERE=""
+    [ "${#GPU_ARGS[@]}" -gt 0 ] || return 0
+    w="$(where "${GPU_ARGS[@]}")"
+    gpu_part="${w%%|*}" gpu_cons="${w#*|}"
+    [ -n "$gpu_part" ] || gpu_part="$part"
+    [ -n "$gpu_cons" ] || gpu_cons="$cons"
+    gres="$(printf '%s\n' "${GPU_ARGS[@]}" | sed -n 's/^--gres=//p' | tail -n 1)"
+    gres="${gres%%,*}"
+    case "$gres" in *:[0-9]*) gres="${gres%:*}" ;; esac
+    SINFO_ERR=""
+    GRANT_GPU_MB="$(largest "$gpu_part" "$gpu_cons" "${gres:--}")"
+    GRANT_GPU_WHERE="partition ${gpu_part:-<the default>}${gpu_cons:+, constraint $gpu_cons}${gres:+ with gres $gres}"
+    if [ -n "$SINFO_ERR" ] || [ -z "$GRANT_GPU_MB" ]; then
+        # held to what the CPU runs are held to, as before the GPU rows had a check
+        echo "# memory ladder, GPU runs: sinfo lists no node of $GRANT_GPU_WHERE${SINFO_ERR:+ (sinfo failed: $SINFO_ERR)}: checked against $GRANT_WHERE, as the other runs"
+        GRANT_GPU_MB="$GRANT_MB" GRANT_GPU_WHERE="$GRANT_WHERE"
+        return 0
+    fi
+    want="$(awk '{ print $1 * 1024 }' <<< "${RUNGS_GB%% *}")"
+    [ -z "${gpu_runs:-}" ] || [ "$want" -le "$GRANT_GPU_MB" ] || die "the memory ladder's first rung, ${RUNGS_GB%% *} GB, is more than the largest node of $GRANT_GPU_WHERE has ($GRANT_GPU_MB MB, sinfo): the runs that need a GPU ($gpu_runs ) could not start. Name the site's GPU partition and gres in REGBENCH_SBATCH_GPU, or leave those runs out with --runs. Nothing was submitted."
+    # shellcheck disable=SC2086
+    rung_cut_said "$GRANT_GPU_MB" "$GRANT_GPU_WHERE" "GPU runs: " $RUNGS_GB $SELFCHECK_RUNGS_GB \
+        && echo "# memory ladder, GPU runs: every rung fits the largest node of $GRANT_GPU_WHERE ($GRANT_GPU_MB MB, sinfo)"
+    return 0
+}
+# grantable <GB> [<gpu: 1>]: can a node the task may have grant it (yes when it is not
+# known). Leaves what it checked against in GRANT_SAID (for plan_cut's reason).
+grantable() {
+    local mb="$GRANT_MB" at="$GRANT_WHERE"
+    if [ "${2:-0}" = 1 ] && [ "${#GPU_ARGS[@]}" -gt 0 ]; then
+        mb="$GRANT_GPU_MB" at="$GRANT_GPU_WHERE"
+    fi
+    GRANT_SAID="the largest node of $at has $mb MB (sinfo at launch)"
+    GRANT_AT="$at" GRANT_AT_MB="$mb"
+    [ -z "$mb" ] || [ $(($1 * 1024)) -le "$mb" ]
+}
 
 # RETRIES ARE SUBMITTED AFTER A FAILURE, NEVER BEFORE IT. Of a chain (a memory ladder, the
 # attempts of a stage) only the FIRST array is submitted here, with one small job after
@@ -824,8 +897,8 @@ plan_cut() {
     local jobname="$1"; shift
     PLAN_N=$((PLAN_N + 1))
     N_CUT=$((N_CUT + 1))
-    printf '%s\n' cut "$jobname" "the largest node of $GRANT_WHERE has $GRANT_MB MB (sinfo at launch)" "$@" > "$PLAN/step-$PLAN_N"
-    [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_WHERE can grant it ($GRANT_MB MB): $jobname"
+    printf '%s\n' cut "$jobname" "$GRANT_SAID" "$@" > "$PLAN/step-$PLAN_N"
+    [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_AT can grant it ($GRANT_AT_MB MB): $jobname"
     return 0
 }
 # plan_watch <job prefix> <first job id> <first job name> <array range|-> <dependencies
@@ -935,22 +1008,29 @@ if [ "$prepare" = 1 ]; then
                     nuc_mem="${REGBENCH_NUCLEI_MEM:-128G}"
                     nuc_alloc=(--cpus-per-task="${REGBENCH_NUCLEI_CPUS:-8}" --time="$(limit "$nuclei_s")"
                                ${nuc_gpu[@]+"${nuc_gpu[@]}"})
+                    case "$nuc_mem" in
+                        *[0-9]G) nuc_gb="${nuc_mem%G}" ;;
+                        *) nuc_gb="" ;;
+                    esac
+                    [ -z "${nuc_gb//[0-9]/}" ] || nuc_gb=""
+                    nuc_on_gpu=0
+                    [ "${#nuc_gpu[@]}" -eq 0 ] || nuc_on_gpu=1
+                    # its FIRST request too (T5): one no node can grant pends for ever
+                    if [ -n "$nuc_gb" ] && ! grantable "$nuc_gb" "$nuc_on_gpu"; then
+                        die "--prepare: the nuclei array asks for REGBENCH_NUCLEI_MEM=$nuc_mem per slide, and $GRANT_SAID: it could never start. Name a partition with larger nodes (REGBENCH_SBATCH_GPU for the GPU, or -- --partition=...), or lower REGBENCH_NUCLEI_MEM. Nothing was submitted."
+                    fi
                     submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" --mem="$nuc_mem" "${nuc_alloc[@]}" \
                         --array="$pending%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
                     nuc_first="$JOB_ID"
                     mkdir -p "$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION" 2>/dev/null \
                         || die "cannot write the retry plans under $REGBENCH_OUT/logs/retry. Nothing more was submitted."
                     plan_open rb-nuclei
-                    case "$nuc_mem" in
-                        *[0-9]G) nuc_gb="${nuc_mem%G}" ;;
-                        *) nuc_gb="" ;;
-                    esac
-                    if [ -z "$nuc_gb" ] || [ -n "${nuc_gb//[0-9]/}" ]; then
+                    if [ -z "$nuc_gb" ]; then
                         echo "# nuclei: REGBENCH_NUCLEI_MEM=$nuc_mem is not <N>G: no memory ladder above it"
                     else
                         for gb in $NUCLEI_RUNGS_GB; do
                             [ "$gb" -gt "$nuc_gb" ] || continue
-                            if ! grantable "$gb"; then
+                            if ! grantable "$gb" "$nuc_on_gpu"; then
                                 plan_cut "rb-nuclei-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" --mem="${gb}G" \
                                     "${nuc_alloc[@]}" "$HERE/nuclei.sbatch"
                                 break
@@ -1234,8 +1314,8 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
         attempt=$((attempt + 1))
         # a rung no node can grant: the selfcheck stops below it (it reports, and its
         # record says what the last attempt left)
-        if [ "$attempt" -gt 1 ] && ! grantable "$gb"; then
-            [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_WHERE can grant it ($GRANT_MB MB): rb-sc-$name-${gb}g"
+        if [ "$attempt" -gt 1 ] && ! grantable "$gb" "$gpu"; then
+            [ "$DRY" = 1 ] && echo "# NOT PLANNED, no node of $GRANT_AT can grant it ($GRANT_AT_MB MB): rb-sc-$name-${gb}g"
             break
         fi
         if [ "$attempt" = 1 ]; then
@@ -1289,7 +1369,7 @@ ladder() {
     printf '%s\n' "$name" "$method" "$label" "$opts" "$ds" > "$PLAN/run"
     for gb in $rungs; do
         attempt=$((attempt + 1))
-        if ! grantable "$gb"; then
+        if ! grantable "$gb" "$gpu"; then
             # rung_check stopped the launch when the first rung is not grantable
             plan_cut "$prefix-${gb}g" "${COMMON[@]}" "$LOG_ARRAY" \
                 --cpus-per-task="$cpus" --mem="${gb}G" \

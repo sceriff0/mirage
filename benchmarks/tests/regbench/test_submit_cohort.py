@@ -2978,6 +2978,27 @@ def test_prepare_resolves_the_bare_nuclei_of_every_slide_first(site, tmp_path):
     assert jobs["rb-prepare-multiplex"].args[-2:] == ["--nuclei-fallback", "shrink"]
 
 
+def test_a_nuclei_request_no_node_can_grant_stops_the_launch(site, tmp_path):
+    """T5: the nuclei array's FIRST request (REGBENCH_NUCLEI_MEM, 128G) is checked
+    against the nodes it may have, the GPU ones here, like every rung above it: one no
+    node can grant would pend for ever. The launch stops, and nothing is submitted."""
+    env = {
+        **_with_sinfo(site, tmp_path, [
+            "cpu*|1000000|icelake|(null)", "gpu|100000|h200|gpu:h200:4",
+        ]),
+        "REGBENCH_MANIFEST": str(_manifest(tmp_path)),
+        "REGBENCH_STARDIST_MODEL": "site_model",
+        "REGBENCH_STARDIST_MODEL_DIR": "/models",
+        "REGBENCH_SBATCH_GPU": "--partition=gpu --gres=gpu:h200:1",
+    }  # fmt: skip
+    done, log, _ = launch(site, "--prepare", "--datasets", "multiplex", env=env,
+                          log="nuc-big")  # fmt: skip
+    assert done.returncode != 0, done.stdout
+    assert "REGBENCH_NUCLEI_MEM=128G" in done.stderr
+    assert "partition gpu with gres gpu:h200 has 100000 MB" in done.stderr
+    assert _sbatch_lines(done.stdout) == [] and not log.exists()  # nothing submitted
+
+
 def test_prepare_leaves_the_manifest_where_the_score_job_finds_it(site, tmp_path):
     """`attrition.csv: manifest_rounds` needs the manifest in the score job, which is
     submitted by a later call that has no REGBENCH_MANIFEST."""
@@ -3086,7 +3107,7 @@ def test_extra_sbatch_arguments_reach_every_job(site):
 # ── the watcher: a retry is submitted after a failure, for the units that failed ──
 def _watch(
     tmp_path, ends, steps, range_="0-4", run="stare", single=None, link=None,
-    squeue="exit 0", python=None, sbatch_fails=None, plan_files=None,
+    squeue="exit 0", python=None, sbatch_fails=None, plan_files=None, extra_env=None,
 ):  # fmt: skip
     """Run retry.sbatch against stand-in sbatch and squeue. ``ends``: {index: end line
     of the unit's task in the first array, or None for no end line}. ``link``: the
@@ -3136,6 +3157,7 @@ def _watch(
         "REGBENCH_SUBMISSION": "t",
         "REGBENCH_CASES": str(tmp_path / "cases"),
         "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        **(extra_env or {}),
     }
     argv = ["bash", str(SLURM / "retry.sbatch"), run, str(plan), "50", "rb-x-16g"]
     argv += [range_] + ([str(link)] if link is not None else [])
@@ -3326,6 +3348,42 @@ def test_a_step_an_earlier_link_was_submitting_is_looked_for_in_the_queue(tmp_pa
     assert [s.split()[1] for s in sent][0] == "--job-name=rb-x-16g-again"
 
 
+def test_a_takeover_that_cannot_read_the_queue_looks_again_and_never_submits_twice(
+    tmp_path,
+):
+    """T2: the successor's look for a half-submitted step is retried as `gone()` retries
+    its own: a queue that fails once and then answers finds the job; a queue that keeps
+    failing ends the link loudly, with NOTHING submitted (resubmitting on a failed look
+    would put the step in the queue twice)."""
+    ends = {i: None for i in range(2)}
+    once = (
+        f'n=$(cat "{tmp_path}/q" 2>/dev/null || echo 0); echo $((n + 1)) > "{tmp_path}/q"\n'
+        'case "$*" in *--name=rb-x-16g-again*)\n'
+        '  [ "$n" = 0 ] && { echo "slurm_load_jobs error: Socket timed out" >&2; exit 1; }\n'
+        "  echo 77 ;; esac; exit 0"
+    )
+    done, sent, _ = _watch(
+        tmp_path / "once", ends, STEPS, range_="0-1", link=2, squeue=once,
+        plan_files={"submitting": "1 rb-x-16g-again\n"},
+        extra_env={"REGBENCH_RETRY_SQUEUE_TRIES": "3"},
+    )  # fmt: skip
+    assert "it is in the queue as 77" in done.stdout, done.stdout + done.stderr
+    assert "--job-name=rb-x-16g-again" not in " ".join(sent)
+    never = (
+        'case "$*" in *--name=*) echo "slurm_load_jobs error: Socket timed out" >&2;'
+        " exit 1 ;; esac; exit 0"
+    )
+    done, sent, _ = _watch(
+        tmp_path / "never", ends, STEPS, range_="0-1", link=2, squeue=never,
+        plan_files={"submitting": "1 rb-x-16g-again\n"},
+        extra_env={"REGBENCH_RETRY_SQUEUE_TRIES": "3"},
+    )  # fmt: skip
+    assert done.returncode != 0 and sent == [], done.stdout + done.stderr
+    assert "could not be read 3 times in a row" in done.stdout
+    assert "NOT submitted again" in done.stdout
+    assert done.stdout.splitlines()[-1].startswith("REGBENCH_END kind=retry")
+
+
 def test_a_rung_the_partition_cannot_grant_is_written_down_as_the_launchers(tmp_path):
     """F2: a `cut` step is never submitted. The units that would climb to it are
     written down by `regbench chain-mark` as not_submitted (the launcher's), and the
@@ -3462,7 +3520,9 @@ def test_a_rung_no_node_can_grant_is_not_planned_and_said_loudly(site, tmp_path)
     # the selfcheck's 512 GB rung too
     assert "rb-sc-stare-512g" not in everything and "rb-sc-stare-256g" in jobs.later
     assert "ladder(s) stop below a rung no node of" in done.stdout
-    assert (tmp_path / "sinfo.log").read_text().split() == ["-h", "-N", "-o", "%P|%m|%f"]
+    assert (tmp_path / "sinfo.log").read_text().split()[:4] == [
+        "-h", "-N", "-o", "%P|%m|%f|%G"
+    ]  # fmt: skip
     # named on the command line, the partition with the large node plans the ladder
     done, _, _ = launch(
         site, "--", "--partition=big", env=_with_sinfo(site, tmp_path / "b", NODES),
@@ -3472,6 +3532,35 @@ def test_a_rung_no_node_can_grant_is_not_planned_and_said_loudly(site, tmp_path)
     assert "-p big" in (tmp_path / "b" / "sinfo.log").read_text()
     assert "every rung (16, 64, 256, 512, 700 GB" in done.stdout
     assert "rb-palom-multiplex-700g" in jobs_of(done).later
+
+
+def test_a_gpu_run_is_checked_against_the_nodes_it_can_have(site, tmp_path):
+    """T4: a run that needs a GPU is given REGBENCH_SBATCH_GPU (here a partition of its
+    own and a typed gres): its rungs are checked against the largest node of THAT
+    partition that HAS the gres, not against the CPU partition. A larger node there
+    without the card does not count."""
+    nodes = [
+        "cpu*|1000000|icelake|(null)",  # the CPU runs' partition: every rung fits
+        "gpu|300000|h200|gpu:nvidia_h200:4(S:0-1)",  # 292 GB with the card
+        "gpu|900000|h200|(null)",  # more memory, no card
+    ]
+    env = {
+        **_with_sinfo(site, tmp_path, nodes),
+        "REGBENCH_SBATCH_GPU": "--partition=gpu --gres=gpu:nvidia_h200:1",
+    }
+    done, _, _ = launch(site, env=env, log="gpu")
+    assert done.returncode == 0, done.stderr
+    everything = {**jobs_of(done), **jobs_of(done).later}
+    gpu_runs = sorted({n.rsplit("-", 1)[0] for n in everything
+                       if n.endswith("_gpu-multiplex-16g")})  # fmt: skip
+    assert gpu_runs, sorted(everything)
+    for run in gpu_runs:
+        assert f"{run}-256g" in everything and f"{run}-512g" not in everything, run
+    assert "rb-palom-multiplex-700g" in everything  # the CPU partition grants it
+    assert (
+        "GPU runs: the largest node of partition gpu with gres gpu:nvidia_h200 has "
+        "300000 MB (sinfo), so the rung(s) 512 GB, 700 GB can NEVER be granted there"
+    ) in done.stdout
 
 
 def test_a_partition_that_cannot_grant_the_first_rung_stops_the_launch(site, tmp_path):

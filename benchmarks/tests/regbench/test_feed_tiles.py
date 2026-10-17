@@ -323,6 +323,33 @@ def test_a_line_that_is_no_index_never_reaches_the_list_of_what_is_due(tmp_path)
     assert site.tiles(1) == [0, 1, 4] and len(site.calls()) == 1
 
 
+def test_a_list_grep_could_not_read_is_a_refusal_not_an_empty_list(tmp_path):
+    """T6: grep exits 1 for "no line is an index" (nothing is due) and 2 for its own
+    error. A 2 was taken for an empty list: every tile of the attempt silently not
+    submitted. It is the submitter giving up, through the path a round reads."""
+    site = Site(tmp_path, {}, rounds=2)
+    python = site.fake / "python"
+    python.write_text("#!/bin/bash\ncase \" $* \" in *\" --due 1 \"*) echo 0; echo 1 ;; esac\n")
+    python.chmod(0o755)
+    real = subprocess.run(["bash", "-c", "command -v grep"], capture_output=True,
+                          text=True).stdout.strip()  # fmt: skip
+    grep = site.fake / "grep"
+    grep.write_text(
+        "#!/bin/bash\n"
+        "if [ \"$1\" = -E ] && [ \"$2\" = '^[0-9]+$' ]; then\n"
+        "  echo 'grep: due.a1.tmp: Input/output error' >&2; exit 2\nfi\n"
+        f'exec {real} "$@"\n'
+    )
+    grep.chmod(0o755)
+    done = site.run()
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert site.calls() == []
+    marker = Path(f"{site.state}.refused").read_text()
+    assert "attempt 1: the list of what is due could not be read (grep exited 2)" in marker
+    assert "status=refused cause=not_submitted whose=launcher" in last(done)
+    assert not Path(f"{site.state}.due.a1").exists()
+
+
 @pytest.mark.parametrize(
     "lines, n_calls",
     [

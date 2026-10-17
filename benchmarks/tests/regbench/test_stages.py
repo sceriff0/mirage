@@ -856,6 +856,9 @@ def test_a_cohort_unit_without_the_launcher_stated_refuses_before_any_work(
     assert f"unit={staged['case'].case_id} " in said[-1]
     assert "status=lost cause=not_submitted whose=launcher" in said[-1]
     assert started == [] and not out.exists()
+    # S4: no later step of the chain can cure a refusal: the watcher reads `wants=-`
+    # (a run end line without the key is taken by every step, and climbs every rung)
+    assert " wants=- " in said[-1]
     # ... at every task of the ladder: a later rung reads no record either
     with stated(None):
         assert cli.main([*argv, "--ladder", "climb", "--accounting-waited"]) == 1
