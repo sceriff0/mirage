@@ -1507,7 +1507,7 @@ repository (`compute_qcs_4methods.py:2`).
 | row | image |
 |---|---|
 | every variant with a written image | the method's own file |
-| `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |  |
+| `initial` | the moving slide's nuclear channel placed on the reference canvas by the identity, drawn by the benchmark: for scale |
 
 A variant with no image has NO row and one line in `tissue_missing.csv` with the reason:
 `not run`, `the run failed (<cause>): no image`, `the method writes no image for this

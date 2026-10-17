@@ -139,45 +139,6 @@ def array_reader(a):
     return Reader(a.shape[:2], lambda y0, y1, x0, x1: a[y0:y1, x0:x1])
 
 
-def read_rgb(path):
-    """A JPEG / PNG (ANHIR) whole, as ``(H, W, 3)`` uint8. PIL decodes these formats
-    whole; a whole-slide TIFF goes through ``rgb_tiff_reader`` instead."""
-    from PIL import Image
-
-    Image.MAX_IMAGE_PIXELS = None  # these are whole sections, not an attack
-    with Image.open(str(path)) as im:
-        return np.asarray(im.convert("RGB"))
-
-
-def rgb_tiff_reader(path):
-    """An RGB TIFF (HyReCo's slides; an RGB OME-TIFF, three samples per pixel or three
-    planes) read in rectangles from its full-resolution level: only the TIFF tiles (or
-    strips) a rectangle touches are decoded, so the memory is a block's, whatever the
-    slide's size. The reader is ``imageio._rgb_view``. Refused: not 8-bit RGB, or no lazy
-    reader (zarr) installed, which would read the slide whole."""
-    import tifffile
-
-    from .imageio import _rgb_view
-
-    tif = tifffile.TiffFile(str(path))
-    try:
-        level = tif.series[0].levels[0]
-        read, hw = _rgb_view(level, lazy_only=True)
-        if np.dtype(level.dtype) != np.uint8:
-            raise Refused(f"{path}: expected 8-bit RGB, found {level.dtype}")
-    except ImportError as exc:
-        tif.close()
-        raise Refused(
-            f"{path}: no lazy TIFF reader ({exc}); reading the slide whole is refused"
-        ) from None
-    except (ValueError, IndexError) as exc:
-        tif.close()
-        if isinstance(exc, Refused):
-            raise
-        raise Refused(f"{path}: not an RGB image in its first series ({exc})") from None
-    return Reader(hw, lambda y0, y1, x0, x1: read(y0, y1, x0, x1), tif.close)
-
-
 def _smooth(block):
     from scipy.ndimage import gaussian_filter
 
@@ -379,16 +340,30 @@ def current(case, name, dest):
 
 
 def _reader(src):
-    if str(src).lower().endswith((".tif", ".tiff")):
-        return rgb_tiff_reader(src)
-    return array_reader(read_rgb(src))
+    """One RGB image as a ``Reader`` (``imageio.open_rgb``: a TIFF in rectangles, never
+    read whole; a JPEG / PNG decoded whole). Refused: not 8-bit RGB, or no lazy reader
+    (zarr) installed, which would read the slide whole."""
+    from .imageio import open_rgb
+
+    tiff = str(src).lower().endswith((".tif", ".tiff"))
+    try:
+        read, hw, close = open_rgb(src, lazy_only=tiff)
+    except ImportError as exc:
+        raise Refused(
+            f"{src}: no lazy TIFF reader ({exc}); reading the slide whole is refused"
+        ) from None
+    except (ValueError, IndexError) as exc:
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(f"{src}: {exc}") from None
+    return Reader(hw, read, close)
 
 
 def write_inputs(case, name, dest):
     """Both proxies ``name`` of a brightfield case under ``dest``; returns ``(reference,
     moving)``, the two files STARE is given (channel 0 of each). Read from the case's
     RGB slides (``ref_image`` / ``mov_image``): a whole-slide TIFF by tiles
-    (``rgb_tiff_reader``), a JPEG or PNG whole. What was done is ``dest/record.json``.
+    (``imageio.open_rgb``), a JPEG or PNG whole. What was done is ``dest/record.json``.
     Every refusal is ``Refused``: the benchmark's cause."""
     proxy(name)
     if case.modality != "brightfield":

@@ -216,6 +216,41 @@ def _rgb_view(level, lazy_only=False):
     return read, (h, w)
 
 
+RGB_DECODED = (".jpg", ".jpeg", ".png")  # decoded whole by PIL; anything else is a TIFF
+
+
+def open_rgb(path, lazy_only=False):
+    """``(read, (H, W), close)`` of an RGB image: ``read(y0, y1, x0=0, x1=W)`` gives that
+    rectangle as ``(h, w, 3)`` uint8. A JPEG or PNG (ANHIR) is decoded whole by PIL; else
+    the full-resolution level of a TIFF is read in rectangles (``_rgb_view``; ``lazy_only``
+    refuses the whole read). ``ValueError``: not an 8-bit RGB image; ``ImportError``:
+    ``lazy_only`` and no lazy reader. The one RGB reader of the preprocessing
+    (``prep``) and of DeeperHistReg's writer (``methods.deeperhistreg``)."""
+    if str(path).lower().endswith(RGB_DECODED):
+        from PIL import Image
+
+        Image.MAX_IMAGE_PIXELS = None  # whole sections, not an attack
+        with Image.open(str(path)) as im:
+            rgb = np.asarray(im.convert("RGB"))
+        return (
+            (lambda y0, y1, x0=0, x1=None: rgb[y0:y1, x0:x1]),
+            rgb.shape[:2],
+            (lambda: None),
+        )
+    import tifffile
+
+    tif = tifffile.TiffFile(str(path))
+    try:
+        level = tif.series[0].levels[0]
+        if np.dtype(level.dtype) != np.uint8:
+            raise ValueError(f"{path}: expected an 8-bit RGB image, got {level.dtype}")
+        read, hw = _rgb_view(level, lazy_only=lazy_only)
+    except Exception:
+        tif.close()
+        raise
+    return read, hw, tif.close
+
+
 def read_rgb_reduced(path, max_dim, rows=64):
     """An RGB whole-slide TIFF as uint8 ``(h, w, 3)`` with long side <= ``max_dim``, and the
     integer factor it was reduced by: the coarsest pyramid level still at least that large,

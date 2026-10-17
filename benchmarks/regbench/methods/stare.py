@@ -917,8 +917,15 @@ def _launch(rnd, workers, mon=None):
     if rnd.candidate and mon is not None:
         mon.pause()  # the benchmark's own step, not STARE's: unbilled
         try:
-            if _write_proxies(rnd, 1, LOCAL) is not None:
-                return  # COARSE's record says why; _collect fails the round with it
+            # the pipeline's retry rule, as in a job: a memory failure is attempted again
+            for attempt in range(1, stages.ATTEMPTS + 1):
+                failed = _write_proxies(rnd, attempt, LOCAL)
+                if failed is None:
+                    break
+                if not stages.retryable(failed):
+                    return  # COARSE's record says why; _collect fails the round
+            else:
+                return
         finally:
             mon.resume()
     if not start(stages.COARSE):
@@ -1117,9 +1124,15 @@ def register(case, work, opts):
         )
         side = info["implementation"]["benchmark_side"]
         side.append(
-            "brightfield: STARE is given the case's one-channel proxy of each RGB slide "
-            f"({info_proxy(case)}), written by the dataset module before the clock "
-            "starts; the image it writes is the registered proxy"
+            (
+                "brightfield: STARE is given a one-channel proxy of each RGB slide, "
+                "written by the benchmark (below) before the clock starts; the image "
+                "it writes is the registered proxy"
+                if made
+                else "brightfield: STARE is given the case's one-channel proxy of each "
+                f"RGB slide ({info_proxy(case)}), written by the dataset module before "
+                "the clock starts; the image it writes is the registered proxy"
+            )
         )
         if not case.pixel_size_um:
             side.append(

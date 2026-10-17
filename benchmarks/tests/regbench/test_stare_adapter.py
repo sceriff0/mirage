@@ -384,6 +384,63 @@ def test_the_proxy_is_written_before_coarse_once_and_again_when_a_slide_changes(
     assert written == ["haem", "haem"]
 
 
+def test_a_local_proxy_write_that_ran_out_of_memory_is_attempted_again(
+    rgb_case, tmp_path, no_stage, monkeypatch
+):
+    """Task 6 review: in local mode the proxy write before COARSE went through the
+    retry rule only in jobs mode; a ``benchmark_oom`` (exit 137) now gets attempts 2 and
+    3 here too, as the pipeline retries it."""
+    from benchmarks.regbench import prep
+
+    real, calls, attempts = prep.write_inputs, [], []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise MemoryError()
+        return real(*a, **k)
+
+    real_write = adapter._write_proxies
+
+    def spy(rnd, attempt, execution):
+        attempts.append(attempt)
+        return real_write(rnd, attempt, execution)
+
+    class Mon:
+        pause = resume = staticmethod(lambda: None)
+
+    monkeypatch.setattr(prep, "write_inputs", flaky)
+    monkeypatch.setattr(adapter, "_write_proxies", spy)
+    rnd = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    adapter._launch(rnd, 1, Mon())
+    assert attempts[:2] == [1, 2] and len(calls) >= 2
+
+
+def test_a_local_proxy_write_that_is_a_bug_is_not_attempted_again(
+    rgb_case, tmp_path, no_stage, monkeypatch
+):
+    from benchmarks.regbench import prep
+
+    attempts = []
+    real_write = adapter._write_proxies
+
+    def spy(rnd, attempt, execution):
+        attempts.append(attempt)
+        return real_write(rnd, attempt, execution)
+
+    class Mon:
+        pause = resume = staticmethod(lambda: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(prep, "write_inputs", boom)
+    monkeypatch.setattr(adapter, "_write_proxies", spy)
+    rnd = adapter.Round(rgb_case, tmp_path / "r", {"proxy": "haem"})
+    adapter._launch(rnd, 1, Mon())
+    assert attempts == [1] and no_stage == []
+
+
 @pytest.mark.parametrize(
     "exc, cause",
     [(MemoryError(), "benchmark_oom"), (RuntimeError("a bug"), "benchmark")],
@@ -522,6 +579,12 @@ def test_a_proxy_is_recorded_as_benchmark_side(ran_rgb):
     plain_side = plain["implementation"]["benchmark_side"]
     assert not any("proxy `" in x for x in plain_side)
     assert any(x.startswith("brightfield: STARE is given") for x in plain_side)
+    # the provenance names who wrote the proxy, and says it once: the dataset module's own
+    # (`grey`), or the benchmark's (`haem`, never "written by the dataset module")
+    plain_line = next(x for x in plain_side if x.startswith("brightfield:"))
+    haem_line = next(x for x in side if x.startswith("brightfield:"))
+    assert "written by the dataset module" in plain_line
+    assert "dataset module" not in haem_line and "written by the benchmark" in haem_line
     assert plain["input"] == {
         "reference": case.ref_nuclear,
         "moving": case.mov_nuclear,

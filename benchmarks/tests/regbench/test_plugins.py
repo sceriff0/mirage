@@ -89,8 +89,9 @@ def probe(tmp_path, switch, with_plugin=True):
 
 
 def public_counts():
-    """The public run list, derived from the tables: (runs, GPU runs, per patient, cohort result
-    names, cohort runs). STARE: every stride x level of every regime, by name, and the two tier
+    """The public run list, derived from the tables: (runs, GPU runs, per patient, cohort
+    result names). The runs are the cohort's own list (``runs_for(None)``; the table has as
+    many rows). STARE: every stride x level of the cohort regime, by name, and the two tier
     runs (two result names each); ASHLAR: its cells (one each); the others are written out
     below."""
     from benchmarks.regbench import regimes as rg
@@ -112,13 +113,13 @@ def public_counts():
     # counts(), the table and the expected names are the cohort's own list (runs_for(None))
     cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS)
     names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS)
-    return cohort_runs, 4, 11 + len(ashlar.ASHLAR_CELLS), names, cohort_runs
+    return cohort_runs, 4, 11 + len(ashlar.ASHLAR_CELLS), names
 
 
 def public(got):
-    runs, gpu, group, names, cohort = public_counts()
+    runs, gpu, group, names = public_counts()
     assert got["counts"] == [runs, gpu, group] and got["expected"] == names
-    assert got["table_rows"] == cohort and not got["loaded"]
+    assert got["table_rows"] == runs and not got["loaded"]
     assert "fakeprivate" not in got["cli_methods"] + got["seam_owners"] + got["names"]
     assert not got["sizes"] and got["family"] is None and not got["cost_columns"]
 
@@ -135,10 +136,10 @@ def test_with_the_switch_and_no_plugin_nothing_changes(tmp_path):
 def test_an_enabled_plugin_is_picked_up_everywhere(tmp_path):
     got = probe(tmp_path, "1")
     assert got["loaded"]
-    runs, gpu, group, names, cohort = public_counts()
+    runs, gpu, group, names = public_counts()
     assert got["counts"] == [runs + 2, gpu, group] and got["expected"] == names + 2
     assert got["names"][-2:] == ["fakeprivate", "fakeprivate_r2"]
-    assert got["table_rows"] == cohort + 2
+    assert got["table_rows"] == runs + 2
     assert got["cli_methods"][-1] == "fakeprivate"
     assert got["seam_owners"][-1] == "fakeprivate" and got["sizes"]
     assert got["family"] == "fakeprivate" and got["checked_by"] == "fakeprivate"
@@ -166,7 +167,7 @@ def test_the_runs_command_lists_a_plugin_run_only_when_enabled(tmp_path):
 
     off = runs({"REGBENCH_PRIVATE_DIR": str(folder)})
     on = runs({"REGBENCH_PRIVATE_DIR": str(folder), "REGBENCH_PRIVATE": "1"})
-    n = public_counts()[4]
+    n = public_counts()[0]
     assert len(off) == n and on[:n] == off
     assert [r[0] for r in on[n:]] == ["fakeprivate", "fakeprivate_r2"]
     assert (

@@ -310,3 +310,27 @@ def test_a_refusal_is_the_benchmarks_cause(tmp_path):
     assert failure_log.WHOSE[cause] == failure_log.BENCHMARK
     with pytest.raises(prep.Refused, match="fluorescence"):
         prep.write_inputs(bf_case(tif, (64, 64), "fluorescence"), "haem", tmp_path)
+
+
+def test_read_rgb_reduced_is_the_block_mean_of_the_slide(tmp_path):
+    """``imageio.read_rgb_reduced``: long side <= ``max_dim``, each pixel the rounded mean
+    of an f x f block (the edge that is not a whole block is dropped), and the factor."""
+    from benchmarks.regbench import imageio
+
+    tif = write_rgb_tiff(str(tmp_path / "s.tif"), (200, 300), tile=64)
+    import tifffile
+
+    full = tifffile.imread(tif)
+    got, f = imageio.read_rgb_reduced(tif, 100, rows=7)
+    assert f == 3 and got.dtype == np.uint8 and max(got.shape[:2]) <= 100
+    hh, ww = (200 // f) * f, (300 // f) * f
+    want = (
+        full[:hh, :ww]
+        .astype(np.float32)
+        .reshape(hh // f, f, ww // f, f, 3)
+        .mean(axis=(1, 3))
+        .round()
+        .astype(np.uint8)
+    )
+    assert got.shape == want.shape == (66, 100, 3)
+    assert np.array_equal(got, want)

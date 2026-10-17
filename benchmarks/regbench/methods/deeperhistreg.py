@@ -129,6 +129,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..imageio import open_rgb
 from ..mapping import REF_TO_MOV, PointMap
 from . import require_fluorescence
 
@@ -301,10 +302,8 @@ def single_page_tiff(src, channel, dst):
                     counts[: sub.max() + 1] += np.bincount(sub)
                 for x0 in range(0, w, TILE):
                     t = band[:, x0 : x0 + TILE]
-                    if t.shape != (
-                        TILE,
-                        TILE,
-                    ):  # edge tiles padded, as TIFF stores them
+                    # edge tiles padded, as TIFF stores them
+                    if t.shape != (TILE, TILE):
                         full = np.zeros((TILE, TILE), dtype)
                         full[: t.shape[0], : t.shape[1]] = t
                         t = full
@@ -335,36 +334,6 @@ def single_page_tiff(src, channel, dst):
     return {"hw": [h, w], "dtype": str(dtype), "levels": levels}
 
 
-RGB_DECODED = (".jpg", ".jpeg", ".png")  # decoded whole by PIL; anything else is a TIFF
-
-
-def _rgb_source(src):
-    """``(read(y0, y1) -> (h, w, 3) uint8, (H, W), close)`` of an RGB image: a JPEG or
-    PNG decoded whole (PIL), else the full-resolution level of a TIFF read in rows
-    (``imageio._rgb_view``: three samples per pixel, or three channels)."""
-    if str(src).lower().endswith(RGB_DECODED):
-        from PIL import Image
-
-        Image.MAX_IMAGE_PIXELS = None  # whole sections, not an attack
-        with Image.open(str(src)) as im:
-            rgb = np.asarray(im.convert("RGB"))
-        return (lambda y0, y1: rgb[y0:y1]), rgb.shape[:2], (lambda: None)
-    import tifffile
-
-    from ..imageio import _rgb_view
-
-    tif = tifffile.TiffFile(str(src))
-    try:
-        level = tif.series[0].levels[0]
-        if np.dtype(level.dtype) != np.uint8:
-            raise ValueError(f"{src}: expected an 8-bit RGB image, got {level.dtype}")
-        read, hw = _rgb_view(level)
-    except Exception:
-        tif.close()
-        raise
-    return (lambda y0, y1: read(y0, y1)), hw, tif.close
-
-
 def rgb_single_page_tiff(src, dst):
     """An RGB image (JPEG, PNG, or an RGB TIFF) as a tiled, uncompressed TIFF with ONE
     top-level page: three 8-bit samples per pixel, the values untouched. Written tile row
@@ -372,7 +341,7 @@ def rgb_single_page_tiff(src, dst):
     "levels"}`` like ``single_page_tiff`` (``levels`` None: three channels)."""
     import tifffile
 
-    read, (h, w), close = _rgb_source(src)
+    read, (h, w), close = open_rgb(src)
     h, w = int(h), int(w)
 
     def tiles():
@@ -384,10 +353,8 @@ def rgb_single_page_tiff(src, dst):
                 )
             for x0 in range(0, w, TILE):
                 t = band[:, x0 : x0 + TILE]
-                if t.shape[:2] != (
-                    TILE,
-                    TILE,
-                ):  # edge tiles padded, as TIFF stores them
+                # edge tiles padded, as TIFF stores them
+                if t.shape[:2] != (TILE, TILE):
                     full = np.zeros((TILE, TILE, 3), np.uint8)
                     full[: t.shape[0], : t.shape[1]] = t
                     t = full
@@ -669,9 +636,8 @@ def register(case, work, opts):
             "channel (a black pad, no intensity flip); a brightfield RGB case is run "
             "with the shipped parameters"
         )
-    require_fluorescence(
-        case, "deeperhistreg"
-    )  # the shared rule: DeeperHistReg has one
+    # the shared rule: DeeperHistReg has one
+    require_fluorescence(case, "deeperhistreg")
     import deeperhistreg
     import SimpleITK as sitk
     import torch
