@@ -15,6 +15,12 @@ is marked ``sibling variant not ok`` in ``detail`` (``reusable`` stays what it i
 the record itself). The per-record predicate is ``methods.record_gaps``, shared with
 the launcher's ``_reuse``.
 
+A results folder slimmed by ``regbench slim`` (``<out>/SLIMMED.txt``, ``regbench.slimmed``)
+is reported as such: at ``csv`` its maps are removed, and a result the record check finds
+without its ``warped.npz`` says ``slimmed: csv`` (not reusable: the launcher runs it
+again) instead of a missing file; at ``images`` every row's detail says ``slimmed:
+images`` (the maps are kept, so reuse is unaffected).
+
 A method whose adapter cannot be loaded or whose key cannot be computed here (a
 stand-in, a private plug-in that is not enabled) is ``reusable: no`` with the detail
 ``KEY_NOT_COMPUTABLE`` and ``code`` among the differences: its code bytes cannot be
@@ -27,7 +33,7 @@ import json
 import os
 from pathlib import Path
 
-from . import methods
+from . import methods, slimmed
 from .cases import load_case
 
 KEY_NOT_COMPUTABLE = "key not computable here"
@@ -95,6 +101,16 @@ def report(cases_root, out, dataset="multiplex"):
             for r in unit_rows:
                 if r["reusable"] == "yes":
                     r["detail"] = "sibling variant not ok"
+    said = slimmed.said(out)
+    if said:
+        for r in rows:
+            gone = "record" in r["differs"].split(",") and slimmed.level(out) == "csv"
+            detail = "" if r["detail"] == "warped.npz is missing" and gone else r["detail"]
+            if gone:
+                said_here = f"{said} (its warped.npz is removed: run again)"
+            else:
+                said_here = said
+            r["detail"] = "; ".join(x for x in (said_here, detail) if x)
     return rows
 
 

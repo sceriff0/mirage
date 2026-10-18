@@ -25,12 +25,18 @@
                        refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
 ``cpu-scaling``        the CPU-scaling table: the named rows at 4, 8 and 16 CPUs
                        (``paper/cpu_scaling.py``)
-``plots``              the paper's figures from the paper tables (``paper/plots.py``)
+``plots``              the paper's figures from the paper tables (``paper/plots.py``);
+                       ``--tables DIR --to DIR`` draws them from any folder of the paper's
+                       CSVs (a ``collect`` folder: drafts)
 ``overlays``           the overlay zooms (before, after rigid, after the whole transform) of
                        one field of a cohort case, per method's best row (``paper/overlays.py``)
 ``collect``            the interim collection: the existing arm, sweep and interim regbench
                        results in the paper tables' columns, NA for what is still to come
                        (``paper/collect.py``; never read by ``score`` or ``paper``)
+``slim``               keep the CSVs, free the space of a results, arms or sweep root: the
+                       written images and work folders (``images``), and the maps and
+                       records too (``csv``, after a ``collect``); a dry run unless
+                       ``--apply`` (``paper/slim.py``)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -672,9 +678,31 @@ def build_parser():
         "<out>/paper/figures/ for the cohort, <out>/paper/<dataset>/figures/ otherwise; a figure "
         "whose input table is absent is written as a placeholder naming it",
     )
-    pl.add_argument("--out", required=True, help="the results folder `paper` wrote to")
+    pl.add_argument("--out", default=None, help="the results folder `paper` wrote to")
     pl.add_argument("--dataset", default="multiplex", choices=DATASETS)
     pl.add_argument("--only", default=None, help="figure names, comma-separated")
+    pl.add_argument(
+        "--tables",
+        default=None,
+        metavar="DIR",
+        help="draw from this folder of paper-schema CSVs instead (a `collect` folder or a "
+        "paper/ folder; nothing else is read), into --to; every plot and overlay is written, "
+        "a placeholder where its inputs are absent or all NA",
+    )
+    pl.add_argument("--to", default=None, help="with --tables: the folder the figures go to")
+    pl.add_argument(
+        "--draft",
+        action="store_true",
+        help="with --tables: stamp 'DRAFT — interim data (<sources>)' on every figure and add "
+        "_draft to its name (implied when the folder holds the collector's README.txt)",
+    )
+    pl.add_argument(
+        "--results",
+        default=None,
+        help="with --tables: the results folder whose images the overlay zooms are drawn from "
+        "(with --cases); without it the overlays are placeholders naming what they need",
+    )
+    pl.add_argument("--cases", default=None, help="with --results: the prepared cases folder")
 
     ov = sub.add_parser(
         "overlays",
@@ -719,6 +747,22 @@ def build_parser():
     co.add_argument("--cases", default=None,
                     help="the folder the cohort cases were prepared under: one expected per_pair "
                     "row per (case, terminal row of the run list)")
+
+    sm = sub.add_parser(
+        "slim",
+        help="keep the CSVs, free the space (benchmarks/regbench/paper/slim.py): a DRY RUN "
+        "unless --apply. --level images removes the written images and work folders "
+        "(re-scoring still works); --level csv also the maps and records (needs --collected)",
+    )
+    sm.add_argument("--root", required=True,
+                    help="a regbench results folder, an arms root or a sweep root")
+    sm.add_argument("--level", default=None, choices=("images", "csv"))
+    sm.add_argument("--collected", default=None, metavar="DIR",
+                    help="--level csv: a `collect` folder (or the root's tables/) newer than "
+                    "every run it covers, with rows of this root")
+    sm.add_argument("--apply", action="store_true", help="delete (default: a dry run)")
+    sm.add_argument("--status", action="store_true",
+                    help="print `slimmed: images|csv` (or `slimmed: no`) and exit")
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1518,7 +1562,15 @@ def _main(a):
     if a.cmd == "plots":
         from .paper import plots
 
+        if a.tables:
+            return plots.main_tables(a)
+        if not a.out:
+            raise SystemExit("plots: --out (the results folder) or --tables (with --to)")
         return plots.main(a)
+    if a.cmd == "slim":
+        from .paper import slim
+
+        return slim.main(a)
     if a.cmd == "overlays":
         from .paper import overlays
 

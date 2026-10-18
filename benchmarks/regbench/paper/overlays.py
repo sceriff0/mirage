@@ -967,26 +967,34 @@ def _roi_row(case, family, row, roi, med, rule):
     )
 
 
-def _placeholders(fig_dir, missing, paper_dir):
-    schema.write(paper_dir / "overlay_rois.csv", "overlay_rois", [])
+def _placeholders(fig_dir, missing, rois_path):
+    schema.write(rois_path, "overlay_rois", [])
     return {name: plots._placeholder(fig_dir, name, missing) for name in OVERLAYS}
 
 
-def build(cases_root, out, roi_um=ROI_UM, case_id=None, dataset=COHORT):
-    """Write ``OVERLAYS`` and ``overlay_rois.csv``; ``{figure: result}`` as ``plots``."""
+def build(cases_root, out, roi_um=ROI_UM, case_id=None, dataset=COHORT, best_path=None,
+          fig_dir=None, rois_path=None, extra_missing=()):
+    """Write ``OVERLAYS`` and ``overlay_rois.csv``; ``{figure: result}`` as ``plots``.
+
+    By default the best rows are ``<out>/paper/method_best.csv`` and the figures and
+    ``overlay_rois.csv`` go under ``<out>/paper``; ``plots --tables`` names its own
+    (``best_path``, ``fig_dir``, ``rois_path``) and what a placeholder must name besides
+    (``extra_missing``: a ``regbench slim`` of the results folder)."""
     paper_dir = Path(out) / "paper"
-    fig_dir = paper_dir / "figures"
+    fig_dir = Path(fig_dir) if fig_dir is not None else paper_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
-    best_path = paper_dir / "method_best.csv"
+    rois_path = Path(rois_path) if rois_path is not None else paper_dir / "overlay_rois.csv"
+    extra = list(extra_missing)
+    best_path = Path(best_path) if best_path is not None else paper_dir / "method_best.csv"
     best = plots._read(best_path)
     if best is None:
-        return _placeholders(fig_dir, [("method_best", best_path)], paper_dir)
+        return _placeholders(fig_dir, [("method_best", best_path), *extra], rois_path)
     best_rows = {r["family"]: r.get("best_row") for r in best
                  if (r.get("dataset") or dataset) == dataset}
     stare_row = best_rows.get(STARE_FAMILY)
     if not stare_row:
-        return _placeholders(fig_dir, [("method_best: the stare family's best_row", best_path)],
-                             paper_dir)
+        return _placeholders(fig_dir, [("method_best: the stare family's best_row", best_path),
+                                       *extra], rois_path)
     found = list_cases(cases_root, dataset)
     if case_id is not None:
         found = [c for c in found if str(c.case_id) == str(case_id)]
@@ -1005,7 +1013,7 @@ def build(cases_root, out, roi_um=ROI_UM, case_id=None, dataset=COHORT):
         sets_of[case.case_id], d_of[case.case_id] = sets, d
     if not rois:
         where = Path(out) / stare_row / dataset / (str(case_id) if case_id else "*") / "warped.npz"
-        return _placeholders(fig_dir, [(f"a {stare_row} result", where)], paper_dir)
+        return _placeholders(fig_dir, [(f"a {stare_row} result", where), *extra], rois_path)
     chosen, case_rule = pick_case(rois, case_id)
     sets, roi = sets_of[chosen], rois[chosen]
     case = sets.case
@@ -1028,7 +1036,7 @@ def build(cases_root, out, roi_um=ROI_UM, case_id=None, dataset=COHORT):
         panels, ref, ref_rings = row_panels(case, sets, out, row, roi, d)
         drawn.append((family, row, panels, ref, ref_rings))
         roi_rows.append(_roi_row(case, family, row, roi, medians_in(sets.ref_c, d, roi), rule))
-    schema.write(paper_dir / "overlay_rois.csv", "overlay_rois", roi_rows)
+    schema.write(rois_path, "overlay_rois", roi_rows)
     stare = next(x for x in drawn if x[0] == STARE_FAMILY)
     return {
         "fig3a_overlays": _draw_rows("fig3a_overlays", drawn, sets, roi, fig_dir),

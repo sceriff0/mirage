@@ -1864,6 +1864,21 @@ def case_jobs(
     return [(str(out), c, variants, owners, dict(row_checks or {})) for c in cs]
 
 
+def refuse_slimmed(out, what="score"):
+    """``SystemExit`` when ``out`` was slimmed to ``csv`` (``<out>/SLIMMED.txt``,
+    ``regbench slim``, ``regbench.slimmed``): its maps (``warped.npz``) and records are
+    gone, so a re-score would find every result missing and read as failures. A folder
+    slimmed to ``images`` is scored as usual: what a score reads is kept."""
+    from . import slimmed
+
+    if slimmed.level(out) == "csv":
+        raise SystemExit(
+            f"{what}: refusing {out}: slimmed: csv ({Path(out) / slimmed.NAME}, `regbench "
+            "slim --level csv`): its maps and records are removed, so it can no longer be "
+            "scored. Its CSVs (tables/) are what is left; run the runs again to score them."
+        )
+
+
 def score_case(
     cases_root,
     out,
@@ -1886,6 +1901,7 @@ def score_case(
     the dataset (``list_cases``: the order every array of the launcher uses). Returns
     ``"scored"``, ``"kept"`` (its record was valid already) or ``"skipped"`` (a
     ``dev_*`` case when ``dev`` is not given, and the reverse)."""
+    refuse_slimmed(out, "score-case")
     everything = list_cases(cases_root, dataset)
     if case_id is None:
         if index is None or not 0 <= index < len(everything):
@@ -3720,7 +3736,11 @@ def score(
     the primary variants: they come first in the summary and define the ``common`` block.
     ``seam_owners`` (default ``SEAM_OWNERS``) names the variants whose seam mask gives
     every variant a second, off-seam row (``nonband_*``).
+
+    A results folder slimmed to ``csv`` (``refuse_slimmed``) is refused here, before
+    anything is read.
     """
+    refuse_slimmed(out, "score")
     owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
     variants_of = {}
     jobs = []

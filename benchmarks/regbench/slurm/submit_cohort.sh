@@ -662,6 +662,22 @@ earlier_default_folders() {
 }
 earlier_default_folders
 
+# A RESULTS FOLDER SLIMMED BY `regbench slim` (benchmarks/regbench/paper/slim.py). At
+# `csv` its maps (warped.npz) and records are gone: no result in it is reusable, so every
+# unit runs again (the run's own reuse check, methods.record_gaps, finds no warped.npz),
+# and it can no longer be scored (score refuses it). Said here; `images` changes nothing.
+# Asked only when the folder holds SLIMMED.txt, so any other launch is unchanged.
+if [ -e "$REGBENCH_OUT/SLIMMED.txt" ]; then
+    slimmed="$(regbench_py "$REGBENCH_HEAD_IMAGE" slim --status --root "$REGBENCH_OUT")" \
+        || die "cannot read $REGBENCH_OUT/SLIMMED.txt (python -m benchmarks.regbench slim --status). Nothing was submitted."
+    if [ "$slimmed" = "slimmed: csv" ]; then
+        [ "$score_only" = 1 ] && die "--score-only: $REGBENCH_OUT is $slimmed ($REGBENCH_OUT/SLIMMED.txt): its maps and records are removed, so it can no longer be scored (score refuses it). Nothing was submitted."
+        echo "# WARNING results folder: $REGBENCH_OUT is $slimmed ($REGBENCH_OUT/SLIMMED.txt): its maps (warped.npz) and records are removed, so NO result in it is reusable: every unit runs again" | tee /dev/stderr
+    else
+        echo "# results folder: $REGBENCH_OUT is $slimmed ($REGBENCH_OUT/SLIMMED.txt): its written images are removed; its maps are kept, so its results are reused as usual"
+    fi
+fi
+
 if [ "$DRY" = 1 ]; then
     scratch="$(mktemp -d)"
     scratch_is_temporary=1

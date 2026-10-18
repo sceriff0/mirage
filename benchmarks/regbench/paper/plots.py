@@ -36,7 +36,7 @@ import matplotlib.ticker  # noqa: E402
 import numpy as np  # noqa: E402
 
 from . import plotstyle as ps  # noqa: E402
-from . import tables  # noqa: E402
+from . import schema, tables  # noqa: E402
 
 WHISKERS = "1.5 x IQR"
 MIN_BOX = 10  # fewer points than this: points with a median bar, never a box
@@ -60,16 +60,49 @@ LABELS = {
 }
 STAGES = ("initial", "rigid", "micro_rigid", "nonrigid", "micro")
 TIERS = ("high", "medium", "low")
+EXPECTED = "expected"  # the collector's rows that hold no measurement yet
+DRAFT_SUFFIX = "_draft"
+DRAFT_COLOR = "#B03A2E"
+
+
+# How a figure is drawn from a tables folder (``render_tables``): set only inside it.
+#   stamp          "DRAFT — interim data (<sources>)": on every figure, ``_draft`` on its name
+#   fallback       a folder whose derived table stands in for an EMPTY one of the folder
+#   schema_only    refuse to read a CSV that is not a paper-schema table
+#   drop_expected  leave out the collector's ``source = expected`` rows (no measurement)
+_CTX = {}
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
-def _read(path):
+def _read_file(path):
     path = Path(path)
     if not path.is_file():
         return None
     with open(path, newline="") as fh:
         rows = [{k: (None if v == "NA" else v) for k, v in r.items()} for r in csv.DictReader(fh)]
+    if _CTX.get("drop_expected"):
+        rows = _case_keyed([r for r in rows if r.get("source") != EXPECTED])
     return rows or None
+
+
+def _case_keyed(rows):
+    """A row that names no ``case_id`` but its patient and panel (an arm's row: the arms
+    know no case ids) is keyed ``<patient>/<panel>``, so its cases stay apart."""
+    for r in rows:
+        if "case_id" in r and r["case_id"] is None and r.get("patient_id") and r.get("panel"):
+            r["case_id"] = f"{r['patient_id']}/{r['panel']}"
+    return rows
+
+
+def _read(path):
+    path = Path(path)
+    if _CTX.get("schema_only") and path.stem not in schema.TABLES:
+        raise ValueError(f"plots: {path} is not a paper-schema table (paper/schema.py)")
+    rows = _read_file(path)
+    fallback = _CTX.get("fallback")
+    if rows is None and fallback is not None and (Path(fallback) / path.name).is_file():
+        rows = _read_file(Path(fallback) / path.name)
+    return rows
 
 
 def _num(v):
@@ -112,6 +145,10 @@ def _colors(fig_dir, extra=()):
 
 
 def _save(fig, fig_dir, name, data):
+    stamp = _CTX.get("stamp")
+    if stamp:
+        fig.suptitle(stamp, fontsize=ps.TICK_PT, color=DRAFT_COLOR, fontweight="bold")
+        name = f"{name}{DRAFT_SUFFIX}"
     return [str(p) for p in ps.save(fig, Path(fig_dir) / name, data=data)]
 
 
@@ -778,17 +815,221 @@ PLOTS = {
 }
 
 
+# ── all-NA inputs (R22) ──────────────────────────────────────────────────────
+# Per figure, the tables it reads and the columns that carry what it draws. A figure whose
+# table is absent, or whose columns are NA in every row of it, is the placeholder naming
+# them (never an empty axis).
+NEEDS = {
+    "fig3b_dice_best": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
+    "fig3b_dice_all": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
+    "fig3c_displacement_best": {"per_pair.csv": ("displacement_um_p50",),
+                                "method_best.csv": ("best_row",)},
+    "fig3d_valis_stages": {"valis_stages.csv": ("dice_med",)},
+    "fig3d_stare_tiers": {"per_pair.csv": ("dice_matched",), "stare_tiers.csv": ("row",)},
+    "fig3e_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
+    "fig3f_cpu_wall_best": {"method_best.csv": ("best_row",),
+                            "cost_points.csv": ("cpu_h_used", "wall_s")},
+    "fig2c_cost_vs_input": {"method_best.csv": ("best_row",), "cost_points.csv": ("input_gb",),
+                            "cost_fits.csv": ("slope",)},
+    "figS_cpu_scaling": {"cpu_scaling.csv": ("wall_s",)},
+    "figS_pipeline_cost_fits": {"pipeline_cost_fits.csv": ("slope",)},
+}
+
+
+def _not_drawable(paper_dir, name):
+    """``[(what, path)]``: each table of ``NEEDS[name]`` that is absent, or whose columns
+    are all NA; ``[]`` when the figure can be drawn."""
+    missing = []
+    for fname, cols in NEEDS.get(name, {}).items():
+        path = Path(paper_dir) / fname
+        rows = _read(path)
+        table = fname.removesuffix(".csv")
+        if rows is None:
+            missing.append((table, path))
+        elif all(r.get(c) is None for r in rows for c in cols):
+            missing.append((f"{table}: column(s) {', '.join(cols)} NA in all {len(rows)} row(s)",
+                            path))
+    return missing
+
+
+def draw(name, paper_dir, fig_dir):
+    """One figure of ``PLOTS``: its placeholder when its inputs are absent or all NA."""
+    missing = _not_drawable(paper_dir, name)
+    if missing:
+        return _placeholder(fig_dir, name, missing)
+    return PLOTS[name](paper_dir, fig_dir)
+
+
+def _only(only, known):
+    names = [s for s in (only or "").split(",") if s]
+    unknown = [s for s in names if s not in known]
+    if unknown:
+        raise SystemExit(f"plots: no figure {unknown}; known: {sorted(known)}")
+    return names
+
+
 def main(a):
     base = Path(a.out) / "paper"
     paper_dir = base if a.dataset == tables.COHORT else base / a.dataset
     fig_dir = paper_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
-    only = [s for s in (a.only or "").split(",") if s]
-    unknown = [s for s in only if s not in PLOTS]
-    if unknown:
-        raise SystemExit(f"plots: no figure {unknown}; known: {sorted(PLOTS)}")
+    only = _only(a.only, PLOTS)
     for name in only or PLOTS:
-        res = PLOTS[name](paper_dir, fig_dir)
+        res = draw(name, paper_dir, fig_dir)
+        tag = "placeholder" if res.get("placeholder") else "drawn"
+        print(f"{name}\t{tag}\t{res['files'][0]}")
+    return 0
+
+
+# ── drawing from a tables folder: drafts (Task 18b) ──────────────────────────
+# ``regbench plots --tables DIR --to DIR [--draft]``. Every figure is drawn from the
+# paper-schema CSVs of DIR and NOTHING else (``_CTX["schema_only"]``): a collection
+# (``collect.py``) or a ``paper/`` folder. The collector's ``expected`` rows hold no
+# measurement and are left out. A table the paper DERIVES from ``per_pair``
+# (``DERIVABLE``: method_best, valis_stages, stare_tiers) that has no row in DIR is derived
+# here by the paper's own rule (``tables.best_of`` / ``valis_stages`` / ``stare_tiers``,
+# without cost) and written to ``<to>/derived/`` with ``source = derived:<DIR>``: what the
+# figure drew is on disk. ``--draft`` (implied by the collector's README.txt) stamps
+# ``DRAFT — interim data (<source kinds>)`` on every figure and adds ``_draft`` to its name.
+# The overlay zooms need a results folder's images (``--results``, ``--cases``); without
+# one, or where they were removed (``regbench slim``), each is the placeholder naming them.
+DERIVABLE = ("method_best", "valis_stages", "stare_tiers")
+
+
+def _typed(rows):
+    out = []
+    for r in rows:
+        t = dict(r)
+        for k in tables.NUMERIC:
+            if k in t:
+                t[k] = tables._num(t[k])
+        for k in tables.FLAGS:
+            if k in t:
+                t[k] = tables._flag(t[k])
+        out.append(t)
+    return out
+
+
+def _derive(tables_dir, to, dataset):
+    """Write ``<to>/<table>.csv`` for each ``DERIVABLE`` table that has no row in
+    ``tables_dir``; ``{table: rows written}``."""
+    pp = _read_file(Path(tables_dir) / "per_pair.csv")
+    if pp is None:
+        return {}
+    pp = _typed(_case_keyed([r for r in pp if r.get("source") != EXPECTED]))
+    pp = [r for r in pp if r.get("dataset") == dataset]
+    if not pp:
+        return {}
+    source = f"derived:{tables_dir}"
+    made = {}
+    for name in DERIVABLE:
+        if _read_file(Path(tables_dir) / f"{name}.csv") is not None:
+            continue
+        if name == "method_best":
+            rows = [tables.best_of(pp, f, dataset, {}) for f in tables._families(dataset)]
+        elif name == "valis_stages":
+            rows = tables.valis_stages(pp, dataset)
+        else:
+            rows = tables.stare_tiers(pp, [], dataset)
+        rows = [{**r, "source": source} for r in rows]
+        Path(to).mkdir(parents=True, exist_ok=True)
+        schema.write(Path(to) / f"{name}.csv", name, rows)
+        made[name] = len(rows)
+    if made:
+        (Path(to) / "README.txt").write_text(
+            f"Derived by `regbench plots --tables {tables_dir}` from its per_pair.csv (the "
+            "collector's `expected` rows left out), by the paper's own rules "
+            "(benchmarks/regbench/paper/tables.py: best_of, valis_stages, stare_tiers), "
+            "without cost (no tie-break by CPU time): these tables had no row there.\n"
+            + "".join(f"  {k}: {n} row(s)\n" for k, n in made.items()))
+    return made
+
+
+def sources(tables_dir):
+    """The source kinds of the rows of ``tables_dir`` (``arms``, ``sweep``,
+    ``regbench-interim``, ``regbench`` ...), ``expected`` left out, in order."""
+    kinds = []
+    for name in schema.TABLES:
+        for r in _read_file(Path(tables_dir) / f"{name}.csv") or []:
+            k = (r.get("source") or "").split(":", 1)[0]
+            if k and k != EXPECTED and k not in kinds:
+                kinds.append(k)
+    return sorted(kinds)
+
+
+def _overlay_placeholders(fig_dir, results, extra=()):
+    from . import overlays
+
+    where = Path(results) if results else Path("<results>")
+    missing = [*extra,
+               ("warped.npz of each best row (the rigid and final panels' maps)",
+                where / "<row>" / "<dataset>" / "<case>" / "warped.npz"),
+               ("the image each best row wrote (run.json native.files)",
+                where / "<row>" / "<dataset>" / "<case>" / "native")]
+    if not results:
+        missing.insert(0, ("a results folder and its cases (plots --results, --cases): "
+                           "none given", where))
+    return {name: _placeholder(fig_dir, name, missing) for name in overlays.OVERLAYS}
+
+
+def _overlays(tables_dir, to, results, cases, dataset, derived):
+    from .. import slimmed
+    from . import overlays
+
+    if not results or not cases:
+        return _overlay_placeholders(to, results)
+    extra = []
+    if slimmed.said(results):
+        extra.append((f"removed by `regbench slim` ({slimmed.said(results)})",
+                      Path(results) / slimmed.NAME))
+    best = Path(tables_dir) / "method_best.csv"
+    if _read(best) is None and (Path(derived) / "method_best.csv").is_file():
+        best = Path(derived) / "method_best.csv"
+    return overlays.build(cases, results, dataset=dataset, best_path=best, fig_dir=to,
+                          rois_path=Path(to) / "overlay_rois.csv", extra_missing=extra)
+
+
+def render_tables(tables_dir, to, draft=None, only=None, results=None, cases=None,
+                  dataset=tables.COHORT):
+    """Every figure of ``PLOTS`` and ``overlays.OVERLAYS`` from the paper-schema CSVs of
+    ``tables_dir`` into ``to``; ``{figure: result}`` as ``PLOTS``."""
+    from . import overlays, slim
+
+    tables_dir, to = Path(tables_dir), Path(to)
+    if not tables_dir.is_dir():
+        raise SystemExit(f"plots --tables: {tables_dir} is not a folder")
+    t, o = tables_dir.resolve(), to.resolve()
+    if o == t or t in o.parents:
+        raise SystemExit(f"plots --tables: --to {to} lies in the tables folder it reads")
+    draft = bool(draft) or slim.is_collection(tables_dir)
+    stamp = f"DRAFT — interim data ({', '.join(sources(tables_dir)) or 'no source'})" \
+        if draft else None
+    names = only if isinstance(only, (list, tuple)) else _only(only, [*PLOTS, *overlays.OVERLAYS])
+    to.mkdir(parents=True, exist_ok=True)
+    derived = to / "derived"
+    _derive(tables_dir, derived, dataset)
+    got = {}
+    saved = dict(_CTX)
+    _CTX.clear()
+    _CTX.update(stamp=stamp, fallback=derived, schema_only=True, drop_expected=True)
+    try:
+        for name in PLOTS:
+            if not names or name in names:
+                got[name] = draw(name, tables_dir, to)
+        if not names or set(names) & set(overlays.OVERLAYS):
+            ov = _overlays(tables_dir, to, results, cases, dataset, derived)
+            got.update({k: v for k, v in ov.items() if not names or k in names})
+    finally:
+        _CTX.clear()
+        _CTX.update(saved)
+    return got
+
+
+def main_tables(a):
+    if not a.to:
+        raise SystemExit("plots --tables: --to <folder> is required")
+    got = render_tables(a.tables, a.to, a.draft, a.only, a.results, a.cases, a.dataset)
+    for name, res in got.items():
         tag = "placeholder" if res.get("placeholder") else "drawn"
         print(f"{name}\t{tag}\t{res['files'][0]}")
     return 0
