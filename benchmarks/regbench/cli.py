@@ -23,7 +23,7 @@
                        folders), for ``REGBENCH_CASES`` of the CPU cross
 ``staged-results``     the STARE results under ``--out`` its stage jobs made (the launcher
                        refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
-``cpu-scaling``        the CPU-scaling table: the named rows at 4, 8 and 16 CPUs
+``cpu-scaling``        the CPU-scaling table: the named rows at 4 and 8 CPUs
                        (``paper/cpu_scaling.py``)
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``);
                        ``--tables DIR --to DIR`` draws them from any folder of the paper's
@@ -720,8 +720,8 @@ def build_parser():
     cs = sub.add_parser(
         "cpu-scaling",
         help="the CPU-scaling table (benchmarks/regbench/paper/cpu_scaling.py): wall time, "
-        "CPU-hours and peak memory of the named rows at 4, 8 and 16 CPUs, e.g. --point 4=OUT "
-        "--point 4=OUT_LOCAL4 --point 8=OUT8 --point 16=OUT16 --rows "
+        "CPU-hours and peak memory of the named rows at 4 and 8 CPUs, e.g. --point 4=OUT "
+        "--point 4=OUT_LOCAL4 --point 8=OUT8 --rows "
         "stare,valis_mirage,valis120_hires,deeperhistreg_hr_gpu,ashlar,palom "
         "--to O/paper/cpu_scaling.csv",
     )

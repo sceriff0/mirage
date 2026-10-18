@@ -434,10 +434,10 @@ need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
 need_int REGBENCH_SCORE_CPUS 1
 need_int REGBENCH_RETRY_WATCHERS 1
-# the CPU cross: 4 (every method's allocation), 8 or 16, and who starts STARE's stages
+# the CPU cross: 4 (every method's allocation) or 8, and who starts STARE's stages
 case "$LADDER_CPUS" in
-    4|8|16) ;;
-    *) die "REGBENCH_CPUS='$LADDER_CPUS': the ladder's CPUs are 4, 8 or 16 (4 is every method's allocation; 8 and 16 are the CPU cross's). Nothing was submitted." ;;
+    4|8) ;;
+    *) die "REGBENCH_CPUS='$LADDER_CPUS': the ladder's CPUs are 4 or 8 (4 is every method's allocation; 8 is the CPU cross's). Nothing was submitted." ;;
 esac
 case "$STARE_EXECUTION" in
     jobs|local) ;;

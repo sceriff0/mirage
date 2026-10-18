@@ -1,5 +1,5 @@
 """The CPU-scaling table (``cpu_scaling``): wall time, CPU-hours and peak memory of the
-primary rows at 4, 8 and 16 CPUs, per patient.
+primary rows at 4 and 8 CPUs, per patient.
 
 ``points`` maps a CPU count to the results folders that ran at it. Each folder's
 ``tables/summary_resources.csv`` gives one line per (patient, result name); only COMPLETE

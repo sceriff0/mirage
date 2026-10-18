@@ -2799,8 +2799,9 @@ subset is assumed to be under `$REGBENCH_OUT` already, and the script says so.
 ### The CPU cross
 
 4 CPUs is every method's allocation. The CPU cross runs the six primary rows again at 8
-and 16 CPUs on a few patients, to show how each method's wall time and CPU-hours move
-with the allocation (user ruling 2026-10-16: `REGBENCH_CPUS` exists for this alone).
+CPUs on a few patients, to show how each method's wall time and CPU-hours move
+with the allocation (user ruling 2026-10-16: `REGBENCH_CPUS` exists for this alone;
+  user ruling 2026-10-18: 4 and 8 CPUs only, not 16).
 
 - **The patients** are a rule: the smallest, median and largest by total moving
   gigapixels (the sum of `mov_hw` over a patient's rounds, ties by name; `subset.py`).
@@ -2810,7 +2811,7 @@ with the allocation (user ruling 2026-10-16: `REGBENCH_CPUS` exists for this alo
 - **Their cases** are a folder of symlinks to the prepared case folders (and a copy of
   `manifest.csv`): `regbench subset-cases --cases C --groups P1,P2,P3 --to D`. It
   refuses a `D` that is not empty. Nothing is prepared again.
-- **`REGBENCH_CPUS`** (4, 8 or 16; anything else stops the launch before any `sbatch`)
+- **`REGBENCH_CPUS`** (4 or 8; anything else, 16 included, stops the launch before any `sbatch`)
   is every ladder task's `--cpus-per-task`, recorded in `run.json` as
   `cpus_requested`. The selfchecks and the prepare, settle, tissue and score jobs keep
   their own allocation.
@@ -2828,18 +2829,16 @@ regbench_py STARE_REGBENCH pick-patients --cases "$REGBENCH_CASES"
 regbench_py STARE_REGBENCH subset-cases --cases "$REGBENCH_CASES" \
     --groups <the three patients> --to "$ROOT/cases_cross"
 RUNS="stare valis_mirage valis120_hires deeperhistreg_hr_gpu ashlar palom"
-for c in 8 16; do
-    REGBENCH_CPUS=$c REGBENCH_STARE_EXECUTION=local REGBENCH_OUT=$ROOT/out_c$c \
-    REGBENCH_CASES=$ROOT/cases_cross \
-        benchmarks/regbench/slurm/submit_cohort.sh --runs "$RUNS" -- <site options>
-done
+REGBENCH_CPUS=8 REGBENCH_STARE_EXECUTION=local REGBENCH_OUT=$ROOT/out_c8 \
+REGBENCH_CASES=$ROOT/cases_cross \
+    benchmarks/regbench/slurm/submit_cohort.sh --runs "$RUNS" -- <site options>
 # STARE's 4-CPU point, also local, in a folder of its own
 REGBENCH_STARE_EXECUTION=local REGBENCH_OUT=$ROOT/out_c4 \
 REGBENCH_CASES=$ROOT/cases_cross \
     benchmarks/regbench/slurm/submit_cohort.sh --runs stare -- <site options>
 ```
 
-STARE's points at 4, 8 and 16 CPUs are all `local`, so they compare with one another.
+STARE's points at 4 and 8 CPUs are both `local`, so they compare with one another.
 The other methods' 4-CPU points are the main run's results on those patients; they are
 not run again. Never point a `local` launch at the main `REGBENCH_OUT`: its STARE
 results have another reuse key, so every STARE unit there would run again and replace

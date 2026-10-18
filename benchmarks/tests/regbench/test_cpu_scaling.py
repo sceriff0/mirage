@@ -49,11 +49,7 @@ def points(tmp_path):
         row("P4", "valis_mirage", 35, complete="False"),
         row("P1", "stare", 120),
     ], {"stare": "jobs:local"})
-    c16 = folder(tmp_path, "c16", [
-        row("P1", "valis_mirage", 25), row("P3", "valis_mirage", 20), row("P4", "valis_mirage", 18),
-        row("P1", "stare", 70),
-    ], {"stare": "local"})
-    return {4: [c4, l4], 8: [c8], 16: [c16]}
+    return {4: [c4, l4], 8: [c8]}
 
 
 def test_speedup_efficiency_and_present_in_every_count(points):
@@ -64,8 +60,6 @@ def test_speedup_efficiency_and_present_in_every_count(points):
     assert p1[4]["speedup_vs_4"] == pytest.approx(1.0)
     assert p1[8]["speedup_vs_4"] == pytest.approx(100 / 50)
     assert p1[8]["efficiency"] == pytest.approx(1.0)
-    assert p1[16]["speedup_vs_4"] == pytest.approx(4.0)
-    assert p1[16]["efficiency"] == pytest.approx(1.0)
     assert p1[8]["execution"] == "one process" and p1[8]["wall_s"] == 50
     assert p1[8]["family"] and p1[8]["row"] == "valis_mirage"
 
@@ -76,9 +70,8 @@ def test_stare_executions_never_mix(points):
     assert by[("jobs", 4)]["wall_s"] == 40  # wall_unlimited_parallel_s for a jobs row
     assert by[("local", 4)]["wall_s"] == 200
     assert by[("local", 8)]["speedup_vs_4"] == pytest.approx(200 / 120)  # info.jobs fallback
-    assert by[("local", 16)]["speedup_vs_4"] == pytest.approx(200 / 70)
-    assert by[("local", 16)]["efficiency"] == pytest.approx(200 / 70 / 4)
-    assert ("jobs", 8) not in by and ("jobs", 16) not in by
+    assert by[("local", 8)]["efficiency"] == pytest.approx(200 / 120 / 2)
+    assert ("jobs", 8) not in by
 
 
 def test_rows_not_named_are_left_out_and_columns_are_the_schema(points, tmp_path):

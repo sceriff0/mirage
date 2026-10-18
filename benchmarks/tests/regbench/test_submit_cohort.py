@@ -3666,13 +3666,13 @@ def test_regbench_cpus_is_every_ladder_tasks_allocation_and_nothing_elses(site):
             assert job.opt("--cpus-per-task") == base[name].opt("--cpus-per-task"), name
 
 
-@pytest.mark.parametrize("value", ["6", "2", "0", "eight", "4 8"])
+@pytest.mark.parametrize("value", ["6", "2", "0", "16", "eight", "4 8"])
 def test_a_cpu_count_outside_the_cross_is_refused_before_any_sbatch(site, value):
     done, log, _ = launch(
         site, env={"REGBENCH_CPUS": value}, log="cpus-bad-" + value.replace(" ", "_")
     )
     assert done.returncode == 2
-    assert "REGBENCH_CPUS" in done.stderr and "4, 8 or 16" in done.stderr
+    assert "REGBENCH_CPUS" in done.stderr and "4 or 8" in done.stderr
     assert not _sbatch_lines(done.stdout)
     assert not log.exists() or not log.read_text()
 
