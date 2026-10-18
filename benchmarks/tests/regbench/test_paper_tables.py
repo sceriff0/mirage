@@ -470,3 +470,19 @@ def test_end_to_end_reads_the_common_patients_the_row_completed_with_intervals()
     assert r["n_patients"] == 2 and r["estimate_s_med"] == 15.0
     assert r["estimate_s_ci_low"] <= 15.0 <= r["estimate_s_ci_high"]
     assert r["unit"] == "patient" and r["clock"] == "whole_process"
+
+
+def test_the_prior_counts_the_rounds_it_has_no_line_for_and_is_summed_per_patient():
+    """T31 fix M8: an affine=stare prior sums STARE's COARSE over the patient's rounds; a
+    round with no stare_stage_peaks line makes it a lower bound, counted; and
+    with_prior_cpu_h is the median of the per-patient sums, not a median plus a median."""
+    res = [{"method": "stare", "group": p, "case_id": c}
+           for p, c in (("P1", "a"), ("P1", "b"), ("P2", "c"), ("P3", "d"))]
+    peaks = [{"row": "stare", "patient_id": p, "case_id": c, "coarse_cpu_h": h, "coarse_s": 1}
+             for p, c, h in (("P1", "a", 1.0), ("P2", "c", 10.0), ("P3", "d", 0.0))]
+    got = tables._prior_by_patient("affine_ashlar", [], res, {"P1", "P2", "P3"}, peaks)
+    assert got["P1"] == (1.0, 1.0, 1) and got["P2"] == (10.0, 1.0, 0)
+    own = {"P1": 0.0, "P2": 0.0, "P3": 10.0}
+    # sums 1, 10, 10 -> 10; median + median would be 1 + 0 = 1
+    assert tables._with_prior(own, got) == 10.0
+    assert tables._prior_by_patient("ashlar", [], res, {"P1"}, peaks) == {}

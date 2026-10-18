@@ -627,40 +627,46 @@ def _summary_kinds(fam, best, primary, cost_rows, dataset):
     return [(k, r) for k, r in picks if not _missing(r)]
 
 
-def _prior(row, cost_rows, res_rows, common, peaks):
-    """``(prior_cpu_h, prior_s)`` of an ``affine_ashlar`` row: the median, over the
-    common patients, of what the row it reads its anchor from cost up to that stage
-    (R15). ``affine=stare``: STARE's COARSE (``stare_stage_peaks.coarse_cpu_h`` /
-    ``coarse_s``, summed over the patient's rounds); ``affine=valis``: the
-    ``valis_mirage_rigid`` row's ``cpu_h_used`` and ``register_s``. NaN otherwise."""
-    cpu, sec = _prior_values(row, cost_rows, common, peaks)
-    return _median(cpu), _median(sec)
-
-
-def _prior_values(row, cost_rows, common, peaks):
-    """``([prior_cpu_h], [prior_s])`` per patient of ``common`` (``_prior``'s rule);
-    empty lists for a row with no prior."""
+def _prior_by_patient(row, cost_rows, res_rows, common, peaks):
+    """``{patient: (prior_cpu_h, prior_s, n_rounds_missing)}`` over ``common`` of an
+    ``affine_ashlar`` row, what the row it reads its anchor from cost up to that stage
+    (R15); ``{}`` for a row with no prior. ``affine=stare``: STARE's
+    COARSE (``stare_stage_peaks.coarse_cpu_h`` / ``coarse_s``) summed over the patient's
+    rounds, and the count of its rounds (``resources.csv`` rows of ``stare``) with no
+    stage-peaks line: a patient with one is a LOWER bound (T31 fix M8). ``affine=valis``:
+    the ``valis_mirage_rigid`` row's ``cpu_h_used`` and ``register_s`` (complete patients)."""
     try:
         run = variants.run_of(row)
     except KeyError:
-        return [], []
+        return {}
     anchor = (run.opts or {}).get("affine")
     if run.method != "ashlar" or anchor in (None, "", "none"):
-        return [], []
+        return {}
+    out = {}
     if anchor == "stare":
-        by = {}
+        rounds = {}
+        for r in res_rows:
+            if r.get("method") == "stare":
+                rounds.setdefault(str(r.get("group")), set()).add(r.get("case_id"))
         for r in peaks:
-            if r.get("row") == "stare":
-                p = str(r.get("patient_id"))
-                c, t = _num(r.get("coarse_cpu_h")), _num(r.get("coarse_s"))
-                got = by.setdefault(p, [0.0, 0.0])
-                got[0] += c
-                got[1] += t
-        return ([by[p][0] for p in sorted(common) if p in by],
-                [by[p][1] for p in sorted(common) if p in by])
+            p = str(r.get("patient_id"))
+            if r.get("row") != "stare" or p not in common:
+                continue
+            c, t, seen = out.get(p, (0.0, 0.0, set()))
+            out[p] = (c + _num(r.get("coarse_cpu_h")), t + _num(r.get("coarse_s")),
+                      seen | {r.get("case_id")})
+        return {p: (c, t, len(rounds.get(p, set()) - seen)) for p, (c, t, seen) in out.items()}
     rigid = f"{VALIS_FAMILY}_rigid"
-    mine = [r for r in _complete(cost_rows) if r["method"] == rigid and r["group"] in common]
-    return [r.get("cpu_h_used") for r in mine], [r.get("register_s") for r in mine]
+    for r in _complete(cost_rows):
+        if r["method"] == rigid and r["group"] in common:
+            out[r["group"]] = (_num(r.get("cpu_h_used")), _num(r.get("register_s")), 0)
+    return out
+
+
+def _with_prior(own, prior):
+    """The median over patients of the row's own CPU-hours plus its prior's (the sum per
+    patient, never a median plus a median; T31 fix M8): ``own`` is ``{patient: cpu_h}``."""
+    return _median(own[p] + prior[p][0] for p in own if p in prior)
 
 
 def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, common=None, peaks=()):
@@ -697,8 +703,9 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
             adapter = _adapter_of(res_rows, row)
             work = cost_mod.WORK.get(adapter, {})
             heap = _finite(r.get("jvm_max_heap_gb") for r in mine)
-            prior_cpu, _ = _prior(row, cost_rows, res_rows, common, peaks)
-            cpu = _num(sc["cpu_h_used_common_med"])
+            prior = _prior_by_patient(row, cost_rows, res_rows, common, peaks)
+            prior_cpu = _median(v[0] for v in prior.values())
+            own = {p["unit_id"]: _num(p.get("cpu_h_used")) for p in shared}
             out.append(
                 schema.empty_row(
                     "method_summary",
@@ -729,9 +736,9 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
                     jvm_max_heap_gb=max(heap) if heap else math.nan,
                     jvm_peak_heap_gb=JVM_PEAK_NA if heap else schema.NA,
                     prior_cpu_h=prior_cpu,
-                    with_prior_cpu_h=cpu + prior_cpu
-                    if math.isfinite(cpu) and math.isfinite(prior_cpu)
-                    else math.nan,
+                    with_prior_cpu_h=_with_prior(own, prior) if prior else math.nan,
+                    n_prior_rounds_missing=sum(v[2] for v in prior.values()) if prior
+                    else schema.NA,
                 )
             )
     return out
@@ -855,7 +862,7 @@ def end_to_end(summary, cost_rows, res_rows, e2e_rows, peaks, dataset, common, p
             vals = [r.get(src) for r in mine]
             stats[f"{col}_med"] = _median(vals)
             stats[f"{col}_ci_low"], stats[f"{col}_ci_high"] = costs.interval(vals)
-        prior_s = _prior_values(row, cost_rows, done, peaks)[1]
+        prior_s = [v[1] for v in _prior_by_patient(row, cost_rows, res_rows, done, peaks).values()]
         stats["prior_s_med"] = _median(prior_s)
         stats["prior_s_ci_low"], stats["prior_s_ci_high"] = costs.interval(prior_s)
         out.append(

@@ -284,7 +284,10 @@ _TABLE_LIST = [
        ("jvm_peak_heap_gb", "GB", "the JVM's own peak heap use: NA, not measured (the reason)"),
        ("prior_cpu_h", "CPU-h", "an affine-anchored ASHLAR row: what the row it reads cost up "
         "to that stage (STARE's COARSE, or the valis_mirage _rigid row), median, common patients"),
-       ("with_prior_cpu_h", "CPU-h", "cpu_h_used_common_med + prior_cpu_h")),
+       ("with_prior_cpu_h", "CPU-h", "the row's own cpu_h_used plus its prior, summed per "
+        "common patient, then the median (never a median plus a median)"),
+       ("n_prior_rounds_missing", "count", "rounds of the common patients with no "
+        "stare_stage_peaks line: their prior is a lower bound")),
     _t("valis_stages", ("dataset", "row", "stage"),
        "Dice by VALIS stage, per VALIS run (tier x micro)",
        ("dataset", "", ""), ("row", "", "the run's final result name"),
