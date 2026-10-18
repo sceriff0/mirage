@@ -153,7 +153,8 @@ _TABLE_LIST = [
        ("row", "", "the result name (a variant of a run)"),
        ("family", "", "the method the row is shown under (variants.family)"),
        ("set", "", "outlines (headline) or nuclei"),
-       ("stage", "", "initial, rigid, nonrigid, micro or final"),
+       ("stage", "", "initial, rigid, micro_rigid, nonrigid, micro or final (R18: micro_rigid "
+                     "is VALIS depth >= 1's _rigid row; micro exists at depth 2 only)"),
        ("tool_version", "", "the package version the run recorded (run.json info.version)"),
        ("frame", "", "reference or moving: where the two sets were compared"),
        ("dice_matched", "1", "matched-pair Dice over all pairs of the case"),
@@ -203,7 +204,9 @@ _TABLE_LIST = [
        "Dice by VALIS stage, per VALIS run (tier x micro)",
        ("dataset", "", ""), ("row", "", "the run's final result name"),
        ("memory_mode", "", "high, medium or low"), ("micro_reg", "", "0, 1 or 2"),
-       ("stage", "", "initial, rigid, nonrigid or micro"), ("stage_row", "", "result name of the stage"),
+       ("stage", "", "initial, rigid (depth 0), micro_rigid (the _rigid row at depth 1 and 2: "
+                     "affine + micro-rigid), nonrigid, or micro (depth 2 only); R18"),
+       ("stage_row", "", "result name of the stage; NA when the run has no such stage"),
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
        ("n_pairs", "count", ""), ("disp_um_med", "um", "")),
     _t("stare_tiers", ("dataset", "row"), "Dice and cost per STARE run (tier, stride, prep)",

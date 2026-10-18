@@ -644,6 +644,14 @@ def build_parser():
     )
     sx.add_argument("--out", required=True)
 
+    pa = sub.add_parser(
+        "paper",
+        help="the paper tables (benchmarks/regbench/paper/tables.py) from the scorer's "
+        "tables: <out>/paper/<table>.csv for the cohort, <out>/paper/<dataset>/ otherwise",
+    )
+    pa.add_argument("--out", required=True, help="the results folder `score` wrote to")
+    pa.add_argument("--dataset", default="multiplex", choices=DATASETS)
+
     rn = sub.add_parser("runs")
     rn.add_argument(
         "--header", action="store_true", help="print the column names first"
@@ -1435,6 +1443,10 @@ def _main(a):
         return preflight.main(a)
     if a.cmd == "prepare":
         return _prepare(a)
+    if a.cmd == "paper":
+        from .paper import tables
+
+        return tables.main(a)
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":
