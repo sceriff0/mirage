@@ -23,6 +23,8 @@
                        folders), for ``REGBENCH_CASES`` of the CPU cross
 ``staged-results``     the STARE results under ``--out`` its stage jobs made (the launcher
                        refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
+``cpu-scaling``        the CPU-scaling table: the named rows at 4, 8 and 16 CPUs
+                       (``paper/cpu_scaling.py``)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -657,6 +659,20 @@ def build_parser():
         help="the folder the cases were prepared under: the input size of a cost point "
         "is read from its slide files (blank without it)",
     )
+
+    cs = sub.add_parser(
+        "cpu-scaling",
+        help="the CPU-scaling table (benchmarks/regbench/paper/cpu_scaling.py): wall time, "
+        "CPU-hours and peak memory of the named rows at 4, 8 and 16 CPUs, e.g. --point 4=OUT "
+        "--point 4=OUT_LOCAL4 --point 8=OUT8 --point 16=OUT16 --rows "
+        "stare,valis_mirage,valis120_hires,deeperhistreg_hr_gpu,ashlar,palom "
+        "--to O/paper/cpu_scaling.csv",
+    )
+    cs.add_argument("--point", action="append", required=True, metavar="CPUS=OUT",
+                    help="a results folder that ran at CPUS; repeat, also for one count")
+    cs.add_argument("--rows", required=True, help="result names, comma-separated")
+    cs.add_argument("--to", required=True)
+    cs.add_argument("--dataset", default="multiplex", choices=DATASETS)
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1453,6 +1469,10 @@ def _main(a):
         from .paper import tables
 
         return tables.main(a)
+    if a.cmd == "cpu-scaling":
+        from .paper import cpu_scaling
+
+        return cpu_scaling.main(a)
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":
