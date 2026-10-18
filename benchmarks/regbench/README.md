@@ -1477,6 +1477,104 @@ $REGBENCH_OUT/logs/*.log` is the same classification as the table. Not recorded:
 `exit_code` (the scheduler's accounting is asked for state, elapsed and CPU time only),
 and the cost of a selfcheck attempt.
 
+## Where every loss shows up
+
+USER 2026-10-18: "no blocking at all, just report in final csv / results" and "make sure in
+outputs i see everything" (Task 28). Nothing that goes wrong with one unit (a case, a run, a
+slide, a round of the manifest) stops the others. Every such thing is a ROW of
+`tables/losses.csv` (`losses.py`), never only a line of a log; `score` prints the counts
+by stage, cause and blame at its end, writes them into `summary.json: losses` and into
+`summary.md` ("Where every loss shows up"), and `tables/README.txt` lists every cause.
+`losses.csv` is written by every `score`, a header alone when nothing was lost: an absent
+table is not "none". `score` exits non-zero only when not one case could be scored, and
+writes `losses.csv` first.
+
+Columns: `stage,dataset,patient_id,case_id,run,method,cause,blame,effect,detail,source`.
+`stage` is one of `submit`, `manifest`, `prepare`, `nuclei`, `run`, `settle`, `score`, `paper`; `blame` one of
+`method`, `infrastructure`, `input`, `integrity`; `effect` one of
+`dropped`, `imputed`, `flagged`, `capped`, `not_run` (`dropped`: in no summary; `imputed`: scored
+at the unregistered pose like any failure of the method; `flagged`: kept and scored, with
+a flag on its rows; `capped`: the memory ladder stopped at the partition's largest rung,
+imputed, the cap in `detail`; `not_run`: nobody ran it). `source` names the file that
+carries the evidence.
+
+Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`):
+
+| cause | blame | stage | what it is |
+|---|---|---|---|
+| `exception` | method | run | the method raised |
+| `killed` | method | run | the process died and the scheduler's accounting names no cause |
+| `oom` | method | run | out of memory |
+| `gpu_oom` | method | run | out of GPU memory |
+| `timeout` | method | run | out of time |
+| `writer` | method | run | the method's writer failed |
+| `writer_oom` | method | run | the method's writer ran out of memory |
+| `capped` | method | run | it needed more memory than the largest rung the partition grants: the ladder is the same for every method, so this is a cost result (imputed; the cap is in detail) |
+| `benchmark_oom` | infrastructure | run | the benchmark's own point step ran out of memory |
+| `benchmark` | infrastructure | run | the benchmark's own step failed |
+| `identical_overlap` | infrastructure | run | pixel-identical tile overlaps, made by the benchmark's tiling |
+| `infrastructure` | infrastructure | run | the scheduler or the node lost the attempt |
+| `not_submitted` | infrastructure | run | the launcher never submitted the unit |
+| `killed_unsettled` | infrastructure | settle | killed, and never settled against the scheduler's accounting (no job id, or sacct had none): the cause is not known |
+| `watcher_gave_up` | infrastructure | settle | the chain's watcher could not read the queue and gave up before the unit's next step |
+| `result_unreadable` | infrastructure | score | the result's run.json or warped.npz could not be read, or an ok result has no warped.npz |
+| `submit_refused` | infrastructure | submit | sbatch refused the unit's next step after every retry |
+| `held` | infrastructure | run | its jobs were held or stalled in the queue (the squeue reason is in detail) |
+| `score_error` | infrastructure | score | the scoring of the case raised (score_errors.csv): the case has no row |
+| `not_run` | infrastructure | run | no result of this submission: nobody ran it |
+| `stale_result` | integrity | run | a result made for an earlier version of the case or by another submission |
+| `preflight_failed` | infrastructure | submit | the run's image failed the preflight: the run was not submitted |
+| `run_config` | infrastructure | submit | a configuration problem of that run (its image, its GPU request, its stages): the run was not submitted |
+| `unmarked_unit` | infrastructure | settle | a chain the settle job could not list: its units were not checked for tasks still in flight |
+| `no_trace` | infrastructure | run | a compute-all patient with no Nextflow trace (pipeline_cost_summary: complete_run 0) |
+| `compute_incomplete` | infrastructure | run | a compute-all patient whose run is not whole (a failed task no retry recovered, a cached task, no ok end line): out of the backend's `all` row |
+| `manifest_dropped` | input | manifest | the manifest could not list the round |
+| `prepare_dropped` | input | prepare | prepare multiplex dropped the round |
+| `prepare_failed` | input | prepare | prepare multiplex failed on the round |
+| `low_agreement` | input | nuclei | the slide's nuclei agree with its outlines under the threshold: kept, scored and flagged (nuclei_checks.csv) |
+| `pixel_size_fallback` | input | manifest | the checkpoint has no pixel size for the round: 0.325 um is used |
+
+`killed_unsettled`, `watcher_gave_up`, `result_unreadable`, `submit_refused`, `held` and
+`score_error` are not the method's (`score.NOT_THE_METHOD`): those rounds are in no
+summary of the method. `capped` IS the method's (the ladder is the same for every method,
+so needing more than its top is a cost result). **Billing (R26):** a `killed_unsettled`
+attempt is billed as WASTED, not lost, at the scheduler's upper bound (elapsed x allocated
+CPUs and memory from `logs/accounting.psv` when it is there), and its `resources.csv` row
+says `cost_bound=upper`.
+
+**The per-stage tables** (`losses.csv` is their union; they still exist):
+
+| table | where | what |
+|---|---|---|
+| `submit_dropped.csv` | results folder | the runs the launcher dropped (`preflight_failed`, `run_config`: a GPU run with no GPU request, an image with no path, a staged run it cannot size); the others were submitted |
+| `manifest_dropped.csv` | beside the manifest (copied to the cases folder by `--prepare`) | every round the manifest could not list, with `n_rounds` |
+| `prepare_dropped.csv` | cases folder | every round `prepare multiplex` dropped or failed on (per-round files under `_cache/prepare_dropped/`, their union beside them) |
+| `nuclei_checks.csv` | tables (and the nuclei folder, from `nuclei --list`) | one row per slide: its one-nucleus fraction against its outlines, the threshold, `low_agreement` |
+| `score_errors.csv` | tables | a case whose scoring raised: the last frame and the message; the other cases are scored |
+| `logs/unmarked_units.csv` | results folder | the units the settle job could not list (an unreadable run file, a chain beyond the case list) |
+| `pipeline_cost_summary.csv` | tables | `reason` and `n_tasks_unmeasured` per compute-all patient (`no_trace`, `failed_task`, `cached`, `no_ok_end`) |
+| `summary.json` | tables | `losses`: the counts by stage, cause, blame and effect |
+
+Beside them, nothing is skipped silently any more: `resources.csv: unmeasured_records`
+(stage records that could not be read), `*_n_nan` columns beside every averaged number,
+`cost_fits`/`pipeline_cost_fits: n_dropped` (and "k dropped" in the figures),
+`versions`/`run_parameters: n_unreadable`, `common_block_per_method` beside the strict
+common block, a realcheck verdict `unreadable`, and `pixel_size_source` and
+`low_agreement` on every scored row of a case.
+
+**The integrity refusals that remain** (the ONLY hard stops; each names itself in its
+message): a second submission into one results root; a reused run id; a slimmed or
+truncated cells csv (`refuse_slimmed`); the launcher's "the queue cannot be read
+(squeue)", only after 5 tries 10 s apart (`REGBENCH_SQUEUE_TRIES`,
+`REGBENCH_SQUEUE_WAIT_S`). A `truth_sha256` mismatch is no crash: the result is
+`stale_result`, `not_run`. A launch in which the launcher dropped EVERY run stops, since
+nothing is left to submit.
+
+**Selfchecks and realchecks never gate**: they run and report (`verdicts.tsv`,
+`failure_log.csv`), and scoring waits only for the registration chains. The scorer
+(`rb-score`) runs once they end; `rb-rescore` runs `score` again after the selfchecks
+end (afterany), so their verdicts reach the tables without anything waiting on them.
+
 ## Tissue-level agreement of the written images (secondary)
 
 **ACCREDIT's composite (Zhou et al. 2026, bioRxiv, released code), designed for H&E
