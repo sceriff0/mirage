@@ -386,51 +386,54 @@ def test_a_rerun_that_disagrees_with_the_outlines_is_loud_and_not_exact(
     assert "DISAGREEMENT P1/P1.r1" in said and "a tracing bug" in said
 
 
-def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
-    """User ruling 2026-10-11: under 0.90 of the outlines with exactly one nucleus the
-    nuclei are not used, and everything says so. Against their own trace it can only
+def test_a_rerun_far_from_the_outlines_is_kept_and_flagged(cohort, monkeypatch, capsys):
+    """Task 28, B9 (was the 2026-10-11 refusal): under 0.90 of the outlines with
+    exactly one nucleus the nuclei are KEPT, flagged ``low_agreement`` and every place
+    that lists them says so; nothing is blocked. Against their own trace it can only
     be a tracing bug: made here with a cell mask shifted by 20 px."""
     tmp, lab, row = cohort
     fake_segment(tmp, lab, monkeypatch, cells_from=labels_of(shift=(20, 20)))
     manifest = manifest_of(tmp, row)
     base = dict(manifest=manifest, out=tmp / "nuc")
-    assert nuclei.main(args(**base, segment=True, index=0)) == 1  # the task fails
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0  # never fails
     (ref, mov) = nuclei.slides(multiplex.read_manifest(manifest))
     store = nuclei.store_of(tmp / "nuc", ref)
     rec = nuclei.load(store)
     frac = rec["agreement"]["one_nucleus_frac"]
     assert frac < nuclei.ACCEPT_ONE_NUCLEUS
-    assert rec["refused"] and not rec["usable"] and not rec["exact"]
-    assert rec["source"] == "" and not rec["needs_rerun"]
-    assert not (store / "nuclei.npz").exists()
+    assert rec["usable"] and rec["low_agreement"] and not rec.get("refused")
+    assert not rec["exact"] and rec["source"] == "stardist_rerun"
+    assert (store / "nuclei.npz").is_file()
     n_out, n_nuc = rec["agreement"]["n_outlines"], rec["agreement"]["n_nuclei"]
-    assert f"only {frac:.3f} of this slide's {n_out} outlines" in rec["reason"]
-    assert f"{n_nuc} nuclei (at least 0.9 is required)" in rec["reason"]
-    assert "a tracing bug" in rec["reason"]
+    why = rec["low_agreement_reason"]
+    assert f"only {frac:.3f} of this slide's {n_out} outlines" in why
+    assert f"{n_nuc} nuclei (at least 0.9 is required)" in why
+    assert "a tracing bug" in why and "kept and flagged" in why
     said = capsys.readouterr().out
-    assert f"REFUSED P1/P1.r1: {rec['reason']}" in said
-    assert "DISAGREEMENT" not in said  # that line is for nuclei that are KEPT
-    # the list: its own status, the share and the reason
+    assert f"LOW_AGREEMENT P1/P1.r1: {why}" in said and "REFUSED" not in said
+    # the list: its own status, the share and the reason; and nuclei_checks.csv
     assert nuclei.main(args(**base, list=True)) == 0
     listed = capsys.readouterr()
     line = listed.out.splitlines()[1].split("\t")
-    assert line[:3] == ["0", "P1/P1.r1", "refused"] and line[4] == "False"
-    assert line[5] == f"{frac:.4f}" and "REFUSED" in line[7]
-    assert "1 whose re-run was REFUSED" in listed.err
+    assert line[:3] == ["0", "P1/P1.r1", "low_agreement"] and line[4] == "False"
+    assert line[5] == f"{frac:.4f}" and "LOW AGREEMENT" in line[7]
+    assert "1 kept and flagged LOW AGREEMENT" in listed.err
+    with open(tmp / "nuc" / nuclei.CHECKS) as fh:
+        checks = list(csv.DictReader(fh))
+    (got,) = [r for r in checks if r["slide"] == ref["slide"]]
+    assert got["patient_id"] == "P1" and got["low_agreement"] == "1"
+    assert float(got["one_nucleus_fraction"]) == round(frac, 4)
+    assert float(got["threshold"]) == nuclei.ACCEPT_ONE_NUCLEUS
     # it is not segmented again unasked, and no command is printed for it
     calls, real = [], nuclei.segment
     monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or real(*a))
-    assert nuclei.main(args(**base, segment=True, index=0)) == 1 and not calls
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0 and not calls
     capsys.readouterr()
     assert nuclei.main(args(**base, command=True, index=0)) == 0
     assert capsys.readouterr().out == ""
-    # forced: the refused run is set aside with the outlines traced from it, and
-    # StarDist runs again (the same stand-in here, so the same verdict)
-    assert nuclei.main(args(**base, segment=True, index=0, force=True)) == 1
-    assert len(calls) == 1 and (store / "rerun_stale").is_dir()
-    assert Path(ref["outlines"] + ".stale").is_file()
-    assert nuclei.load(store)["refused"]
-    # the case is prepared on its outlines, without nuclei, with that reason
+    assert 0 not in nuclei.pending(nuclei.slides(multiplex.read_manifest(manifest)),
+                                   tmp / "nuc")  # fmt: skip
+    # the case is prepared WITH those nuclei, and its record carries the flag
     fake_segment(tmp, lab, monkeypatch)
     assert nuclei.main(args(**base, segment=True, index=1)) == 0
     cases_root = tmp / "cases"
@@ -438,10 +441,41 @@ def test_a_rerun_far_from_the_outlines_is_refused(cohort, monkeypatch, capsys):
     assert multiplex.prepare(a) == 0
     (case,) = list_cases(cases_root, "multiplex")
     points = load_points(case)
-    assert polys(points, "ref", "nuclei") is None
+    assert polys(points, "ref", "nuclei") is not None
     info = cases_mod.set_info(case, "ref", "nuclei")
-    assert info["source"] == "" and info["reason"] == rec["reason"]
-    assert "REFUSED" in cases_mod.nuclei_reason(case, points)
+    assert info["low_agreement"] is True and info["low_agreement_reason"] == why
+    assert not cases_mod.set_info(case, "mov", "nuclei").get("low_agreement")
+
+
+def test_a_record_an_earlier_checkout_refused_is_checked_again_and_kept(
+    cohort, monkeypatch, capsys
+):
+    """B9: a slide refused before Task 28 (its nuclei.npz deleted, its masks kept) is
+    pending again and its next look keeps the masks, flagged; StarDist is not run."""
+    tmp, lab, row = cohort
+    fake_segment(tmp, lab, monkeypatch, cells_from=labels_of(shift=(20, 20)))
+    manifest = manifest_of(tmp, row)
+    base = dict(manifest=manifest, out=tmp / "nuc")
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0
+    all_slides = nuclei.slides(multiplex.read_manifest(manifest))
+    store = nuclei.store_of(tmp / "nuc", all_slides[0])
+    rec = nuclei.load(store)
+    # what an earlier checkout wrote for it
+    for k in ("low_agreement", "low_agreement_reason"):
+        rec.pop(k)
+    rec.update(usable=False, refused=True, source="", reason="the re-run was REFUSED")
+    nuclei.write_json(store / "nuclei.json", rec)
+    (store / "nuclei.npz").unlink()
+    assert 0 in nuclei.pending(all_slides, tmp / "nuc")
+    calls = []
+    monkeypatch.setattr(nuclei, "segment", lambda *a: calls.append(a) or 0)
+    capsys.readouterr()
+    assert nuclei.main(args(**base, segment=True, index=0)) == 0 and not calls
+    again = nuclei.load(store)
+    assert again["usable"] and again["low_agreement"] and not again.get("refused")
+    assert (store / "nuclei.npz").is_file()
+    assert "LOW_AGREEMENT P1/P1.r1" in capsys.readouterr().out
+    assert 0 not in nuclei.pending(all_slides, tmp / "nuc")
 
 
 def test_a_kept_rerun_is_redone_when_its_settings_no_longer_resolve_the_same(
@@ -717,12 +751,12 @@ def test_outlines_that_are_gone_are_traced_again_without_stardist(
     assert nuclei.load(store)["outlines"] == moved["ref_cells"]
 
 
-def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
+def test_the_array_task_keeps_a_low_agreement_slide_and_can_be_forced(
     cohort, monkeypatch, tmp_path
 ):
-    """Review item 6b: under `set -e` the first check (exit 1 for a refused slide)
-    ended the task before it asked what the slide needs. It still fails (user ruling),
-    with the reason, and REGBENCH_NUCLEI_FORCE=1 reaches the re-run."""
+    """Review item 6b, then Task 28 B9: a slide under the agreement threshold is kept
+    and flagged, so its task has nothing to segment and exits 0 (it was refused and
+    failed); REGBENCH_NUCLEI_FORCE=1 still reaches the re-run."""
     import os
 
     tmp, lab, row = cohort
@@ -730,7 +764,7 @@ def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
     manifest = manifest_of(tmp, row)
     assert (
         nuclei.main(args(manifest=manifest, out=tmp / "nuc", segment=True, index=0))
-        == 1
+        == 0
     )
     env = {
         k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))
@@ -750,10 +784,9 @@ def test_the_array_task_handles_a_refused_slide_and_can_be_forced(
     done = subprocess.run(
         ["bash", str(script)], env=env, capture_output=True, text=True, cwd=REPO
     )
-    assert done.returncode == 1, done.stdout + done.stderr
-    assert "its StarDist re-run was REFUSED and is not run again" in done.stdout
-    assert "REGBENCH_NUCLEI_FORCE=1" in done.stdout
-    assert "nothing to segment" not in done.stdout and "+ python" not in done.stdout
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "nothing to segment" in done.stdout and "+ python" not in done.stdout
+    assert "is not run again" not in done.stdout and "LOW_AGREEMENT" in done.stdout
     # forced: the task gets as far as the re-run's command (the stand-in segment.py is
     # not what this process's `python bin/segment.py` runs, so only the line is checked)
     forced = subprocess.run(

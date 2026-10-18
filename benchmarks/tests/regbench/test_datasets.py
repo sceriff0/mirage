@@ -439,3 +439,38 @@ def test_a_case_prepared_before_fingerprints_is_judged_by_its_paths_only(tmp_pat
     other = _grid_cells(tmp_path / "other" / "good.geojson")
     manifest.write_text(manifest.read_text().replace(str(good), str(other)))
     assert multiplex.prepare(_mx_args(cases_root, manifest, force=False)) == 1
+
+
+def test_every_round_prepare_loses_is_a_row_of_prepare_dropped(tmp_path, capsys):
+    """Task 28, S8: a round prepare drops or fails on is a row of
+    <cases>/prepare_dropped.csv (status, reason), which attrition.csv and losses.csv
+    join; a round prepared later clears its row. S9: a case.json that cannot be read
+    is prepared again, and said, never reused."""
+    from benchmarks.regbench import losses, score
+
+    good = _grid_cells(tmp_path / "good.geojson")
+    empty = _cell_file(tmp_path / "empty.geojson", [])
+    manifest, _ = _cohort_manifest(tmp_path, [("bad", good, empty), ("ok", good, good)])
+    cases_root = tmp_path / "cases"
+    assert multiplex.prepare(_mx_args(cases_root, manifest)) == 0
+    rows, where = losses.read_prepare_dropped(cases_root)
+    assert [(r["case_id"], r["status"]) for r in rows] == [("bad", "FAILED")]
+    assert str(empty) in rows[0]["reason"]
+    with open(cases_root / "prepare_dropped.csv", newline="") as fh:
+        assert [r["case_id"] for r in csv.DictReader(fh)] == ["bad"]
+    assert score.input_drops(tmp_path / "out", cases_root, None)["not_prepared"] == 1
+    lost = losses.prepare_rows(rows)
+    assert [(r["case_id"], r["cause"], r["stage"]) for r in lost] == [
+        ("bad", "prepare_failed", "prepare")
+    ]
+    # S9: the kept case's record cut short: prepared again, and said
+    record = cases_root / "multiplex" / "ok" / "case.json"
+    record.write_text("{ cut")
+    capsys.readouterr()
+    assert multiplex.prepare(_mx_args(cases_root, manifest)) == 0
+    assert "case.json cannot be read" in capsys.readouterr().out
+    assert [c.case_id for c in list_cases(cases_root, "multiplex")] == ["ok"]
+    # the failed round, once it can be prepared, has no row any more
+    _grid_cells(tmp_path / "empty.geojson")
+    assert multiplex.prepare(_mx_args(cases_root, manifest)) == 0
+    assert losses.read_prepare_dropped(cases_root)[0] == []

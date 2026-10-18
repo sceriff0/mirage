@@ -227,7 +227,15 @@ def _nuclei(cache, row, side, image, channel, outlines, a):
             }
     if rec is not None and rec.get("usable"):
         info = {"source": rec["source"], "exact": bool(rec["exact"])}
-        for k in ("agreement", "origin", "command", "outlines_from", "tolerance"):
+        for k in (
+            "agreement",
+            "origin",
+            "command",
+            "outlines_from",
+            "tolerance",
+            "low_agreement",  # B9: kept and flagged, every scored row says so
+            "low_agreement_reason",
+        ):
             if rec.get(k):
                 info[k] = rec[k]
         return nuclei.read_polys(store), info, None
@@ -335,6 +343,25 @@ def _prepared_from_other_inputs(d, row):
     return ""
 
 
+def _readable_case(d):
+    """Is ``<d>/case.json`` a case that can be read? One that cannot (cut short, not
+    JSON) is prepared again, and said (Task 28, S9): it was reused before, as if it
+    were of this row."""
+    import json
+
+    try:
+        rec = json.loads((d / "case.json").read_text())
+    except (OSError, ValueError) as exc:
+        print(f"multiplex/{d.name}: {d / 'case.json'} cannot be read ({exc}): the case "
+              "is prepared again")  # fmt: skip
+        return False
+    if not isinstance(rec, dict):
+        print(f"multiplex/{d.name}: {d / 'case.json'} is not a case record: the case "
+              "is prepared again")  # fmt: skip
+        return False
+    return True
+
+
 def _require_outlines(row):
     """A round is a case only with the outlines of both slides: not traced yet, or
     traced from another file than the slide that is there now, it is DROPPED."""
@@ -363,7 +390,7 @@ def _require_outlines(row):
 
 def prepare_one(cases_root, row, a):
     d = case_dir(cases_root, "multiplex", row["case_id"])
-    if (d / "case.json").exists() and not a.force:
+    if (d / "case.json").exists() and not a.force and _readable_case(d):
         other = _prepared_from_other_inputs(d, row)
         if other:
             raise ValueError(other)
@@ -460,15 +487,26 @@ def prepare(a):
     rows = read_manifest(a.manifest)
     if a.index is not None:
         rows = rows[a.index : a.index + 1]
+    from .. import losses
+
     bad = 0
     for row in rows:
+        lost = {"dataset": "multiplex", "patient_id": row.get("group") or "",
+                "case_id": row["case_id"]}  # fmt: skip
         try:
             d = prepare_one(a.cases, row, a)
             print(f"multiplex/{row['case_id']} -> {d}")
+            lost = None
         except Dropped as exc:
             bad += 1
             print(f"multiplex/{row['case_id']}: DROPPED {exc}")
-        except Exception as exc:
+            lost.update(status="DROPPED", reason=str(exc))
+        except Exception as exc:  # noqa: BLE001 - a row of prepare_dropped.csv (S8)
             bad += 1
             print(f"multiplex/{row['case_id']}: FAILED {type(exc).__name__}: {exc}")
+            lost.update(status="FAILED", reason=f"{type(exc).__name__}: {exc}")
+        # every round's outcome is kept (S8): a drop or failure is a row of
+        # <cases>/prepare_dropped.csv, which attrition.csv and losses.csv join; a round
+        # prepared now clears an earlier one
+        losses.write_prepare_dropped(a.cases, "multiplex", row["case_id"], lost)
     return 1 if rows and bad == len(rows) else 0

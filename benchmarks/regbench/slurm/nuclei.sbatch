@@ -52,15 +52,17 @@ mkdir -p "$REGBENCH_NUCLEI"
 # and the last look reads the masks StarDist has just written
 force=()
 [ "${REGBENCH_NUCLEI_FORCE:-0}" = 1 ] && force=(--force)
-# what is there first. It exits 1 for a slide whose kept re-run was REFUSED: that is
-# this task's verdict when nothing is run again, not a reason to stop before asking
-# what the slide still needs.
+# what is there first. It exits 1 for a slide whose kept re-run has no usable nuclei
+# and needs no re-run (StarDist found none): that is this task's verdict when nothing
+# is run again, not a reason to stop before asking what the slide still needs. A
+# re-run under the agreement threshold is KEPT and flagged low_agreement (B9), and a
+# record an earlier checkout refused is checked again here from its masks.
 first=0
 regbench_py "$scorer" "${what[@]}" ${force[@]+"${force[@]}"} || first=$?
 line="$(regbench_py "$scorer" "${what[@]}" --command ${force[@]+"${force[@]}"})"
 if [ -z "$line" ]; then
     if [ "$first" -ne 0 ]; then
-        echo "slide $SLURM_ARRAY_TASK_ID: its StarDist re-run was REFUSED and is not run again (nuclei --list has the reason). Correct the model or the settings, then REGBENCH_NUCLEI_FORCE=1 runs it again. This task fails."
+        echo "slide $SLURM_ARRAY_TASK_ID: its kept StarDist re-run has no usable nuclei and is not run again (nuclei --list has the reason). Correct the model or the settings, then REGBENCH_NUCLEI_FORCE=1 runs it again. This task fails."
         nuclei_end failed benchmark - "$first"
         exit "$first"
     fi

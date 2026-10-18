@@ -34,9 +34,13 @@ none, is not used: the slide is decided again, and a run kept for it is set asid
 (``rerun_stale/``, its traced outlines with it) and run again. ``--force``
 (``REGBENCH_NUCLEI_FORCE=1``) does that for EVERY slide, whatever its record says.
 
-A run under ``ACCEPT_ONE_NUCLEUS`` is REFUSED (user ruling 2026-10-11): the slide has no
-nuclei and its record says why; between that and the exact thresholds it is kept as
-``exact: false``. Anything else (shrinking the outlines) is ``prepare multiplex
+A run under ``ACCEPT_ONE_NUCLEUS`` was REFUSED (user ruling 2026-10-11). Since Task 28
+(B9, "no blocking at all, just report") it is KEPT and FLAGGED: its nuclei are used,
+``low_agreement: true`` is in its record (``nuclei --list`` status ``low_agreement``,
+``<out>/nuclei_checks.csv``), every scored row of its cases says so (``cells.csv:
+low_agreement``) and ``losses.csv`` has a ``low_agreement`` row for it. A record an
+earlier checkout refused is checked again from its masks (no StarDist run). Between
+that threshold and the exact ones it is kept as ``exact: false``. Anything else (shrinking the outlines) is ``prepare multiplex
 --nuclei-fallback shrink`` and is never chosen here.
 
 The thresholds, and why:
@@ -518,15 +522,17 @@ def record_failure(slide, out, code, mem_gb=None, job=""):
 
 def pending(all_slides, out, force=False):
     """The indices of the slides the nuclei array has anything to do for: no record,
-    no usable or refused one, one made with other settings or of another image, or
-    outlines that are not there. Everything else would print "nothing to segment".
+    no usable one, one made with other settings or of another image, or outlines
+    that are not there. Everything else would print "nothing to segment". A record an
+    earlier checkout REFUSED is pending too (B9): its task checks the kept masks again
+    and keeps them flagged ``low_agreement`` (StarDist is not run for it).
     This is the HEAD's look, before submitting; each task still decides for itself."""
     found = []
     for i, slide in enumerate(all_slides):
         rec = load(store_of(out, slide))
         settled = bool(
             rec
-            and (rec.get("usable") or rec.get("refused"))
+            and rec.get("usable")
             and rec.get("image_fingerprint")
             and not settings_changed(rec)
             and not other_image(rec, slide)
@@ -619,17 +625,15 @@ def check_rerun(slide, store, a):
             if own
             else "the outlines the manifest names"
         )
-        if not agreement["one_nucleus_frac"] >= ACCEPT_ONE_NUCLEUS:
+        low = not agreement["one_nucleus_frac"] >= ACCEPT_ONE_NUCLEUS
+        if low:
             # user ruling 2026-10-11: nuclei this far from the outlines are another
-            # segmentation (or, against their own trace, a tracing bug). REFUSED: the
-            # slide has no nuclei, and says why wherever nuclei are missing.
+            # segmentation (or, against their own trace, a tracing bug). Task 28, B9:
+            # KEPT and FLAGGED (low_agreement), never refused: the rows say so
             rec.update(
-                refused=True,
-                needs_rerun=False,
-                agreement=agreement,
-                **_made_with(slide, dest),
-                reason=(
-                    f"the StarDist re-run was REFUSED: only "
+                low_agreement=True,
+                low_agreement_reason=(
+                    f"LOW AGREEMENT, kept and flagged: only "
                     f"{agreement['one_nucleus_frac']:.3f} of this slide's "
                     f"{agreement['n_outlines']} outlines ({what}) hold exactly one "
                     f"of its {agreement['n_nuclei']} nuclei (at least "
@@ -644,10 +648,9 @@ def check_rerun(slide, store, a):
                     )
                 ),
             )
-            (Path(store) / "nuclei.npz").unlink(missing_ok=True)
-            print(f"REFUSED {slide['key']}: {rec['reason']}", flush=True)
-            return rec
-        if not exact:
+            print(f"LOW_AGREEMENT {slide['key']}: {rec['low_agreement_reason']}",
+                  flush=True)  # fmt: skip
+        elif not exact:
             print(
                 f"DISAGREEMENT {slide['key']}: the StarDist run does not reproduce "
                 f"{what} ({json.dumps(agreement)}). Its nuclei are kept and marked "
@@ -940,6 +943,8 @@ def table(all_slides, out):
         rec = load(store_of(out, slide))
         if rec is None:
             status, rec = "needs_rerun", {"reason": NOT_RESOLVED}
+        elif rec.get("usable") and rec.get("low_agreement"):
+            status = "low_agreement"
         elif rec.get("usable"):
             status = "usable"
         elif rec.get("refused"):
@@ -958,10 +963,51 @@ def table(all_slides, out):
                 "exact": rec.get("exact", ""),
                 "one_nucleus_frac": "" if frac is None else f"{frac:.4f}",
                 "n_nuclei": rec.get("n_nuclei", ""),
-                "reason": rec.get("reason", ""),
+                "reason": rec.get("low_agreement_reason") or rec.get("reason", ""),
             }
         )
     return rows
+
+
+CHECKS = "nuclei_checks.csv"
+CHECKS_COLUMNS = (
+    "patient_id",
+    "slide",
+    "one_nucleus_fraction",
+    "threshold",
+    "low_agreement",
+)
+
+
+def write_checks(all_slides, out):
+    """``<out>/nuclei_checks.csv``: one row per slide with a record, its one-nucleus
+    fraction against its outlines, the threshold and ``low_agreement`` (1: kept and
+    flagged, B9). Written by every ``nuclei --list`` (header only when no slide has
+    a record yet); the scorer writes the same columns for the slides it scored."""
+    import csv
+
+    path = Path(out) / CHECKS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=CHECKS_COLUMNS)
+        w.writeheader()
+        for slide in all_slides:
+            rec = load(store_of(out, slide))
+            if not rec:
+                continue
+            frac = (rec.get("agreement") or {}).get("one_nucleus_frac")
+            w.writerow(
+                {
+                    "patient_id": slide["group"],
+                    "slide": slide["slide"],
+                    "one_nucleus_fraction": "" if frac is None else round(frac, 4),
+                    "threshold": ACCEPT_ONE_NUCLEUS,
+                    "low_agreement": int(bool(rec.get("low_agreement"))),
+                }
+            )
+    os.replace(tmp, path)
+    return path
 
 
 def main(a):
@@ -995,12 +1041,15 @@ def main(a):
         print("\t".join(COLUMNS))
         for r in rows:
             print("\t".join(str(r[c]) for c in COLUMNS))
-        kinds = ("usable", "needs_rerun", "refused")
+        kinds = ("usable", "low_agreement", "needs_rerun", "refused")
         n = {s: sum(r["status"] == s for r in rows) for s in kinds}
+        checks = write_checks(all_slides, a.out)
         print(
             f"# {len(rows)} slide(s): {n['usable']} with usable nuclei, "
             f"{n['needs_rerun']} needing the StarDist re-run, "
-            f"{n['refused']} whose re-run was REFUSED, "
+            f"{n['low_agreement']} kept and flagged LOW AGREEMENT ({checks}), "
+            f"{n['refused']} refused by an earlier checkout (checked again by the "
+            "next nuclei array), "
             f"{len(rows) - sum(n.values())} other",
             file=sys.stderr,
         )
@@ -1052,6 +1101,7 @@ def main(a):
                 print(f"nuclei/{slide['key']}: segment.py exited {code}")
             rec = resolve(slide, a.out, after)
         state = rec["source"] if rec["usable"] else f"NONE ({rec.get('reason', '')})"
-        print(f"nuclei/{slide['key']}: {state} exact={rec['exact']}", flush=True)
+        flag = " LOW_AGREEMENT (kept and flagged)" if rec.get("low_agreement") else ""
+        print(f"nuclei/{slide['key']}: {state} exact={rec['exact']}{flag}", flush=True)
         bad += not rec["usable"] and not rec.get("needs_rerun")
     return 1 if chosen and bad == len(chosen) else 0

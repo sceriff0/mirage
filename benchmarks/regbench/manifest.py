@@ -143,8 +143,10 @@ def _pixel_size(cell):
     return px if math.isfinite(px) and px > 0 else None
 
 
-def read_checkpoint(path):
-    """``{patient: [slide rows]}`` of a ``preprocessed.csv``, in file order."""
+def read_checkpoint(path, blanks=None):
+    """``{patient: [slide rows]}`` of a ``preprocessed.csv``, in file order. A row with
+    no ``patient_id`` belongs to no patient: with ``blanks`` (a list) it is appended
+    there (its image), never passed over in silence (Task 28, S7)."""
     path = Path(path)
     if not path.is_file():
         raise SystemExit(
@@ -160,9 +162,11 @@ def read_checkpoint(path):
         per = {}
         for row in reader:
             patient = (row["patient_id"] or "").strip()
-            if not patient:
-                continue
             image = (row["preprocessed_image"] or "").strip()
+            if not patient:
+                if blanks is not None:
+                    blanks.append(image)
+                continue
             per.setdefault(patient, []).append(
                 {
                     "image": image,
@@ -187,17 +191,20 @@ def outline_path(outlines_dir, patient, slide):
 def build(preprocessed_csv, outlines_dir, nuclear=NUCLEAR_MARKERS):
     """``(rows, problems)``: the manifest rows, and what was dropped and why.
 
-    A problem is ``{"patient", "slide", "reason", "path"}``; ``slide`` is empty when the
-    whole patient is dropped. ``*_cells`` name where the nuclei step traces each slide's
-    outlines (:func:`outline_path`); they need not exist yet.
+    A problem is ``{"patient", "slide", "reason", "path", "n_rounds"}``; ``slide`` is
+    empty when the whole patient is dropped, and ``n_rounds`` is how many rounds the
+    drop costs (a patient's: its moving slides). A checkpoint row with no
+    ``patient_id`` is a problem too (S7). ``*_cells`` name where the nuclei step traces
+    each slide's outlines (:func:`outline_path`); they need not exist yet.
     """
     checkpoint = Path(preprocessed_csv)
     rows, problems = [], []
 
-    def drop(patient, slide, reason, path):
+    def drop(patient, slide, reason, path, n_rounds=1):
         problems.append(
-            {"patient": patient, "slide": slide, "reason": reason, "path": str(path)}
-        )
+            {"patient": patient, "slide": slide, "reason": reason, "path": str(path),
+             "n_rounds": n_rounds}
+        )  # fmt: skip
 
     def resolve(patient, s, blame):
         """Image, nuclear index and outlines of one slide, or None after noting why not."""
@@ -212,18 +219,24 @@ def build(preprocessed_csv, outlines_dir, nuclear=NUCLEAR_MARKERS):
             return None
         return image, channel, outline_path(outlines_dir, patient, s["slide"])
 
-    for patient, slides in sorted(read_checkpoint(checkpoint).items()):
+    blanks = []
+    per = read_checkpoint(checkpoint, blanks)
+    for image in blanks:
+        drop("", slide_name(image) if image else "", "no patient_id", checkpoint)
+    for patient, slides in sorted(per.items()):
         refs = [s for s in slides if s["is_reference"]]
+        n_moving = sum(not s["is_reference"] for s in slides)
         if len(refs) != 1:
             n = "no" if not refs else str(len(refs))
-            drop(patient, "", f"{n} reference row{'s' * (len(refs) != 1)}", checkpoint)
+            drop(patient, "", f"{n} reference row{'s' * (len(refs) != 1)}", checkpoint,
+                 n_moving)  # fmt: skip
             continue
         ref = refs[0]
         moving = sorted(
             (s for s in slides if not s["is_reference"]), key=lambda s: s["slide"]
         )
         if not moving:
-            drop(patient, "", "no moving round", checkpoint)
+            drop(patient, "", "no moving round", checkpoint, 0)
             continue
         seen = set()
         for mov in moving:
@@ -266,6 +279,25 @@ def build(preprocessed_csv, outlines_dir, nuclear=NUCLEAR_MARKERS):
     return rows, problems
 
 
+DROPPED_NAME = "manifest_dropped.csv"
+DROPPED_COLUMNS = ("patient_id", "slide", "reason", "path", "n_rounds")
+
+
+def write_dropped(problems, out):
+    """``manifest_dropped.csv`` beside the manifest ``out`` (header alone when nothing
+    was dropped): the scorer joins it into ``attrition.csv`` (``checkpoint_rounds``)
+    and ``losses.csv`` (S7)."""
+    path = Path(out).parent / DROPPED_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(DROPPED_COLUMNS)
+        for p in problems:
+            w.writerow((p["patient"], p["slide"], p["reason"], p["path"],
+                        p.get("n_rounds", 1)))  # fmt: skip
+    return path
+
+
 def write(rows, out):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -306,7 +338,9 @@ def main(argv=None):
     rows, problems = build(a.preprocessed, a.outlines, a.nuclear or NUCLEAR_MARKERS)
     for p in problems:
         who = "/".join(v for v in (p["patient"], p["slide"]) if v)
-        print(f"DROPPED {who}: {p['reason']}: {p['path']}")
+        print(f"DROPPED {who or '(no patient_id)'}: {p['reason']}: {p['path']}")
+    dropped = write_dropped(problems, a.out)
+    print(f"{len(problems)} drop(s) -> {dropped}")
     fallback = sum(r["pixel_size_source"] == "fallback" for r in rows)
     if fallback:
         print(

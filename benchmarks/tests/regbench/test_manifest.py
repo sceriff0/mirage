@@ -229,3 +229,44 @@ def test_cli_writes_the_good_rows(tmp_path, capsys):
     for bad in (["--out", str(none)], ["--root", str(tmp_path), "--out", str(none)]):
         with pytest.raises(SystemExit):
             manifest.main(bad)
+
+
+def test_every_drop_is_a_row_of_manifest_dropped_with_its_rounds(tmp_path):
+    """Task 28, S7: a checkpoint row with no patient_id is a drop, never passed over;
+    each drop says how many rounds it costs; the CLI writes manifest_dropped.csv beside
+    the manifest (header alone when nothing was dropped), which the scorer joins into
+    attrition.csv's checkpoint_rounds."""
+    slides = [
+        *P1,
+        ("", "loose.ome.tif", False, "DAPI"),
+        ("P3", "a.ome.tif", True, "DAPI"),
+        ("P3", "b.ome.tif", True, "DAPI"),
+        ("P3", "c.ome.tif", False, "DAPI"),
+    ]
+    checkpoint = _tree(tmp_path, slides)
+    rows, problems = _build(tmp_path)
+    assert len(rows) == 2
+    by = {(p["patient"], p["slide"]): p for p in problems}
+    assert by[("", "loose")]["reason"] == "no patient_id"
+    assert by[("", "loose")]["n_rounds"] == 1
+    assert by[("P3", "")]["n_rounds"] == 1  # its one moving slide
+    out = tmp_path / "made" / "rounds.csv"
+    argv = ["--preprocessed", str(checkpoint), "--outlines", str(tmp_path / "outlines")]
+    assert manifest.main([*argv, "--out", str(out)]) == 0
+    with open(out.parent / "manifest_dropped.csv", newline="") as fh:
+        got = list(csv.DictReader(fh))
+    assert [(r["patient_id"], r["reason"], r["n_rounds"]) for r in got] == [
+        ("", "no patient_id", "1"),
+        ("P3", "2 reference rows", "1"),
+    ]
+    from benchmarks.regbench import score
+
+    drops = score.input_drops(tmp_path / "out", tmp_path / "cases", out)
+    assert drops["checkpoint_rounds"] == 2 + 2
+    # nothing dropped: the header alone
+    clean = tmp_path / "clean"
+    manifest.main(["--preprocessed", str(_tree(clean, P1)), "--outlines",
+                   str(clean / "outlines"), "--out", str(clean / "m" / "r.csv")])  # fmt: skip
+    assert (clean / "m" / "manifest_dropped.csv").read_text().strip() == ",".join(
+        manifest.DROPPED_COLUMNS
+    )
