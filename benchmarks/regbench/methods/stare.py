@@ -44,7 +44,7 @@ channel, read by STARE's own reader. ``--nuclear-index`` is ``case.extra["mov_ch
 (0 when the case names none). STARE takes ONE index for both slides, so a case whose
 reference has its nuclei at another index is refused.
 
-**A brightfield case** (``case.modality == "brightfield"``: HyReCo, ANHIR, ACROBAT).
+**A brightfield case** (``case.modality == "brightfield"``: HyReCo, ANHIR).
 Ported from commit 5a46f778 (this module there; its preprocessing row and the candidate
 selection were not). STARE reads ONE channel per slide, so an RGB slide cannot be handed
 over as it is. The case carries a one-channel proxy of each slide, written by its dataset

@@ -116,6 +116,22 @@ def _case(root, dataset, case_id, group, ref_hw=REF_HW):
 
 
 @pytest.fixture(scope="module")
+def public_launcher(tmp_path_factory):
+    """The launcher with the two TEST-ONLY public datasets of ``testpublic`` (``nucset``,
+    ``tissueset``) added to its ``PUBLIC_DATASETS`` and ``PUBLIC_KINDS``, as ``(script,
+    env)``: ``env`` makes a python the launcher starts know them too. The real lists are
+    held equal to ``regbench.PUBLIC`` by the tests below, on the real script."""
+    from . import testpublic
+
+    return testpublic.patched_launcher(tmp_path_factory.mktemp("public_launcher"))
+
+
+def launch_public(site, public_launcher, *args, env=None, **kw):
+    script, more = public_launcher
+    return launch(site, *args, env={**more, **(env or {})}, script=script, **kw)
+
+
+@pytest.fixture(scope="module")
 def site(tmp_path_factory):
     """Prepared cases, and a bin directory whose `sbatch` only records its calls."""
     tmp = tmp_path_factory.mktemp("cohort")
@@ -169,13 +185,13 @@ def site(tmp_path_factory):
     return tmp, cases, fake
 
 
-def launch(site, *args, env=None, dry=True, log="calls"):
-    argv, base, out = _launch_command(site, args, env, dry, log)
+def launch(site, *args, env=None, dry=True, log="calls", script=None):
+    argv, base, out = _launch_command(site, args, env, dry, log, script)
     done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
     return done, Path(base["SBATCH_LOG"]), out
 
 
-def _launch_command(site, args, env, dry, log):
+def _launch_command(site, args, env, dry, log, script=None):
     tmp, cases, fake = site
     out = tmp / f"out-{log}"
     base = {
@@ -200,7 +216,7 @@ def _launch_command(site, args, env, dry, log):
     base.update(env or {})
     for key in [k for k, v in base.items() if v is None]:
         del base[key]
-    argv = ["bash", str(SCRIPT), *(["--dry-run"] if dry else []), *args]
+    argv = ["bash", str(script or SCRIPT), *(["--dry-run"] if dry else []), *args]
     return argv, base, out
 
 
@@ -668,7 +684,7 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     assert 'DEFAULT_DATASETS="multiplex"' in code
 
 
-@pytest.mark.parametrize("named", ["anhir_tune", "synthetic", "multiplex x", "ibex@raw"])
+@pytest.mark.parametrize("named", ["anhir_tune", "synthetic", "multiplex x", "mcmicro@raw"])
 def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     """Neither the cohort nor a public dataset: refused before anything is read or
     submitted, in one line naming the allowed values, with no argparse usage and no
@@ -689,62 +705,62 @@ def test_the_launchers_public_datasets_are_regbench_public():
     assert line.split("=", 1)[1].strip('"').split() == list(PUBLIC)
 
 
-def test_a_public_dataset_needs_its_cases_folder(site):
-    done, _, _ = launch(site, "--datasets", "multiplex ibex", log="ds-nocases")
+def test_a_public_dataset_needs_its_cases_folder(site, public_launcher):
+    done, _, _ = launch_public(site, public_launcher, "--datasets", "multiplex nucset", log="ds-nocases")
     assert done.returncode == 2
-    assert "REGBENCH_CASES_IBEX is not set" in done.stderr
+    assert "REGBENCH_CASES_NUCSET is not set" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
-def test_a_public_dataset_is_refused_by_prepare(site, tmp_path):
-    done, _, _ = launch(
-        site, "--prepare", "--datasets", "ibex",
-        env={"REGBENCH_CASES_IBEX": str(tmp_path)}, log="ds-prep",
+def test_a_public_dataset_is_refused_by_prepare(site, public_launcher, tmp_path):
+    done, _, _ = launch_public(
+        site, public_launcher, "--prepare", "--datasets", "nucset",
+        env={"REGBENCH_CASES_NUCSET": str(tmp_path)}, log="ds-prep",
     )  # fmt: skip
     assert done.returncode == 2
     assert "prepares the cohort (multiplex) only" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
-def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, tmp_path):
-    """``--datasets "multiplex acrobat"``: ACROBAT's runs are its own list (no ASHLAR, no
-    PALOM: no input rule for a brightfield case), read from REGBENCH_CASES_ACROBAT, and
+def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, public_launcher, public_datasets, tmp_path):
+    """``--datasets "multiplex tissueset"``: the tissue test set's runs are its own list (no ASHLAR, no
+    PALOM: no input rule for a brightfield case), read from REGBENCH_CASES_TISSUESET, and
     the scorer is told both datasets (each public one is scored alone)."""
-    cases = tmp_path / "acrobat_cases"
-    _case(cases, "acrobat", "A1", "A1")
-    _case(cases, "acrobat", "A2", "A2")
-    done, _, _ = launch(
-        site, "--datasets", "multiplex acrobat",
-        env={"REGBENCH_CASES_ACROBAT": str(cases)}, log="ds-acrobat",
+    cases = tmp_path / "tissueset_cases"
+    _case(cases, "tissueset", "A1", "A1")
+    _case(cases, "tissueset", "A2", "A2")
+    done, _, _ = launch_public(
+        site, public_launcher, "--datasets", "multiplex tissueset",
+        env={"REGBENCH_CASES_TISSUESET": str(cases)}, log="ds-tissueset",
     )  # fmt: skip
     jobs = jobs_of(done)
     on = {}
     for j in [*jobs.values(), *jobs.later.values()]:
         if j.script == "run_rung.sbatch":
             on.setdefault(j.args[6], set()).add(j.args[0])
-    want = {variants.run_name(r) for r in variants.runs_for("acrobat")}
-    assert set(on) == {"multiplex", "acrobat"}
-    assert on["acrobat"] <= want and not any(
-        n.startswith(("ashlar", "affine_ashlar", "palom")) for n in on["acrobat"]
+    want = {variants.run_name(r) for r in variants.runs_for("tissueset")}
+    assert set(on) == {"multiplex", "tissueset"}
+    assert on["tissueset"] <= want and not any(
+        n.startswith(("ashlar", "affine_ashlar", "palom")) for n in on["tissueset"]
     )
-    # a run of ACROBAT's regime alone, never the cohort's: its own list, not the cohort's
-    assert "stare_grey_clahe" in on["acrobat"] and "stare_grey_clahe" not in on["multiplex"]
-    assert "stare_clahe" in on["multiplex"] and "stare_clahe" not in on["acrobat"]
-    assert jobs["rb-score"].args == ["score", "multiplex", "acrobat"]
-    assert jobs["rb-tissue"].args == ["tissue", "multiplex", "acrobat"]
-    assert "rb-score-case-acrobat" in jobs
-    assert "# acrobat: 2 case(s)" in done.stdout
+    # a run of the tissue test set's regime alone, never the cohort's: its own list, not the cohort's
+    assert "stare_grey_clahe" in on["tissueset"] and "stare_grey_clahe" not in on["multiplex"]
+    assert "stare_clahe" in on["multiplex"] and "stare_clahe" not in on["tissueset"]
+    assert jobs["rb-score"].args == ["score", "multiplex", "tissueset"]
+    assert jobs["rb-tissue"].args == ["tissue", "multiplex", "tissueset"]
+    assert "rb-score-case-tissueset" in jobs
+    assert "# tissueset: 2 case(s)" in done.stdout
 
 
-def test_a_public_dataset_alone_selects_no_cohort_only_run(site, tmp_path):
-    """``--datasets acrobat`` alone: the selected runs, their selfchecks and the stage
-    sizing come from ACROBAT's list; no cohort-only run (ASHLAR, PALOM, ``stare_clahe``)
-    is selected or checked, and ACROBAT's own runs are."""
-    cases = tmp_path / "acrobat_alone"
-    _case(cases, "acrobat", "A1", "A1")
-    done, _, _ = launch(
-        site, "--datasets", "acrobat",
-        env={"REGBENCH_CASES_ACROBAT": str(cases)}, log="ds-acrobat-alone",
+def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher, public_datasets, tmp_path):
+    """``--datasets tissueset`` alone: the selected runs, their selfchecks and the stage
+    sizing come from the tissue test set's list; no cohort-only run (ASHLAR, PALOM, ``stare_clahe``)
+    is selected or checked, and the tissue test set's own runs are."""
+    cases = tmp_path / "tissueset_alone"
+    _case(cases, "tissueset", "A1", "A1")
+    done, _, _ = launch_public(
+        site, public_launcher, "--datasets", "tissueset",
+        env={"REGBENCH_CASES_TISSUESET": str(cases)}, log="ds-tissueset-alone",
     )  # fmt: skip
     jobs = jobs_of(done)
     names = set(jobs) | set(jobs.later)
@@ -795,9 +811,9 @@ def test_the_launchers_kinds_are_regbench_public_and_scored_kinds():
     assert tuple(scored.split("=", 1)[1].strip('"').split()) == score.SCORED_KINDS
 
 
-def test_a_public_cases_folder_that_is_not_there_is_refused(site, tmp_path):
-    env = {"REGBENCH_CASES_IBEX": str(tmp_path / "not_there")}
-    done, _, _ = launch(site, "--datasets", "ibex", env=env, log="ds-gone")
+def test_a_public_cases_folder_that_is_not_there_is_refused(site, public_launcher, tmp_path):
+    env = {"REGBENCH_CASES_NUCSET": str(tmp_path / "not_there")}
+    done, _, _ = launch_public(site, public_launcher, "--datasets", "nucset", env=env, log="ds-gone")
     assert done.returncode == 2 and "not_there" in done.stderr
     assert "does not exist" in done.stderr and not _sbatch_lines(done.stdout)
 
@@ -806,12 +822,12 @@ def test_only_the_named_datasets_folders_are_bound(tmp_path):
     """env.sh binds the cases folders of the submission's public datasets
     (REGBENCH_PUBLIC_SETS) only: a stale REGBENCH_CASES_<NAME> left in a profile is never
     bound, and a named folder that is not there is said and left out."""
-    (tmp_path / "ibex").mkdir()
+    (tmp_path / "nucset").mkdir()
     script = f'source "{SLURM / "env.sh"}"; _regbench_public_cases; echo'
     env = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
     env.update(
         REGBENCH_CASES=str(tmp_path / "c"), REGBENCH_OUT=str(tmp_path / "o"),
-        REGBENCH_CASES_IBEX=str(tmp_path / "ibex"),
+        REGBENCH_CASES_NUCSET=str(tmp_path / "nucset"),
         REGBENCH_CASES_MCMICRO=str(tmp_path / "stale"),
     )  # fmt: skip
 
@@ -823,9 +839,9 @@ def test_only_the_named_datasets_folders_are_bound(tmp_path):
         return done.stdout.strip(), done.stderr
 
     assert bound() == ("", "")
-    assert bound(REGBENCH_PUBLIC_SETS="ibex")[0] == str(tmp_path / "ibex")
-    got, said = bound(REGBENCH_PUBLIC_SETS="ibex mcmicro")
-    assert got == str(tmp_path / "ibex") and "stale" in said
+    assert bound(REGBENCH_PUBLIC_SETS="nucset")[0] == str(tmp_path / "nucset")
+    got, said = bound(REGBENCH_PUBLIC_SETS="nucset mcmicro")
+    assert got == str(tmp_path / "nucset") and "stale" in said
 
 
 def test_the_jobs_resolve_a_datasets_cases_folder_before_using_it():
@@ -2296,34 +2312,34 @@ def test_a_runs_subset_divides_the_tile_queue_by_the_subset(site):
 
 
 def test_a_run_dropped_at_tile_sizing_on_a_later_dataset_leaves_the_tile_count(
-    site, tmp_path
+    site, public_launcher, public_datasets, tmp_path
 ):
     """Fix round 1 (review M1): a run sized on the cohort and then dropped at tile
     sizing on a later dataset is not counted among the runs that feed the tile queue:
     TILE_RUNS is rebuilt from the runs left, so the share is the total over one."""
-    cases = tmp_path / "acrobat_tiles"
-    _case(cases, "acrobat", "A1", "A1")
+    cases = tmp_path / "tissueset_tiles"
+    _case(cases, "tissueset", "A1", "A1")
     wrap = tmp_path / "wrap"
     wrap.mkdir()
     (wrap / "python").write_text(
         "#!/bin/bash\n"
-        'case " $* " in *" stages "*"acrobat"*) echo boom >&2; exit 1 ;; esac\n'
+        'case " $* " in *" stages "*"tissueset"*) echo boom >&2; exit 1 ;; esac\n'
         f'exec {shlex.quote(sys.executable)} "$@"\n'
     )
     (wrap / "python").chmod(0o755)
     env = {
-        "REGBENCH_CASES_ACROBAT": str(cases),
+        "REGBENCH_CASES_TISSUESET": str(cases),
         "REGBENCH_STAGE_QUEUE_MAX": "100",
         "REGBENCH_RUN_LANES": "4",
         "REGBENCH_ALLOW_PATH_PYTHON": "1",
         "PATH": f"{wrap}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
     }
-    done, _, _ = launch(
-        site, "--runs", "stare stare_clahe", "--datasets", "multiplex acrobat",
+    done, _, _ = launch_public(
+        site, public_launcher, "--runs", "stare stare_clahe", "--datasets", "multiplex tissueset",
         env=env, log="tiles-later",
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
-    assert "# DROPPED stare (run_config): cannot size its tile arrays on acrobat" in (
+    assert "# DROPPED stare (run_config): cannot size its tile arrays on tissueset" in (
         done.stdout
     )
     assert (
@@ -4296,7 +4312,7 @@ def test_a_datasets_cases_folder_is_the_cohorts_or_its_own(tmp_path):
     script = (
         f'source "{SLURM / "env.sh"}"; '
         'regbench_cases_of multiplex; regbench_cases_of mcmicro@raw; '
-        'regbench_cases_of ibex || echo "ibex: none"'
+        'regbench_cases_of nucset || echo "nucset: none"'
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
     env.update(
@@ -4307,5 +4323,5 @@ def test_a_datasets_cases_folder_is_the_cohorts_or_its_own(tmp_path):
         ["bash", "-c", script], env=env, capture_output=True, text=True, check=True
     )
     assert done.stdout.split("\n")[:3] == [
-        str(tmp_path / "c"), str(tmp_path / "m"), "ibex: none"
+        str(tmp_path / "c"), str(tmp_path / "m"), "nucset: none"
     ]  # fmt: skip

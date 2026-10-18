@@ -26,6 +26,8 @@ import pytest
 from benchmarks.regbench import DATASETS, PUBLIC, base_name, public_of, score, variants
 from benchmarks.tests.regbench import scored_cohort
 
+pytestmark = pytest.mark.usefixtures("public_datasets")  # conftest: nucset, tissueset
+
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 RB = ROOT / "benchmarks" / "regbench"
 REMOVED = ("synthetic", "semisynth", "anhir_tune")
@@ -53,7 +55,7 @@ def test_the_cohort_is_still_the_default():
 
 
 def test_the_public_lookup_reads_the_base_name():
-    assert base_name("mcmicro@raw") == "mcmicro" and base_name("ibex") == "ibex"
+    assert base_name("mcmicro@raw") == "mcmicro" and base_name("nucset") == "nucset"
     assert public_of("mcmicro@raw") is PUBLIC["mcmicro"]
     assert public_of("multiplex") is None and public_of(None) is None
     assert not set(PUBLIC) & set(DATASETS)
@@ -64,7 +66,7 @@ def test_the_public_lookup_reads_the_base_name():
     }
 
 
-@pytest.mark.parametrize("name", ["anhir", "hyreco_b", "acrobat"])
+@pytest.mark.parametrize("name", ["anhir", "hyreco_b", "tissueset"])
 def test_brightfield_public_sets_leave_out_ashlar_and_palom(name):
     kept = {variants.run_name(r) for r in variants.runs_for(name)}
     assert not any(n.startswith(("ashlar", "affine_ashlar", "palom")) for n in kept)
@@ -73,12 +75,12 @@ def test_brightfield_public_sets_leave_out_ashlar_and_palom(name):
 
 
 def test_a_fluorescence_public_set_takes_the_cohorts_runs_and_leaves_none_out():
-    assert variants.runs_for("ibex") == variants.runs_for(None)
-    assert variants.excluded_for("ibex") == [] and variants.excluded_for(None) == []
+    assert variants.runs_for("nucset") == variants.runs_for(None)
+    assert variants.excluded_for("nucset") == [] and variants.excluded_for(None) == []
 
 
-def _public_case(root, out, dataset="ibex", case_id="I1"):
-    """One fluorescence ``ibex`` case beside the cohort (a nuclei set: no landmark
+def _public_case(root, out, dataset="nucset", case_id="I1"):
+    """One fluorescence ``nucset`` case beside the cohort (a nuclei set: no landmark
     scorer exists yet), registered by the forward stand-in."""
     from benchmarks.regbench import methods
     from benchmarks.regbench.cases import load_case, write_case
@@ -96,26 +98,26 @@ def _public_case(root, out, dataset="ibex", case_id="I1"):
 
 def test_excluded_run_listed_with_reason(tmp_path, monkeypatch):
     """``excluded_runs.csv`` of a public dataset lists every run left out of it, with its
-    reason, and the summary names them; the cohort's tables do not move. IBEX takes every
+    reason, and the summary names them; the cohort's tables do not move. the nuclei test set takes every
     run, so a rule of ``NOT_ON`` is given to it here."""
     root, out, made = scored_cohort.build(tmp_path)
     score.score(root, out, **scored_cohort.SCORE_KW)
     cohort_before = (out / "tables" / "cells.csv").read_bytes()
     _public_case(root, out)
-    why_palom = "the test leaves PALOM out of IBEX"
+    why_palom = "the test leaves PALOM out of the nuclei test set"
     monkeypatch.setitem(
-        variants.NOT_ON, "ibex", ((lambda r: r.method == "palom", why_palom),)
+        variants.NOT_ON, "nucset", ((lambda r: r.method == "palom", why_palom),)
     )
-    got = score.score(root, out, datasets=["ibex"], expected=[], primary=["stare"])
-    with open(out / "tables" / "ibex" / "excluded_runs.csv") as fh:
+    got = score.score(root, out, datasets=["nucset"], expected=[], primary=["stare"])
+    with open(out / "tables" / "nucset" / "excluded_runs.csv") as fh:
         rows = list(csv.DictReader(fh))
     assert rows == [{"run": "palom", "reason": why_palom}]
-    assert got["public"]["ibex"]["excluded_runs"] == rows
-    said = (out / "tables" / "ibex" / "summary.md").read_text()
+    assert got["public"]["nucset"]["excluded_runs"] == rows
+    said = (out / "tables" / "nucset" / "summary.md").read_text()
     assert "`palom`" in said and why_palom in said
-    assert "palom" not in {variants.run_name(r) for r in variants.runs_for("ibex")}
-    with open(out / "tables" / "ibex" / "cells.csv") as fh:
-        assert {r["dataset"] for r in csv.DictReader(fh)} == {"ibex"}
+    assert "palom" not in {variants.run_name(r) for r in variants.runs_for("nucset")}
+    with open(out / "tables" / "nucset" / "cells.csv") as fh:
+        assert {r["dataset"] for r in csv.DictReader(fh)} == {"nucset"}
     assert (out / "tables" / "cells.csv").read_bytes() == cohort_before
     # the cohort's own: a header alone, nothing is left out of it
     with open(out / "tables" / "excluded_runs.csv") as fh:
@@ -126,25 +128,25 @@ def test_public_rows_never_reach_cohort_tables(tmp_path):
     """Named in ONE call with the cohort, a public dataset still goes to its own tables."""
     root, out, made = scored_cohort.build(tmp_path)
     _public_case(root, out)
-    score.score(root, out, datasets=["multiplex", "ibex"], **scored_cohort.SCORE_KW)
+    score.score(root, out, datasets=["multiplex", "nucset"], **scored_cohort.SCORE_KW)
     for name in ("cells", "cells_nuclei"):
         with open(out / "tables" / f"{name}.csv") as fh:
             assert {r["dataset"] for r in csv.DictReader(fh)} == {"multiplex"}, name
     for name in ("resources", "summary_cells"):
         with open(out / "tables" / f"{name}.csv") as fh:
             assert {r["dataset"] for r in csv.DictReader(fh)} <= {"multiplex"}, name
-    with open(out / "tables" / "ibex" / "cells.csv") as fh:
-        assert {r["dataset"] for r in csv.DictReader(fh)} == {"ibex"}
+    with open(out / "tables" / "nucset" / "cells.csv") as fh:
+        assert {r["dataset"] for r in csv.DictReader(fh)} == {"nucset"}
 
 
 def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
     root, out, made = scored_cohort.build(tmp_path)
-    _public_case(root, out, dataset="acrobat", case_id="A1")
-    got = score.score(root, out, datasets=["acrobat"], expected=[])
-    where = out / "tables" / "acrobat"
+    _public_case(root, out, dataset="tissueset", case_id="A1")
+    got = score.score(root, out, datasets=["tissueset"], expected=[])
+    where = out / "tables" / "tissueset"
     assert (where / "tissue_missing.csv").is_file()
     assert not (where / "cells.csv").exists()
-    assert set(got["public"]["acrobat"]) == {
+    assert set(got["public"]["tissueset"]) == {
         "tissue", "tissue_summary", "tissue_missing", "excluded_runs", "losses"
     }  # fmt: skip
     # the real path: methods.input_rule leaves ASHLAR and PALOM out of a brightfield set
@@ -153,7 +155,7 @@ def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
     assert rows and all(r["reason"].strip() for r in rows)
     assert {"ashlar", "palom"} <= {r["run"] for r in rows}
     assert rows == [
-        {"run": n, "reason": w} for n, w in variants.excluded_for("acrobat")
+        {"run": n, "reason": w} for n, w in variants.excluded_for("tissueset")
     ]
     assert not (out / "tables" / "cells.csv").exists()
 
@@ -309,16 +311,16 @@ def test_nothing_gates():
 
 
 def test_the_paper_tables_of_a_public_set_are_its_own(tmp_path):
-    """``paper --dataset ibex`` reads ``tables/ibex/`` and writes ``paper/ibex/``; the
-    cohort's paper tables have no IBEX row."""
+    """``paper --dataset nucset`` reads ``tables/nucset/`` and writes ``paper/nucset/``; the
+    cohort's paper tables have no the nuclei test set row."""
     from benchmarks.regbench.paper import tables as paper_tables
 
     root, out, made = scored_cohort.build(tmp_path)
     _public_case(root, out)
-    score.score(root, out, datasets=["multiplex", "ibex"], **scored_cohort.SCORE_KW)
-    paper_tables.write_all(out, "ibex")
+    score.score(root, out, datasets=["multiplex", "nucset"], **scored_cohort.SCORE_KW)
+    paper_tables.write_all(out, "nucset")
     paper_tables.write_all(out)
-    with open(out / "paper" / "ibex" / "per_pair.csv") as fh:
-        assert {r["dataset"] for r in csv.DictReader(fh)} == {"ibex"}
+    with open(out / "paper" / "nucset" / "per_pair.csv") as fh:
+        assert {r["dataset"] for r in csv.DictReader(fh)} == {"nucset"}
     with open(out / "paper" / "per_pair.csv") as fh:
         assert {r["dataset"] for r in csv.DictReader(fh)} == {"multiplex"}

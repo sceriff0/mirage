@@ -356,11 +356,11 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the default dataset; the public datasets are named on request
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
-PUBLIC_DATASETS="anhir hyreco_a hyreco_b acrobat ibex mcmicro phenocycler rashid"
+PUBLIC_DATASETS="anhir hyreco_a hyreco_b mcmicro phenocycler rashid"
 # each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
 # (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
 # scorer: a dataset of a kind not scored yet is refused up front (landmarks: Task 21)
-PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks acrobat=tissue ibex=nuclei mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
+PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
 SCORED_KINDS="tissue nuclei"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0

@@ -40,7 +40,7 @@ Removed:
   `submit_ashlar.sh`, `submit_degraded.sh`, `ashlar/solve.py`, `ashlar/degrade.py`.
   `ashlar/{retile,original}.py` stay: regbench imports them.
 - Earlier removals recorded here for the guards that point at this section: the
-  ANHIR/ACROBAT landmark harness (`benchmarks/registration_eval/`, later
+  ANHIR landmark harness (`benchmarks/registration_eval/`, later
   `benchmarks/anhir/`) and `benchmarks/stare_bench/` no longer exist on any
   branch. Nothing under `benchmarks/` measures accuracy against ground truth
   other than what `regbench` scores itself.

@@ -29,8 +29,6 @@ PUBLIC = {
     "anhir": dict(_BF_LANDMARKS),
     "hyreco_a": dict(_BF_LANDMARKS),
     "hyreco_b": dict(_BF_LANDMARKS),
-    "acrobat": {"kind": "tissue", "modality": "brightfield"},
-    "ibex": dict(_NUCLEI),
     "mcmicro": {**_NUCLEI, "raw_tiles": True},
     "phenocycler": {**_NUCLEI, "raw_tiles": True},
     "rashid": {**_NUCLEI, "raw_tiles": True},

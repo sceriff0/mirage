@@ -19,6 +19,8 @@ from benchmarks.regbench import score as score_mod
 
 from . import scored_cohort
 
+pytestmark = pytest.mark.usefixtures("public_datasets")  # conftest: nucset, tissueset
+
 KW = scored_cohort.SCORE_KW
 
 
@@ -447,14 +449,14 @@ def test_an_empty_cohort_beside_a_public_set_scores_the_public_set(tmp_path):
     assert (out / "tables" / "cells.csv").is_file()
     _public_case(root, out)
     shutil.rmtree(root / "multiplex")
-    got = score_mod.score(root, out, ["multiplex", "ibex"], with_tissue=False, **KW)
+    got = score_mod.score(root, out, ["multiplex", "nucset"], with_tissue=False, **KW)
     assert got["n_scored_cases"] == 0
-    assert got["public"]["ibex"]["n_scored_cases"] == 1
+    assert got["public"]["nucset"]["n_scored_cases"] == 1
     assert not (out / "tables" / "cells.csv").exists()  # the stale one is gone
     assert header(out / "tables" / "losses.csv") == list(losses.COLUMNS)
-    assert (out / "tables" / "ibex" / "cells.csv").is_file()
+    assert (out / "tables" / "nucset" / "cells.csv").is_file()
     code = cli.main(["score", "--cases", str(root), "--out", str(out), "--workers",
-                     "1", "--dataset", "multiplex", "ibex"])  # fmt: skip
+                     "1", "--dataset", "multiplex", "nucset"])  # fmt: skip
     assert code in (0, None)
 
 
@@ -462,9 +464,9 @@ def test_a_tissue_set_writes_its_losses_readme_and_summary(tmp_path):
     from .test_public_never_pooled import _public_case
 
     root, out, _ = scored_cohort.build(tmp_path)
-    _public_case(root, out, dataset="acrobat", case_id="A1")
-    score_mod.score(root, out, datasets=["acrobat"], expected=[])
-    where = out / "tables" / "acrobat"
+    _public_case(root, out, dataset="tissueset", case_id="A1")
+    score_mod.score(root, out, datasets=["tissueset"], expected=[])
+    where = out / "tables" / "tissueset"
     assert header(where / "losses.csv") == list(losses.COLUMNS)
     assert "losses.csv" in (where / "README.txt").read_text()
     summary = json.loads((where / "summary.json").read_text())
@@ -518,11 +520,11 @@ def test_run_level_rows_are_the_cohorts_and_losses_run_csv_only(cohort, tmp_path
     (out / "submit_dropped.csv").write_text(
         "run,reason,detail\nvalis_mirage,preflight_failed,no start\n"
     )
-    score_mod.score(root, out, ["multiplex", "ibex"], with_tissue=False, **KW)
+    score_mod.score(root, out, ["multiplex", "nucset"], with_tissue=False, **KW)
     cohort_rows = [r for r in losses_of(out) if r["cause"] == "preflight_failed"]
     assert len(cohort_rows) == 1
-    ibex = read(out / "tables" / "ibex" / "losses.csv")
-    assert not [r for r in ibex if r["dataset"] == ""]
+    nucset = read(out / "tables" / "nucset" / "losses.csv")
+    assert not [r for r in nucset if r["dataset"] == ""]
     run_level = read(out / "tables" / "losses_run.csv")
     assert [r["cause"] for r in run_level] == ["preflight_failed"]
     assert all(r["dataset"] == "" for r in run_level)
@@ -534,18 +536,18 @@ def test_an_image_the_tissue_block_could_not_score_is_a_row(tmp_path, monkeypatc
     from .test_public_never_pooled import _public_case
 
     root, out, _ = scored_cohort.build(tmp_path)
-    _public_case(root, out, dataset="acrobat", case_id="A1")
+    _public_case(root, out, dataset="tissueset", case_id="A1")
     real = tissue.score_all
 
     def one_missing(jobs, workers=1):
         got = real(jobs, workers)
-        got["tissue_missing"] = [{"dataset": "acrobat", "case_id": "A1", "group": "A1",
+        got["tissue_missing"] = [{"dataset": "tissueset", "case_id": "A1", "group": "A1",
                                   "variant": "stare", "reason": "no written image"}]
         return got  # fmt: skip
 
     monkeypatch.setattr(tissue, "score_all", one_missing)
-    score_mod.score(root, out, datasets=["acrobat"], expected=[])
-    (r,) = [r for r in read(out / "tables" / "acrobat" / "losses.csv")
+    score_mod.score(root, out, datasets=["tissueset"], expected=[])
+    (r,) = [r for r in read(out / "tables" / "tissueset" / "losses.csv")
             if r["cause"] == "tissue_missing"]  # fmt: skip
     assert (r["case_id"], r["method"], r["effect"]) == ("A1", "stare", "dropped")
     assert "no written image" in r["detail"]
@@ -627,10 +629,10 @@ def test_an_unreadable_realcheck_verdict_reaches_losses_run_csv_on_a_public_only
         "stare\tselfcheck\tok\t-\tstare\t-\n"
         "stare\trealcheck\tunreadable\t-\tstare\trealcheck.json unreadable on P1_r1\n"
     )
-    score_mod.score(root, out, ["ibex"], with_tissue=False, verdicts=verdicts, **KW)
+    score_mod.score(root, out, ["nucset"], with_tissue=False, verdicts=verdicts, **KW)
     run_level = read(out / "tables" / "losses_run.csv")
     assert [r["cause"] for r in run_level] == ["realcheck_unreadable"]
-    assert not [r for r in read(out / "tables" / "ibex" / "losses.csv")
+    assert not [r for r in read(out / "tables" / "nucset" / "losses.csv")
                 if r["cause"] == "realcheck_unreadable"]
     # the cohort's file has it once, not twice
     score_mod.score(root, out, ["multiplex"], with_tissue=False, verdicts=verdicts, **KW)

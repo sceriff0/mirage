@@ -39,7 +39,7 @@ each method's section give them in full. In short:
 `regbench` is the official, and the only, benchmarking harness of Mirage. It scores
 registration methods on the user's cyclic-IF cohort (`multiplex`), which is what every
 command takes by default. The public datasets of the paper (`regbench.PUBLIC`: ANHIR,
-HyReCo, ACROBAT, IBEX, MCMICRO, PhenoCycler, Rashid) are named only on request and are
+HyReCo, MCMICRO, PhenoCycler, Rashid) are named only on request and are
 scored BESIDE the cohort, each into tables of its own, never pooled with it (see "Public
 datasets"); their download and preparation, and the landmark scorer, are not here yet. The
 generated rungs of the earlier harnesses are gone. **Nothing here has run on the
@@ -47,6 +47,8 @@ cluster**: every part is tested against stand-ins (small trees laid out like the
 published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for each
 method's package) and through the launcher's dry run. The earlier harnesses (arms, sweep,
 figures, the ASHLAR arm) were removed; `benchmarks/README.md` names the tag that keeps them.
+
+ACROBAT and IBEX were removed from `regbench.PUBLIC` by the user's ruling on 2026-10-18 (plan F tasks 22 and 25 are dropped); the `tissue` scoring kind stays as generic machinery, with no dataset of that kind.
 
 The whole harness is drawn in one figure, from the inputs to the tables and the caveats:
 `docs/figures/regbench-harness.html` (self-contained; `test_harness_diagram.py` keeps it in
@@ -1339,13 +1341,13 @@ and freed.
 ### Public datasets (`<out>/tables/<dataset>/`)
 
 A public dataset (`regbench.PUBLIC`) is scored on its own, never pooled with the cohort:
-`score --dataset ibex` (or `--dataset multiplex ibex`) writes the cohort's tables into
-`<out>/tables/` as always and IBEX's into `<out>/tables/ibex/`; a table of the cohort never
+`score --dataset mcmicro` (or `--dataset multiplex mcmicro`) writes the cohort's tables into
+`<out>/tables/` as always and MCMICRO's into `<out>/tables/mcmicro/`; a table of the cohort never
 holds a row of a public dataset. `paper --dataset <name>` reads `<out>/tables/<name>/` and
 writes `<out>/paper/<name>/`. Each public dataset is scored with its own run list
 (`variants.expected_variants(<name>)`, `variants.primary_for(<name>)`), and goes to the
-scorer of its `kind`: `nuclei` (IBEX, MCMICRO, PhenoCycler, Rashid) to the matched cells,
-every table above; `tissue` (ACROBAT) to the tissue-level block alone; `landmarks` (ANHIR,
+scorer of its `kind`: `nuclei` (MCMICRO, PhenoCycler, Rashid) to the matched cells,
+every table above; `tissue` (no dataset has this kind now) to the tissue-level block alone; `landmarks` (ANHIR,
 HyReCo) is refused with a message naming the dataset, because its scorer is not here yet,
 and nothing is written. HyReCo's core set is `hyreco_a`; `hyreco_b` is reported only on
 request. A set of unstitched tiles is named `<name>@<front end>` and is looked up by its
@@ -2564,7 +2566,7 @@ submission into `REGBENCH_OUT`, as `--score-only` does.
 
 **The cohort (`multiplex`) is the default**, and the default submission is the cohort
 alone. `--datasets` may also name a public dataset (`regbench.PUBLIC`), whose prepared
-cases are under `REGBENCH_CASES_<NAME>` (the name in capitals, e.g. `REGBENCH_CASES_IBEX`;
+cases are under `REGBENCH_CASES_<NAME>` (the name in capitals, e.g. `REGBENCH_CASES_MCMICRO`;
 refused up front when it is not set). Such a dataset gets its own run list (`runs --dataset
 <name>`), and the scorer scores it into `<out>/tables/<name>/`. `--prepare` prepares the
 cohort only; any other name is refused.

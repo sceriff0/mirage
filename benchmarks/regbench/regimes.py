@@ -70,8 +70,6 @@ DATASET_REGIME = {
     "anhir": "bf_consecutive",
     "hyreco_a": "bf_same",
     "hyreco_b": "bf_same",
-    "acrobat": "bf_consecutive",
-    "ibex": "cyclic_if",
     "mcmicro": "cyclic_if",
     "phenocycler": "cyclic_if",
     "rashid": "cyclic_if",

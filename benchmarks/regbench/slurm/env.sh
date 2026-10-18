@@ -4,7 +4,7 @@
 #   REGBENCH_REPO    the mirage repository (default: where this file is)
 #   REGBENCH_CASES   the prepared cases (`python -m benchmarks.regbench prepare ...`)
 #   REGBENCH_CASES_<NAME>  the prepared cases of the public dataset <name>
-#                    (regbench.PUBLIC; the name in capitals, e.g. REGBENCH_CASES_IBEX):
+#                    (regbench.PUBLIC; the name in capitals, e.g. REGBENCH_CASES_MCMICRO):
 #                    read only when `submit_cohort.sh --datasets` names it
 #                    (regbench_cases_of), and bound into the images when set
 #   REGBENCH_OUT     results: one folder per result name, plus tables/, logs/ and cache/

@@ -53,3 +53,12 @@ def real_like(tmp_path_factory):
     path = tmp_path_factory.mktemp("real") / "slide.ome.tif"
     write_nuclear(path, ref, 0.5)
     return path
+
+
+@pytest.fixture
+def public_datasets(monkeypatch):
+    """The two test-only public datasets (``testpublic``: ``nucset``, ``tissueset``)
+    registered in this process for one test."""
+    from . import testpublic
+
+    testpublic.register(monkeypatch.setitem, monkeypatch.setattr)

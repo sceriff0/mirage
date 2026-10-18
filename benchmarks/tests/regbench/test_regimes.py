@@ -64,13 +64,12 @@ def test_the_brightfield_levels_are_the_archived_ones():
 
 
 def test_every_dataset_of_the_plan_has_its_regime_now():
+    # the two datasets removed by the user's ruling of 2026-10-18 are not here
     want = {
         "multiplex": "cyclic_if",
         "anhir": "bf_consecutive",
         "hyreco_a": "bf_same",
         "hyreco_b": "bf_same",
-        "acrobat": "bf_consecutive",
-        "ibex": "cyclic_if",
         "mcmicro": "cyclic_if",
         "phenocycler": "cyclic_if",
         "rashid": "cyclic_if",
@@ -96,3 +95,48 @@ def test_unknown_dataset_names_itself():
         rg.regime_of("no_such")
     with pytest.raises(KeyError, match="no_such"):
         rg.regime_of("no_such@stage")
+
+
+# regimes.regime_of(dataset) and the STARE levels of each regime as e898d763 had them (the
+# commit before the two datasets of the ruling of 2026-10-18 were removed), for every dataset that remains and the
+# cohort: removing the two moves nothing of the others' STARE runs.
+_AT_E898D763 = {
+    "multiplex": "cyclic_if",
+    "anhir": "bf_consecutive",
+    "hyreco_a": "bf_same",
+    "hyreco_b": "bf_same",
+    "mcmicro": "cyclic_if",
+    "phenocycler": "cyclic_if",
+    "rashid": "cyclic_if",
+}
+_LEVELS_AT_E898D763 = {
+    "cyclic_if": (
+        ("baseline", ("channel", "none")),
+        ("alt", ("channel", "clahe")),
+        ("pct", ("channel", "percentile")),
+    ),
+    "bf_same": (
+        ("baseline", ("grey", "none")),
+        ("default", ("haem", "clahe")),
+        ("alt", ("grey", "clahe")),
+        ("pct", ("haem", "percentile")),
+    ),
+    "bf_consecutive": (
+        ("baseline", ("grey", "none")),
+        ("default", ("grey", "clahe")),
+        ("alt", ("grey_smooth", "none")),
+        ("pct", ("grey", "percentile")),
+    ),
+}
+
+
+def test_the_remaining_datasets_regimes_are_those_of_e898d763():
+    from benchmarks.regbench import PUBLIC
+
+    assert set(_AT_E898D763) == set(PUBLIC) | {"multiplex"}
+    for dataset, regime in _AT_E898D763.items():
+        assert rg.regime_of(dataset) == regime, dataset
+        assert rg.regime_of(f"{dataset}@raw") == regime, dataset
+        got = tuple((k, tuple(lv)) for k, lv in rg.stare_levels(regime))
+        assert got == _LEVELS_AT_E898D763[regime], dataset
+    assert set(rg.DATASET_REGIME) == set(_AT_E898D763)

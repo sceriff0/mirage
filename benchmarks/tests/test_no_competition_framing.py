@@ -1,7 +1,7 @@
 """No LIVE reference to a ground-truth harness that exists on no branch.
 
 Two harnesses occupied the ground-truth slot and both were deleted:
-`benchmarks/registration_eval/` (ANHIR/ACROBAT expert landmarks, 61e26ec) and
+`benchmarks/registration_eval/` (ANHIR expert landmarks, 61e26ec) and
 `benchmarks/stare_bench/` (a synthetic displacement field, cacc850). What
 survived was not prose. `make_figures.run()` REQUIRED a `reg_eval_csv`
 argument, and the marker file its opt-out wrote told the operator to go run
@@ -19,16 +19,14 @@ NARROWED 2026-09-12, because the premise moved: `benchmarks/anhir/` was then a l
 ANHIR landmark harness (it drove the PIPELINE and warped landmarks through the
 transform each backend publishes; it has since been removed with regbench's own
 ANHIR and HyReCo sets, whose names the guard still does not forbid). The bare
-`anhir` and `ANHIR/ACROBAT` clauses that used to sit in PATTERN would have
-forbidden the harness's own name; they are gone. What this guard still forbids
+`anhir` clause that used to sit in PATTERN would have
+forbidden the harness's own name; it is gone. What this guard still forbids
 is what is still absent: a PATH into either deleted harness, a bare
 (word-bounded) reference to either by name (`registration_eval`, `stare_bench`),
 and `registration_eval`'s own tools (`aggregate_eval`, `prepare_pairs.py`,
 `run_registration.sh`) -- a prose sentence naming one of these without the
 `benchmarks/` prefix used to slip past a path-only check, which is exactly how a
-LIVE instruction survived in a (since removed) sweep config. `acrobat` was never
-forbidden as a bare word (`bin/utils/coarse_align.py` cites it as the provenance
-of the DISK+LightGlue front-end that ships) and still is not.
+LIVE instruction survived in a (since removed) sweep config.
 
 The claiming-context rule for FIGURES ("evaluated on ANHIR") lives in
 tests/test_figures_have_no_retired_names.py and is unchanged: no figure may claim
@@ -64,9 +62,8 @@ ALLOW_FILES = {
     "benchmarks/README.md",
     # This guard. Naming the forbidden strings is what it is for.
     "benchmarks/tests/test_no_competition_framing.py",
-    # An honest-limits NEGATION ("no landmark TRE against ANHIR or ACROBAT was
-    # measured"), not a claim. dev's tests/test_figures_have_no_retired_names.py
-    # deliberately narrowed its own anhir/acrobat rule to CLAIMING context (see
+    # An honest-limits NEGATION ("no landmark TRE ... was measured"), not a claim. dev's tests/test_figures_have_no_retired_names.py
+    # deliberately narrowed its own anhir rule to CLAIMING context (see
     # its comment ~:76-106: "a negation and a claim are not the same risk") --
     # the claiming-context risk in figures is owned by that guard, not this one.
     "docs/figures/accuracy-schematic.html",
