@@ -1486,8 +1486,15 @@ slide, a round of the manifest) stops the others. Every such thing is a ROW of
 by stage, cause and blame at its end, writes them into `summary.json: losses` and into
 `summary.md` ("Where every loss shows up"), and `tables/README.txt` lists every cause.
 `losses.csv` is written by every `score`, a header alone when nothing was lost: an absent
-table is not "none". `score` exits non-zero only when not one case could be scored, and
-writes `losses.csv` first.
+table is not "none". Every public dataset (the tissue ones too) has its own
+`tables/<dataset>/losses.csv`, `README.txt` and `summary.json`. A row of no dataset (a
+dropped run, an unmarked unit, a compute-all patient, a run-level table that cannot be
+read) is the RUN's: it is in the cohort's `losses.csv` and in `tables/losses_run.csv`
+only, so a union of every dataset's table counts it once. `score` exits non-zero only
+when not one case could be scored (its end line says `cause=score_error`), and writes
+`losses.csv` first; a dataset with no case is "nothing scored" for itself (its tables
+are cleared, `n_scored_cases=0`) and never stops another. The `paper` command writes
+`paper/losses.csv` (same columns, stage `paper`) beside its tables.
 
 Columns: `stage,dataset,patient_id,case_id,run,method,cause,blame,effect,detail,source`.
 `stage` is one of `submit`, `manifest`, `prepare`, `nuclei`, `run`, `settle`, `score`, `paper`; `blame` one of
@@ -1496,7 +1503,11 @@ Columns: `stage,dataset,patient_id,case_id,run,method,cause,blame,effect,detail,
 at the unregistered pose like any failure of the method; `flagged`: kept and scored, with
 a flag on its rows; `capped`: the memory ladder stopped at the partition's largest rung,
 imputed, the cap in `detail`; `not_run`: nobody ran it). `source` names the file that
-carries the evidence.
+carries the evidence (the one that failed: `warped.npz` when that is what could not be
+read). **The one fold:** the results nobody ran (`not_run`) are ONE row per (dataset,
+method), its `case_id` reading `N case(s)` and `patient_id` blank, since a method nobody
+launched would otherwise be a row per case of the cohort; every other loss is a row of
+its own.
 
 Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`):
 
@@ -1521,6 +1532,11 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `submit_refused` | infrastructure | submit | sbatch refused the unit's next step after every retry |
 | `held` | infrastructure | run | its jobs were held or stalled in the queue (the squeue reason is in detail) |
 | `score_error` | infrastructure | score | the scoring of the case raised (score_errors.csv): the case has no row |
+| `table_unreadable` | infrastructure | score | a per-stage table is there and cannot be read: the losses it holds are not rows here (its path is in source) |
+| `tissue_missing` | infrastructure | score | the tissue block could not score a written image (tissue_missing.csv) |
+| `realcheck_unreadable` | infrastructure | score | a realcheck.json (or the run.json beside it) cannot be read: the run's realcheck verdict is `unreadable` (verdicts.tsv) |
+| `fit_points_dropped` | infrastructure | paper | a cost fit left points out (no finite target or predictor, or no input size): `n_dropped` of cost_fits / pipeline_cost_fits (S12; `paper/losses.csv`) |
+| `paper_record_unreadable` | infrastructure | paper | a run.json the paper tables could not read: `n_unreadable` of versions / run_parameters, one row per run (S13; `paper/losses.csv`) |
 | `not_run` | infrastructure | run | no result of this submission: nobody ran it |
 | `stale_result` | integrity | run | a result made for an earlier version of the case or by another submission |
 | `preflight_failed` | infrastructure | submit | the run's image failed the preflight: the run was not submitted |
@@ -1531,6 +1547,7 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `manifest_dropped` | input | manifest | the manifest could not list the round |
 | `prepare_dropped` | input | prepare | prepare multiplex dropped the round |
 | `prepare_failed` | input | prepare | prepare multiplex failed on the round |
+| `frame_check_failed` | input | run | a STARE proxy moved image content in prep's frame check: written, run and flagged (`stages/prep/record.json` `frame_check=failed`; B10, user ruling "no blocking") |
 | `low_agreement` | input | nuclei | the slide's nuclei agree with its outlines under the threshold: kept, scored and flagged (nuclei_checks.csv) |
 | `pixel_size_fallback` | input | manifest | the checkpoint has no pixel size for the round: 0.325 um is used |
 
@@ -1551,29 +1568,47 @@ says `cost_bound=upper`.
 | `prepare_dropped.csv` | cases folder | every round `prepare multiplex` dropped or failed on (per-round files under `_cache/prepare_dropped/`, their union beside them) |
 | `nuclei_checks.csv` | tables (and the nuclei folder, from `nuclei --list`) | one row per slide: its one-nucleus fraction against its outlines, the threshold, `low_agreement` |
 | `score_errors.csv` | tables | a case whose scoring raised: the last frame and the message; the other cases are scored |
-| `logs/unmarked_units.csv` | results folder | the units the settle job could not list (an unreadable run file, a chain beyond the case list) |
+| `logs/unmarked_units.csv` | results folder | the units the settle job could not list (an unreadable run file, a chain beyond the case list); `chains.mark_in_flight` returns their number as `n_unmarked_units` |
+| `logs/refused_units.tsv` | results folder | the units of a refused (or given-up) selfcheck or stage step, which no record can carry (`retry.sbatch` `mark_cut`): a row each, of its cause. A watcher that gives up writes the units of the step it was at down itself (`watcher_gave_up`) before it exits, so a failed settle job does not leave them the method's |
+| `logs/compute/plan.tsv` | results folder | the compute-all plan the launcher submitted: a planned patient that left no folder is a `no_trace` row (so is one with an end line and no folder) |
+| `tables/losses_run.csv` | tables | the run-level rows (dataset blank) alone |
+| `paper/losses.csv` | paper | the paper stage's rows (`fit_points_dropped`, `paper_record_unreadable`) |
 | `pipeline_cost_summary.csv` | tables | `reason` and `n_tasks_unmeasured` per compute-all patient (`no_trace`, `failed_task`, `cached`, `no_ok_end`) |
 | `summary.json` | tables | `losses`: the counts by stage, cause, blame and effect |
 
 Beside them, nothing is skipped silently any more: `resources.csv: unmeasured_records`
 (stage records that could not be read), `*_n_nan` columns beside every averaged number,
 `cost_fits`/`pipeline_cost_fits: n_dropped` (and "k dropped" in the figures),
-`versions`/`run_parameters: n_unreadable`, `common_block_per_method` beside the strict
-common block, a realcheck verdict `unreadable`, and `pixel_size_source` and
-`low_agreement` on every scored row of a case.
+`versions`/`run_parameters: n_unreadable`, a realcheck verdict `unreadable`, and
+`pixel_size_source` and `low_agreement` on every scored row of a case.
+
+**Two common blocks (B2).** A round lost to a cause that is not the method's
+(`score.NOT_THE_METHOD`) leaves the strict common block for EVERY method (the headline:
+`cost_summary.csv`, `cost_end_to_end_summary.csv`, `paper/method_best.csv`, column
+`common_block=strict`). Beside each is a `per_method` variant (`cost_summary_per_method.csv`,
+`cost_end_to_end_summary_per_method.csv`, `paper/method_best_per_method.csv`,
+`common_block=per_method`) where such a round leaves only the block of the method it was
+lost to; `n_lost_not_method` in `summary_resources` counts those rounds.
 
 **The integrity refusals that remain** (the ONLY hard stops; each names itself in its
 message): a second submission into one results root; a reused run id; a slimmed or
 truncated cells csv (`refuse_slimmed`); the launcher's "the queue cannot be read
 (squeue)", only after 5 tries 10 s apart (`REGBENCH_SQUEUE_TRIES`,
-`REGBENCH_SQUEUE_WAIT_S`). A `truth_sha256` mismatch is no crash: the result is
+`REGBENCH_SQUEUE_WAIT_S`); the scorer's image with no path, or failing its preflight
+("integrity refusal (the scorer's image)": nothing could be scored, so nothing is
+submitted). A `truth_sha256` mismatch is no crash: the result is
 `stale_result`, `not_run`. A launch in which the launcher dropped EVERY run stops, since
 nothing is left to submit.
 
 **Selfchecks and realchecks never gate**: they run and report (`verdicts.tsv`,
 `failure_log.csv`), and scoring waits only for the registration chains. The scorer
-(`rb-score`) runs once they end; `rb-rescore` runs `score` again after the selfchecks
-end (afterany), so their verdicts reach the tables without anything waiting on them.
+(`rb-score`) runs once they end; `rb-rescore` runs after the selfchecks end (afterany),
+SETTLES again (a kill whose accounting arrived since) and then scores again, so their
+verdicts reach the tables without anything waiting on them; it reads every case's record
+(the selfcheck status is set at table time, not in the case key). With `--compute-all`,
+the first compute head of each lane waits for `rb-score` AND `rb-rescore` (compute runs
+last and alone), and `rb-score-compute` for every head and `rb-rescore`. A failed frame
+check of a STARE proxy is no longer a refusal (B10): it is a `frame_check_failed` row.
 
 ## Tissue-level agreement of the written images (secondary)
 
