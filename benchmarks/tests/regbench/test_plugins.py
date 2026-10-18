@@ -111,8 +111,11 @@ def public_counts():
         for s_ in variants.STARE_STRIDES
     } | tiers
     # counts(), the table and the expected names are the cohort's own list (runs_for(None))
-    cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS)
-    names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS)
+    # + stare_local4 (T31 R2: STARE in one job of 4 CPUs, a cost row of stare's; two
+    # result names, like every STARE run: stare_local4 and stare_local4_rigid)
+    local4 = len(variants.LOCAL_4CPU)
+    cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS) + local4
+    names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS) + 2 * local4
     return cohort_runs, 4, 11 + len(ashlar.ASHLAR_CELLS), names
 
 

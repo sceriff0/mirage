@@ -420,7 +420,18 @@ def test_the_cost_header_counts_the_runs_without_a_watcher():
         {"cause": "", "oom_watch": "no", "adapter": "valis", "unit": "patient"},
         {"cause": "not_run", "oom_watch": "", "adapter": "", "unit": ""},
     ]
-    (watch, threads, reused) = cost.header_lines(rows)
+    def line(lines, start):
+        # found by what it says, not where it is: the header grows (T31 added the
+        # instrument, request-policy, memory-instrument and contention lines)
+        got = [x for x in lines if x.startswith(start)]
+        assert len(got) == 1, (start, lines)
+        return got[0]
+
+    lines = cost.header_lines(rows)
+    watch = line(lines, "out-of-memory watcher:")
+    threads = line(lines, "thread variables:")
+    reused = line(lines, "reused:")
+    assert lines[:2] == [watch, threads]
     assert threads.startswith("thread variables: the benchmark sets none.")
     assert "2 of 3 results ran WITHOUT one" in watch
     assert "stare 1, valis 1" in watch and "may be a memory death" in watch
@@ -429,9 +440,10 @@ def test_the_cost_header_counts_the_runs_without_a_watcher():
     rows[0].update(time_limit="1-00:00:00", reused=True)
     rows[2].update(time_limit="3-00:00:00")
     lines = cost.header_lines(rows)
-    assert lines[2].startswith("reused: 1 of 3 results")
-    assert "pair 1-00:00:00; patient 3-00:00:00" in lines[3]
-    assert "more time per round" in lines[3]
+    assert line(lines, "reused:").startswith("reused: 1 of 3 results")
+    limit = line(lines, "time limit per task:")
+    assert "pair 1-00:00:00; patient 3-00:00:00" in limit
+    assert "more time per round" in limit
 
 
 # ── stale records (review item 13) ────────────────────────────────────────────
