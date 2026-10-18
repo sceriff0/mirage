@@ -1,0 +1,109 @@
+{
+  "ashlar": {
+    "files": [
+      "benchmarks/ashlar/original.py",
+      "benchmarks/ashlar/retile.py",
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/imageio.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/ashlar.py",
+      "benchmarks/regbench/resources.py",
+      "benchmarks/regbench/tilemap.py",
+      "bin/utils/pixel_size.py",
+      "bin/utils/tiled_io.py",
+      "bin/utils/tiled_manifest.py"
+    ],
+    "fingerprint": "732cd186da4ab0129aab57f6b684c54f0069a70a57c6e6c8e2c2e1ab6d43dafd"
+  },
+  "deeperhistreg": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/imageio.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/deeperhistreg.py",
+      "benchmarks/regbench/resources.py"
+    ],
+    "fingerprint": "43d6536bf8bc58344f815c11d5b6f9f221400cdb7c2cf0d39e3639d42294eab7"
+  },
+  "initial": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/initial.py",
+      "benchmarks/regbench/resources.py"
+    ],
+    "fingerprint": "ebd15b17dda98c00497fb261ad2e1c3614406ce2efd22eb21963ad22d353bbfd"
+  },
+  "palom": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/palom.py",
+      "benchmarks/regbench/resources.py"
+    ],
+    "fingerprint": "ec212c1ab8a20178d4216437efe11c14a3fc8bfd3d694a9ce51f3d68ee4240c7"
+  },
+  "stare": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/imageio.py",
+      "benchmarks/regbench/ladder.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/stare.py",
+      "benchmarks/regbench/prep.py",
+      "benchmarks/regbench/regimes.py",
+      "benchmarks/regbench/resources.py",
+      "benchmarks/regbench/stages.py"
+    ],
+    "fingerprint": "5facaab7ea5a74716d4d7b5fdcb1d1ec34d0411590332f5c0fde2185dc8b1625"
+  },
+  "valis": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/valis.py",
+      "benchmarks/regbench/resources.py",
+      "bin/utils/jvm_cache.py"
+    ],
+    "fingerprint": "d494f493d2354c9567013f132043d323bbd2cc2a169bdb35da20c338e2b91c9a"
+  },
+  "valis_mirage": {
+    "files": [
+      "benchmarks/regbench/cases.py",
+      "benchmarks/regbench/landmark_io.py",
+      "benchmarks/regbench/mapping.py",
+      "benchmarks/regbench/methods/__init__.py",
+      "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/valis_mirage.py",
+      "benchmarks/regbench/resources.py",
+      "bin/register.py",
+      "bin/utils/image_utils.py",
+      "bin/utils/jvm_cache.py",
+      "bin/utils/logger.py",
+      "bin/utils/ome_io.py",
+      "bin/utils/pixel_size.py",
+      "bin/utils/progress.py",
+      "bin/utils/retry.py",
+      "bin/utils/tiled_io.py",
+      "bin/utils/valis_config.py",
+      "bin/utils/valis_micro_rigid.py",
+      "bin/utils/valis_preflight.py"
+    ],
+    "fingerprint": "16263ec4eb98dc90d0991fafbfdcde40b3a8ae78cbeb4ef99312f6673e40d95f"
+  }
+}

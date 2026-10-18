@@ -2451,6 +2451,22 @@ folder; these rules keep one from answering for the other:
   submission that a re-run would overwrite is moved to `<result>/earlier/<n>/` first,
   as above.
 
+- *The method code is frozen* (plan F, Task 8).
+  `benchmarks/tests/regbench/method_code_freeze.json` holds, for every method in
+  `benchmarks.regbench.METHODS`, the `code` fingerprint of `methods.code_fingerprint` and
+  the files it covers (`methods.code_files`, paths from the repository root);
+  `test_method_code_freeze.py` fails, naming the method and the files, when a method has
+  another fingerprint. **A frozen file changes only in a commit of its own that
+  regenerates the freeze file** (`python -m
+  benchmarks.tests.regbench.make_method_code_freeze >
+  benchmarks/tests/regbench/method_code_freeze.json`) **and says why**: every cluster
+  result of the methods that file belongs to will run again. A method added later is
+  appended by its own task. The files common to all methods are `cases.py`,
+  `landmark_io.py`, `mapping.py`, `resources.py` and `methods/__init__.py`; the rest, per
+  method (the adapter, its helpers, `imageio.py`, `bin/register.py` and the `bin/utils`
+  modules it runs, the tile cutting of `benchmarks/ashlar`), is the `files` list of that
+  method in the freeze file, which the generator prints.
+
 **Reuse: what is computed again, and why.** A unit result is reused only when its
 `run.json: reuse_key` equals the key the current code computes. `code` is a sha256 over
 the driver `methods/__init__.py` and `methods.DRIVER_CODE`, the adapter, the `methods/`
