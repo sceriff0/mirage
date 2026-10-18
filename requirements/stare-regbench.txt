@@ -40,3 +40,16 @@ pillow==12.3.0        # scikit-image, imageio
 iniconfig==2.3.1      # pytest
 pluggy==1.6.0         # pytest
 pygments==2.21.0      # pytest
+
+# The paper's plots (benchmarks/regbench/paper/plots.py: `python -m benchmarks.regbench plots`)
+# run in this image too. matplotlib is the version requirements/segeval.txt pins; its own
+# dependencies are pinned like the rest of this block (numpy, pillow and packaging above),
+# at the versions requirements/palom.txt resolves for the same CPython 3.11 / linux x86_64.
+matplotlib==3.8.4
+contourpy==1.3.2      # matplotlib
+cycler==0.12.1        # matplotlib
+fonttools==4.65.0     # matplotlib
+kiwisolver==1.5.1     # matplotlib
+pyparsing==3.3.3      # matplotlib
+python-dateutil==2.9.0.post0   # matplotlib
+six==1.17.0           # python-dateutil

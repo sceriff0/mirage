@@ -61,6 +61,9 @@ points, _ = orb.detectAndCompute(image, None)
 print('cv2', cv2.__version__, 'ORB keypoints on noise:', len(points))
 "
 
+# matplotlib, the paper's plots (benchmarks/regbench/paper/plots.py), headless.
+MPLBACKEND=Agg "$PY" -c "import matplotlib; import matplotlib.pyplot; print('matplotlib', matplotlib.__version__)"
+
 # The negative: no learned stack in this image either. __import__() so the smoke scanner
 # does not read it as a positive import.
 for mod in torch kornia; do

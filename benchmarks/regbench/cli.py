@@ -25,6 +25,7 @@
                        refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
 ``cpu-scaling``        the CPU-scaling table: the named rows at 4, 8 and 16 CPUs
                        (``paper/cpu_scaling.py``)
+``plots``              the paper's figures from the paper tables (``paper/plots.py``)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -659,6 +660,16 @@ def build_parser():
         help="the folder the cases were prepared under: the input size of a cost point "
         "is read from its slide files (blank without it)",
     )
+
+    pl = sub.add_parser(
+        "plots",
+        help="the paper's figures (benchmarks/regbench/paper/plots.py) from the paper tables: "
+        "<out>/paper/figures/ for the cohort, <out>/paper/<dataset>/figures/ otherwise; a figure "
+        "whose input table is absent is written as a placeholder naming it",
+    )
+    pl.add_argument("--out", required=True, help="the results folder `paper` wrote to")
+    pl.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    pl.add_argument("--only", default=None, help="figure names, comma-separated")
 
     cs = sub.add_parser(
         "cpu-scaling",
@@ -1469,6 +1480,10 @@ def _main(a):
         from .paper import tables
 
         return tables.main(a)
+    if a.cmd == "plots":
+        from .paper import plots
+
+        return plots.main(a)
     if a.cmd == "cpu-scaling":
         from .paper import cpu_scaling
 
