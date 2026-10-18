@@ -107,6 +107,19 @@ T28_COLUMNS = (
 )
 
 
+# the columns Task 31 added to resources and summary_resources (the cost review): with
+# them stripped too the golden is still the T7 golden, so no value of an older column
+# moved (the golden changed only by added columns)
+T31_COLUMNS = (
+    "cost_blank_reason",
+    "jvm_peak_heap_gb",
+    "peak_concurrent_gb",
+    "peak_hwm_gb",
+    "peak_largest_job_gb",
+    "register_s_per_round_from",
+)
+
+
 def test_the_golden_minus_dropme_is_the_t7_golden():
     want = json.loads(GOLDEN.read_text())
     back = {
@@ -114,7 +127,7 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
             {
                 ("n_not_run_or_blocked" if k == "n_not_run_or_lost" else k): v
                 for k, v in row.items()
-                if k not in T10_COLUMNS and k not in T28_COLUMNS
+                if k not in T10_COLUMNS and k not in T28_COLUMNS and k not in T31_COLUMNS
             }
             for row in rows
             if not _dropme(row)
