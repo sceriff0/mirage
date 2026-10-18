@@ -147,7 +147,12 @@ def test_summary_has_best_and_primary_rows_and_the_paired_difference(scored):
 def test_terminal_rows_are_the_last_variant_of_each_run():
     rows = tables.terminal_rows("multiplex")
     for run in variants.runs_for("multiplex"):
+        if variants.run_name(run) in variants.COST_ONLY:
+            # a cost row is in no accuracy table (T31 fix C1): the cost tables add it
+            assert variants.run_name(run) not in rows
+            continue
         assert rows[variants.run_name(run)] == variants.variants_of(run)[-1]
+    assert variants.STARE_LOCAL4 in variants.COST_ONLY
     # DeeperHistReg has ONE result per run: the run's own name (ruling 2026-10-17)
     assert rows["deeperhistreg_hr_gpu"] == "deeperhistreg_hr_gpu"
     assert not any("asdrawn" in v for v in rows.values())

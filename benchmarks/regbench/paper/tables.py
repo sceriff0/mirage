@@ -241,16 +241,41 @@ def _variants_of_name(name):
 
 
 # ── the rows and their stages ────────────────────────────────────────────────
-def terminal_rows(dataset):
-    """``{run name: its last result name}`` for every active run of ``dataset``:
-    ``variants.variants_of(run)[-1]``. STARE's final row, VALIS's final row (the micro
-    stage only at depth 2), DeeperHistReg's one row (the run's own name), ASHLAR's cell,
-    PALOM's ``palom``."""
+def _run_terminals(dataset):
+    """``{run name: its last result name}`` for every active run of ``dataset``, the
+    cost-only rows included (``terminal_rows`` filters them)."""
     ds = None if dataset == COHORT else dataset
     return {
         variants.run_name(r): list(variants.variants_of(r))[-1]
         for r in variants.runs_for(ds)
     }
+
+
+def is_cost_only(name):
+    """A COST row (``variants.COST_ONLY``: ``stare_local4``): it is in the cost tables and
+    figures only, never in an accuracy table or figure (T31 fix C1)."""
+    return name in set(getattr(variants, "COST_ONLY", ()))
+
+
+def terminal_rows(dataset):
+    """``{run name: its last result name}`` for every active run of ``dataset``:
+    ``variants.variants_of(run)[-1]``. STARE's final row, VALIS's final row (the micro
+    stage only at depth 2), DeeperHistReg's one row (the run's own name), ASHLAR's cell,
+    PALOM's ``palom``. A cost-only run (``is_cost_only``) is left out: every accuracy
+    table and figure reads this list (T31 fix C1); the cost tables add it themselves
+    (``cost_points``, ``_summary_kinds``). ``versions``, ``run_parameters`` and ``hosts``
+    read this list too: the cost row is ``stare``'s code on another allocation."""
+    return {
+        name: final
+        for name, final in _run_terminals(dataset).items()
+        if not (is_cost_only(name) or is_cost_only(final))
+    }
+
+
+def accuracy_pairs(pp):
+    """``per_pair`` without the cost-only rows: what every accuracy table and figure is
+    made from (T31 fix C1)."""
+    return [r for r in pp if not is_cost_only(r.get("row"))]
 
 
 def _valis_depth(run):
@@ -652,7 +677,10 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
     out = []
     for fam in _families(dataset):
         for which, row in _summary_kinds(fam, best, primary, cost_rows, dataset):
-            _, acc = _accuracy(pp, row, dataset)
+            # a cost-only row has no accuracy here: it is no configuration of its own
+            # (T31 fix C1); its cost columns are its own
+            cost_row = is_cost_only(row)
+            acc = {} if cost_row else _accuracy(pp, row, dataset)[1]
             old = _cost(cost_rows, res_rows, row, excluded)
             mine = [r for r in cost_rows if r["method"] == row]
             clock = costs.clock_of(row, mine[0]) if mine else costs.WHOLE
@@ -681,7 +709,7 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
                     which=which,
                     row_kind=which,
                     **acc,
-                    **_paired(pp, row, stare_best, dataset),
+                    **({} if cost_row else _paired(pp, row, stare_best, dataset)),
                     **old,
                     **sc,
                     total_cpu_h_used_med=sc["total_cpu_h_used_common_med"],
@@ -1160,7 +1188,8 @@ def build_best(pp, dataset, cpu):
 
 def build(out, dataset=COHORT, cases_root=None):
     """``{table name: rows}`` for every table of ``WRITTEN``."""
-    pp = per_pair(out, dataset)
+    every = per_pair(out, dataset)  # the cost tables and local4_differs read these
+    pp = accuracy_pairs(every)  # every accuracy table and per_pair.csv (T31 fix C1)
     cost_rows = _cost_rows(out, dataset)
     res_rows = _res_rows(out, dataset)
     cpu = _cpu_by_row(cost_rows)
@@ -1168,13 +1197,15 @@ def build(out, dataset=COHORT, cases_root=None):
     best = got["method_best"]
     peaks = _copied(out, dataset, "stare_stage_peaks")
     common, points = cost_points(
-        pp, best, cost_rows, res_rows, dataset, fits._cases_by_id(cases_root, dataset)
+        every, best, cost_rows, res_rows, dataset, fits._cases_by_id(cases_root, dataset)
     )
-    summary = method_summary(pp, best, cost_rows, res_rows, dataset, points, common, peaks)
-    counted = list(dict.fromkeys(r["row"] for r in summary))
+    summary = method_summary(every, best, cost_rows, res_rows, dataset, points, common, peaks)
+    counted = [r for r in dict.fromkeys(r["row"] for r in summary) if not is_cost_only(r)]
     e2e = _csv(_tables(out, dataset) / "cost_end_to_end.csv")
     return {
-        "per_pair": pp,
+        # every row: local4_differs reads the cost row's pairs; per_pair.csv is written
+        # without it (write_all: accuracy_pairs, T31 fix C1)
+        "per_pair": every,
         "end_to_end": end_to_end(summary, cost_rows, res_rows, e2e, peaks, dataset, common),
         "method_best": best,
         "method_best_per_method": got["method_best_per_method"],
@@ -1185,7 +1216,7 @@ def build(out, dataset=COHORT, cases_root=None):
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),
         "versions": versions(out, dataset),
         "run_parameters": run_parameters(out, dataset),
-        "hosts": hosts(res_rows, dataset, _excluded_rounds(pp)),
+        "hosts": hosts(res_rows, dataset, _excluded_rounds(every)),
         "stare_tier_table": stare_tier_table(),
         "pipeline_params": pipeline_params(),
         "cohort_counts": cohort_counts(pp, counted, dataset),
@@ -1290,7 +1321,8 @@ def write_all(out, dataset=COHORT, cases_root=None):
     paths = {}
     for name in WRITTEN:
         path = target / f"{name}.csv"
-        schema.write(path, name, built[name])
+        rows = accuracy_pairs(built[name]) if name == "per_pair" else built[name]
+        schema.write(path, name, rows)
         paths[name] = path
     paths["losses"] = target / "losses.csv"
     losses.write(paths["losses"], paper_losses(built, dataset))

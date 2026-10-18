@@ -188,8 +188,11 @@ def _need(paper_dir, **names):
 
 # ── per-case dice ────────────────────────────────────────────────────────────
 def _outlines(per_pair):
+    # a cost-only row (stare_local4) is in no accuracy figure, even in a per_pair.csv
+    # written before T31's fix C1 or collected from a draft
     return [r for r in per_pair if r.get("set") == tables.OUTLINES
-            and not _flag(r.get("excluded_from_summaries"))]
+            and not _flag(r.get("excluded_from_summaries"))
+            and not tables.is_cost_only(r.get("row"))]
 
 
 def _cases(per_pair, row):
@@ -352,7 +355,8 @@ def _terminal(per_pair):
     try:
         return set(tables.terminal_rows(ds).values())
     except KeyError:
-        return {r["row"] for r in per_pair if r.get("stage") != tables.INITIAL}
+        return {r["row"] for r in per_pair
+                if r.get("stage") != tables.INITIAL and not tables.is_cost_only(r["row"])}
 
 
 def fig3b_dice_all(paper_dir, fig_dir):
@@ -471,6 +475,8 @@ def fig3d_stare_tiers(paper_dir, fig_dir):
         return _placeholder(fig_dir, "fig3d_stare_tiers", missing)
     picks = {}
     for r in got["st"]:
+        if tables.is_cost_only(r.get("row")):
+            continue  # a cost row is no tier of STARE's (T31 fix C1)
         if _num(r.get("stride")) == 64 and (r.get("sprep") or "none") == "none":
             picks[r["tier"]] = r["row"]
     by_row = _drop_empty_cases({row: _cases(got["pp"], row) for row in picks.values()})
@@ -759,7 +765,7 @@ def _derive(tables_dir, to, dataset):
     if pp is None:
         return {}
     pp = _typed(_case_keyed([r for r in pp if r.get("source") != EXPECTED]))
-    pp = [r for r in pp if r.get("dataset") == dataset]
+    pp = tables.accuracy_pairs([r for r in pp if r.get("dataset") == dataset])
     if not pp:
         return {}
     source = f"derived:{tables_dir}"
