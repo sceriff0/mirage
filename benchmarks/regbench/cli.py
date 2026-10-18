@@ -21,6 +21,8 @@
                        moving gigapixels (``subset.py``), one ``patient<TAB>gpx`` line each
 ``subset-cases``       a cases folder of the named patients alone (symlinks to their case
                        folders), for ``REGBENCH_CASES`` of the CPU cross
+``staged-results``     the STARE results under ``--out`` its stage jobs made (the launcher
+                       refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -635,6 +637,12 @@ def build_parser():
     ss.add_argument("--groups", required=True, help="patients, comma-separated")
     ss.add_argument("--to", required=True, help="a new (or empty) folder")
     ss.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    sx = sub.add_parser(
+        "staged-results",
+        help="the STARE result folders under --out that its stage jobs made, one per "
+        "line (the launcher refuses a `local` launch into such a folder)",
+    )
+    sx.add_argument("--out", required=True)
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1444,6 +1452,12 @@ def _main(a):
         print(f"# rule: {subset.RULE}")
         for group, gpx in subset.pick(a.cases, a.dataset, a.n):
             print(f"{group}\t{gpx:.3f}")
+        return 0
+    if a.cmd == "staged-results":
+        from . import subset
+
+        for folder in subset.staged_stare(a.out):
+            print(folder)
         return 0
     if a.cmd == "subset-cases":
         from . import subset

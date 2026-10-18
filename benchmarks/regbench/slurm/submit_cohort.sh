@@ -748,6 +748,21 @@ if [ "$scoring_earlier" = 1 ]; then
     [ -z "$only_runs" ] || echo "# $step_flag: --runs is not used (the scorer scores every run of the submission)"
     selected=""
 fi
+# REGBENCH_STARE_EXECUTION=local into a folder that holds STARE results of its stage jobs
+# is refused: those results have another reuse key (execution `jobs`), so every STARE
+# unit would run again and replace them. The cross has folders of its own (README, "The
+# CPU cross"). A staged launch over local results is not refused.
+if [ "$STARE_EXECUTION" = local ] && [ -d "$REGBENCH_OUT" ]; then
+    for r in $LOCAL_RUNS; do
+        has "$selected" "$r" || continue
+        staged_found="$(regbench_py "$REGBENCH_HEAD_IMAGE" staged-results --out "$REGBENCH_OUT")" \
+            || die "cannot read which STARE results under $REGBENCH_OUT ran as stage jobs (python -m benchmarks.regbench staged-results). Nothing was submitted."
+        if [ -n "$staged_found" ]; then
+            die "REGBENCH_STARE_EXECUTION=local into $REGBENCH_OUT, which holds $(wc -l <<< "$staged_found" | tr -d ' ') STARE result(s) of its stage jobs (execution jobs), e.g. $(head -n 1 <<< "$staged_found"): every STARE unit would run again under another reuse key and replace them. Use a separate REGBENCH_OUT for the CPU cross (README, \"The CPU cross\": one folder per CPU count). Nothing was submitted."
+        fi
+        break
+    done
+fi
 # compute-all's runs, read before the first sbatch: (backend, patient) in the order
 # they are submitted
 COMPUTE_PLAN=""

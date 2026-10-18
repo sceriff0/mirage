@@ -2841,7 +2841,9 @@ STARE's points at 4, 8 and 16 CPUs are all `local`, so they compare with one ano
 The other methods' 4-CPU points are the main run's results on those patients; they are
 not run again. Never point a `local` launch at the main `REGBENCH_OUT`: its STARE
 results have another reuse key, so every STARE unit there would run again and replace
-the staged result. Without `REGBENCH_CPUS` and `REGBENCH_STARE_EXECUTION` the launcher
+the staged result. The launcher refuses it before any `sbatch` when the folder holds a
+STARE result of its stage jobs (`regbench staged-results --out O` lists them); a staged
+launch over `local` results is not refused. Without `REGBENCH_CPUS` and `REGBENCH_STARE_EXECUTION` the launcher
 submits exactly what it submitted before the cross existed. A test compares the default
 dry run with the one from the launcher at 275edda0.
 

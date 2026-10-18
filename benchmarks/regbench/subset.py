@@ -80,3 +80,30 @@ def write(cases_root, groups_wanted, dest, dataset="multiplex"):
     if (root / "manifest.csv").exists():
         shutil.copyfile(root / "manifest.csv", dest / "manifest.csv")
     return n
+
+
+def staged_stare(out):
+    """The STARE result folders under ``out`` whose run was its stage jobs: ``run.json``
+    of method ``stare`` whose reuse key says ``execution: jobs`` (``methods.reuse_key``),
+    or, in a record without that part, whose ``info.jobs.execution`` does
+    (``methods/stare.py``). A ``local`` launch (the CPU cross) into such a folder would
+    run every one of those units again under another key and replace it, so the
+    launcher refuses it (``slurm/submit_cohort.sh``). Unreadable records are skipped."""
+    import json
+
+    found = []
+    for path in sorted(Path(out).glob("*/*/*/run.json")):
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("method") != "stare":
+            continue
+        key = rec.get("reuse_key")
+        execution = key.get("execution") if isinstance(key, dict) else None
+        if execution is None:
+            jobs = (rec.get("info") or {}).get("jobs")
+            execution = jobs.get("execution") if isinstance(jobs, dict) else None
+        if execution == "jobs":
+            found.append(path.parent)
+    return found

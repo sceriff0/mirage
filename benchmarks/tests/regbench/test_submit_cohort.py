@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -3799,3 +3800,59 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
         ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
         for ln in later
     ] == now
+
+
+def _stare_record(out, record, variant="stare", case="P1_a"):
+    d = Path(out) / variant / "multiplex" / case
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "run.json").write_text(json.dumps(record))
+    return d
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"method": "stare", "ok": True, "reuse_key": {"execution": "jobs"}},
+        # a failed unit carries the key too: it is still the staged run's folder
+        {"method": "stare", "ok": False, "reuse_key": {"execution": "jobs"}},
+        # a record that names the execution only in what the jobs added up to
+        {"method": "stare", "ok": True, "info": {"jobs": {"execution": "jobs"}}},
+    ],
+)
+def test_a_local_stare_launch_over_staged_stare_results_is_refused(site, record):
+    """Fix round 1 of task 9: a `local` launch into a folder of staged STARE results
+    would run every STARE unit again (another reuse key) and replace them. Refused
+    before any sbatch, naming the folder and the way out."""
+    tmp, _, _ = site
+    out = tmp / "out-local-over-staged"
+    shutil.rmtree(out, ignore_errors=True)
+    _stare_record(out, record, variant="stare_medium")
+    done, log, _ = launch(
+        site, env={"REGBENCH_STARE_EXECUTION": "local"}, log="local-over-staged"
+    )
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert str(out) in done.stderr and "separate REGBENCH_OUT" in done.stderr
+    assert "stare_medium/multiplex/P1_a" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+    assert not log.exists() or not log.read_text()
+
+
+def test_staged_and_local_launches_over_results_that_do_not_clash_go_on(site):
+    tmp, _, _ = site
+    # a staged launch over local results: allowed (the README's cross folders)
+    out = tmp / "out-staged-over-local"
+    shutil.rmtree(out, ignore_errors=True)
+    _stare_record(out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}})
+    done, _, _ = launch(site, log="staged-over-local")
+    assert done.returncode == 0, done.stderr
+    # a local launch over local results, and over another method's staged-looking key
+    out = tmp / "out-local-over-local"
+    shutil.rmtree(out, ignore_errors=True)
+    _stare_record(out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}})
+    _stare_record(
+        out, {"method": "palom", "ok": True, "reuse_key": {"execution": "jobs"}}, "palom"
+    )
+    (out / "stare" / "multiplex" / "P2_a").mkdir(parents=True)
+    (out / "stare" / "multiplex" / "P2_a" / "run.json").write_text("not json")
+    done, _, _ = launch(site, env={"REGBENCH_STARE_EXECUTION": "local"}, log="local-over-local")
+    assert done.returncode == 0, done.stderr
