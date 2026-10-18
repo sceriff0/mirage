@@ -1188,12 +1188,15 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
 
 def test_the_settle_step_of_the_batch_script():
     code = code_of(SLURM / "score_cohort.sbatch")
-    # ONE place asks the scheduler and settles; the settle job and the scorer call it
-    assert (
-        code.count("settle --out") == 1
-        and code.count("sacct -n -P -j") == 1
-        and "sacct -n -X" not in code
-    )
+    # ONE place settles (the settle job and the scorer call it); the scheduler is asked
+    # twice there, with the steps both times (never -X: no CPU time, no MaxRSS): the run
+    # jobs (settle_killed) and, since T31 R6/R7, the stage jobs (settle_stages)
+    assert code.count("settle --out") == 1 and code.count("sacct -n -P -j") == 2
+    assert "sacct -X" not in code and "sacct -n -X" not in code
+    killed = code[code.index("settle_killed() {") : code.index("already_settled() {")]
+    stages = code[code.index("settle_stages() {") : code.index("settle_killed() {")]
+    assert killed.count("sacct -n -P -j") == 1 and stages.count("sacct -n -P -j") == 1
+    assert code.count("settle_stages") == 2  # defined, and run by the settle job alone
     # defined, the settle job, the re-score (always), the scorer (when not settled)
     assert code.count("settle_killed") == 4
     rescore = code[code.index('if [ "$kind" = rescore ]') :]
@@ -1204,6 +1207,7 @@ def test_the_settle_step_of_the_batch_script():
         code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
     ]
     assert "settle_killed" in job and "exit 0" in job  # never blocks the scoring
+    assert job.index("settle_stages") < job.index("settle_killed")
     assert "cause=settle_unfinished whose=benchmark" in job
     # it says for which submission it was done, and only after it was
     done = code[code.index("settle_killed() {") : code.index("already_settled() {")]
