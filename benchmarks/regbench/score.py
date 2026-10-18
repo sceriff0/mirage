@@ -1046,6 +1046,18 @@ def _unreadable(run, said, path):
             "unreadable_file": str(path)}  # fmt: skip
 
 
+def _failed_file(exc, case, d):
+    """The file ``_load_run`` was reading when ``exc`` came out of it: the case's
+    ``points.npz`` when the raise is under ``stale_points`` (the fingerprint of the points
+    the result was made for), else ``warped.npz``."""
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_name in ("stale_points", "points_fingerprint"):
+            return Path(case.points_path)
+        tb = tb.tb_next
+    return d / "warped.npz"
+
+
 def _load_result(out, variant, case):
     """``_load_run`` as the tables read it (Task 28, S4 and S1). NOT a pair-code member
     (``PAIR_CODE_MEMBERS``): ``_load_run`` stays byte for byte what the kept pair records
@@ -1071,9 +1083,13 @@ def _load_result(out, variant, case):
     try:
         run, warped, problem, cause = _load_run(out, variant, case)
     except (OSError, ValueError, EOFError, zipfile.BadZipFile) as exc:
-        said = f"warped.npz is not readable ({type(exc).__name__}: {exc})"
-        run = json.loads(rec.read_text())
-        return _unreadable(run, said, d / "warped.npz"), None, said, UNREADABLE
+        failed = _failed_file(exc, case, d)
+        said = f"{failed.name} is not readable ({type(exc).__name__}: {exc})"
+        try:
+            run = json.loads(rec.read_text())
+        except (OSError, ValueError):
+            run = {}
+        return _unreadable(run, said, failed), None, said, UNREADABLE
     if cause == "not_run" or not run:
         return run, warped, problem, cause
     if run.get("ok") and not (d / "warped.npz").exists():
@@ -4192,9 +4208,20 @@ def _run_loss(r, of_run, effect=None):
         effect=effect,
         detail=detail[:300],
         # the file that failed (M7): the map when it is the map that could not be read
-        source=f"{method}/{r['dataset']}/{r['case_id']}/"
-        + ("warped.npz" if cause == UNREADABLE and "warped.npz" in detail else "run.json"),
+        source=_unreadable_source(method, r, cause, detail),
     )
+
+
+def _unreadable_source(method, r, cause, detail):
+    """The loss row's ``source``: the file that failed, as ``_load_result`` said it
+    (``<file> is not readable``): the case's ``points.npz`` is the case's, the others the
+    result's."""
+    named = detail.split(" is not readable")[0] if cause == UNREADABLE else ""
+    if named == "points.npz":
+        return f"{r['dataset']}/{r['case_id']}/points.npz"
+    where = f"{method}/{r['dataset']}/{r['case_id']}/"
+    return where + ("warped.npz" if named == "warped.npz" or (
+        cause == UNREADABLE and "warped.npz" in detail) else "run.json")
 
 
 def _fold_not_run(rows):
@@ -5012,7 +5039,12 @@ def score(
             )
     # the run's own rows (no dataset: a dropped run, an unmarked unit, a compute-all
     # patient), once: beside the cohort's tables, whatever the call named (M3)
-    run_level = loss_rows(out, cases_root, [], None, [], [], [], [], _pipe_summary(out))
+    # (the realcheck verdicts too: their rows have no dataset, so a call that names only
+    # public datasets would write them nowhere)
+    run_level = loss_rows(
+        out, cases_root, [], None, [], [], [], [], _pipe_summary(out),
+        launch=read_verdicts(kw.get("verdicts")),
+    )  # fmt: skip
     losses.write(tables_dir(out, None, dev) / "losses_run.csv", run_level)
     return done
 

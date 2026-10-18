@@ -608,3 +608,52 @@ def test_a_failed_frame_check_is_an_input_row(cohort, tmp_path):
     )
     assert r["patient_id"] == "P1" and "dx" in r["detail"]
     assert r["source"].endswith("stages/prep/record.json")
+
+
+# ── Task 28 minors ───────────────────────────────────────────────────────────────────
+def test_an_unreadable_realcheck_verdict_reaches_losses_run_csv_on_a_public_only_call(
+    cohort, tmp_path
+):
+    """The row has no dataset: a public dataset's call drops it (``run_level=False``), so
+    ``losses_run.csv`` has to be written from the verdicts, whatever the call named."""
+    from .test_public_never_pooled import _public_case
+
+    root, out = copy_of(cohort, tmp_path)
+    _public_case(root, out)
+    verdicts = out / "logs" / "verdicts.tsv"
+    verdicts.parent.mkdir(parents=True, exist_ok=True)
+    verdicts.write_text(
+        "run\tcheck\tstatus\treference\trows\tlog\n"
+        "stare\tselfcheck\tok\t-\tstare\t-\n"
+        "stare\trealcheck\tunreadable\t-\tstare\trealcheck.json unreadable on P1_r1\n"
+    )
+    score_mod.score(root, out, ["ibex"], with_tissue=False, verdicts=verdicts, **KW)
+    run_level = read(out / "tables" / "losses_run.csv")
+    assert [r["cause"] for r in run_level] == ["realcheck_unreadable"]
+    assert not [r for r in read(out / "tables" / "ibex" / "losses.csv")
+                if r["cause"] == "realcheck_unreadable"]
+    # the cohort's file has it once, not twice
+    score_mod.score(root, out, ["multiplex"], with_tissue=False, verdicts=verdicts, **KW)
+    assert len([r for r in losses_of(out) if r["cause"] == "realcheck_unreadable"]) == 1
+    run_level = read(out / "tables" / "losses_run.csv")
+    assert [r["cause"] for r in run_level] == ["realcheck_unreadable"]
+
+
+def test_an_unreadable_points_file_is_blamed_on_points_not_warped(
+    cohort, tmp_path, monkeypatch
+):
+    from benchmarks.regbench import cases
+
+    root, out = copy_of(cohort, tmp_path)
+
+    def points_fingerprint(case):
+        raise ValueError("points.npz is damaged")
+
+    monkeypatch.setattr(cases, "points_fingerprint", points_fingerprint)
+    run(root, out)
+    rows = [r for r in losses_of(out) if r["cause"] == "result_unreadable"]
+    assert rows
+    for r in rows:
+        assert "warped.npz" not in r["detail"] and "warped.npz" not in r["source"]
+        assert "points.npz" in r["detail"] and r["source"].endswith("points.npz")
+        assert r["blame"] == "infrastructure"
