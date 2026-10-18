@@ -87,7 +87,13 @@ STEMS = {
     "elapsed_with_queue_s": ("elapsed_with_queue_s", "s", "STARE's stage jobs, queue waits in"),
     "peak_rss_gb": ("peak_rss_gb", "GB", "the memory one job needs: the launch's peak, the "
                     "largest round's, or STARE's largest stage job"),
-    "peak_hwm_gb": ("peak_hwm_gb", "GB", "sum of VmHWM over the job's processes (telemetry)"),
+    "peak_hwm_gb": ("peak_hwm_gb", "GB", "sum of VmHWM over the job's processes (telemetry), "
+                    "over the WHOLE job (the writer and the conversion in it), not the "
+                    "driver sampler's paused window: not the quantity of peak_rss_gb even "
+                    "on a one-process row; blank on STARE's stage-job rows (their own job "
+                    "is the driver's: stage_hwm_peak_gb)"),
+    "stage_hwm_peak_gb": ("stage_hwm_peak_gb", "GB", "STARE's stage jobs: the largest sum of "
+                          "VmHWM of one good attempt's job (telemetry)"),
     "gpu_peak_gb": ("gpu_peak_gb", "GB", "the GPU's peak memory"),
     "peak_largest_job_gb": ("peak_largest_job_gb", "GB", "STARE's stage jobs: the largest "
                             "single good attempt (what a node must give one job)"),
@@ -100,7 +106,8 @@ STEMS = {
 # a wall stem's clock is the row's own unless named here
 STEM_CLOCK = {"elapsed_with_queue_s": QUEUE}
 # the stems that are a peak: compared only where the instrument is comparable
-PEAKS = ("peak_rss_gb", "peak_hwm_gb", "peak_largest_job_gb", "peak_concurrent_gb")
+PEAKS = ("peak_rss_gb", "peak_hwm_gb", "stage_hwm_peak_gb", "peak_largest_job_gb",
+         "peak_concurrent_gb")
 
 
 # ── reading ──────────────────────────────────────────────────────────────────
@@ -246,6 +253,7 @@ def patient_values(r, rounds):
     if not staged(r):
         got["elapsed_with_queue_s"] = math.nan
         got["peak_concurrent_gb"] = math.nan
+        got["stage_hwm_peak_gb"] = math.nan
     return got
 
 

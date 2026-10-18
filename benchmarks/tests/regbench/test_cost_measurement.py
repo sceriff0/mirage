@@ -232,6 +232,29 @@ def test_a_staged_rows_cgroup_peak_is_blank_and_its_driver_job_is_named(tmp_path
     assert plain["cgroup_peak_gb"] == 1.0 and plain["driver_job_peak_gb"] == ""
 
 
+
+def test_a_staged_rows_hwm_is_its_stage_jobs_never_its_driver_job(tmp_path):
+    """T31 fix I2: the sidecar's VmHWM of a STARE row in several jobs is its driver
+    job's (STITCH and the benchmark's work), so `peak_hwm_gb` is blank there, as
+    `cgroup_peak_gb` is; `stage_hwm_peak_gb` is the largest of its GOOD stage attempts'
+    own telemetry. A one-process row keeps its own job's."""
+    out, case, rows = _rows(tmp_path)
+    stare, _, palom = rows
+    tel = {
+        stare["launch_id"]: {"hwm_peak_mb": "9216"},  # the driver job: not the method's
+        "c1": {"hwm_peak_mb": "1024"},
+        "t0b": {"hwm_peak_mb": "5120"},
+        "t0a": {"hwm_peak_mb": "20480"},  # a failed attempt: not the good one's need
+        "30_1": {"hwm_peak_mb": "2048"},
+    }
+    score.bill_from_disk(rows, out, [case], {}, {}, tel)
+    assert stare["peak_hwm_gb"] == ""
+    assert stare["stage_hwm_peak_gb"] == 5.0
+    assert palom["peak_hwm_gb"] == 2.0 and palom["stage_hwm_peak_gb"] == ""
+    per = {r["method"]: r for r in score.summarise_resources(rows)}
+    assert per["stare"]["stage_hwm_peak_gb"] == 5.0
+    assert per["stare"]["peak_hwm_gb"] in ("", None) or per["stare"]["peak_hwm_gb"] != per["stare"]["peak_hwm_gb"]
+
 # ── R11, R16, R19, R1: the new columns of a row ──────────────────────────────────
 def test_a_row_names_its_gpu_peak_its_instruments_and_where_its_round_time_is_from():
     gpu = score.resource_row(

@@ -307,6 +307,7 @@ FOOTPRINT = (
     "peak_largest_job_gb",
     "peak_concurrent_gb",
     "stage_cgroup_peak_gb",
+    "stage_hwm_peak_gb",
     "stage_jobs_known",
     "stage_jobs_confined",
     "stage_cpu_efficiency_max",
@@ -330,6 +331,9 @@ def stage_footprint(stage_dir, telemetry=None):
     * ``stage_cgroup_peak_gb``: the largest job cgroup peak (``memory.peak``) of an
       attempt, from its record (``cgroup_peak_mb``) else from the job's telemetry file
       (``regbench.telemetry``);
+    * ``stage_hwm_peak_gb``: the largest sum of VmHWM over one good attempt's job
+      (its telemetry file, ``hwm_peak_mb``): the stage jobs' own, where the row's
+      ``peak_hwm_gb`` would be its driver job's (T31 fix I2);
     * ``stage_jobs_known`` / ``stage_jobs_confined``: the attempts that recorded both
       the CPUs they asked for and the cores they could use, and those of them held to
       their CPUs (``cost.cores_confined``);
@@ -396,6 +400,10 @@ def stage_footprint(stage_dir, telemetry=None):
         "peak_largest_job_gb": top(mb(a, "peak_rss_mb") for a in good),
         "peak_concurrent_gb": most,
         "stage_cgroup_peak_gb": top(cgroup),
+        "stage_hwm_peak_gb": top(
+            _n(tel_mod.of(telemetry, a.get("launch_id")).get("hwm_peak_mb")) / 1024.0
+            for a in good
+        ),
         "stage_jobs_known": len(known),
         "stage_jobs_confined": sum(
             _n(a["cpus_affinity"]) <= _n(a["cpus_requested"]) for a in known

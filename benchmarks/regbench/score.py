@@ -1038,6 +1038,12 @@ def bill_from_disk(
             continue
         _bill_one(row, out, case, accounting, reservations, node_telemetry)
     for row in res_rows:
+        # T31 fix I2: a row in several jobs' own job is its driver (STITCH and the
+        # benchmark's work): its VmHWM is no figure of the registration, as its
+        # cgroup peak is not (R5); `stage_hwm_peak_gb` is the stage jobs'
+        if row.get("n_jobs") not in ("", None):
+            row["peak_hwm_gb"] = ""
+    for row in res_rows:
         parent = _billed_with(row, res_rows)
         if parent is not None:
             for col in BILLED_ELSEWHERE:
