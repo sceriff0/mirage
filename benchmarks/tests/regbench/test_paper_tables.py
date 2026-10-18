@@ -386,3 +386,47 @@ def test_primary_of_reads_the_dataset():
     assert tables.primary_of("ashlar", "multiplex") == "ashlar"
     assert tables.primary_of("ashlar", public) is None
     assert tables.primary_of("stare", public) == "stare"
+
+
+def test_best_of_has_a_per_method_common_set_beside_the_strict_one(toy_family):
+    """B2 (M2): a round `a` lost for a cause that is not its own (excluded) takes c2
+    out of the STRICT common set for every candidate, but out of `a`'s own set alone
+    in the PER_METHOD one. The strict row is the headline; both say which they are."""
+    pp = [_hand("a", "c1", "p1", 0.9), _hand("a", "c2", "p2", 0.0, excluded=True,
+                                             imputed=True),
+          _hand("b", "c1", "p1", 0.8), _hand("b", "c2", "p2", 0.7)]  # fmt: skip
+    strict = tables.best_of(pp, "f", "multiplex", {})
+    per = tables.best_of(pp, "f", "multiplex", {}, rule="per_method")
+    assert strict["common_block"] == "strict" and per["common_block"] == "per_method"
+    assert strict["n_cases_common"] == 1
+    assert per["best_row"] == "a" and per["n_cases_common"] == 1  # a's own: c1
+    built = tables.build_best(pp, "multiplex", {})
+    assert {r["common_block"] for r in built["method_best"]} == {"strict"}
+    assert {r["common_block"] for r in built["method_best_per_method"]} == {
+        "per_method"
+    }
+
+
+def test_the_paper_writes_its_own_losses_csv(scored):
+    """M3 (ruling): the paper stage's losses are rows of ``paper/losses.csv`` (same
+    columns as tables/losses.csv, stage ``paper``): the points a cost fit dropped
+    (S12) and the run.json files the paper tables could not read (S13)."""
+    from benchmarks.regbench import losses
+
+    (path,) = sorted((scored / "stare" / "multiplex").glob("*/run.json"))[:1]
+    path.write_text("{trunc")
+    paths = tables.write_all(scored, "multiplex")
+    got = paths["losses"]
+    with open(got, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+        fh.seek(0)
+        assert next(csv.reader(fh)) == list(losses.COLUMNS)
+    assert rows and {r["stage"] for r in rows} == {"paper"}
+    (bad,) = [r for r in rows if r["cause"] == "paper_record_unreadable"]
+    assert bad["run"] == "stare" and "1" in bad["detail"]
+    assert bad["source"] == "paper/versions.csv"
+    fits_rows = [r for r in rows if r["cause"] == "fit_points_dropped"]
+    built = tables.build(scored, "multiplex")
+    want = [f for f in built["cost_fits"] + built["pipeline_cost_fits"]
+            if f["n_dropped"]]  # fmt: skip
+    assert len(fits_rows) == len(want) > 0  # no cases folder: no input_gb

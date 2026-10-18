@@ -69,6 +69,7 @@ VALIS_FAMILY = "valis_mirage"
 WRITTEN = (
     "per_pair",
     "method_best",
+    "method_best_per_method",
     "method_summary",
     "valis_stages",
     "stare_tiers",
@@ -365,7 +366,10 @@ def _patient_median(rows):
 
 
 # ── the best row of a method ─────────────────────────────────────────────────
-def best_of(per_pair, family, dataset, cost):
+STRICT, PER_METHOD = "strict", "per_method"  # score.COMMON_BLOCKS (B2)
+
+
+def best_of(per_pair, family, dataset, cost, rule=STRICT):
     """The ``method_best`` row of one family (the rule: module docstring, ``RULE``).
     ``cost`` is ``{result name: {patient: cpu_h_used}}`` over complete patients
     (``_cpu_by_row``; may be empty)."""
@@ -374,9 +378,14 @@ def best_of(per_pair, family, dataset, cost):
     ]
     have = {c: _rows_of(per_pair, c, dataset) for c in cands}
     cands = [c for c in cands if _rows_of(per_pair, c, dataset, kept=False)]
+    # B2: STRICT (the headline) is the cases every candidate has a kept row on; on
+    # PER_METHOD a round lost for a cause that is not its own (excluded) takes the
+    # case out of that candidate's own set only
+    every = {c: {r["case_id"] for r in _rows_of(per_pair, c, dataset, kept=False)}
+             for c in cands}  # fmt: skip
     common = None
     for c in cands:
-        cases = {r["case_id"] for r in have[c]}
+        cases = {r["case_id"] for r in have[c]} if rule == STRICT else every[c]
         common = cases if common is None else common & cases
     common = common or set()
     # a case where no candidate has a matched pair is the case's, not a method's
@@ -385,6 +394,7 @@ def best_of(per_pair, family, dataset, cost):
         for k in common
         if not all(_no_pair(r) for c in cands for r in have[c] if r["case_id"] == k)
     }
+    own = {c: common & {r["case_id"] for r in have[c]} for c in cands}
     cost = cost or {}
     shared = None  # the patients every candidate completed
     for c in cands:
@@ -394,7 +404,7 @@ def best_of(per_pair, family, dataset, cost):
     scored = []
     zeroed = {}
     for c in cands:
-        mine = [r for r in have[c] if r["case_id"] in common]
+        mine = [r for r in have[c] if r["case_id"] in own[c]]
         zeroed[c] = sum(_no_pair(r) for r in mine)
         value = _median(_patient_median(mine).values())
         cpu = _median((cost.get(c) or {}).get(p) for p in shared)
@@ -418,7 +428,8 @@ def best_of(per_pair, family, dataset, cost):
         n_candidates=len(cands),
         criterion=CRITERION,
         criterion_value=best[4] if best else math.nan,
-        n_cases_common=len(common),
+        n_cases_common=len(own[best[3]]) if best else len(common),
+        common_block=rule,
         n_dice_zeroed=zeroed[best[3]] if best else math.nan,
         tie_break=TIE_BREAK,
         in_sample_selection=True,
@@ -947,19 +958,33 @@ def laptop(out, dataset, pp):
 
 
 # ── build and write ──────────────────────────────────────────────────────────
+def build_best(pp, dataset, cpu):
+    """``method_best`` (the strict common set: the headline every other table reads)
+    and ``method_best_per_method`` beside it (B2)."""
+    fams = _families(dataset)
+    return {
+        "method_best": [best_of(pp, f, dataset, cpu) for f in fams],
+        "method_best_per_method": [
+            best_of(pp, f, dataset, cpu, PER_METHOD) for f in fams
+        ],
+    }
+
+
 def build(out, dataset=COHORT, cases_root=None):
     """``{table name: rows}`` for every table of ``WRITTEN``."""
     pp = per_pair(out, dataset)
     cost_rows = _cost_rows(out, dataset)
     res_rows = _res_rows(out, dataset)
     cpu = _cpu_by_row(cost_rows)
-    best = [best_of(pp, fam, dataset, cpu) for fam in _families(dataset)]
+    got = build_best(pp, dataset, cpu)
+    best = got["method_best"]
     summary = method_summary(pp, best, cost_rows, res_rows, dataset)
     counted = list(dict.fromkeys(r["row"] for r in summary))
     cost_points = fits.points(out, dataset, cases_root, _excluded_rounds(pp))
     return {
         "per_pair": pp,
         "method_best": best,
+        "method_best_per_method": got["method_best_per_method"],
         "method_summary": summary,
         "valis_stages": valis_stages(pp, dataset),
         "stare_tiers": stare_tiers(pp, cost_rows, dataset),
@@ -978,8 +1003,52 @@ def build(out, dataset=COHORT, cases_root=None):
     }
 
 
+def paper_losses(built, dataset):
+    """The paper stage's loss rows (M3): one per cost fit that left points out (S12)
+    and one per run whose run.json files the paper tables could not all read (S13),
+    (one row per run, from versions, which reads every variant, else from
+    run_parameters), so ``paper/losses.csv`` holds them beside ``tables/losses.csv``."""
+    from .. import losses
+
+    shown = "multiplex" if dataset == COHORT else dataset
+    rows = []
+    for table in ("cost_fits", "pipeline_cost_fits"):
+        for f in built[table]:
+            n = _int(f.get("n_dropped"))
+            if not n > 0:  # nan (no count) is not a loss
+                continue
+            what = ", ".join(
+                f"{k}={f[k]}"
+                for k in ("dataset", "row", "backend", "process", "target", "predictor")
+                if not _missing(f.get(k))
+            )
+            rows.append(losses.row(
+                stage="paper", dataset=shown, run=f.get("row") or "",
+                cause="fit_points_dropped", effect="dropped",
+                detail=f"{n} point(s) left out of the fit ({what})",
+                source=f"paper/{table}.csv",
+            ))
+    seen = set()  # one row per run: versions reads every variant, so it comes first
+    for table in ("versions", "run_parameters"):
+        for r in built[table]:
+            n = _int(r.get("n_unreadable"))
+            if not n > 0 or r["row"] in seen:
+                continue
+            seen.add(r["row"])
+            rows.append(losses.row(
+                stage="paper", dataset=shown, run=r["row"], method=r.get("method") or "",
+                cause="paper_record_unreadable", effect="dropped",
+                detail=f"{n} run.json file(s) could not be read",
+                source=f"paper/{table}.csv",
+            ))
+    return rows
+
+
 def write_all(out, dataset=COHORT, cases_root=None):
-    """Write every table of ``WRITTEN``; ``{table name: path}``."""
+    """Write every table of ``WRITTEN`` and ``losses.csv`` (the paper stage's losses,
+    ALWAYS written); ``{table name: path}``."""
+    from .. import losses
+
     built = build(out, dataset, cases_root)
     target = _paper_dir(out, dataset)
     target.mkdir(parents=True, exist_ok=True)
@@ -988,6 +1057,8 @@ def write_all(out, dataset=COHORT, cases_root=None):
         path = target / f"{name}.csv"
         schema.write(path, name, built[name])
         paths[name] = path
+    paths["losses"] = target / "losses.csv"
+    losses.write(paths["losses"], paper_losses(built, dataset))
     return paths
 
 
