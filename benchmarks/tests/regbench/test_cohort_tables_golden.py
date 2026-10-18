@@ -101,6 +101,9 @@ T28_COLUMNS = (
     "launches_failed_watcher_gave_up",
     "cost_bound",
     "unmeasured_records",
+    # fix round 1: B2's block label and the rounds lost to a cause not the method's
+    "common_block",
+    "n_lost_not_method",
 )
 
 
