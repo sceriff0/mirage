@@ -6,7 +6,7 @@ import pytest
 from benchmarks.regbench.paper import schema
 
 EXPECTED = {
-    "per_pair", "method_best", "method_summary", "valis_stages", "stare_tiers",
+    "per_pair", "method_best", "method_best_per_method", "method_summary", "valis_stages", "stare_tiers",
     "stare_stage_peaks", "ashlar_discard", "cost_points", "cost_fits",
     "pipeline_cost_fits", "cpu_scaling", "laptop", "versions", "run_parameters",
     "hosts", "stare_tier_table", "pipeline_params", "cohort_counts",
