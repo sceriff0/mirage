@@ -56,7 +56,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import stages, variants
-from . import schema
+from . import fits, schema
 
 SOURCE = "regbench"
 COHORT = "multiplex"
@@ -79,6 +79,9 @@ WRITTEN = (
     "stare_tier_table",
     "pipeline_params",
     "cohort_counts",
+    "cost_points",
+    "cost_fits",
+    "pipeline_cost_fits",
 )
 
 RULE = (
@@ -874,7 +877,7 @@ def cohort_counts(pp, rows, dataset):
 
 
 # ── build and write ──────────────────────────────────────────────────────────
-def build(out, dataset=COHORT):
+def build(out, dataset=COHORT, cases_root=None):
     """``{table name: rows}`` for every table of ``WRITTEN``."""
     pp = per_pair(out, dataset)
     cost_rows = _cost_rows(out, dataset)
@@ -883,6 +886,7 @@ def build(out, dataset=COHORT):
     best = [best_of(pp, fam, dataset, cpu) for fam in _families(dataset)]
     summary = method_summary(pp, best, cost_rows, res_rows, dataset)
     counted = list(dict.fromkeys(r["row"] for r in summary))
+    cost_points = fits.points(out, dataset, cases_root, _excluded_rounds(pp))
     return {
         "per_pair": pp,
         "method_best": best,
@@ -897,12 +901,15 @@ def build(out, dataset=COHORT):
         "stare_tier_table": stare_tier_table(),
         "pipeline_params": pipeline_params(),
         "cohort_counts": cohort_counts(pp, counted, dataset),
+        "cost_points": cost_points,
+        "cost_fits": fits.method_fits(cost_points),
+        "pipeline_cost_fits": fits.pipeline_fits(out),
     }
 
 
-def write_all(out, dataset=COHORT):
+def write_all(out, dataset=COHORT, cases_root=None):
     """Write every table of ``WRITTEN``; ``{table name: path}``."""
-    built = build(out, dataset)
+    built = build(out, dataset, cases_root)
     target = _paper_dir(out, dataset)
     target.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -914,7 +921,7 @@ def write_all(out, dataset=COHORT):
 
 
 def main(a):
-    paths = write_all(a.out, a.dataset)
+    paths = write_all(a.out, a.dataset, getattr(a, "cases", None))
     for name, path in paths.items():
         print(f"{name}\t{path}")
     return 0

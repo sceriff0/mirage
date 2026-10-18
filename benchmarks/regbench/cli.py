@@ -651,6 +651,12 @@ def build_parser():
     )
     pa.add_argument("--out", required=True, help="the results folder `score` wrote to")
     pa.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    pa.add_argument(
+        "--cases",
+        default=None,
+        help="the folder the cases were prepared under: the input size of a cost point "
+        "is read from its slide files (blank without it)",
+    )
 
     rn = sub.add_parser("runs")
     rn.add_argument(
