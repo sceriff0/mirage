@@ -164,6 +164,32 @@ CAUSES = {
         "a run.json the paper tables could not read: n_unreadable of versions / "
         "run_parameters (S13)",
     ),
+    # T31 rule 6: what a cost figure could not draw is a row, never a silent gap
+    "plot_points_dropped": (
+        INFRA,
+        "paper",
+        "a cost figure could not draw a patient's value (no figure, <= 0 on a log axis, "
+        "a rusage peak in a peak comparison, a GPU row without a CPU twin on a CPU axis): "
+        "paper/figures/losses.csv",
+    ),
+    "plot_lower_bound": (
+        INFRA,
+        "paper",
+        "a cost figure drew a patient's value that is a lower bound "
+        "(cost_points.lower_bound): kept and flagged, paper/figures/losses.csv",
+    ),
+    "plot_placeholder": (
+        INFRA,
+        "paper",
+        "a cost figure is its placeholder: its input table is absent or all NA "
+        "(paper/figures/losses.csv)",
+    ),
+    "stare_local4_differs": (
+        INTEGRITY,
+        "paper",
+        "stare_local4 (STARE's stages in one job of 4 CPUs) scored a case differently "
+        "from stare: the cost row is not of the same registration (paper/losses.csv)",
+    ),
     "not_run": (INFRA, "run", "no result of this submission: nobody ran it"),
     "stale_result": (
         INTEGRITY,

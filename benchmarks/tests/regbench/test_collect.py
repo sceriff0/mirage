@@ -147,8 +147,12 @@ def test_arm_cost_points_from_the_trace(tmp_path):
     assert v["row"] == "valis_mirage" and v["unit_id"] == "REGISTER:P1"
     assert float(v["wall_s"]) == 3600.0 and float(v["peak_rss_gb"]) == 2.0
     assert float(v["input_gb"]) == 1.5 and float(v["cpu_h_used"]) == 2.0
+    # T31 P14: a tiled arm's point is its PATIENT (the TILED_* tasks summed), wall the
+    # critical path with every task at once
     (t,) = tiled
-    assert t["row"] == "stare" and t["unit_id"] == "TILED_SOLVE:P1" and t["input_gb"] is None
+    assert t["row"] == "stare" and t["unit_id"] == "P1" and t["unit_kind"] == "patient"
+    assert t["clock"] == "critical_path_unlimited" and t["input_gb"] is None
+    assert float(t["wall_s"]) == 1800.0 and float(t["cpu_h_used"]) == 0.5
 
 
 def test_sweep_cost_points_are_flagged_synthetic(tmp_path):
@@ -274,3 +278,26 @@ def test_the_cli_runs_it(tmp_path, capsys):
     assert cli.main(["collect", "--to", str(tmp_path / "c"), "--arms", str(tmp_path / "arms")]) == 0
     assert "per_pair\t1" in capsys.readouterr().out
     assert (tmp_path / "c" / "README.txt").exists()
+
+
+def test_a_tiled_arm_is_one_point_per_patient_summed_over_its_tasks(tmp_path):
+    """T31 P14: two tiles of one patient and its solve are ONE point: CPU-hours summed,
+    wall the longest tile plus the solve, the peak the largest task's."""
+    trace_text = (
+        "task_id\tprocess\ttag\tname\tstatus\texit\tpeak_rss\trealtime\t%cpu\n"
+        "1\tMIRAGE:TILED_REG_TILE\tP1:0_0\tT (P1)\tCOMPLETED\t0\t1 GB\t10m\t100.0%\n"
+        "2\tMIRAGE:TILED_REG_TILE\tP1:0_1\tT (P1)\tCOMPLETED\t0\t3 GB\t20m\t100.0%\n"
+        "3\tMIRAGE:TILED_SOLVE\tP1:DAPI_CD8\tS (P1)\tCOMPLETED\t0\t2 GB\t30m\t200.0%\n"
+        "4\tMIRAGE:TILED_SOLVE\tP2:DAPI_CD8\tS (P2)\tCOMPLETED\t0\t2 GB\t30m\t\n")
+    _arm(tmp_path / "arms", "tiled_high_s64", "P1", "DAPI_CD8", 0.7)
+    (tmp_path / "arms" / "tiled_high_s64" / "trace").mkdir()
+    (tmp_path / "arms" / "tiled_high_s64" / "trace" / "trace.txt").write_text(trace_text)
+    collect.run(tmp_path / "c", tmp_path / "arms", None, None, [], None)
+    pts = {p["unit_id"]: p for p in schema.read(tmp_path / "c" / "cost_points.csv")
+           if p["source"] == "arms:tiled_high_s64"}
+    assert set(pts) == {"P1", "P2"}
+    p1 = pts["P1"]
+    assert float(p1["wall_s"]) == 20 * 60 + 30 * 60  # the longest tile, then the solve
+    assert float(p1["cpu_h_used"]) == pytest.approx((10 + 20 + 60) / 60)
+    assert float(p1["peak_rss_gb"]) == 3.0
+    assert pts["P2"]["cpu_h_used"] is None  # a task with no %cpu: no figure

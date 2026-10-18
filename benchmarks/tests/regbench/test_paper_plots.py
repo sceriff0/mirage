@@ -111,7 +111,7 @@ def test_every_plot_writes_all_formats_or_a_placeholder(paper):
         assert res.get("placeholder", False) == (name in MISSING), name
 
 
-MISSING = {"figS_cpu_scaling", "public_dice_best", "public_landmarks_best"}
+MISSING = {"figS_cpu_scaling", "figS_end_to_end", "public_dice_best", "public_landmarks_best"}
 
 
 def test_a_missing_input_is_a_placeholder_that_names_the_table_and_path(paper):

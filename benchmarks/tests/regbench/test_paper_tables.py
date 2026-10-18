@@ -121,15 +121,14 @@ def test_best_of_on_hand_rows_excluded_never_decides():
         assert best["n_cases_common"] == 3
         # a: patients 0.65, 0.80, 0.80 -> 0.80; b: 0.70, 0.70, 0.10 -> 0.70
         assert best["best_row"] == "a" and best["criterion_value"] == pytest.approx(0.80)
-        # ties go to the lower CPU-hours, then to the name
+        # T31 R11: a tie goes to the name, device-blind: no cost decides it (a GPU row's
+        # CPU-hours would otherwise win every tie it is in)
         tie = [x for x in pp if x["row"] == "a"] + [
             {**x, "row": "b"} for x in pp if x["row"] == "a"]
         assert tables.best_of(tie, "f", "multiplex", {})["best_row"] == "a"
         cost = {"a": {"p1": 2.0, "p2": 2.0}, "b": {"p1": 1.0, "p2": 1.0}}
-        assert tables.best_of(tie, "f", "multiplex", cost)["best_row"] == "b"
-        # the tie-break reads the patients EVERY candidate completed: on p1 alone, a wins
-        cost = {"a": {"p1": 1.0, "p2": 5.0}, "b": {"p1": 2.0}}
         assert tables.best_of(tie, "f", "multiplex", cost)["best_row"] == "a"
+        assert "device-blind" in tables.TIE_BREAK
     finally:
         tables.family_of, tables.terminal_rows = old_f, old_t
 

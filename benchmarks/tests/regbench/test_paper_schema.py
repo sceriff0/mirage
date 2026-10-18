@@ -11,6 +11,7 @@ EXPECTED = {
     "pipeline_cost_fits", "cpu_scaling", "laptop", "versions", "run_parameters",
     "hosts", "stare_tier_table", "pipeline_params", "cohort_counts",
     "crosscheck_arms", "overlay_rois", "public_landmarks", "public_tissue",
+    "end_to_end",
 }
 
 
@@ -48,8 +49,9 @@ def test_write_and_read_round_trip_na(tmp_path):
         schema.write(p, "laptop", [{"source": "x", "bogus": 1}])
 
 
-def test_cpu_scaling_key_names_the_execution():
-    assert schema.TABLES["cpu_scaling"].key == ("row", "cpus", "patient_id", "execution")
+def test_cpu_scaling_key_names_the_execution_and_the_repeat():
+    # T31 R13: two repeats per point, never one row over the other
+    assert schema.TABLES["cpu_scaling"].key == ("row", "cpus", "patient_id", "execution", "repeat")
 
 
 def test_source_documents_expected_and_the_reexport_is_the_scorer_side_module():

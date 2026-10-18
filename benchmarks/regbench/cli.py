@@ -26,8 +26,12 @@
 ``local``              STARE's stages on ONE cohort slide on a laptop, stored as
                        ``<run>_laptop`` with the machine's spec in its run.json
                        (``local.py``)
-``cpu-scaling``        the CPU-scaling table: the named rows at 4 and 8 CPUs
-                       (``paper/cpu_scaling.py``)
+``cross-runs``         the CPU cross's rows: each family's best-Dice row of a scored main
+                       run (DeeperHistReg's best CPU row), one ``family<TAB>row`` line each
+                       and the ``--rows`` line (``paper/cpu_scaling.py``)
+``cpu-scaling``        the CPU-scaling table: the cross's rows at 4 and 8 CPUs, per
+                       patient and repeat (``paper/cpu_scaling.py``); ``--main MAIN``
+                       takes the rows from ``cross-runs``; a GPU row is refused
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``);
                        ``--tables DIR --to DIR`` draws them from any folder of the paper's
                        CSVs (a ``collect`` folder: drafts)
@@ -750,17 +754,28 @@ def build_parser():
     ov.add_argument("--roi-um", type=float, default=300.0, help="side of the field, in um")
     ov.add_argument("--dataset", default="multiplex", choices=DATASETS)
 
+    cr = sub.add_parser(
+        "cross-runs",
+        help="the CPU cross's rows (benchmarks/regbench/paper/cpu_scaling.py): each "
+        "family's best-Dice row of the scored MAIN run (tables.best_of), DeeperHistReg's "
+        "best CPU row; refused when MAIN has no scored tables",
+    )
+    cr.add_argument("--out", required=True, help="the MAIN results folder (scored)")
+    cr.add_argument("--dataset", default="multiplex", choices=DATASETS)
+
     cs = sub.add_parser(
         "cpu-scaling",
         help="the CPU-scaling table (benchmarks/regbench/paper/cpu_scaling.py): wall time, "
-        "CPU-hours and peak memory of the named rows at 4 and 8 CPUs, e.g. --point 4=OUT "
-        "--point 4=OUT_LOCAL4 --point 8=OUT8 --rows "
-        "stare,valis_mirage,valis120_hires,deeperhistreg_hr_gpu,ashlar,palom "
-        "--to O/paper/cpu_scaling.csv",
+        "CPU-hours and peak memory of the cross's rows at 4 and 8 CPUs, per patient and "
+        "repeat (a folder's rep<k> subfolders, REGBENCH_REPEAT), e.g. --point 4=OUT_C4 "
+        "--point 8=OUT_C8 --main MAIN --to O/paper/cpu_scaling.csv; a GPU row is refused",
     )
     cs.add_argument("--point", action="append", required=True, metavar="CPUS=OUT",
                     help="a results folder that ran at CPUS; repeat, also for one count")
-    cs.add_argument("--rows", required=True, help="result names, comma-separated")
+    cs.add_argument("--rows", default=None,
+                    help="result names, comma-separated (default: --main's cross-runs)")
+    cs.add_argument("--main", default=None,
+                    help="the scored MAIN run the rows are chosen from (cross-runs)")
     cs.add_argument("--to", required=True)
     cs.add_argument("--dataset", default="multiplex", choices=DATASETS)
 
@@ -1633,6 +1648,10 @@ def _main(a):
         from .paper import cpu_scaling
 
         return cpu_scaling.main(a)
+    if a.cmd == "cross-runs":
+        from .paper import cpu_scaling
+
+        return cpu_scaling.main_cross_runs(a)
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":

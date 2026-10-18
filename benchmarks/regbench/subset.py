@@ -1,9 +1,9 @@
 """The few patients of the CPU cross, and a cases folder that holds only them.
 
-The CPU cross (README, "The CPU cross") runs the primary rows again at 8 and 16 CPUs on
-a few patients. Which ones is a rule, not a choice: ``pick`` takes the patients at the
-smallest, median and largest total moving gigapixels (the sum of ``Case.mov_hw`` over a
-patient's rounds), ties broken by name. ``write`` makes a cases folder of those patients
+The CPU cross (README, "The CPU cross") runs each family's best-Dice row at 4 and 8 CPUs
+on a few patients (user ruling 2026-10-18: 4 and 8 only). Which ones is a rule, not a
+choice: ``pick`` takes the patients at the smallest, median and largest total moving
+gigapixels (the sum of ``Case.mov_hw`` over a patient's rounds), ties broken by name. ``write`` makes a cases folder of those patients
 alone, as symlinks to their prepared case folders, so ``REGBENCH_CASES`` can point at it
 and the launcher sizes its arrays from it; nothing is copied and nothing prepared again.
 """

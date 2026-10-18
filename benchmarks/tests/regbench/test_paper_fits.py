@@ -113,41 +113,51 @@ def cohort(tmp_path, monkeypatch):
     return out, cases
 
 
-def test_an_incomplete_patient_is_not_a_point(cohort):
+def test_every_patient_is_a_point_and_says_what_became_of_it(cohort):
+    # T31 rule 6: an incomplete patient is a point with its status, never dropped
+    # silently; only a complete one enters a fit
     out, cases = cohort
-    pts = fits.points(out, "multiplex", cases, excluded=frozenset())
-    patients = {p["unit_id"] for p in pts if p["row"] == "pp"}
-    assert patients == {"P1", "P3"}  # P2 registered one round of two: not its cost
+    pts = fits.points(out, "multiplex", cases)
+    status = {p["unit_id"]: p["status"] for p in pts if p["row"] == "pp"}
+    assert status == {"P1": "complete", "P2": "failed", "P3": "complete"}
     assert all(p["unit_kind"] == "patient" for p in pts if p["row"] == "pp")
+    fitted = {(r["target"], r["predictor"]): r for r in fits.method_fits(pts) if r["row"] == "pp"}
+    assert all(r["n"] + r["n_dropped"] == 2 for r in fitted.values())  # P1, P3
 
 
-def test_an_excluded_round_is_not_a_point_and_makes_its_patient_one_less(cohort):
+def test_a_failed_round_is_not_a_round_point(cohort):
     out, cases = cohort
-    pts = fits.points(out, "multiplex", cases, excluded={("P3_r1", "pp"), ("P3_r1", "pair")})
-    assert {p["unit_id"] for p in pts if p["row"] == "pp"} == {"P1"}
+    pts = fits.points(out, "multiplex", cases)
     assert {p["unit_id"] for p in pts if p["row"] == "pair"} == {
-        "P1_r1", "P1_r2", "P2_r1", "P3_r2"}  # P2_r2 failed: not ok
+        "P1_r1", "P1_r2", "P2_r1", "P3_r1", "P3_r2"}  # P2_r2 failed: not ok
+    assert all(p["unit_kind"] == "round" for p in pts if p["row"] == "pair")
 
 
 def test_a_point_carries_the_bytes_of_the_files_it_read(cohort):
     out, cases = cohort
-    pts = {(p["row"], p["unit_id"]): p for p in fits.points(out, "multiplex", cases, excluded=frozenset())}
+    pts = {(p["row"], p["unit_id"]): p for p in fits.points(out, "multiplex", cases)}
     assert pts[("pair", "P1_r1")]["input_gb"] == pytest.approx(2 * 2**20 / 2**30)
     assert pts[("pp", "P1")]["input_gb"] == pytest.approx(4 * 2**20 / 2**30)  # both rounds
     assert pts[("pp", "P1")]["input_gpx"] == 1.0 and pts[("pp", "P1")]["wall_s"] == 200
-    no_cases = fits.points(out, "multiplex", None, excluded=frozenset())
+    no_cases = fits.points(out, "multiplex", None)
     assert all(p["input_gb"] is None for p in no_cases)
 
 
 def test_method_fits_follow_the_schema(cohort):
+    # T31 P10/P13: per patient for every method (a pair row without patient sums has
+    # no fit), log-log, and no fit below MIN_FIT_POINTS patients
     out, cases = cohort
-    rows = fits.method_fits(fits.points(out, "multiplex", cases, excluded=frozenset()))
-    assert len(rows) == 2 * 2 * 2
+    points = fits.points(out, "multiplex", cases)
+    rows = fits.method_fits(points)
+    assert len(rows) == len(fits.METHOD_TARGETS) * len(fits.METHOD_PREDICTORS)
+    assert {r["row"] for r in rows} == {"pp"}
     assert all(list(r) == schema.columns("cost_fits") for r in rows)
-    pair = {(r["target"], r["predictor"]): r for r in rows if r["row"] == "pair"}
-    assert pair[("wall_s", "input_gb")]["n"] == 5 and pair[("wall_s", "input_gb")]["fit_ok"] is False
-    assert pair[("peak_rss_gb", "input_gpx")]["fit_ok"] is False  # one size
-    # every point of the row is counted: used or dropped (S12)
-    points = fits.points(out, "multiplex", cases, excluded=frozenset())
-    n_pair = sum(p["row"] == "pair" for p in points)
-    assert all(r["n"] + r["n_dropped"] == n_pair for r in rows if r["row"] == "pair")
+    assert all(r["unit"] == "patient" and r["patient_set"] == "survivors" for r in rows)
+    assert all(r["fit_ok"] is False and r["n"] == 2 for r in rows)  # 2 < 5 patients
+
+
+def test_a_fit_on_five_patients_has_a_slope_interval():
+    r = fits.fit([1, 2, 4, 8, 16], [2.1, 3.9, 8.2, 15.8, 32.5], log=True, min_n=5)
+    assert r["fit_ok"] and r["scale"] == "log-log" and r["slope"] == pytest.approx(1.0, abs=0.05)
+    assert r["slope_ci_low"] < r["slope"] < r["slope_ci_high"]
+    assert fits.fit([1, 2, 4, 8], [2, 4, 8, 16], log=True, min_n=5)["fit_ok"] is False

@@ -27,8 +27,9 @@ the ``channels`` of ``<arm>/csv/registered.csv`` with ``|`` -> ``_``; the row by
 ``arm_row``. One difference from the ported ``harvest``: a ``full_transform`` record whose
 Dice is NaN is KEPT (NaN) rather than skipped for a lower stage, which would credit the arm
 with a stage it did not ship. Cost: ``cost_points`` per traced task of ``REGISTER`` (VALIS
-arms, one per patient) or ``TILED_*`` (tiled arms, ``unit_kind = task``), completed tasks
-only, with ``input_gb`` the per-process mean of ``size_logs/input_sizes.csv`` where present.
+arms, one per patient) or ``TILED_*`` (tiled arms, aggregated per patient: T31 P14,
+``_tiled_patient_points``), completed tasks only, with ``input_gb`` the per-process mean of
+``size_logs/input_sizes.csv`` where present (a VALIS arm's).
 
 **Sweep** (``<sweep>/<run_id>/trace/trace.txt``, the run plan's ``run_id``): every completed
 task as a ``cost_points`` row of ``dataset = synthetic_sweep``, ``row = run_id``. The
@@ -71,7 +72,7 @@ import re
 from pathlib import Path
 
 from .. import trace, variants
-from . import schema, tables
+from . import costs, schema, tables
 
 COHORT = "multiplex"
 SWEEP_DATASET = "synthetic_sweep"
@@ -319,6 +320,54 @@ def _task_points(tasks, sizes, keep, **ident):
     return rows
 
 
+def _tiled_patient_points(tasks, **ident):
+    """A tiled arm's cost per PATIENT (T31 P14: the patient is the one unit): its
+    completed ``TILED_*`` tasks, grouped by the patient of their tag (the modules tag
+    ``<patient_id>:...``). ``cpu_h_used`` is their sum, blank when one task has no
+    ``%cpu`` (``score._whole``'s rule); ``wall_s`` is the critical path with every task
+    at once and no queue (``clock = critical_path_unlimited``: per process its longest
+    task, summed over the processes); ``peak_rss_gb`` the largest task's (the memory
+    one job needs). ``input_gb`` is blank: the size log is per process, not per
+    patient."""
+    by = {}
+    for t in successful(tasks):
+        proc = _simple(t["process"])
+        if not proc.startswith("TILED_"):
+            continue
+        tag = str(t.get("tag") or t.get("name") or "")
+        patient = tag.split(":", 1)[0].strip()
+        if patient:
+            by.setdefault(patient, []).append((proc, t))
+    rows = []
+    for patient, mine in sorted(by.items()):
+        walls = [_finite(t.get("realtime_s")) for _, t in mine]
+        cpus = []
+        for _, t in mine:
+            wall, pcpu = _finite(t.get("realtime_s")), _finite(t.get("pcpu"))
+            cpus.append(wall * pcpu / 100.0 / 3600.0 if wall is not None and pcpu is not None else None)
+        longest = {}
+        for (proc, _), w in zip(mine, walls):
+            longest.setdefault(proc, []).append(w)
+        whole = all(w is not None for w in walls)
+        peaks = [x for x in (_finite(t.get("peak_rss_gb")) for _, t in mine) if x is not None]
+        rows.append(
+            schema.empty_row(
+                "cost_points",
+                unit_kind="patient",
+                unit="patient",
+                unit_id=patient,
+                status="complete",
+                clock=costs.CRITICAL,
+                wall_s=sum(max(ws) for ws in longest.values()) if whole else None,
+                peak_rss_gb=max(peaks) if peaks else None,
+                cpu_h_used=sum(cpus) if all(c is not None for c in cpus) else None,
+                lower_bound="" if len(peaks) == len(mine) else "a task without a peak",
+                **ident,
+            )
+        )
+    return rows
+
+
 def _sizes_at(*candidates):
     for p in candidates:
         if p.is_file():
@@ -350,10 +399,11 @@ def _arm_cost(arm_dir, notes):
     tasks = _read_trace(arm_dir / "trace" / "trace.txt", f"arms:{arm}", notes)
     if tasks is None:
         return []
+    ident = dict(source=f"arms:{arm}", dataset=COHORT, family=_family(row), row=row)
+    if arm.startswith("tiled_"):  # T31 P14: per patient, like every other cost point
+        return _tiled_patient_points(tasks, **ident)
     sizes = _sizes_at(arm_dir / "size_logs" / "input_sizes.csv")
-    return _task_points(
-        tasks, sizes, keep, source=f"arms:{arm}", dataset=COHORT, family=_family(row), row=row
-    )
+    return _task_points(tasks, sizes, keep, **ident)
 
 
 def collect_arms(root, notes):
@@ -647,8 +697,9 @@ def _readme(to, counts, inputs, notes):
         "(`paper`, tables.py); this collection does not.",
         "The synthetic sweep is removed from the paper: its rows (cost_points, dataset "
         f"{SWEEP_DATASET}) are here for reference only.",
-        "cost_points: unit_kind `task` is one Nextflow task of an arm or the sweep (a tiled "
-        "arm's TILED_* jobs, every sweep process); REGISTER is one patient. Regbench cost "
+        "cost_points: unit_kind `task` is one Nextflow task of the sweep (every sweep "
+        "process); an arm's point is one patient (REGISTER, or a tiled arm's TILED_* jobs "
+        "summed per patient, wall = the critical path with every task at once). Regbench cost "
         "points have no input_gb / input_gpx here (the slide sizes come with the paper "
         "tables). Case-record rows have no selfcheck_status or excluded_from_summaries (the "
         "scorer sets those when it writes its tables).",

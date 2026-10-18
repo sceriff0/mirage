@@ -223,8 +223,10 @@ def _dataset(per_pair):
 
 
 # ── drawing ──────────────────────────────────────────────────────────────────
-def _draw_group(ax, pos, values, color, horizontal=False, solid=True, seed=0):
-    """One group: box (n >= 10) or median bar (n < 10), every point drawn."""
+def _draw_group(ax, pos, values, color, horizontal=False, solid=True, seed=0, hollow=False):
+    """One group: box (n >= 10) or median bar (n < 10), every point drawn; ``hollow``
+    draws the points and the box as outlines (T31 rule 3: a family's best-Dice row,
+    "best (ceiling)", beside its filled primary row)."""
     v = np.asarray([x for x in values if math.isfinite(x)], float)
     if v.size == 0:
         return
@@ -239,8 +241,9 @@ def _draw_group(ax, pos, values, color, horizontal=False, solid=True, seed=0):
         lo = v[v >= q1 - 1.5 * iqr].min()
         hi = v[v <= q3 + 1.5 * iqr].max()
         w = 0.3
-        ax.fill(*xy([pos - w, pos + w, pos + w, pos - w], [q1, q1, q3, q3]),
-                facecolor=color, alpha=0.25 if solid else 0.12, edgecolor="none", zorder=1)
+        if not hollow:
+            ax.fill(*xy([pos - w, pos + w, pos + w, pos - w], [q1, q1, q3, q3]),
+                    facecolor=color, alpha=0.25 if solid else 0.12, edgecolor="none", zorder=1)
         ax.plot(*xy([pos - w, pos + w, pos + w, pos - w, pos - w], [q1, q1, q3, q3, q1]),
                 color=color, lw=0.6, alpha=alpha, zorder=2)
         ax.plot(*xy([pos, pos], [lo, q1]), color=color, lw=0.6, alpha=alpha, zorder=2)
@@ -248,7 +251,12 @@ def _draw_group(ax, pos, values, color, horizontal=False, solid=True, seed=0):
         ax.plot(*xy([pos - w, pos + w], [med, med]), color=ps.GREY, lw=1.0, zorder=4)
     else:
         ax.plot(*xy([pos - 0.3, pos + 0.3], [med, med]), color=ps.GREY, lw=1.2, zorder=4)
-    ax.scatter(*xy(jitter, v), s=4, color=color, alpha=0.7 * alpha + 0.2, linewidths=0, zorder=3)
+    if hollow:
+        ax.scatter(*xy(jitter, v), s=6, facecolor="none", edgecolor=color,
+                   alpha=0.7 * alpha + 0.2, linewidths=0.5, zorder=3)
+    else:
+        ax.scatter(*xy(jitter, v), s=4, color=color, alpha=0.7 * alpha + 0.2, linewidths=0,
+                   zorder=3)
 
 
 def _group_axes(ax, labels, horizontal=False, bold=()):
@@ -481,189 +489,10 @@ def fig3d_stare_tiers(paper_dir, fig_dir):
     return _result(files, n)
 
 
-# ── Fig. 3e, 3f ──────────────────────────────────────────────────────────────
-def _cost_groups(got, key):
-    """``[(family, best row, [points])]`` over the best rows, points with finite ``key``
-    > 0 (a log axis)."""
-    mine = {}
-    for r in got["best"]:
-        if r.get("best_row"):
-            mine[r["best_row"]] = r["family"]
-    out = []
-    for row, fam in mine.items():
-        pts = [p for p in got["cost"] if p["row"] == row and _fin(p.get(key)) and _num(p[key]) > 0]
-        out.append((fam, row, pts))
-    n = {f: 0 for f, _ in _best_rows(got["best"])}
-    for fam, _, pts in out:
-        n[fam] = len(pts)
-    return [g for g in out if g[2]], n
-
-
-def _cost_panel(ax, groups, key, scale, colors, tick_extra, ylabel):
-    labels, data = [], []
-    for i, (fam, row, pts) in enumerate(groups):
-        vals = [_num(p[key]) * scale for p in pts]
-        _draw_group(ax, i, vals, colors[fam], seed=i)
-        kinds = sorted({p.get("unit_kind") or "unit" for p in pts})
-        labels.append(f"{_label(fam)}{tick_extra.get(fam, '')}\nn={len(vals)} {'/'.join(kinds)}")
-        for p, v in zip(pts, vals):
-            data.append({"family": fam, "row": row, "unit_id": p.get("unit_id"),
-                         "unit_kind": p.get("unit_kind"), "value": v})
-    _group_axes(ax, labels)
-    ax.set_yscale("log")
-    plain = matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}")
-    ax.yaxis.set_major_formatter(plain)
-    ax.yaxis.set_minor_formatter(plain)
-    ax.set_ylabel(ylabel)
-    return data
-
-
-def fig3e_peak_rss_best(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, best="method_best.csv", cost="cost_points.csv")
-    if missing:
-        return _placeholder(fig_dir, "fig3e_peak_rss_best", missing)
-    summary = _read(Path(paper_dir) / "method_summary.csv") or []
-    per_task = {r["family"] for r in summary if r.get("which") == "best"
-                and "task" in (r.get("peak_rss_unit") or "")}
-    groups, n = _cost_groups(got, "peak_rss_gb")
-    _style()
-    colors = _colors(fig_dir)
-    fig, (ax,) = ps.figure(width="double", aspect=0.6)
-    extra = {f: " *" for f in per_task}
-    ylab = "Peak memory (GB, log10)"
-    if per_task:
-        ylab += "\n* peak of the largest task"
-    data = _cost_panel(ax, groups, "peak_rss_gb", 1.0, colors, extra, ylab)
-    files = _save(fig, fig_dir, "fig3e_peak_rss_best",
-                  _Table(["family", "row", "unit_id", "unit_kind", "value"], data))
-    return _result(files, n)
-
-
-def fig3f_cpu_wall_best(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, best="method_best.csv", cost="cost_points.csv")
-    if missing:
-        return _placeholder(fig_dir, "fig3f_cpu_wall_best", missing)
-    summary = _read(Path(paper_dir) / "method_summary.csv") or []
-    gpu = {r["family"]: r.get("gpu_model") for r in summary
-           if r.get("which") == "best" and r.get("device") == "gpu"}
-    extra = {f: f" (GPU: {m or 'GPU'})" for f, m in gpu.items()}
-    _style()
-    colors = _colors(fig_dir)
-    fig, axes = ps.figure(width="double", nrows=1, ncols=2, aspect=1.1)
-    data, n = [], {}
-    for ax, key, scale, ylab, quantity in (
-        (axes[0], "cpu_h_used", 1.0, "CPU time (CPU-hours, log10)", "cpu_hours"),
-        (axes[1], "wall_s", 1 / 60.0, "Wall time (min, log10)", "wall_min"),
-    ):
-        groups, n_k = _cost_groups(got, key)
-        n = {f: max(n.get(f, 0), v) for f, v in n_k.items()}
-        for d in _cost_panel(ax, groups, key, scale, colors, extra, ylab):
-            data.append({**d, "quantity": quantity})
-        for t in ax.get_xticklabels():
-            t.set_rotation(90)
-            t.set_ha("center")
-    ps.panel_labels(axes)
-    files = _save(fig, fig_dir, "fig3f_cpu_wall_best",
-                  _Table(["quantity", "family", "row", "unit_id", "unit_kind", "value"], data))
-    return _result(files, n)
-
-
-# ── Fig. 2c ──────────────────────────────────────────────────────────────────
-def fig2c_cost_vs_input(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, best="method_best.csv", cost="cost_points.csv",
-                         fits="cost_fits.csv")
-    if missing:
-        return _placeholder(fig_dir, "fig2c_cost_vs_input", missing)
-    mine = {r["best_row"]: r["family"] for r in got["best"] if r.get("best_row")}
-    _style()
-    colors = _colors(fig_dir)
-    fig, axes = ps.figure(width="double", nrows=1, ncols=2, aspect=0.95)
-    n = {f: 0 for f, _ in _best_rows(got["best"])}
-    data = []
-    dropped = 0  # S12: points of a drawn row with no finite size or value, said below
-    for ax, key, scale, ylab, target in (
-        (axes[0], "peak_rss_gb", 1.0, "Peak memory (GB)", "peak_rss_gb"),
-        (axes[1], "wall_s", 1 / 60.0, "Wall time (min)", "wall_s"),
-    ):
-        for row, fam in mine.items():
-            every = [p for p in got["cost"] if p["row"] == row]
-            pts = [p for p in every if _fin(p.get("input_gb")) and _fin(p.get(key))]
-            dropped += len(every) - len(pts)
-            if not pts:
-                continue
-            x = np.array([_num(p["input_gb"]) for p in pts])
-            y = np.array([_num(p[key]) * scale for p in pts])
-            ax.scatter(x, y, s=6, color=colors[fam], linewidths=0, label=_label(fam))
-            n[fam] = max(n[fam], len(pts))
-            for a, b in zip(x, y):
-                data.append({"panel": target, "family": fam, "row": row, "input_gb": a, "value": b,
-                             "fit": False})
-            for f in got["fits"]:
-                if (f["row"] == row and f["target"] == target and f["predictor"] == "input_gb"
-                        and _flag(f.get("fit_ok")) and _fin(f.get("slope"))):
-                    xs = np.array([x.min(), x.max()])
-                    ys = (_num(f["slope"]) * xs + _num(f["intercept"])) * scale
-                    ax.plot(xs, ys, color=colors[fam], lw=0.8)
-                    for a, b in zip(xs, ys):
-                        data.append({"panel": target, "family": fam, "row": row, "input_gb": a,
-                                     "value": b, "fit": True})
-        ax.set_xlabel("Input size (GB)")
-        ax.set_ylabel(ylab)
-        ax.set_ylim(bottom=0)
-        ax.set_xlim(left=0)
-    ps.panel_labels(axes)
-    handles, labels = axes[0].get_legend_handles_labels()
-    seen = dict(zip(labels, handles))
-    if seen:
-        fig.legend(seen.values(), seen.keys(), loc="outside lower center", ncol=min(4, len(seen)),
-                   title="Method (best row; line: least-squares fit)"
-                   + (f"; {dropped} point(s) dropped: no input size or value"
-                      if dropped else ""))
-    files = _save(fig, fig_dir, "fig2c_cost_vs_input",
-                  _Table(["panel", "family", "row", "input_gb", "value", "fit"], data))
-    return _result(files, n)
+# ── Fig. 3e, 3f, 2c, the CPU cross and end to end: paper/cost_plots.py (T31) ──────
 
 
 # ── supplementary ────────────────────────────────────────────────────────────
-def figS_cpu_scaling(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, cs="cpu_scaling.csv")
-    if missing:
-        return _placeholder(fig_dir, "figS_cpu_scaling", missing)
-    _style()
-    colors = _colors(fig_dir)
-    fig, (ax,) = ps.figure(width="onehalf", aspect=0.8)
-    lines = {}
-    for r in got["cs"]:
-        if _fin(r.get("wall_s")) and _fin(r.get("cpus")):
-            lines.setdefault((r["row"], r.get("execution"), r["patient_id"]), []).append(
-                (_num(r["cpus"]), _num(r["wall_s"]) / 60.0, r.get("family")))
-    n, data, seen = {}, [], {}
-    extras = {fam for pts in lines.values() for _, _, fam in pts if fam}
-    colors = _colors(fig_dir, extra=sorted(extras))
-    for (row, ex, pid), pts in lines.items():
-        pts.sort()
-        fam = pts[0][2] or "stare"
-        ax.plot([p[0] for p in pts], [p[1] for p in pts], color=colors[fam], lw=0.6,
-                marker="o", ms=2, alpha=0.8, ls="--" if ex == "local" else "-")
-        seen[fam] = True
-        n[row] = n.get(row, 0) + 1
-        for c, w, _ in pts:
-            data.append({"family": fam, "row": row, "execution": ex, "patient_id": pid,
-                         "cpus": c, "wall_min": w})
-    ax.set_xscale("log", base=2)
-    ax.set_xticks(sorted({d["cpus"] for d in data}))
-    ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-    ax.set_xlabel("CPUs (count, log2)")
-    ax.set_ylabel("Wall time (min)")
-    ax.set_ylim(bottom=0)
-    fig.legend(handles=[plt.Line2D([], [], color=colors[f], label=_label(f)) for f in seen],
-               title="Method\n(one line per row\nand patient;\ndashed: local)",
-               loc="outside right center")
-    files = _save(fig, fig_dir, "figS_cpu_scaling",
-                  _Table(["family", "row", "execution", "patient_id", "cpus", "wall_min"], data))
-    return _result(files, n)
-
-
 def figS_pipeline_cost_fits(paper_dir, fig_dir):
     got, missing = _need(paper_dir, fits="pipeline_cost_fits.csv")
     if missing:
@@ -814,10 +643,11 @@ PLOTS = {
     "fig3c_displacement_best": fig3c_displacement_best,
     "fig3d_valis_stages": fig3d_valis_stages,
     "fig3d_stare_tiers": fig3d_stare_tiers,
-    "fig3e_peak_rss_best": fig3e_peak_rss_best,
-    "fig3f_cpu_wall_best": fig3f_cpu_wall_best,
-    "fig2c_cost_vs_input": fig2c_cost_vs_input,
-    "figS_cpu_scaling": figS_cpu_scaling,
+    "fig3e_peak_rss_best": None,  # cost_plots.FIGURES, filled in below
+    "fig3f_cpu_wall_best": None,
+    "fig2c_cost_vs_input": None,
+    "figS_cpu_scaling": None,
+    "figS_end_to_end": None,
     "figS_pipeline_cost_fits": figS_pipeline_cost_fits,
     "public_dice_best": public_dice_best,
     "public_landmarks_best": public_landmarks_best,
@@ -838,9 +668,10 @@ NEEDS = {
     "fig3e_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
     "fig3f_cpu_wall_best": {"method_best.csv": ("best_row",),
                             "cost_points.csv": ("cpu_h_used", "wall_s")},
-    "fig2c_cost_vs_input": {"method_best.csv": ("best_row",), "cost_points.csv": ("input_gb",),
+    "fig2c_cost_vs_input": {"method_best.csv": ("best_row",), "cost_points.csv": ("input_gpx",),
                             "cost_fits.csv": ("slope",)},
     "figS_cpu_scaling": {"cpu_scaling.csv": ("wall_s",)},
+    "figS_end_to_end": {"end_to_end.csv": ("estimate_s_med",)},
     "figS_pipeline_cost_fits": {"pipeline_cost_fits.csv": ("slope",)},
 }
 
@@ -883,10 +714,12 @@ def main(a):
     fig_dir = paper_dir / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
     only = _only(a.only, PLOTS)
+    got = {}
     for name in only or PLOTS:
-        res = draw(name, paper_dir, fig_dir)
+        res = got[name] = draw(name, paper_dir, fig_dir)
         tag = "placeholder" if res.get("placeholder") else "drawn"
         print(f"{name}\t{tag}\t{res['files'][0]}")
+    print(f"losses\t{cost_plots.write_losses(fig_dir, got, a.dataset)}")
     return 0
 
 
@@ -1031,6 +864,7 @@ def render_tables(tables_dir, to, draft=None, only=None, results=None, cases=Non
     finally:
         _CTX.clear()
         _CTX.update(saved)
+    cost_plots.write_losses(to, got, dataset)
     return got
 
 
@@ -1042,3 +876,8 @@ def main_tables(a):
         tag = "placeholder" if res.get("placeholder") else "drawn"
         print(f"{name}\t{tag}\t{res['files'][0]}")
     return 0
+
+
+# the cost figures live in their own module (T31): it reads this one's helpers and
+# fills its entries of PLOTS when it is imported (either module may be imported first)
+from . import cost_plots  # noqa: E402
