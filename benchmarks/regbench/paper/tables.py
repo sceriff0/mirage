@@ -19,8 +19,20 @@ result name of each active run); outlines only; a case counts for a candidate un
 ``excluded_from_summaries`` (imputed failures COUNT); the comparison is on the cases every
 candidate has a non-excluded row on (``n_cases_common``); per candidate, the patient median
 of ``dice_matched`` over those cases, then the median over patients; the highest wins; ties
-go to the lower median over patients of ``cpu_h_used`` (``summary_resources.csv``), then to
-the name. ``in_sample_selection`` is True for every family: the row is chosen on this cohort
+go to the lower median of ``cpu_h_used`` (``summary_resources.csv``) over the patients every
+candidate completed, then to the name.
+
+**No matched pair is Dice 0.** ``pairs.record`` gives ``dice_matched = nan`` to a case with
+no pair (an imputed failure on a large offset, or a bad registration). On a non-excluded row
+it counts as 0.0 in the selection and in every Dice statistic of ``method_summary``,
+``stare_tiers`` and ``valis_stages`` (``n_dice_zeroed`` counts them), so a method is never
+read on its easy rounds only. A case where EVERY candidate (``best_of``), or both rows of a
+paired difference, have no pair is the case's, not a method's, and is left out.
+
+**Cost** reads the COMPLETE patients of ``summary_resources.csv`` only (every round
+registered; as ``score.summarise_cost``): a patient's sums there cover its registered rounds
+only. An excluded round makes its patient incomplete, and its ``resources.csv`` row is left
+out of ``cpu_model`` and ``hosts``. ``in_sample_selection`` is True for every family: the row is chosen on this cohort
 with this metric.
 
 **VALIS stages** (ruling R18, ``methods.valis_mirage.STAGES_AT_DEPTH``). At depth 0 there
@@ -73,11 +85,14 @@ RULE = (
     "candidates are the family's terminal rows; outlines only; a case counts for a "
     "candidate unless excluded_from_summaries (imputed failures count); compared on the "
     "cases every candidate has a non-excluded row on (n_cases_common); per candidate the "
-    "patient median of dice_matched over those cases, then the median over patients; the "
-    "highest wins; ties by the lower cpu_h_used median over patients, then by name"
+    "patient median of dice_matched over those cases, then the median over patients; a "
+    "missing dice_matched (no matched pair) on a non-excluded row counts as 0, and a case "
+    "where every candidate has none is the case's and leaves the common cases; the "
+    "highest wins; ties by the lower cpu_h_used median over the patients every candidate "
+    "completed, then by name"
 )
 CRITERION = "median over patients of the patient-median dice_matched (outlines)"
-TIE_BREAK = "lower cpu_h_used median over patients, then the name"
+TIE_BREAK = "lower cpu_h_used median over the patients every candidate completed, then the name"
 
 # a module-level name, so a test can give the rows a toy family map
 family_of = variants.family
@@ -316,17 +331,28 @@ def _rows_of(pp, row, dataset, kept=True):
     ]
 
 
-def _patient_median(rows, key="dice_matched"):
+def _dice0(r):
+    """A kept row's Dice, with a missing one (no matched pair) counted as 0.0."""
+    d = _num(r["dice_matched"])
+    return d if math.isfinite(d) else 0.0
+
+
+def _no_pair(r):
+    return not math.isfinite(_num(r["dice_matched"]))
+
+
+def _patient_median(rows):
     by = {}
     for r in rows:
-        by.setdefault(r["patient_id"], []).append(r[key])
+        by.setdefault(r["patient_id"], []).append(_dice0(r))
     return {p: _median(v) for p, v in by.items()}
 
 
 # ── the best row of a method ─────────────────────────────────────────────────
 def best_of(per_pair, family, dataset, cost):
     """The ``method_best`` row of one family (the rule: module docstring, ``RULE``).
-    ``cost`` is ``{result name: [cpu_h_used per patient]}`` (may be empty)."""
+    ``cost`` is ``{result name: {patient: cpu_h_used}}`` over complete patients
+    (``_cpu_by_row``; may be empty)."""
     cands = [
         t for t in dict.fromkeys(terminal_rows(dataset).values()) if family_of(t) == family
     ]
@@ -337,11 +363,25 @@ def best_of(per_pair, family, dataset, cost):
         cases = {r["case_id"] for r in have[c]}
         common = cases if common is None else common & cases
     common = common or set()
+    # a case where no candidate has a matched pair is the case's, not a method's
+    common = {
+        k
+        for k in common
+        if not all(_no_pair(r) for c in cands for r in have[c] if r["case_id"] == k)
+    }
+    cost = cost or {}
+    shared = None  # the patients every candidate completed
+    for c in cands:
+        mine_p = set((cost.get(c) or {}))
+        shared = mine_p if shared is None else shared & mine_p
+    shared = shared or set()
     scored = []
+    zeroed = {}
     for c in cands:
         mine = [r for r in have[c] if r["case_id"] in common]
+        zeroed[c] = sum(_no_pair(r) for r in mine)
         value = _median(_patient_median(mine).values())
-        cpu = _median((cost or {}).get(c, []))
+        cpu = _median((cost.get(c) or {}).get(p) for p in shared)
         scored.append(
             (
                 0 if math.isfinite(value) else 1,
@@ -363,15 +403,17 @@ def best_of(per_pair, family, dataset, cost):
         criterion=CRITERION,
         criterion_value=best[4] if best else math.nan,
         n_cases_common=len(common),
+        n_dice_zeroed=zeroed[best[3]] if best else math.nan,
         tie_break=TIE_BREAK,
         in_sample_selection=True,
         rule=RULE,
     )
 
 
-def primary_of(family):
-    """The family's primary result name (``variants.PRIMARY``), or None."""
-    for v in variants.PRIMARY:
+def primary_of(family, dataset=COHORT):
+    """The family's primary result name on ``dataset`` (``variants.primary_for``), or
+    None: also when the family's primary was not run on that dataset."""
+    for v in variants.primary_for(None if dataset == COHORT else dataset):
         if family_of(v) == family:
             return v
     return None
@@ -395,10 +437,20 @@ def _res_rows(out, dataset):
     return [r for r in _csv(_tables(out) / "resources.csv") if r.get("dataset") == dataset]
 
 
+def _complete(cost_rows):
+    """The patients whose every round registered (``summary_resources.csv: complete``),
+    as ``score.summarise_cost`` reads them: the cost of some of a patient's rounds is not
+    the cost of the patient."""
+    return [r for r in cost_rows if _flag(r.get("complete"))]
+
+
 def _cpu_by_row(cost_rows):
+    """``{result name: {patient: cpu_h_used}}`` over complete patients."""
     by = {}
-    for r in cost_rows:
-        by.setdefault(r["method"], []).append(r.get("cpu_h_used"))
+    for r in _complete(cost_rows):
+        v = _num(r.get("cpu_h_used"))
+        if math.isfinite(v):
+            by.setdefault(r["method"], {})[r["group"]] = v
     return by
 
 
@@ -418,11 +470,12 @@ def _peak_unit(mine):
 # ── method_summary ───────────────────────────────────────────────────────────
 def _accuracy(pp, row, dataset):
     mine = _rows_of(pp, row, dataset)
-    dice = [r["dice_matched"] for r in mine]
+    dice = [_dice0(r) for r in mine]
     q25, q75 = _quartiles(dice)
     readable = [r["displacement_um_p50"] for r in mine if r["displacement_readable"] is True]
     d25, d75 = _quartiles(readable)
     return mine, {
+        "n_dice_zeroed": sum(_no_pair(r) for r in mine),
         "tool_version": _distinct(r["tool_version"] for r in mine),
         "n_patients": len({r["patient_id"] for r in mine}),
         "n_pairs": len(mine),
@@ -439,13 +492,15 @@ def _accuracy(pp, row, dataset):
 
 
 def _paired(pp, row, stare_row, dataset):
-    """Per case, ``row - stare_row`` on the cases both have and neither is excluded,
-    where both numbers exist."""
+    """Per case, ``row - stare_row`` on the cases both have and neither is excluded. A
+    missing Dice counts as 0, except on a case where both are missing (the case's)."""
     if stare_row is None:
         return {}
     a = {r["case_id"]: _num(r["dice_matched"]) for r in _rows_of(pp, row, dataset)}
     b = {r["case_id"]: _num(r["dice_matched"]) for r in _rows_of(pp, stare_row, dataset)}
-    both = [c for c in a if c in b and math.isfinite(a[c]) and math.isfinite(b[c])]
+    both = [c for c in a if c in b and (math.isfinite(a[c]) or math.isfinite(b[c]))]
+    a = {c: (v if math.isfinite(v) else 0.0) for c, v in a.items()}
+    b = {c: (v if math.isfinite(v) else 0.0) for c, v in b.items()}
     diffs = [a[c] - b[c] for c in both]
     q25, q75 = _quartiles(diffs)
     return {
@@ -457,22 +512,36 @@ def _paired(pp, row, stare_row, dataset):
     }
 
 
-def _cost(cost_rows, res_rows, row):
-    mine = [r for r in cost_rows if r["method"] == row]
+def _excluded_rounds(pp):
+    """``{(case_id, row)}`` of the rounds excluded from the summaries."""
+    return {(r["case_id"], r["row"]) for r in pp if r["excluded_from_summaries"] is True}
+
+
+def _cost(cost_rows, res_rows, row, excluded=frozenset()):
+    """Cost per patient over the COMPLETE patients (``_complete``); an excluded round
+    makes its patient incomplete, and its ``resources.csv`` row is left out of
+    ``cpu_model``."""
+    every = [r for r in cost_rows if r["method"] == row]
+    mine = _complete(every)
     jobs = any(not _missing(r.get("n_jobs")) for r in mine)
     wall_key = "wall_unlimited_parallel_s" if jobs else "register_s"
     peaks = [r.get("peak_rss_gb") for r in mine]
     return {
         "peak_rss_gb_med": _median(peaks),
         "peak_rss_gb_max": max(_finite(peaks)) if _finite(peaks) else math.nan,
-        "peak_rss_unit": _peak_unit(mine) if mine else schema.NA,
+        "peak_rss_unit": _peak_unit(mine or every) if every else schema.NA,
+        "n_patients_complete": len({r["group"] for r in mine}),
         "cpu_h_used_med": _median(r.get("cpu_h_used") for r in mine),
         "wall_s_med": _median(r.get(wall_key) for r in mine),
         "wall_kind": "time_unlimited_parallel_tiles_s" if jobs else "register_s",
         "gpu_h_med": _median(r.get("gpu_h") for r in mine),
         "device": _distinct(r.get("device") for r in mine),
         "gpu_model": _distinct(r.get("gpu_model") for r in mine),
-        "cpu_model": _most_common(r.get("cpu_model") for r in res_rows if r["method"] == row),
+        "cpu_model": _most_common(
+            r.get("cpu_model")
+            for r in res_rows
+            if r["method"] == row and (r.get("case_id"), row) not in excluded
+        ),
     }
 
 
@@ -482,15 +551,20 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset):
     best = {r["family"]: r["best_row"] for r in best_rows}
     stare_best = best.get(STARE_FAMILY)
     stare_best = None if _missing(stare_best) else stare_best
-    stare_peak = _cost(cost_rows, res_rows, stare_best)["peak_rss_gb_med"] if stare_best else math.nan
+    excluded = _excluded_rounds(pp)
+    stare_peak = (
+        _cost(cost_rows, res_rows, stare_best, excluded)["peak_rss_gb_med"]
+        if stare_best
+        else math.nan
+    )
     out = []
     for fam in _families(dataset):
-        picks = [("best", best.get(fam)), ("primary", primary_of(fam))]
+        picks = [("best", best.get(fam)), ("primary", primary_of(fam, dataset))]
         for which, row in picks:
             if _missing(row):
                 continue
             _, acc = _accuracy(pp, row, dataset)
-            cost = _cost(cost_rows, res_rows, row)
+            cost = _cost(cost_rows, res_rows, row, excluded)
             fold = (
                 cost["peak_rss_gb_med"] / stare_peak
                 if math.isfinite(_num(cost["peak_rss_gb_med"]))
@@ -520,7 +594,7 @@ def _stage_stats(pp, row, dataset):
     if _missing(row):
         return {}
     mine = _rows_of(pp, row, dataset)
-    dice = [r["dice_matched"] for r in mine]
+    dice = [_dice0(r) for r in mine]
     q25, q75 = _quartiles(dice)
     readable = [r["displacement_um_p50"] for r in mine if r["displacement_readable"] is True]
     return {
@@ -575,7 +649,7 @@ def stare_tiers(pp, cost_rows, dataset):
         run = _run(name)
         opts = run.opts if run is not None else {}
         stats = _stage_stats(pp, final, dataset)
-        mine = [r for r in cost_rows if r["method"] == final]
+        mine = [r for r in _complete(cost_rows) if r["method"] == final]
         peaks = _finite(r.get("peak_rss_gb") for r in mine)
         out.append(
             schema.empty_row(
@@ -693,10 +767,15 @@ def run_parameters(out, dataset):
     return rows
 
 
-def hosts(res_rows, dataset):
+def hosts(res_rows, dataset, excluded=frozenset()):
+    """Where each terminal row ran, from ``resources.csv``, without its excluded rounds."""
     rows = []
     for final in terminal_rows(dataset).values():
-        mine = [r for r in res_rows if r["method"] == final]
+        mine = [
+            r
+            for r in res_rows
+            if r["method"] == final and (r.get("case_id"), final) not in excluded
+        ]
         rows.append(
             schema.empty_row(
                 "hosts",
@@ -814,7 +893,7 @@ def build(out, dataset=COHORT):
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),
         "versions": versions(out, dataset),
         "run_parameters": run_parameters(out, dataset),
-        "hosts": hosts(res_rows, dataset),
+        "hosts": hosts(res_rows, dataset, _excluded_rounds(pp)),
         "stare_tier_table": stare_tier_table(),
         "pipeline_params": pipeline_params(),
         "cohort_counts": cohort_counts(pp, counted, dataset),

@@ -67,8 +67,10 @@ def test_best_counts_imputed_rounds_and_leaves_out_excluded(scored):
     assert best["rtm"]["best_row"] == "rtm"
     assert best["stare"]["in_sample_selection"] is True
     assert "median over patients" in best["stare"]["rule"]
-    # rtm's never-run P2_r1 is an imputed failure: it COUNTS, so the common cases are 4
-    assert best["rtm"]["n_cases_common"] == 4
+    # rtm's never-run P2_r1 is an imputed failure with no pair; so is crash's: a case where
+    # EVERY candidate has no pair is the case's, not a method's, and leaves the common set
+    assert best["rtm"]["n_cases_common"] == 3
+    assert "counts as 0" in best["rtm"]["rule"]
 
 
 def test_an_excluded_row_is_left_out_and_an_imputed_one_kept(scored):
@@ -123,8 +125,11 @@ def test_best_of_on_hand_rows_excluded_never_decides():
         tie = [x for x in pp if x["row"] == "a"] + [
             {**x, "row": "b"} for x in pp if x["row"] == "a"]
         assert tables.best_of(tie, "f", "multiplex", {})["best_row"] == "a"
-        cost = {"a": [2.0, 2.0], "b": [1.0, 1.0]}
+        cost = {"a": {"p1": 2.0, "p2": 2.0}, "b": {"p1": 1.0, "p2": 1.0}}
         assert tables.best_of(tie, "f", "multiplex", cost)["best_row"] == "b"
+        # the tie-break reads the patients EVERY candidate completed: on p1 alone, a wins
+        cost = {"a": {"p1": 1.0, "p2": 5.0}, "b": {"p1": 2.0}}
+        assert tables.best_of(tie, "f", "multiplex", cost)["best_row"] == "a"
     finally:
         tables.family_of, tables.terminal_rows = old_f, old_t
 
@@ -224,3 +229,144 @@ def test_the_paper_cli_writes_the_tables(scored, monkeypatch):
 
     assert cli.main(["paper", "--out", str(scored)]) == 0
     assert (scored / "paper" / "method_best.csv").exists()
+
+
+def _hand(row, case, patient, dice, excluded=False, imputed=False):
+    return {"dataset": "multiplex", "set": "outlines", "row": row, "case_id": case,
+            "patient_id": patient, "dice_matched": dice, "excluded_from_summaries": excluded,
+            "imputed_initial": imputed, "displacement_readable": False,
+            "displacement_um_p50": float("nan"), "tool_version": "1", "n_pairs": 0}
+
+
+@pytest.fixture
+def toy_family(monkeypatch):
+    monkeypatch.setattr(tables, "family_of", {"a": "f", "b": "f"}.get)
+    monkeypatch.setattr(tables, "terminal_rows", lambda ds: {"a": "a", "b": "b"})
+
+
+def test_a_nan_dice_counts_as_zero_in_best_of(toy_family):
+    """The review's probe: `a` is 0.9 on c1 and has no pair on c2 (an imputed failure);
+    `b` is 0.8 / 0.7. Scored on its easy round alone `a` would win; it does not."""
+    nan = float("nan")
+    pp = [_hand("a", "c1", "p1", 0.9), _hand("a", "c2", "p2", nan, imputed=True),
+          _hand("b", "c1", "p1", 0.8), _hand("b", "c2", "p2", 0.7)]
+    best = tables.best_of(pp, "f", "multiplex", {})
+    assert best["best_row"] == "b" and best["n_cases_common"] == 2
+    assert best["criterion_value"] == pytest.approx(0.75) and best["n_dice_zeroed"] == 0
+    # a case where EVERY candidate has no pair is left out of the common cases
+    pp += [_hand("a", "c3", "p3", nan, imputed=True), _hand("b", "c3", "p3", nan)]
+    best = tables.best_of(pp, "f", "multiplex", {})
+    assert best["n_cases_common"] == 2 and best["best_row"] == "b"
+    # the chosen row's own NaN rounds counted as 0 are counted
+    pp2 = [_hand("a", "c1", "p1", 0.9), _hand("a", "c2", "p2", 0.9),
+           _hand("b", "c1", "p1", 0.5), _hand("b", "c2", "p2", nan)]
+    best = tables.best_of(pp2, "f", "multiplex", {})
+    assert best["best_row"] == "a" and best["n_dice_zeroed"] == 0
+    pp3 = [_hand("a", "c1", "p1", 0.9), _hand("a", "c2", "p2", nan),
+           _hand("b", "c1", "p1", 0.2), _hand("b", "c2", "p2", 0.2)]
+    best = tables.best_of(pp3, "f", "multiplex", {})
+    assert best["best_row"] == "a" and best["n_dice_zeroed"] == 1
+
+
+def test_the_paired_difference_has_its_sign():
+    nan = float("nan")
+    pp = [_hand("x", "c1", "p1", 0.9), _hand("x", "c2", "p2", 0.8),
+          _hand("s", "c1", "p1", 0.7), _hand("s", "c2", "p2", 0.7),
+          _hand("x", "c3", "p3", nan), _hand("s", "c3", "p3", nan),  # both: the case's
+          _hand("x", "c4", "p4", nan), _hand("s", "c4", "p4", 0.5)]  # x has no pair: 0
+    got = tables._paired(pp, "x", "s", "multiplex")
+    # diffs 0.2, 0.1, -0.5
+    assert got["d_dice_vs_stare_med"] == pytest.approx(0.1)
+    assert got["n_pairs_vs_stare"] == 3 and got["n_pairs_stare_ge"] == 1
+
+
+def _sr(method, group, complete=True, **kw):
+    base = {"dataset": "multiplex", "group": group, "method": method, "unit": "pair",
+            "complete": str(complete), "n_jobs": "", "peak_rss_gb": "1.0",
+            "cpu_h_used": "1.0", "register_s": "10.0", "wall_unlimited_parallel_s": "",
+            "gpu_h": "0.0", "device": "cpu", "gpu_model": ""}
+    base.update({k: str(v) for k, v in kw.items()})
+    return base
+
+
+def test_cost_routes_read_complete_patients_only():
+    rows = [
+        _sr("j", "p1", n_jobs=40, wall_unlimited_parallel_s=100.0, register_s=1.0,
+            peak_rss_gb=3.0, cpu_h_used=2.0),
+        _sr("j", "p2", n_jobs=50, wall_unlimited_parallel_s=300.0, register_s=1.0,
+            peak_rss_gb=5.0, cpu_h_used=4.0),
+        _sr("j", "p3", complete=False, n_jobs=5, wall_unlimited_parallel_s=1.0,
+            peak_rss_gb=99.0, cpu_h_used=0.01),
+        _sr("g", "p1", unit="patient", peak_rss_gb=8.0, cpu_h_used=6.0, register_s=60.0),
+        _sr("r", "p1", peak_rss_gb=2.0, register_s=20.0),
+    ]
+    j = tables._cost(rows, [], "j")
+    assert j["peak_rss_unit"] == "per task (largest job)"
+    assert j["wall_kind"] == "time_unlimited_parallel_tiles_s"
+    assert j["wall_s_med"] == pytest.approx(200.0)
+    assert j["peak_rss_gb_med"] == pytest.approx(4.0) and j["peak_rss_gb_max"] == 5.0
+    assert j["cpu_h_used_med"] == pytest.approx(3.0) and j["n_patients_complete"] == 2
+    g = tables._cost(rows, [], "g")
+    assert g["peak_rss_unit"] == "per patient launch" and g["wall_s_med"] == 60.0
+    r = tables._cost(rows, [], "r")
+    assert r["peak_rss_unit"] == "per round" and r["wall_kind"] == "register_s"
+    assert tables._cpu_by_row(rows)["j"] == {"p1": 2.0, "p2": 4.0}
+
+
+def test_cpu_by_row_from_the_scorers_file_skips_incomplete_patients(scored):
+    rows = tables._cost_rows(scored, "multiplex")
+    cpu = tables._cpu_by_row(rows)
+    assert set(cpu["rtm"]) == {"P1", "P3"}  # P2 never ran: not complete
+    assert set(cpu["stare"]) == {"P1", "P2", "P3"}
+    assert "crash" not in cpu
+
+
+def test_summary_zeroes_nan_dice_and_counts_complete_patients(scored):
+    built = tables.build(scored, "multiplex")
+    rows = {(r["family"], r["which"]): r for r in built["method_summary"]}
+    rtm = rows[("rtm", "best")]
+    pp = {r["case_id"]: r["dice_matched"] for r in built["per_pair"]
+          if r["row"] == "rtm" and r["set"] == "outlines"}
+    want = sorted([pp["P1_r1"], pp["P1_r2"], pp["P3_r1"], 0.0])
+    assert rtm["n_dice_zeroed"] == 1 and rtm["dice_med"] == pytest.approx((want[1] + want[2]) / 2)
+    assert rtm["n_patients_complete"] == 2 and rows[("stare", "best")]["n_patients_complete"] == 3
+    cost = [r for r in tables._cost_rows(scored, "multiplex")
+            if r["method"] == "rtm" and r["complete"] == "True"]
+    import statistics
+    assert rtm["peak_rss_gb_med"] == pytest.approx(
+        statistics.median(float(r["peak_rss_gb"]) for r in cost))
+
+
+def test_excluded_rounds_leave_hosts_and_cost(scored):
+    _exclude(scored, "dropme", "P1_r1")
+    built = tables.build(scored, "multiplex")
+    h = {r["row"]: r for r in built["hosts"]}
+    assert h["dropme"]["n_results"] == 3 and h["stare"]["n_results"] == 4
+
+
+def test_cohort_counts_numbers(scored):
+    built = tables.build(scored, "multiplex")
+    c = {(r["patient_id"], r["row"]): r for r in built["cohort_counts"]}
+    assert (c[("P1", "stare")]["n_pairs_min"], c[("P1", "stare")]["n_pairs_max"]) == (81, 81)
+    assert c[("P1", "stare")]["n_pairs_med"] == 81.0
+    assert c[("P2", "rtm")]["n_panels"] == 1 and c[("P2", "rtm")]["n_pairs_max"] == 0
+
+
+def test_stare_tiers_defaults_and_options(scored, monkeypatch):
+    monkeypatch.setattr(tables, "family_of", variants.family)
+    monkeypatch.setattr(tables, "terminal_rows", lambda ds: {
+        n: n for n in ("stare", "stare_medium", "stare_s128_clahe")})
+    t = {r["row"]: r for r in tables.build(scored, "multiplex")["stare_tiers"]}
+    assert (t["stare"]["tier"], t["stare"]["stride"], t["stare"]["sprep"]) == ("high", 64, "none")
+    assert t["stare_medium"]["tier"] == "medium" and t["stare_medium"]["stride"] == 64
+    assert (t["stare_s128_clahe"]["stride"], t["stare_s128_clahe"]["sprep"]) == (128, "clahe")
+
+
+def test_primary_of_reads_the_dataset():
+    from benchmarks.regbench import regimes
+
+    public = next(d for d, reg in regimes.DATASET_REGIME.items()
+                  if reg != regimes.COHORT_REGIME)
+    assert tables.primary_of("valis_mirage", "multiplex") == "valis_mirage"
+    assert tables.primary_of("valis_mirage", public) is None  # never run there
+    assert tables.primary_of("stare", public) == "stare"

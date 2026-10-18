@@ -176,7 +176,10 @@ _TABLE_LIST = [
        ("n_candidates", "count", "terminal rows of the family considered"),
        ("criterion", "", "median over patients of the patient-median dice_matched (outlines)"),
        ("criterion_value", "1", "the chosen row's value"),
-       ("n_cases_common", "count", "cases every candidate has a non-excluded row on"),
+       ("n_cases_common", "count", "cases every candidate has a non-excluded row on, less those "
+        "where no candidate has a matched pair"),
+       ("n_dice_zeroed", "count", "the chosen row's common cases with no matched pair, whose "
+        "missing dice_matched counted as 0"),
        ("tie_break", "", "lower cpu_h_used median over patients, then the name"),
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words")),
@@ -186,6 +189,8 @@ _TABLE_LIST = [
        ("which", "", "best or primary"), ("tool_version", "", ""),
        ("n_patients", "count", ""), ("n_pairs", "count", "panel pairs (cases)"),
        ("n_ok", "count", "cases registered"),
+       ("n_dice_zeroed", "count", "cases with no matched pair, whose missing dice_matched "
+        "counted as 0 in the Dice statistics"),
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""), ("dice_mean", "1", ""),
        ("disp_um_med", "um", "median over readable cases of displacement_um_p50"),
        ("disp_um_q25", "um", ""), ("disp_um_q75", "um", ""), ("n_readable", "count", ""),
@@ -193,7 +198,9 @@ _TABLE_LIST = [
        ("d_dice_vs_stare_q25", "1", ""), ("d_dice_vs_stare_q75", "1", ""),
        ("n_pairs_vs_stare", "count", "cases both have"),
        ("n_pairs_stare_ge", "count", "cases where STARE's Dice >= this row's"),
-       ("peak_rss_gb_med", "GB", "median over patients"), ("peak_rss_gb_max", "GB", ""),
+       ("n_patients_complete", "count", "patients whose every round registered: the cost "
+        "columns read these only"),
+       ("peak_rss_gb_med", "GB", "median over complete patients"), ("peak_rss_gb_max", "GB", ""),
        ("peak_rss_unit", "", "per task (largest job), per patient launch, or per round"),
        ("fold_peak_vs_stare", "1", "peak_rss_gb_med over STARE's"),
        ("cpu_h_used_med", "CPU-h", "per patient, median"), ("wall_s_med", "s", ""),
