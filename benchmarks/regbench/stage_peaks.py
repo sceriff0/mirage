@@ -125,7 +125,7 @@ def rows(out, cases, names):
                 continue
             try:
                 run = json.loads((d / "run.json").read_text()) if has_run else {}
-            except ValueError:
+            except (OSError, ValueError):  # unreadable: losses.csv has its row (S4)
                 run = {}
             found.append({**round_row(run, d / "stages", case), "row": name})
     return found

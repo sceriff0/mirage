@@ -57,7 +57,7 @@ def rows(out, cases):
                 continue
             try:
                 run = json.loads(path.read_text())
-            except ValueError:
+            except (OSError, ValueError):  # unreadable: losses.csv has its row (S4)
                 run = {}
             run = run if isinstance(run, dict) else {}
             info, opts = run.get("info") or {}, run.get("opts") or {}

@@ -145,7 +145,7 @@ def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
     assert (where / "tissue_missing.csv").is_file()
     assert not (where / "cells.csv").exists()
     assert set(got["public"]["acrobat"]) == {
-        "tissue", "tissue_summary", "tissue_missing", "excluded_runs"
+        "tissue", "tissue_summary", "tissue_missing", "excluded_runs", "losses"
     }  # fmt: skip
     # the real path: methods.input_rule leaves ASHLAR and PALOM out of a brightfield set
     with open(where / "excluded_runs.csv") as fh:

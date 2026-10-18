@@ -188,6 +188,8 @@ TABLES = (
     # Task 28: the per-method common block, and every loss as a row
     "common_block_per_method",
     "summary_common_per_method",
+    "cost_summary_per_method",
+    "cost_end_to_end_summary_per_method",
     "losses",
     "score_errors",
     "nuclei_checks",
@@ -1011,13 +1013,8 @@ def _load_run(out, variant, case):
     if (d / "run.json").exists():
         try:
             run = json.loads((d / "run.json").read_text())
-        except (OSError, ValueError) as exc:
-            # S4: not the method's (it may have written it whole): the record is gone
-            said = f"run.json is not readable ({type(exc).__name__})"
-            return _unreadable({}, said), None, said, UNREADABLE
-        if not isinstance(run, dict):
-            said = "run.json is not readable (not an object)"
-            return _unreadable({}, said), None, said, UNREADABLE
+        except ValueError:
+            return {}, None, "run.json is not readable", "exception"
     if not run:
         return {}, None, "not run", "not_run"
     if not of_this_submission(run):
@@ -1026,11 +1023,6 @@ def _load_run(out, variant, case):
     if changed:
         # not the method's failure: its polygons no longer fit because the CASE changed
         return {}, None, f"{STALE_CASE} ({', '.join(changed)})", "not_run"
-    # the causes the frozen writers cannot say themselves (killed_unsettled, held)
-    run = losses.reclassify(run)
-    if run.get("ok") and not (d / "warped.npz").exists():
-        said = "the result says ok and has no warped.npz"
-        return _unreadable(run, said), None, said, UNREADABLE
     if not run.get("ok") or not (d / "warped.npz").exists():
         return (
             run,
@@ -1038,22 +1030,61 @@ def _load_run(out, variant, case):
             run.get("error") or "no output",
             run.get("cause") or "exception",
         )
-    try:
-        with np.load(d / "warped.npz") as z:
-            warped = {k: z[k] for k in z.files}
-    except (OSError, ValueError, EOFError, zipfile.BadZipFile) as exc:
-        said = f"warped.npz is not readable ({type(exc).__name__}: {exc})"
-        return _unreadable(run, said), None, said, UNREADABLE
+    with np.load(d / "warped.npz") as z:
+        warped = {k: z[k] for k in z.files}
     return run, warped, str(run.get("problem") or ""), ""
 
 
 UNREADABLE = "result_unreadable"
 
 
-def _unreadable(run, said):
+def _unreadable(run, said, path):
     """A result whose record or map cannot be read, as the tables read it: failed, for
-    ``result_unreadable`` (``losses.CAUSES``: not the method's), with what was said."""
-    return {**run, "ok": False, "cause": UNREADABLE, "error": said}
+    ``result_unreadable`` (``losses.CAUSES``: not the method's), with what was said and
+    the file that failed (``unreadable_file``: the loss row's ``source``)."""
+    return {**run, "ok": False, "cause": UNREADABLE, "error": said,
+            "unreadable_file": str(path)}  # fmt: skip
+
+
+def _load_result(out, variant, case):
+    """``_load_run`` as the tables read it (Task 28, S4 and S1). NOT a pair-code member
+    (``PAIR_CODE_MEMBERS``): ``_load_run`` stays byte for byte what the kept pair records
+    were made with, and what is said here around it changes no pair record:
+
+    * a ``run.json`` that cannot be opened or parsed, or is no JSON object, and a
+      ``warped.npz`` that cannot be read, are ``result_unreadable`` (not the method's),
+      never a raise out of the scorer;
+    * an ``ok`` result with no ``warped.npz`` is ``result_unreadable``;
+    * the causes the frozen writers cannot say themselves (``losses.reclassify``:
+      ``killed_unsettled``, ``held``, ``submit_refused``)."""
+    d = result_dir(out, variant, case)
+    rec = d / "run.json"
+    if rec.exists():
+        try:
+            parsed = json.loads(rec.read_text())
+        except (OSError, ValueError) as exc:
+            said = f"run.json is not readable ({type(exc).__name__})"
+            return _unreadable({}, said, rec), None, said, UNREADABLE
+        if not isinstance(parsed, dict):
+            said = "run.json is not readable (not an object)"
+            return _unreadable({}, said, rec), None, said, UNREADABLE
+    try:
+        run, warped, problem, cause = _load_run(out, variant, case)
+    except (OSError, ValueError, EOFError, zipfile.BadZipFile) as exc:
+        said = f"warped.npz is not readable ({type(exc).__name__}: {exc})"
+        run = json.loads(rec.read_text())
+        return _unreadable(run, said, d / "warped.npz"), None, said, UNREADABLE
+    if cause == "not_run" or not run:
+        return run, warped, problem, cause
+    if run.get("ok") and not (d / "warped.npz").exists():
+        said = "the result says ok and has no warped.npz"
+        return _unreadable(run, said, d / "warped.npz"), None, said, UNREADABLE
+    said = losses.reclassify(run)
+    if said is not run:
+        return said, warped, problem, said["cause"]
+    return run, warped, problem, cause
+
+
 
 
 def _seam_masks(
@@ -1111,7 +1142,9 @@ _FILE_SHA = {}
 
 def file_sha256(path):
     """sha256 of a file's bytes, ``""`` when it is not there. Kept per file state (path,
-    size, modification time), so a file is read once per process."""
+    size, modification time), so a file is read once per process. A file that is there
+    and cannot be read is ``"unreadable:<errno>"`` (I1): a key that is never a valid
+    sha, never a raise; whoever reads the file then says why it could not."""
     path = Path(path)
     try:
         st = path.stat()
@@ -1120,9 +1153,12 @@ def file_sha256(path):
     state = (str(path), st.st_size, st.st_mtime_ns)
     if state not in _FILE_SHA:
         h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for block in iter(lambda: fh.read(1 << 22), b""):
-                h.update(block)
+        try:
+            with open(path, "rb") as fh:
+                for block in iter(lambda: fh.read(1 << 22), b""):
+                    h.update(block)
+        except OSError as exc:
+            return f"unreadable:{exc.errno}"
         _FILE_SHA[state] = h.hexdigest()
     return _FILE_SHA[state]
 
@@ -1376,10 +1412,11 @@ def case_key(job):
     """Everything that decides a case's rows. A case record is reused only when this is
     EQUAL: the case as prepared, the variants and their order, the bytes of every
     result the case reads (``run.json`` and ``warped.npz``; the seam masks are in the
-    owners' ``warped.npz``), the seam owners, each row's selfcheck, the submission
-    being scored, the code, the libraries and the constants."""
+    owners' ``warped.npz``), the seam owners, the submission being scored, the code,
+    the libraries and the constants. Not each row's selfcheck (I2): it is set at table
+    time (``set_selfcheck_row``), so the re-score after the selfchecks reads every
+    record (B5)."""
     out, case, variants, owners = job[:4]
-    checks = job[4] if len(job) > 4 else {}
     results = {}
     for v in variants:
         if v == "initial":
@@ -1401,7 +1438,6 @@ def case_key(job):
         "variants": list(variants),
         "results": results,
         "seam_owners": list(owners),
-        "checks": {v: checks.get(v, "") for v in variants},
         "submission": os.environ.get(SUBMISSION_ENV) or "",
     }
 
@@ -1559,6 +1595,23 @@ class _Case:
         }
 
 
+class _ScoredCase(_Case):
+    """``_Case`` reading each result through ``_load_result``. A subclass, so that
+    ``_Case``'s own source (a pair-code member) is what it was; its seam masks read
+    through ``self.load`` (``_seam_masks``'s ``load=``) and so through this too."""
+
+    def load(self, v):
+        if v in self._warped:
+            warped = self._warped.pop(v)
+        else:
+            run, warped, problem, cause = _load_result(self.out, v, self.case)
+            self._said.setdefault(v, (run, problem, cause))
+            while len(self._warped) >= self.KEEP_WARPED:
+                del self._warped[next(iter(self._warped))]
+        self._warped[v] = warped  # the most recent last
+        run, problem, cause = self._said[v]
+        return run, warped, problem, cause
+
 def _spec_name(spec):
     which, (kind, name), owner = spec
     return f"{which} {name or kind}" + (f"{NON}{owner}" if owner else "")
@@ -1575,7 +1628,7 @@ def _pair_task(task):
     name = (job[0], job[1].dataset, str(job[1].case_id))
     if _IN_WORKER.get("name") != name:
         _IN_WORKER.clear()
-        _IN_WORKER.update(name=name, case=_Case(job))
+        _IN_WORKER.update(name=name, case=_ScoredCase(job))
     started = time.monotonic()
     return i, _IN_WORKER["case"].record(*spec), time.monotonic() - started
 
@@ -1647,7 +1700,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
     (``_records``) and the rows are filled. A variant that failed, was killed or never
     ran is scored at the unregistered pose: all of them read the one pair record of
     that pose, and one more per seam owner."""
-    ctx = _Case(job)
+    ctx = _ScoredCase(job)
     case, variants, checks = ctx.case, ctx.variants, ctx.checks
     points, px = ctx.points, ctx.px
     base = {
@@ -1924,12 +1977,23 @@ def score_jobs(jobs, workers=1, fresh=False):
     done = [None] * len(jobs)
     keys, todo = [], []
     for i, job in enumerate(jobs):
-        keys.append(case_key(job))
-        got, why = (
-            (None, "asked to compute it again")
-            if fresh
-            else _read_record(records_dir(job[0], job[1]) / "case.rec", keys[i])
-        )
+        try:  # inside the guard of the case too (I1): a key that raises is one case
+            keys.append(case_key(job))
+            got, why = (
+                (None, "asked to compute it again")
+                if fresh
+                else _read_record(records_dir(job[0], job[1]) / "case.rec", keys[i])
+            )
+        except Exception as exc:  # noqa: BLE001 - recorded in score_errors.csv
+            keys[i:] = [None]
+            done[i] = ScoreError(job, exc)
+            print(
+                f"score: {job[1].dataset}/{job[1].case_id}: SCORE ERROR before its "
+                f"scoring ({done[i].row['error']}); the other cases go on",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
         if got is None:
             todo.append((i, why))
         else:
@@ -2639,6 +2703,11 @@ def summarise_resources(res_rows):
             "n_rounds": len(mine),
             "n_ok": len(ok),
             "complete": len(ok) == len(mine),
+            # the rounds lost for a cause that is not the method's (B2: they take the
+            # patient out of this method's per-method common block only)
+            "n_lost_not_method": sum(
+                not r["ok"] and r.get("cause") in NOT_THE_METHOD for r in mine
+            ),
             # False when no round of it has a record (a run that was not launched)
             "launched": any(r["cause"] != "not_run" for r in mine),
             "attempt": _stat(_values(mine, "attempt"), np.max),
@@ -2797,10 +2866,19 @@ VALID_RATIOS = (
 )
 
 
-def common_patients(res_summary, primary=None):
-    """``{dataset: (patients complete for every compared row, [compared rows])}``. A
-    row is compared as in the cell tables: a primary row (any run when none is named)
-    with at least one result that is not ``not run``."""
+def common_patients(res_summary, primary=None, rule=STRICT):
+    """``{dataset: (patients, [compared rows])}``. A row is compared as in the cell
+    tables: a primary row (any run when none is named) with at least one result that is
+    not ``not run``. B2, the two rules of ``common_block``:
+
+    * ``strict`` (the headline): ``patients`` is ONE set, those complete for every
+      compared row;
+    * ``per_method``: ``patients`` is ``{method: set}``: a patient another compared row
+      did not complete ONLY because of rounds lost for a cause that is not its own
+      (``n_lost_not_method``) stays in this method's block; one this method did not
+      complete leaves it, and a failure of a row's own leaves every block."""
+    if rule not in COMMON_BLOCKS:
+        raise ValueError(f"common block {rule!r}: one of {COMMON_BLOCKS}")
     out = {}
     for ds in dict.fromkeys(r["dataset"] for r in res_summary):
         of_ds = [r for r in res_summary if r["dataset"] == ds]
@@ -2808,28 +2886,52 @@ def common_patients(res_summary, primary=None):
         inside = [
             m for m in names if any(r["method"] == m and r["launched"] for r in of_ds)
         ]
-        patients = {r["group"] for r in of_ds}
-        for m in inside:
-            patients &= {
-                r["group"] for r in of_ds if r["method"] == m and r["complete"]
+        everyone = {r["group"] for r in of_ds}
+
+        def done_by(k, lenient):
+            return {
+                r["group"]
+                for r in of_ds
+                if r["method"] == k
+                and (
+                    r["complete"]
+                    or lenient
+                    and r["n_ok"] + r.get("n_lost_not_method", 0) == r["n_rounds"]
+                )
             }
-        out[ds] = (patients if inside else set(), inside)
+
+        def block(m):
+            patients = set(everyone)
+            for k in inside:
+                patients &= done_by(k, lenient=rule == PER_METHOD and k != m)
+            return patients if inside else set()
+
+        if rule == STRICT:
+            out[ds] = (block(None), inside)
+        else:
+            out[ds] = ({m: block(m) for m in _methods(of_ds)}, inside)
     return out
 
 
-def summarise_cost(res_summary, primary=None):
+def _common_of(common, ds, method):
+    """The patients of ``method``'s block in a ``common_patients`` result."""
+    got = common.get(ds, (set(), []))[0]
+    return got.get(method, set()) if isinstance(got, dict) else got
+
+
+def summarise_cost(res_summary, primary=None, rule=STRICT):
     """Per (dataset, method): the median over patients of each cost, TWICE. Over the
     patients this method completed (``n_patients_complete`` of ``n_patients``): a
     method that fails on the largest patients is then read on the small ones and looks
     cheaper. And over the patients EVERY compared row completed
     (``n_patients_common``, ``*_common``): the same patients for every method, the only
     numbers that may be set beside each other."""
-    common = common_patients(res_summary, primary)
+    common = common_patients(res_summary, primary, rule)
     out = []
     for ds, m in dict.fromkeys((r["dataset"], r["method"]) for r in res_summary):
         mine = [r for r in res_summary if (r["dataset"], r["method"]) == (ds, m)]
         done = [r for r in mine if r["complete"]]
-        shared = [r for r in done if r["group"] in common[ds][0]]
+        shared = [r for r in done if r["group"] in _common_of(common, ds, m)]
         rec = {
             "dataset": ds,
             "method": m,
@@ -2839,6 +2941,7 @@ def summarise_cost(res_summary, primary=None):
             "n_patients_partial": sum(0 < r["n_ok"] < r["n_rounds"] for r in mine),
             "n_patients_common": len(shared),
             "common_among": ", ".join(common[ds][1]),
+            "common_block": rule,  # B2: which common block the *_common columns are
         }
         # in several scheduler jobs per round: its times are another quantity
         split = any(r.get("n_jobs") not in ("", None) for r in done)
@@ -3273,6 +3376,29 @@ ATTRITION_COLUMNS = (
 )
 
 
+def _blank_references(dropped):
+    """``{(checkpoint path, slide)}`` of the rows with no ``patient_id`` that the
+    checkpoint marks ``is_reference``: manifest.build counts each as one round, but a
+    reference slide costs none. Read here, from the checkpoint the row names, because
+    manifest.py is in a method's frozen set (review M5)."""
+    from . import manifest as manifest_mod
+
+    got = set()
+    for path in {r.get("path") for r in dropped if not r.get("patient_id")}:
+        try:
+            with open(path, newline="") as fh:
+                rows = list(csv.DictReader(fh))
+        except (OSError, TypeError, csv.Error, UnicodeDecodeError):
+            continue  # unreadable: counted as manifest.build said
+        for row in rows:
+            if (row.get("patient_id") or "").strip():
+                continue
+            if manifest_mod._truthy(row.get("is_reference", "")):
+                image = (row.get("preprocessed_image") or "").strip()
+                got.add((path, manifest_mod.slide_name(image) if image else ""))
+    return got
+
+
 def input_drops(out, cases_root, manifest):
     """``{"checkpoint_rounds", "not_prepared"}`` for ``attrition.csv``: the rounds the
     input step's checkpoint lists before the manifest's drops (the manifest's rounds
@@ -3285,7 +3411,10 @@ def input_drops(out, cases_root, manifest):
     dropped = None
     if m_path is not None and listed is not None:
         dropped = 0
+        refs = _blank_references(losses.read_csv(m_path))
         for r in losses.read_csv(m_path):
+            if not r.get("patient_id") and (r.get("path"), r.get("slide")) in refs:
+                continue  # a reference slide of no patient costs no round (review M5)
             try:
                 dropped += int(r.get("n_rounds") or 0)
             except ValueError:
@@ -3465,6 +3594,16 @@ def verdict_status(launch, run_variants=None):
         for v in (run_variants or {}).get(g["run"], [g["run"]]):
             out[v] = g["selfcheck"]
     return out
+
+
+def set_selfcheck_row(rows, checks):
+    """Column ``selfcheck_row`` of every row: what the selfcheck says of THAT row now
+    (``variants.row_checks``). Set at table time, never kept in a case's record, so a
+    record made before the selfcheck ended is read, not recomputed (I2, B5)."""
+    for r in rows or []:
+        if isinstance(r, dict) and "selfcheck_row" in r:
+            r["selfcheck_row"] = checks.get(str(r.get("method", "")).split(NON)[0], "")
+    return rows
 
 
 def set_selfcheck_status(rows, statuses):
@@ -4052,7 +4191,9 @@ def _run_loss(r, of_run, effect=None):
         cause=cause,
         effect=effect,
         detail=detail[:300],
-        source=f"{method}/{r['dataset']}/{r['case_id']}/run.json",
+        # the file that failed (M7): the map when it is the map that could not be read
+        source=f"{method}/{r['dataset']}/{r['case_id']}/"
+        + ("warped.npz" if cause == UNREADABLE and "warped.npz" in detail else "run.json"),
     )
 
 
@@ -4089,28 +4230,72 @@ def loss_rows(
     pipe_summary,
     run_variants=None,
     checks=(),
+    launch=(),
+    tissue_missing=(),
+    run_level=True,
 ):
     """Every row of ``losses.csv`` for ``datasets`` (``regbench.losses``): the
     per-stage tables found beside the results, the cases and the manifest, then the
     rounds of every result that did not register (``cells``: the outline rows; ``res``
     for a case without them), the cases whose scoring raised (``errors``), the slides
     flagged by the nuclei check (``checks``), the rounds scored at the fallback pixel
-    size, and the compute-all patients without a trace."""
+    size, the compute-all patients without a trace, every realcheck verdict that is
+    ``unreadable`` (``launch``: ``read_verdicts``), every written image the tissue block
+    could not score (``tissue_missing``) and one ``table_unreadable`` row per per-stage
+    table that is there and cannot be read (I5).
+
+    The rows of no dataset (a dropped run, an unmarked unit, a compute-all patient,
+    an unreadable run-level table) are the RUN's, not a dataset's: they are returned
+    only with ``run_level`` (the cohort's table and ``losses_run.csv``), so a union of
+    every dataset's table counts each once (M3)."""
+    from . import variants
+
     of_run = {v: run for run, vs in (run_variants or {}).items() for v in vs}
     logs = Path(out) / "logs"
     mdir = Path(manifest).parent if manifest else None
-    got = []
+    got, bad, bad_ds = [], [], []
     path = losses.find("submit_dropped.csv", out)
-    got += losses.submit_rows(losses.read_csv(path))
+    got += losses.submit_rows(losses.read_csv(path, bad))
     if "multiplex" in datasets:
         path = losses.find("manifest_dropped.csv", mdir, logs, cases_root)
         got += losses.manifest_rows(
-            losses.read_csv(path), _shown(path, out, cases_root)
+            losses.read_csv(path, bad_ds), _shown(path, out, cases_root)
         )
-        p_rows, path = losses.read_prepare_dropped(cases_root)
+        p_rows, path = losses.read_prepare_dropped(cases_root, bad_ds)
         got += losses.prepare_rows(p_rows, _shown(path, out, cases_root))
     path = losses.find("unmarked_units.csv", logs)
-    got += losses.unmarked_rows(losses.read_csv(path))
+    got += losses.unmarked_rows(losses.read_csv(path, bad))
+    path = losses.find(losses.REFUSED_UNITS, logs)
+    got += losses.refused_rows(losses.read_csv(path, bad, delimiter="\t"))
+    shown = lambda p: _shown(p, out, cases_root)  # noqa: E731
+    got += losses.unreadable_rows(bad, shown)
+    for r in losses.unreadable_rows(bad_ds, shown):
+        got.append({**r, "dataset": "multiplex"})
+    for g in launch or []:
+        if g.get("realcheck") == variants.REAL_UNREADABLE:
+            got.append(
+                losses.row(
+                    run=g["run"],
+                    cause="realcheck_unreadable",
+                    effect="flagged",
+                    detail=str(g.get("realcheck_log") or g.get("log") or "")[:300],
+                    source="logs/verdicts.tsv",
+                )
+            )
+    for m in tissue_missing or []:
+        got.append(
+            losses.row(
+                dataset=m.get("dataset", ""),
+                patient_id=m.get("group", ""),
+                case_id=str(m.get("case_id", "")),
+                run=of_run.get(str(m.get("variant", "")), m.get("variant", "")),
+                method=m.get("variant", ""),
+                cause="tissue_missing",
+                effect="dropped",
+                detail=str(m.get("reason", ""))[:300],
+                source="tissue_missing.csv",
+            )
+        )
     for c in checks:
         if c["low_agreement"]:
             got.append(
@@ -4123,6 +4308,34 @@ def loss_rows(
                     detail=f"slide {c['slide']}: one-nucleus fraction "
                     f"{c['one_nucleus_fraction']} under {c['threshold']}",
                     source="nuclei_checks.csv",
+                )
+            )
+    group = {(str(job[1].dataset), str(job[1].case_id)): job[1].group for job in jobs}
+    for ds in datasets:
+        for path in sorted(Path(out).glob(f"*/{ds}/*/stages/prep/record.json")):
+            variant, case_id = path.parts[-6], path.parts[-4]
+            if variant in RESERVED:
+                continue
+            try:
+                rec = json.loads(path.read_text())
+            except (OSError, ValueError):
+                for r in losses.unreadable_rows([path], shown):
+                    got.append({**r, "dataset": ds, "case_id": case_id})
+                continue
+            if not isinstance(rec, dict) or rec.get("frame_check") != "failed":
+                continue
+            got.append(
+                losses.row(
+                    dataset=ds,
+                    patient_id=group.get((ds, case_id), ""),
+                    case_id=case_id,
+                    run=of_run.get(variant, variant),
+                    method=variant,
+                    cause="frame_check_failed",
+                    effect="flagged",
+                    detail=f"proxy {rec.get('proxy', '?')}: "
+                    + json.dumps(rec.get("frame_check_px") or {}, sort_keys=True),
+                    source=_shown(path, out, cases_root),
                 )
             )
     for job in jobs:
@@ -4162,7 +4375,9 @@ def loss_rows(
                     source=f"compute/{p['backend']}/{p['patient']}/",
                 )
             )
-    return [r for r in got if r["dataset"] in ("", *datasets)]
+    return [
+        r for r in got if r["dataset"] in datasets or (run_level and r["dataset"] == "")
+    ]
 
 
 def _shown(path, out, cases_root):
@@ -4266,12 +4481,14 @@ def _score_cells(
             jobs += made
     tables = Path(tables)
     if not jobs:
-        # nothing to score: what was lost before the cases is still written (rule 3)
-        tables.mkdir(parents=True, exist_ok=True)
-        early = loss_rows(out, cases_root, datasets, manifest, [], [], [], [], [])
-        losses.write(tables / "losses.csv", early)
-        print(losses.summary_text(early))
-        raise SystemExit(f"no prepared cases under {cases_root}")
+        # nothing to score (I4): a dataset with nothing scored, never a raise that
+        # would stop the datasets after it. What was lost before the cases is written,
+        # and the tables of an earlier scoring are removed (never left beside it)
+        early = loss_rows(
+            out, cases_root, datasets, manifest, [], [], [], [], [],
+            run_level=not any(public_of(d) is not None for d in datasets),
+        )  # fmt: skip
+        return nothing_scored(tables, early, f"no prepared cases under {cases_root}")
     done = score_jobs(jobs, workers, fresh)
     # B1: a case whose scoring raised has no row; it is named, and the others stand
     errors = [d.row for d in done if isinstance(d, ScoreError)]
@@ -4283,8 +4500,10 @@ def _score_cells(
     # never kept in a case's record
     for job, rows in zip(jobs, done):
         flags = case_flags(job[1])
-        for r in (*rows[0], *rows[2], *rows[4]["cells"], *rows[4]["non_cells"]):
+        flagged = (*rows[0], *rows[2], *rows[4]["cells"], *rows[4]["non_cells"])
+        for r in flagged:
             r.update(flags)
+        set_selfcheck_row((*flagged, *rows[1]), job[4] if len(job) > 4 else {})
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
     # off the seams: tables of their own, never merged into the ones above
@@ -4365,6 +4584,8 @@ def _score_cells(
         for r in ashlar_discard.rows(out, [case])
     ]
     cost_summary = summarise_cost(res_summary, primary)
+    # B2: the per-method common block of the cost tables too, beside the strict one
+    cost_summary_pm = summarise_cost(res_summary, primary, PER_METHOD)
     confined = cost.cores_confined(res)
     cost_header = cost.header_lines(res)
     e2e = cost.end_to_end(res)
@@ -4372,6 +4593,16 @@ def _score_cells(
         e2e,
         {ds: got[0] for ds, got in common_patients(res_summary, primary).items()},
         {(r["dataset"], r["method"]): r["n_patients"] for r in cost_summary},
+        rule=STRICT,
+    )
+    e2e_summary_pm = cost.summarise(
+        e2e,
+        {
+            ds: got[0]
+            for ds, got in common_patients(res_summary, primary, PER_METHOD).items()
+        },
+        {(r["dataset"], r["method"]): r["n_patients"] for r in cost_summary},
+        rule=PER_METHOD,
     )
     # the whole pipeline per patient and backend, from compute-all's traces
     pipe = compute_all.rows(out)
@@ -4420,6 +4651,7 @@ def _score_cells(
         table_schema.columns("ashlar_discard")[1:],
     )
     write_csv(tables / "cost_summary.csv", cost_summary)
+    write_csv(tables / "cost_summary_per_method.csv", cost_summary_pm)
     write_csv(tables / "common_block.csv", common)
     write_csv(tables / "common_block_per_method.csv", common_pm)
     write_csv(tables / "summary_common_per_method.csv", summary_pm)
@@ -4427,6 +4659,7 @@ def _score_cells(
     write_csv(tables / "excluded_rounds.csv", excluded)
     write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
     write_csv(tables / "cost_end_to_end_summary.csv", e2e_summary)
+    write_csv(tables / "cost_end_to_end_summary_per_method.csv", e2e_summary_pm)
     write_csv(tables / "pipeline_cost.csv", list(pipe), list(compute_all.COLUMNS))
     write_csv(
         tables / "pipeline_cost_summary.csv",
@@ -4491,6 +4724,9 @@ def _score_cells(
         pipe_summary,
         run_variants,
         checks,
+        launch,
+        tis.get("tissue_missing", ()),
+        run_level=not any(public_of(d) is not None for d in datasets),
     )
     losses.write(tables / "losses.csv", lost)
     write_readme(tables)
@@ -4571,6 +4807,8 @@ def _score_cells(
         "common_block": common,
         "excluded_rounds": excluded,
         "cost_summary": cost_summary,
+        "cost_summary_per_method": cost_summary_pm,
+        "cost_end_to_end_summary_per_method": e2e_summary_pm,
         "failure_log": events,
         "failures": fails,
         "resources": res,
@@ -4675,7 +4913,12 @@ def _score_tissue(
         if c.case_id.startswith("dev_") == dev
     ]
     if not cs:
-        raise SystemExit(f"no prepared {dataset} cases under {cases_root}")
+        early = loss_rows(
+            out, cases_root, [dataset], None, [], [], [], [], [], run_level=False
+        )
+        return nothing_scored(
+            tables, early, f"no prepared {dataset} cases under {cases_root}"
+        )
     found = find_variants(out, dataset, expected)
     tis = tissue.score_all([(str(out), c, found) for c in cs], workers)
     tables = Path(tables)
@@ -4691,10 +4934,16 @@ def _score_tissue(
         f"`tissue_missing.csv` ({len(tis['tissue'])} row(s), "
         f"{len(tis['tissue_missing'])} without one).\n"
     ) + excluded_markdown(left_out)
-    (tables / "summary.md").write_text(text)
+    # every loss of a tissue set too (M1): the images it could not score, the inputs
+    lost = loss_rows(
+        out, cases_root, [dataset], None, [], [], [], [], [],
+        tissue_missing=tis["tissue_missing"], run_level=False,
+    )  # fmt: skip
+    block = _write_losses_block(tables, lost, len(cs), len(cs))
+    (tables / "summary.md").write_text(text + "\n" + losses.summary_text(lost))
     print(text)
     print(f"tables -> {tables}")
-    return {**tis, "excluded_runs": left_out}
+    return {**tis, "excluded_runs": left_out, "losses": block["losses"]}
 
 
 def score(
@@ -4761,4 +5010,49 @@ def score(
             done["public"][ds] = _score_cells(
                 where, cases_root, out, [ds], workers, dev, expected, primary, **kw
             )
+    # the run's own rows (no dataset: a dropped run, an unmarked unit, a compute-all
+    # patient), once: beside the cohort's tables, whatever the call named (M3)
+    run_level = loss_rows(out, cases_root, [], None, [], [], [], [], _pipe_summary(out))
+    losses.write(tables_dir(out, None, dev) / "losses_run.csv", run_level)
     return done
+
+
+def nothing_scored(tables, lost, why):
+    """The tables folder of a dataset that had nothing to score: every table of an
+    earlier scoring removed, ``losses.csv``, ``README.txt``, ``summary.json`` and a
+    ``summary.md`` that says why; returns ``n_scored_cases`` 0 (``cli`` decides the
+    exit: non-zero only when NO dataset scored a case)."""
+    tables = Path(tables)
+    tables.mkdir(parents=True, exist_ok=True)
+    for name in (*TABLES, *REMOVED_TABLES, *tissue.TABLES):
+        (tables / f"{name}.csv").unlink(missing_ok=True)
+    for name in NUCLEI_TABLES:
+        (tables / f"{name}_nuclei.csv").unlink(missing_ok=True)
+    return _write_losses_block(tables, lost, 0, 0, why)
+
+
+def _write_losses_block(tables, lost, n_cases, n_scored, said=""):
+    """``losses.csv``, ``README.txt`` and ``summary.json`` of a dataset scored without
+    the cells block (a tissue set, or nothing to score), with the loss summary."""
+    losses.write(tables / "losses.csv", lost)
+    write_readme(tables)
+    counts = losses.counts(lost)
+    write_json(
+        tables / "summary.json",
+        {
+            "losses": counts,
+            "n_losses": len(lost),
+            "n_cases": n_cases,
+            "n_scored_cases": n_scored,
+        },
+    )
+    text = losses.summary_text(lost)
+    if said:
+        (tables / "summary.md").write_text(f"# nothing scored\n\n{said}.\n\n{text}")
+        print(said)
+    print(text)
+    return {"losses": lost, "loss_counts": counts, "n_scored_cases": n_scored}
+
+
+def _pipe_summary(out):
+    return compute_all.summarise(compute_all.rows(out))

@@ -482,7 +482,7 @@ def _median(numbers):
     return numbers[mid] if len(numbers) % 2 else (numbers[mid - 1] + numbers[mid]) / 2.0
 
 
-def summarise(rows, common=None, cohort=None):
+def summarise(rows, common=None, cohort=None, rule=None):
     """Per (dataset, result): the median over patients of every step, the largest
     memory peak, how many patients have each, and the texts the patients share.
 
@@ -491,7 +491,9 @@ def summarise(rows, common=None, cohort=None):
     (dataset, result) to that count): survivors, so a result that fails on the largest
     patients looks cheaper. ``common`` maps a dataset to the patients every compared
     row completed (``score.common_patients``); ``*_common`` are the same medians on
-    those patients only (``n_patients_common``), the same ones for every result."""
+    those patients only (``n_patients_common``), the same ones for every result. A
+    dataset's entry may be ``{result: patients}`` (the per-method block, B2); ``rule``
+    names the block in column ``common_block``."""
     out = []
     for ds, method in dict.fromkeys((r["dataset"], r["method"]) for r in rows):
         every = [r for r in rows if (r["dataset"], r["method"]) == (ds, method)]
@@ -507,11 +509,12 @@ def summarise(rows, common=None, cohort=None):
             "n_patients_partial": len(every) - len(mine),
             "n_patients_cohort": (cohort or {}).get((ds, method), len(mine)),
         }
-        shared = (
-            [r for r in mine if r["group"] in common.get(ds, ())]
-            if common is not None
-            else []
-        )
+        if rule is not None:
+            rec["common_block"] = rule
+        block = (common or {}).get(ds, ())
+        if isinstance(block, dict):
+            block = block.get(method, ())
+        shared = [r for r in mine if r["group"] in block] if common is not None else []
         rec["n_patients_common"] = len(shared) if common is not None else math.nan
         for key in ("estimate_s", "write_s", "measured_here_s"):
             rec[f"{key}_common"] = _median(

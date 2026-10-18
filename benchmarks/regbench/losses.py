@@ -39,6 +39,7 @@ the table for every dataset it scores (the cohort into ``tables/``, a public dat
 ``score_errors.csv``      (tables) a case whose scoring raised: the last frame and the
                           message
 ``logs/unmarked_units.csv``  the units the settle job could not list (S2)
+``logs/refused_units.tsv``   the units of a refused or given-up selfcheck/stage step
 
 and of the records of every result (``run.json``: a failure, a unit held in the queue, a
 refused submission, a watcher that gave up, an unsettled kill).
@@ -134,6 +135,35 @@ CAUSES = {
         "score",
         "the scoring of the case raised (score_errors.csv): the case has no row",
     ),
+    "table_unreadable": (
+        INFRA,
+        "score",
+        "a per-stage table is there and cannot be read: the losses it holds are not "
+        "rows here (its path is in source)",
+    ),
+    "tissue_missing": (
+        INFRA,
+        "score",
+        "the tissue block could not score a written image (tissue_missing.csv)",
+    ),
+    "realcheck_unreadable": (
+        INFRA,
+        "score",
+        "a realcheck.json (or the run.json beside it) cannot be read: the run's "
+        "realcheck verdict is `unreadable` (verdicts.tsv)",
+    ),
+    "fit_points_dropped": (
+        INFRA,
+        "paper",
+        "a cost fit left points out (no finite target or predictor, or no input size): "
+        "n_dropped of cost_fits / pipeline_cost_fits (S12)",
+    ),
+    "paper_record_unreadable": (
+        INFRA,
+        "paper",
+        "a run.json the paper tables could not read: n_unreadable of versions / "
+        "run_parameters (S13)",
+    ),
     "not_run": (INFRA, "run", "no result of this submission: nobody ran it"),
     "stale_result": (
         INTEGRITY,
@@ -174,6 +204,12 @@ CAUSES = {
     "manifest_dropped": (INPUT, "manifest", "the manifest could not list the round"),
     "prepare_dropped": (INPUT, "prepare", "prepare multiplex dropped the round"),
     "prepare_failed": (INPUT, "prepare", "prepare multiplex failed on the round"),
+    "frame_check_failed": (
+        INPUT,
+        "run",
+        "a STARE proxy moved image content in prep's frame check: written, run and "
+        "flagged (stages/prep/record.json frame_check=failed; B10, no blocking)",
+    ),
     "low_agreement": (
         INPUT,
         "nuclei",
@@ -275,8 +311,10 @@ def row(**kw):
     return out
 
 
-def read_csv(path):
-    """The rows of a CSV, ``[]`` when it is not there or cannot be read (said)."""
+def read_csv(path, bad=None, delimiter=","):
+    """The rows of a CSV, ``[]`` when it is not there. One that is there and cannot be
+    read is said, and its path is appended to ``bad`` (I5: the caller makes it a
+    ``table_unreadable`` row, so its losses are never silently missing)."""
     if not path:
         return []
     path = Path(path)
@@ -284,10 +322,25 @@ def read_csv(path):
         return []
     try:
         with open(path, newline="") as fh:
-            return list(csv.DictReader(fh))
+            return list(csv.DictReader(fh, delimiter=delimiter))
     except (OSError, csv.Error, UnicodeDecodeError) as exc:
         print(f"losses: {path} could not be read ({exc}); its rows are missing")
+        if bad is not None:
+            bad.append(path)
         return []
+
+
+def unreadable_rows(paths, shown=str):
+    """One ``table_unreadable`` row per per-stage table that could not be read."""
+    return [
+        row(
+            cause="table_unreadable",
+            effect="flagged",
+            detail=f"{Path(p).name} is there and cannot be read",
+            source=shown(p),
+        )
+        for p in paths
+    ]
 
 
 def find(name, *dirs):
@@ -309,7 +362,7 @@ def prepare_dropped_dir(cases_root):
     return Path(cases_root, *PREPARE_DROPPED_DIR)
 
 
-def read_prepare_dropped(cases_root):
+def read_prepare_dropped(cases_root, bad=None):
     """``(rows, where)``: the rounds ``prepare`` dropped or failed on, from the one file
     per round (the source of truth), else from ``prepare_dropped.csv``; ``([], None)``
     when neither is there (no prepare wrote one)."""
@@ -319,10 +372,10 @@ def read_prepare_dropped(cases_root):
     rows = []
     if folder.is_dir():
         for path in sorted(folder.glob("*/*.csv")):
-            rows += read_csv(path)
+            rows += read_csv(path, bad)
         return rows, Path(cases_root) / PREPARE_DROPPED
     path = find(PREPARE_DROPPED, cases_root)
-    return (read_csv(path), path) if path else ([], None)
+    return (read_csv(path, bad), path) if path else ([], None)
 
 
 def write_prepare_dropped(cases_root, dataset, case_id, row):
@@ -354,6 +407,7 @@ def write_prepare_dropped(cases_root, dataset, case_id, row):
 
 def write(path, rows):
     """``losses.csv``: ALWAYS written, a header alone when nothing was lost."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(COLUMNS), restval="")
         w.writeheader()
@@ -479,6 +533,26 @@ def unmarked_rows(rows, source="logs/unmarked_units.csv"):
             source=source,
         )
         for r in rows
+    ]
+
+
+REFUSED_UNITS = "refused_units.tsv"  # <out>/logs/: retry.sbatch's mark_cut
+
+
+def refused_rows(rows, source=f"logs/{REFUSED_UNITS}"):
+    """``logs/refused_units.tsv``: the units of a refused (or given-up) selfcheck or
+    stage step, which no record can carry (retry.sbatch ``mark_cut``)."""
+    return [
+        row(
+            run=r.get("plan", ""),
+            case_id=r.get("index", ""),
+            cause=r.get("cause", ""),
+            effect="not_run",
+            detail=f"step {r.get('step', '')} ({r.get('job', '')}): {r.get('why', '')}",
+            source=source,
+        )
+        for r in rows
+        if r.get("cause") in CAUSES
     ]
 
 

@@ -256,13 +256,14 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
     written at every settle, header alone when there is none), and the scorer makes
     each an ``unmarked_unit`` row of ``losses.csv``.
 
-    Returns ``{plan or "-": records changed}``."""
+    Returns ``{plan or "-": records changed}`` (an :class:`InFlight`), whose
+    ``n_unmarked_units`` is the number of those rows (S2)."""
     import re
 
     from . import failure_log, ladder
     from .cases import write_json
 
-    changed = {}
+    changed = InFlight()
     pending = {}
     cut = []
     unmarked = {}
@@ -386,7 +387,15 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
                 changed[plan.name] = changed.get(plan.name, 0) + 1
     if cases_root:
         write_unmarked(out, unmarked)
+    changed.n_unmarked_units = len(unmarked)
     return changed
+
+
+class InFlight(dict):
+    """``{plan or "-": records changed}`` plus ``n_unmarked_units``: the units of
+    ``logs/unmarked_units.csv`` this settle wrote (S2)."""
+
+    n_unmarked_units = 0
 
 
 def write_unmarked(out, unmarked):
@@ -404,13 +413,14 @@ def write_unmarked(out, unmarked):
 
 
 def read_unmarked(out):
-    """The rows of ``<out>/logs/unmarked_units.csv`` (``[]`` without it)."""
+    """The rows of ``<out>/logs/unmarked_units.csv`` (``[]`` without it, or when it
+    cannot be read: the scorer then writes a ``table_unreadable`` row for it)."""
     import csv
 
     try:
         with open(Path(out) / "logs" / UNMARKED, newline="") as fh:
             return list(csv.DictReader(fh))
-    except OSError:
+    except (OSError, csv.Error, UnicodeDecodeError):
         return []
 
 

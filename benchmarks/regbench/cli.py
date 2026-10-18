@@ -1723,7 +1723,7 @@ def _main(a):
                 f"could not be listed ({r['reason']}): nothing of it was written down "
                 "(logs/unmarked_units.csv; an `unmarked_unit` row of losses.csv)"
             )
-        print(f"settle: n_unmarked_units={len(lost)}")
+        print(f"settle: n_unmarked_units={flying.n_unmarked_units}")
         return 0
     if a.cmd == "status":
         from . import status
@@ -1804,7 +1804,7 @@ def _main(a):
 
     if nothing and not any(nothing):
         # rule 3: non-zero only when NOTHING could be scored; losses.csv is written
-        failure_log.emit_end("score", "failed", "unreadable_record")
+        failure_log.emit_end("score", "failed", "score_error")
         raise SystemExit(
             f"score: no case of {', '.join(names)} could be scored (every one raised: "
             "score_errors.csv, losses.csv)"

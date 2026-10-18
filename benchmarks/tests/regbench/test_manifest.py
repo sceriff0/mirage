@@ -270,3 +270,23 @@ def test_every_drop_is_a_row_of_manifest_dropped_with_its_rounds(tmp_path):
     assert (clean / "m" / "manifest_dropped.csv").read_text().strip() == ",".join(
         manifest.DROPPED_COLUMNS
     )
+
+
+def test_a_blank_patient_reference_row_costs_no_round(tmp_path):
+    """Fix round 1 (review M5): a checkpoint row with no patient_id is still a row of
+    manifest_dropped.csv, but when it is a REFERENCE slide it costs no round, so
+    attrition.csv's checkpoint_rounds does not count it (the scorer reads the
+    checkpoint the row names; manifest.py is frozen with ashlar)."""
+    slides = [
+        *P1,
+        ("", "loose_ref.ome.tif", True, "DAPI"),
+        ("", "loose.ome.tif", False, "DAPI"),
+    ]
+    checkpoint = _tree(tmp_path, slides)
+    out = tmp_path / "made" / "rounds.csv"
+    argv = ["--preprocessed", str(checkpoint), "--outlines", str(tmp_path / "outlines")]
+    assert manifest.main([*argv, "--out", str(out)]) == 0
+    from benchmarks.regbench import score
+
+    drops = score.input_drops(tmp_path / "out", tmp_path / "cases", out)
+    assert drops["checkpoint_rounds"] == 2 + 1  # P1's two rounds and the moving one

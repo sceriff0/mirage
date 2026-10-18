@@ -140,7 +140,9 @@ def test_a_crashing_case_is_a_score_error_and_the_others_are_scored(
     assert not any(k[1] == "P2_r1" for k in broken)
 
 
-def test_nothing_scored_exits_non_zero_after_writing_losses(tmp_path, monkeypatch):
+def test_nothing_scored_exits_non_zero_after_writing_losses(
+    tmp_path, monkeypatch, capsys
+):
     root, out = tmp_path / "cases", tmp_path / "out"
     scored_cohort.multiplex_case(root, "P1_r1", "P1", 1)
     from benchmarks.regbench import methods
@@ -157,6 +159,10 @@ def test_nothing_scored_exits_non_zero_after_writing_losses(tmp_path, monkeypatc
                   "multiplex", "--no-tissue"])  # fmt: skip
     assert exc.value.code not in (0, None)
     assert [r["cause"] for r in losses_of(out)] == ["score_error"]
+    # the end line names the cause it was (score errors), not an unreadable record
+    (end,) = [ln for ln in capsys.readouterr().out.splitlines()
+              if ln.startswith("REGBENCH_END kind=score ")]  # fmt: skip
+    assert "cause=score_error" in end and "unreadable_record" not in end
 
 
 # ── S4 / S1: what a result's record cannot say ──────────────────────────────────────
@@ -168,12 +174,13 @@ def test_an_unreadable_result_is_its_own_cause(cohort, tmp_path):
     got = {
         (r["method"], r["case_id"]): r for r in losses_of(out) if r["method"] == "stare"
     }
-    for case in ("P1_r1", "P1_r2"):
+    # the source is the file that failed (M7): the record, then the map
+    for case, failed in (("P1_r1", "run.json"), ("P1_r2", "warped.npz")):
         r = got[("stare", case)]
         assert (r["cause"], r["blame"], r["stage"]) == (
             "result_unreadable", "infrastructure", "score"
         )
-        assert r["source"].endswith(f"stare/multiplex/{case}/run.json")
+        assert r["source"].endswith(f"stare/multiplex/{case}/{failed}")
     assert "result_unreadable" in score_mod.NOT_THE_METHOD
 
 
@@ -376,3 +383,228 @@ def test_six_kinds_of_loss_are_six_rows_and_nothing_else_moves(
     clean = scored_values(clean_out, skip=touched)
     assert broken and not any(k[1] == "P2_r1" for k in broken)
     assert {k: v for k, v in clean.items() if k[1] != "P2_r1"} == broken
+
+
+# ── I1: a result that is there but cannot be opened ──────────────────────────────────
+def test_a_result_that_cannot_be_opened_is_one_loss_row_not_an_abort(cohort, tmp_path):
+    """``case_key`` hashes every result's files before any per-case guard: a run.json
+    that exists but cannot be opened (EACCES, EIO) raised out of the scorer, so there
+    were no tables and no losses.csv at all."""
+    import os
+
+    root, out = copy_of(cohort, tmp_path)
+    path = run_json(out, "stare", "P1_r1")
+    os.chmod(path, 0)
+    try:
+        if os.access(path, os.R_OK):
+            pytest.skip("this user can read a mode-0 file (root)")
+        got = run(root, out)
+    finally:
+        os.chmod(path, 0o644)
+    assert got["n_scored_cases"] == 4
+    (r,) = [r for r in losses_of(out) if r["method"] == "stare" and r["case_id"] == "P1_r1"]
+    assert (r["cause"], r["blame"], r["effect"]) == (
+        "result_unreadable", "infrastructure", "dropped"
+    )
+    assert r["source"].endswith("stare/multiplex/P1_r1/run.json")
+
+
+# ── I2: the re-score reads the case records ──────────────────────────────────────────
+def test_a_rescore_with_new_selfcheck_statuses_reads_every_case_record(
+    cohort, tmp_path, monkeypatch
+):
+    """B5: rb-score runs before the selfchecks end and rb-rescore after. The selfcheck
+    row status was part of ``case_key``, so the re-score recomputed every case of a
+    selfchecked run. It is set at table time now: every case is read, and the rows say
+    the new status."""
+    root, out = copy_of(cohort, tmp_path)
+    run(root, out, row_checks={"stare": "not_checked", "rtm": "not_checked"})
+    computed = []
+    real = score_mod._case_record
+    monkeypatch.setattr(
+        score_mod, "_case_record",
+        lambda job, *a, **kw: computed.append(job[1].case_id) or real(job, *a, **kw),
+    )  # fmt: skip
+    run(root, out, row_checks={"stare": "ok", "rtm": "no_stage_image"})
+    assert computed == []
+    cells = read(out / "tables" / "cells.csv")
+    assert {r["selfcheck_row"] for r in cells if r["method"] == "stare"} == {"ok"}
+    assert {r["selfcheck_row"] for r in cells if r["method"] == "rtm"} == {
+        "no_stage_image"
+    }
+
+
+# ── I4 / M1: an empty dataset, and the tissue datasets ───────────────────────────────
+def test_an_empty_cohort_beside_a_public_set_scores_the_public_set(tmp_path):
+    """An empty dataset raised SystemExit out of the loop, so a public set named after
+    it was never scored and the exit was non-zero. It is a dataset with nothing
+    scored now: its losses.csv is written, its stale tables are removed, the next
+    dataset is scored and the command exits 0."""
+    from .test_public_never_pooled import _public_case
+
+    root, out, _ = scored_cohort.build(tmp_path)
+    score_mod.score(root, out, ["multiplex"], with_tissue=False, **KW)
+    assert (out / "tables" / "cells.csv").is_file()
+    _public_case(root, out)
+    shutil.rmtree(root / "multiplex")
+    got = score_mod.score(root, out, ["multiplex", "ibex"], with_tissue=False, **KW)
+    assert got["n_scored_cases"] == 0
+    assert got["public"]["ibex"]["n_scored_cases"] == 1
+    assert not (out / "tables" / "cells.csv").exists()  # the stale one is gone
+    assert header(out / "tables" / "losses.csv") == list(losses.COLUMNS)
+    assert (out / "tables" / "ibex" / "cells.csv").is_file()
+    code = cli.main(["score", "--cases", str(root), "--out", str(out), "--workers",
+                     "1", "--dataset", "multiplex", "ibex"])  # fmt: skip
+    assert code in (0, None)
+
+
+def test_a_tissue_set_writes_its_losses_readme_and_summary(tmp_path):
+    from .test_public_never_pooled import _public_case
+
+    root, out, _ = scored_cohort.build(tmp_path)
+    _public_case(root, out, dataset="acrobat", case_id="A1")
+    score_mod.score(root, out, datasets=["acrobat"], expected=[])
+    where = out / "tables" / "acrobat"
+    assert header(where / "losses.csv") == list(losses.COLUMNS)
+    assert "losses.csv" in (where / "README.txt").read_text()
+    summary = json.loads((where / "summary.json").read_text())
+    assert summary["n_losses"] == len(read(where / "losses.csv"))
+    assert "losses" in summary
+
+
+# ── I5: a per-stage table that is there and cannot be read ───────────────────────────
+@pytest.mark.parametrize(
+    "where", ["out/submit_dropped.csv", "out/logs/unmarked_units.csv",
+              "cases/manifest_dropped.csv", "cases/prepare_dropped.csv"],
+)  # fmt: skip
+def test_a_per_stage_table_that_cannot_be_read_is_one_row(cohort, tmp_path, where):
+    root, out = copy_of(cohort, tmp_path)
+    path = tmp_path / where
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"run,reason\n\xff\xfe\x00 not text \xff\n")
+    run(root, out)
+    rows = [r for r in losses_of(out) if r["cause"] == "table_unreadable"]
+    assert len(rows) == 1, rows
+    (r,) = rows
+    assert (r["blame"], r["effect"]) == ("infrastructure", "flagged")
+    assert r["source"].endswith(path.name)
+
+
+# ── M3: the realcheck verdict and the run-level rows ─────────────────────────────────
+def test_an_unreadable_realcheck_verdict_is_a_score_row(cohort, tmp_path):
+    root, out = copy_of(cohort, tmp_path)
+    verdicts = out / "logs" / "verdicts.tsv"
+    verdicts.parent.mkdir(parents=True, exist_ok=True)
+    verdicts.write_text(
+        "run\tcheck\tstatus\treference\trows\tlog\n"
+        "stare\tselfcheck\tok\t-\tstare\t-\n"
+        "stare\trealcheck\tunreadable\t-\tstare\trealcheck.json unreadable on P1_r1\n"
+    )
+    run(root, out, verdicts=verdicts)
+    (r,) = [r for r in losses_of(out) if r["cause"] == "realcheck_unreadable"]
+    assert (r["stage"], r["run"], r["blame"], r["effect"]) == (
+        "score", "stare", "infrastructure", "flagged"
+    )
+    assert "P1_r1" in r["detail"] and r["source"] == "logs/verdicts.tsv"
+
+
+def test_run_level_rows_are_the_cohorts_and_losses_run_csv_only(cohort, tmp_path):
+    """A row of no dataset (a dropped run, an unmarked unit, a compute patient) was in
+    every dataset's losses.csv, so a union counted it once per dataset."""
+    from .test_public_never_pooled import _public_case
+
+    root, out = copy_of(cohort, tmp_path)
+    _public_case(root, out)
+    (out / "submit_dropped.csv").write_text(
+        "run,reason,detail\nvalis_mirage,preflight_failed,no start\n"
+    )
+    score_mod.score(root, out, ["multiplex", "ibex"], with_tissue=False, **KW)
+    cohort_rows = [r for r in losses_of(out) if r["cause"] == "preflight_failed"]
+    assert len(cohort_rows) == 1
+    ibex = read(out / "tables" / "ibex" / "losses.csv")
+    assert not [r for r in ibex if r["dataset"] == ""]
+    run_level = read(out / "tables" / "losses_run.csv")
+    assert [r["cause"] for r in run_level] == ["preflight_failed"]
+    assert all(r["dataset"] == "" for r in run_level)
+
+
+def test_an_image_the_tissue_block_could_not_score_is_a_row(tmp_path, monkeypatch):
+    from benchmarks.regbench import tissue
+
+    from .test_public_never_pooled import _public_case
+
+    root, out, _ = scored_cohort.build(tmp_path)
+    _public_case(root, out, dataset="acrobat", case_id="A1")
+    real = tissue.score_all
+
+    def one_missing(jobs, workers=1):
+        got = real(jobs, workers)
+        got["tissue_missing"] = [{"dataset": "acrobat", "case_id": "A1", "group": "A1",
+                                  "variant": "stare", "reason": "no written image"}]
+        return got  # fmt: skip
+
+    monkeypatch.setattr(tissue, "score_all", one_missing)
+    score_mod.score(root, out, datasets=["acrobat"], expected=[])
+    (r,) = [r for r in read(out / "tables" / "acrobat" / "losses.csv")
+            if r["cause"] == "tissue_missing"]  # fmt: skip
+    assert (r["case_id"], r["method"], r["effect"]) == ("A1", "stare", "dropped")
+    assert "no written image" in r["detail"]
+
+
+# ── B2 (behaviour): strict for everyone, per_method for the method that lost it ──────
+def test_a_not_the_methods_loss_shrinks_strict_for_all_but_per_method_for_its_own(
+    cohort, tmp_path
+):
+    clean_root, clean_out = copy_of(cohort, tmp_path / "clean")
+    clean = run(clean_root, clean_out)
+    root, out = copy_of(cohort, tmp_path / "lost")
+    edit_run(out, "rtm", "P1_r1", ok=False, cause="infrastructure", error="node lost")
+    (out / "rtm" / "multiplex" / "P1_r1" / "warped.npz").unlink()
+    lost = run(root, out)
+
+    def n(got, table):
+        return {r["method"]: r["n_cases_common"] for r in got[table]
+                if r["in_common_block"]}  # fmt: skip
+
+    before, after = n(clean, "common_block"), n(lost, "common_block")
+    assert set(before) >= {"stare", "rtm"}
+    for m in before:  # strict: one case fewer for every compared method
+        assert after[m] == before[m] - 1, m
+    before = n(clean, "common_block_per_method")
+    after = n(lost, "common_block_per_method")
+    assert after["rtm"] == before["rtm"] - 1
+    assert all(after[m] == before[m] for m in before if m != "rtm")
+    # the cost block: the same two rules, each named
+    for table, rule in (("cost_summary", "strict"),
+                        ("cost_summary_per_method", "per_method")):  # fmt: skip
+        assert lost[table] and {r["common_block"] for r in lost[table]} == {rule}
+    pm = {r["method"]: r["n_patients_common"] for r in lost["cost_summary_per_method"]}
+    st = {r["method"]: r["n_patients_common"] for r in lost["cost_summary"]}
+    assert st["stare"] == st["rtm"] == pm["rtm"] and pm["stare"] == st["stare"] + 1
+    # each per-method table is published wherever its strict one is
+    for name in ("cost_summary", "cost_end_to_end_summary"):
+        strict = (out / "tables" / f"{name}.csv").is_file()
+        assert (out / "tables" / f"{name}_per_method.csv").is_file() == strict, name
+    assert (out / "tables" / "cost_summary_per_method.csv").is_file()
+
+
+def test_a_failed_frame_check_is_an_input_row(cohort, tmp_path):
+    """B10 (user ruling: no blocking): a STARE proxy whose frame check failed is
+    written and run; the scorer makes its record a ``frame_check_failed`` row."""
+    root, out = copy_of(cohort, tmp_path)
+    variant = next(
+        d.name for d in sorted(out.iterdir()) if (d / "multiplex" / "P1_r1").is_dir()
+    )
+    prep_dir = out / variant / "multiplex" / "P1_r1" / "stages" / "prep"
+    prep_dir.mkdir(parents=True, exist_ok=True)
+    (prep_dir / "record.json").write_text(json.dumps({
+        "proxy": "haem", "frame_check": "failed",
+        "frame_check_px": {"dx": 3.0, "dy": 0.0, "max": 3.0, "n": 10},
+    }))  # fmt: skip
+    run(root, out)
+    (r,) = [r for r in losses_of(out) if r["cause"] == "frame_check_failed"]
+    assert (r["blame"], r["effect"], r["case_id"], r["dataset"]) == (
+        "input", "flagged", "P1_r1", "multiplex"
+    )
+    assert r["patient_id"] == "P1" and "dx" in r["detail"]
+    assert r["source"].endswith("stages/prep/record.json")

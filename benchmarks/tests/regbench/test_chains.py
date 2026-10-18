@@ -214,7 +214,8 @@ def test_a_chain_whose_units_cannot_be_listed_is_written_down(tmp_path, capsys):
     gone = _plan(out, "rb-gone-multiplex", "1 rb-y-16g-61\n")
     (gone / "run").write_text("palom\npalom\n-\n-\nno_such_dataset\n")
     (gone / "step-1").write_text("climb\nrb-y-64g\n--mem=64G\n")
-    chains.mark_in_flight(out, {}, SUB, root)
+    got = chains.mark_in_flight(out, {}, SUB, root)
+    assert got.n_unmarked_units == 3  # in the return value too (S2)
     rows = chains.read_unmarked(out)
     assert [(r["plan"], r["index"]) for r in rows] == [
         ("rb-broken-multiplex", "0"),
@@ -224,5 +225,5 @@ def test_a_chain_whose_units_cannot_be_listed_is_written_down(tmp_path, capsys):
     assert "unreadable" in rows[0]["reason"] and "unit(s) its cases list" in rows[2]["reason"]
     # nothing to report: the file is the header alone
     other = tmp_path / "other"
-    chains.mark_in_flight(other, {}, SUB, root)
+    assert chains.mark_in_flight(other, {}, SUB, root).n_unmarked_units == 0
     assert (other / "logs" / chains.UNMARKED).read_text().strip() == "plan,index,reason"

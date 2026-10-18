@@ -111,7 +111,11 @@ WHOSE = {
     "manifest_dropped": BENCHMARK,
     "prepare_dropped": BENCHMARK,
     "prepare_failed": BENCHMARK,
+    "table_unreadable": BENCHMARK,
+    "fit_points_dropped": BENCHMARK,
+    "paper_record_unreadable": BENCHMARK,
     "low_agreement": BENCHMARK,
+    "frame_check_failed": BENCHMARK,
     "pixel_size_fallback": BENCHMARK,
 }
 STAGES = (
@@ -394,7 +398,7 @@ def result_events(out, case, variant, mine=None):
     path = Path(out) / variant / case.dataset / case.case_id / "run.json"
     try:
         run = json.loads(path.read_text()) if path.exists() else {}
-    except ValueError:
+    except (OSError, ValueError):
         return [
             _row(
                 dataset=case.dataset,
@@ -491,7 +495,7 @@ def selfcheck_attempt_events(directory, mine=None):
     for path in sorted(directory.glob("*/selfcheck.json")):
         try:
             rec = json.loads(path.read_text())
-        except ValueError:
+        except (OSError, ValueError):
             rec = None
         run = path.parent.name
         if rec is None:
