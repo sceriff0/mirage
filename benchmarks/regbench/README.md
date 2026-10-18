@@ -1313,6 +1313,29 @@ it is scoring.
 | `excluded_runs.csv` | run left out of the dataset | `run, reason` (`variants.excluded_for`): a run whose method has no input rule for the dataset's modality, or one the dataset does not take. Always written; on the cohort a header alone (nothing is left out of it). On a public dataset the summary lists them too |
 | `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the failure log's section, cost on survivors and on the common patients |
 
+### Keeping old results, freeing the rest (`keep_results.sh`)
+
+One command keeps what the plots and tables need from earlier regbench, arms or sweep
+results and frees the images and work folders (`collect`, `plots` and `slim` in order):
+
+```bash
+benchmarks/regbench/keep_results.sh --to $ROOT/keep \
+    --regbench $ROOT/out --arms $ROOT/arms_results      # a dry run: nothing is deleted
+benchmarks/regbench/keep_results.sh --to $ROOT/keep \
+    --regbench $ROOT/out --arms $ROOT/arms_results --apply
+```
+
+It writes `KEEP/tables/` (the interim collection), `KEEP/figures/` (draft figures from it),
+and `KEEP/raw/<root>/`: every `csv tsv json txt yml yaml log html` of each root, tree kept,
+with Nextflow `work/` skipped. It checks that every one is there with the same bytes, and
+stops before anything is deleted if not. Then it slims each root:
+- a regbench root at `images`, so the maps and records stay and it can be scored again;
+- an arms or sweep root at `csv`.
+
+`LEVEL=images|csv` sets one level for every root. `--sweep` needs `--sweep-plan`. A
+refusal names itself. `KEEP/README.txt` and `KEEP/keep_results.log` record what was kept
+and freed.
+
 ### Public datasets (`<out>/tables/<dataset>/`)
 
 A public dataset (`regbench.PUBLIC`) is scored on its own, never pooled with the cohort:
