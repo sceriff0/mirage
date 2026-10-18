@@ -4,8 +4,9 @@ Restored from commit 5a46f778 (``benchmarks/regbench/prep.py``) and reduced to i
 writers. What was removed: the closed candidate list of the ``stare_prep`` row, its
 selection on a tuning set and the frozen file of that selection, and the CLAHE operation
 (STARE 1.3.0 has CLAHE of its own: the ``sprep`` levels, ``regimes.SPREPS``). What is kept
-is what turns an RGB slide into the ONE channel STARE reads, the frame check that refuses
-a proxy which moves image content, and the readers that never hold a whole slide.
+is what turns an RGB slide into the ONE channel STARE reads, the frame check that flags
+a proxy which moves image content (it refused one until B10), and the readers that never
+hold a whole slide.
 
 STARE reads one channel per slide, so a brightfield (RGB) case is registered on a
 one-channel proxy of each slide (``methods.stare``, ``regimes.PROXIES``). The case's own
@@ -22,7 +23,9 @@ the run lists that as benchmark-side work (``info.implementation.benchmark_side`
 ``grey_smooth``  a Gaussian (sigma 2 px) on ``grey``.
 
 No proxy resamples, crops, pads or shifts: every output has the input's shape and pixel
-grid (``frame_check`` measures it on dots; ``write_inputs`` refuses when it fails).
+grid (``frame_check`` measures it on dots; when it fails ``write_inputs`` writes the
+proxy all the same and records ``frame_check: failed``, a ``frame_check_failed`` row of
+losses.csv: B10, user ruling "no blocking").
 
 **Definitions** (as written at 5a46f778; the tags are that text's, not re-read here).
 
@@ -373,9 +376,12 @@ def write_inputs(case, name, dest):
         )
     check = frame_check(name)
     if not check["ok"]:
-        raise Refused(
-            f"proxy={name}: the proxy moves image content ({check}): the transform "
-            "STARE estimates would not be in the slide's frame"
+        # B10 (user ruling: no blocking): written, flagged in the record, and a
+        # `frame_check_failed` row of losses.csv
+        print(
+            f"prep: WARNING proxy={name}: the proxy moves image content ({check}): the "
+            "transform STARE estimates may not be in the slide's frame; written and "
+            "flagged (record.json frame_check=failed)"
         )
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -399,6 +405,7 @@ def write_inputs(case, name, dest):
         "proxy": name,
         "base": c["base"],
         "operation": c["op"] or "none",
+        "frame_check": "ok" if check["ok"] else "failed",
         "frame_check_px": {k: check[k] for k in ("dx", "dy", "max", "n")},
         "prep_s": time.perf_counter() - t0,
         "peak_rss_mb": _peak_rss_mb(),

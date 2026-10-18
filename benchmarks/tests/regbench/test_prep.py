@@ -334,3 +334,24 @@ def test_read_rgb_reduced_is_the_block_mean_of_the_slide(tmp_path):
     )
     assert got.shape == want.shape == (66, 100, 3)
     assert np.array_equal(got, want)
+
+
+def test_a_failed_frame_check_is_a_flag_not_a_refusal(tmp_path, monkeypatch, capsys):
+    """B10 (user ruling: no blocking): a proxy whose frame check fails is still written;
+    the record says ``frame_check: failed`` with the measurement, and the scorer makes
+    it a ``frame_check_failed`` row of losses.csv."""
+    from pathlib import Path
+
+    hw = (300, 400)
+    tif = write_rgb_tiff(tmp_path / "he.tif", hw, tile=256)
+    bad = {"dx": 3.0, "dy": 0.0, "max": 3.0, "n": 10, "ok": False}
+    monkeypatch.setattr(prep, "frame_check", lambda name: dict(bad))
+    ref, mov = prep.write_inputs(bf_case(tif, hw), "haem", tmp_path / "out")
+    assert Path(ref).is_file() and Path(mov).is_file()
+    record = json.loads((tmp_path / "out" / prep.RECORD).read_text())
+    assert record["frame_check"] == "failed"
+    assert record["frame_check_px"] == {"dx": 3.0, "dy": 0.0, "max": 3.0, "n": 10}
+    assert "WARNING" in capsys.readouterr().out
+    monkeypatch.setattr(prep, "frame_check", lambda name: {**bad, "ok": True})
+    prep.write_inputs(bf_case(tif, hw), "haem", tmp_path / "ok")
+    assert json.loads((tmp_path / "ok" / prep.RECORD).read_text())["frame_check"] == "ok"
