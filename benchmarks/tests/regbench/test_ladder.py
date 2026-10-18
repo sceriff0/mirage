@@ -501,6 +501,7 @@ PYTHON = r"""#!/bin/bash
 # python: records its arguments; with --accounting-wanted and no --accounting-waited it
 # names a task and exits 75; else it exits $FAKE/exit (default 0)
 echo "$*" >> "$FAKE/python.log"
+echo "${REGBENCH_STAGES:-unset}" >> "$FAKE/stages.log"
 wanted="" waited=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -528,7 +529,9 @@ fi
 """
 
 
-def _rung(tmp_path, sacct=True, task="climb", out="out", sacct_text=SACCT, **more):
+def _rung(
+    tmp_path, sacct=True, task="climb", out="out", sacct_text=SACCT, tail=(), **more
+):
     """run_rung.sbatch as the scheduler runs task 3 of array job 902, with a stand-in
     python (and sacct) on PATH."""
     fake, out = tmp_path / "bin", tmp_path / out
@@ -559,7 +562,7 @@ def _rung(tmp_path, sacct=True, task="climb", out="out", sacct_text=SACCT, **mor
     done = subprocess.run(
         ["bash", str(REPO / "benchmarks/regbench/slurm/run_rung.sbatch"), "initial",
          "initial", "-", "-", "INITIAL", "0", "multiplex", "2", "64", "0", "900,901",
-         task, "1-00:00:00"],
+         task, "1-00:00:00", *tail],
         env=env, capture_output=True, text=True, cwd=REPO, timeout=120,
     )  # fmt: skip
     calls = (fake / "python.log").read_text().splitlines()
@@ -626,6 +629,24 @@ def test_the_script_notes_a_python_that_was_killed_and_only_that(tmp_path):
     done, _, _, out2 = _rung(tmp_path, out="out2")
     assert "python exited 1" in done.stdout
     assert ladder.read_exits(out2) == {} and not ladder.exits_dir(out2).exists()
+
+
+@pytest.mark.parametrize(
+    "stages, said, exported",
+    [((), "", "unset"), (("-",), "", "unset"), (("jobs",), "", "jobs"),
+     (("local",), " --stages local", "unset")],
+)  # fmt: skip
+def test_the_rung_task_states_who_starts_the_stages(tmp_path, stages, said, exported):
+    """The CPU cross (REGBENCH_STARE_EXECUTION=local): a STARE run as one job per case
+    says `local` on its own command line; the cohort's last job of a staged round still
+    exports `jobs`, and a run that is one job per unit states nothing."""
+    done, calls, fake, _ = _rung(tmp_path, task="first", tail=stages)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(calls) == 1
+    assert ("--stages local" in calls[0]) == bool(said)
+    if said:
+        assert calls[0].endswith(said)
+    assert (fake / "stages.log").read_text().split() == [exported]
 
 
 def test_the_script_and_the_ladder_agree_on_what_has_not_ended():

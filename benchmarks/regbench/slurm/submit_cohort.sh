@@ -274,7 +274,22 @@
 #   REGBENCH_NUCLEI_CPUS (8), REGBENCH_NUCLEI_MEM (128G), REGBENCH_NUCLEI_TIME (08:00:00)
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
-# The rungs, 4 CPUs and the 7-day limit are frozen (benchmarks/regbench/ladder.py).
+#   REGBENCH_CPUS (4)                 every ladder task's --cpus-per-task (run_rung.sbatch,
+#                                     recorded in run.json as cpus_requested): 4, 8 or
+#                                     16, anything else is refused before any sbatch.
+#                                     4 CPUs is every method's allocation; REGBENCH_CPUS
+#                                     exists for the CPU cross only (user ruling
+#                                     2026-10-16). The other jobs keep their own.
+#   REGBENCH_STARE_EXECUTION (jobs)   `local`: every run whose registration is several
+#                                     jobs per round (column `stages`: STARE) is one job
+#                                     per case on the ordinary ladder instead, its stages
+#                                     started inside that job (`run --stages local`,
+#                                     option workers=REGBENCH_CPUS): no stage chain, no
+#                                     tile submitter. Its results get the reuse key's
+#                                     execution `local`, never one of the staged results'.
+#                                     For the CPU cross only (README, "The CPU cross")
+# The rungs, 4 CPUs and the 7-day limit are frozen (benchmarks/regbench/ladder.py);
+# REGBENCH_CPUS moves the ladder's CPUs for the CPU cross alone.
 # No thread variable is exported anywhere.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -290,6 +305,16 @@ RUNGS_GB="16 64 256 512 700"
 NUCLEI_RUNGS_GB="256 512"
 SELFCHECK_RUNGS_GB="64 256 512"
 CPUS=4
+# 4 CPUs is every method's allocation; REGBENCH_CPUS exists for the CPU cross only (user
+# ruling 2026-10-16). It is every ladder task's --cpus-per-task and nothing else's:
+# the selfchecks, the prepare, settle, tissue and score jobs keep CPUS. env.sh (sourced
+# above) defaults it to 4; checked below, before anything is submitted.
+LADDER_CPUS="${REGBENCH_CPUS:-4}"
+# REGBENCH_STARE_EXECUTION: who starts the stage processes of a run whose registration is
+# several jobs per round (column `stages`). `jobs` (the default): the scheduler, a chain
+# of stage jobs. `local`: the run's own job on the ordinary ladder, one job per case,
+# `--stages local` with the option workers=$LADDER_CPUS (the CPU cross).
+STARE_EXECUTION="${REGBENCH_STARE_EXECUTION:-jobs}"
 MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_TIME:=24:00:00}"
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
@@ -409,6 +434,15 @@ need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
 need_int REGBENCH_SCORE_CPUS 1
 need_int REGBENCH_RETRY_WATCHERS 1
+# the CPU cross: 4 (every method's allocation), 8 or 16, and who starts STARE's stages
+case "$LADDER_CPUS" in
+    4|8|16) ;;
+    *) die "REGBENCH_CPUS='$LADDER_CPUS': the ladder's CPUs are 4, 8 or 16 (4 is every method's allocation; 8 and 16 are the CPU cross's). Nothing was submitted." ;;
+esac
+case "$STARE_EXECUTION" in
+    jobs|local) ;;
+    *) die "REGBENCH_STARE_EXECUTION='$STARE_EXECUTION': jobs (the stage jobs, the default) or local (the stages inside one job per case, the CPU cross). Nothing was submitted." ;;
+esac
 # read by the jobs, not here (feed_tiles.sbatch and run_rung.sbatch have the defaults):
 # a value that is no whole number stops the launch, not a job days later
 for pair in REGBENCH_STAGE_STALL_S:1 REGBENCH_STAGE_STALL_MAX_S:1 REGBENCH_STAGE_SQUEUE_TRIES:1 \
@@ -688,6 +722,20 @@ if [ -n "${REGBENCH_RUN_ORDER:-}" ]; then
 fi
 REGBENCH_SCORER_IMAGE="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --scorer-image)"
 export REGBENCH_SCORER_IMAGE
+# REGBENCH_STARE_EXECUTION=local: the run list's `stages` column (the 16th) is read as
+# `-` by every loop below, so no stage chain, layout or tile submitter is made; the runs
+# it named are LOCAL_RUNS, laddered one job per case with `local` (ladder, below)
+LOCAL_RUNS=""
+if [ "$STARE_EXECUTION" = local ]; then
+    while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
+        [ "${stages:--}" = - ] || LOCAL_RUNS="$LOCAL_RUNS $name"
+    done < "$table"
+    if ! awk -F'\t' -v OFS='\t' 'NF >= 16 { $16 = "-" } { print }' "$table" > "$table.local" \
+        || ! mv "$table.local" "$table"; then
+        die "cannot read the run list's stages column as local ($table). Nothing was submitted."
+    fi
+    echo "# STARE: stages run inside one job of $LADDER_CPUS CPUs (local)${LOCAL_RUNS:+:$LOCAL_RUNS}"
+fi
 
 all_names="" selected=""
 while IFS=$'\t' read -r name _; do all_names="$all_names $name"; done < "$table"
@@ -1358,12 +1406,15 @@ deps_and() {
 # reduction), so it has the benchmark's allocation, the same ladder, and inside it the
 # method's writer runs as a process of its own with the pipeline's time limit and
 # retries (methods/stare.py: write_native). Its time is one round's plus the writer's
-# four attempts.
+# four attempts. With `local` (REGBENCH_STARE_EXECUTION=local) it is such a run as one
+# job per unit: the task starts the stages itself (run_rung.sbatch: `run --stages
+# local`), with a plain round's time.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
-    local attempt=0 gb task jobname cpus="$CPUS" rungs="$RUNGS_GB" first_id="" first_name=""
-    # STITCH_S: the writer's four attempts, summed before the first sbatch
-    [ "$staged" = - ] || time="$(limit $((round_s + STITCH_S)))"
+    local attempt=0 gb task jobname cpus="$LADDER_CPUS" rungs="$RUNGS_GB" first_id="" first_name=""
+    # STITCH_S: the writer's four attempts, summed before the first sbatch (a `local`
+    # run is a plain round: its stages are inside the job, its time a round's)
+    [ "$staged" != jobs ] || time="$(limit $((round_s + STITCH_S)))"
     plan_open "$prefix"
     # the row this ladder is of, for the harness that reads the chain back (chains.py)
     printf '%s\n' "$name" "$method" "$label" "$opts" "$ds" > "$PLAN/run"
@@ -1543,15 +1594,21 @@ for ds in $sized; do
         # --realcheck in a ladder of its own, SUBMITTED BESIDE the rest of the run, which
         # does not wait for it (reported, never a gate). What waits for the run waits for
         # both (LAST_ holds both watchers).
-        start=0 ends=""
+        start=0 ends="" execution=-
+        # REGBENCH_STARE_EXECUTION=local: its stages inside the task, the tiles
+        # $LADDER_CPUS at a time (STARE's option workers)
+        if has "$LOCAL_RUNS" "$name"; then
+            execution=local
+            if [ "$opts" = - ]; then opts="workers=$LADDER_CPUS"; else opts="$opts,workers=$LADDER_CPUS"; fi
+        fi
         if [ "${realcheck:--}" != - ] && [ "$ds" = "$first_dataset" ]; then
-            ladder "rb-$name-$ds-first" "0-0" 1 "$base" "$time"
+            ladder "rb-$name-$ds-first" "0-0" 1 "$base" "$time" "$execution"
             finals="$finals $LADDER_LAST"
             ends="$LADDER_LAST"
             start=1
         fi
         if [ "$n" -gt "$start" ]; then
-            ladder "rb-$name-$ds" "$start-$((n - 1))" 0 "$base" "$time"
+            ladder "rb-$name-$ds" "$start-$((n - 1))" 0 "$base" "$time" "$execution"
             finals="$finals $LADDER_LAST"
             ends="${ends:+$ends:}$LADDER_LAST"
         fi

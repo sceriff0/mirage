@@ -2134,19 +2134,24 @@ def test_a_signal_in_the_middle_of_a_submission_says_what_is_queued(site, signum
 
 def test_a_stray_statement_of_the_stage_launcher_reaches_no_job():
     """`--export=ALL` carries the caller's shell into every job: the launcher drops
-    REGBENCH_STAGES, and the one script that states it starts from nothing."""
+    REGBENCH_STAGES, and the one script that states it starts from nothing. A `local`
+    task (the CPU cross) states it on its own command line, never in the variable."""
     code = code_of(SCRIPT)
     assert "unset REGBENCH_STAGES\n" in code[: code.index("RUNGS_GB=")]
     rung = code_of(SLURM / "run_rung.sbatch")
-    stated = rung.index('export REGBENCH_STAGES="$stages"')
+    stated = rung.index('*) export REGBENCH_STAGES="$stages" ;;')
     assert "unset REGBENCH_STAGES\n" in rung[:stated]
-    done = subprocess.run(
-        ["bash", "-c", f'set -- n m - - I 0 d 1 16 0 - first t -; {rung[: stated].split("retry=0")[0]}'
-         '[ "$stages" = - ] || export REGBENCH_STAGES="$stages"; echo "[${REGBENCH_STAGES-unset}]"'],
-        env={**os.environ, "REGBENCH_STAGES": "local", "REGBENCH_REPO": str(REPO)},
-        capture_output=True, text=True, cwd=REPO,
-    )  # fmt: skip
-    assert done.stdout.strip().endswith("[unset]"), done.stdout + done.stderr
+    head = rung.split("retry=0")[0]
+    assert stated < len(head)
+    for column, said in (("-", "[unset] []"), ("local", "[unset] [--stages local]"),
+                         ("jobs", "[jobs] []")):
+        done = subprocess.run(
+            ["bash", "-c", f"set -- n m - - I 0 d 1 16 0 - first t {column}; {head}"
+             'echo "[${REGBENCH_STAGES-unset}] [${stated[*]+${stated[*]}}]"'],
+            env={**os.environ, "REGBENCH_STAGES": "local", "REGBENCH_REPO": str(REPO)},
+            capture_output=True, text=True, cwd=REPO,
+        )  # fmt: skip
+        assert done.stdout.strip().endswith(said), column + done.stdout + done.stderr
 
 
 def test_a_notice_of_the_sites_submit_plugin_is_not_a_refusal(site):
@@ -2416,7 +2421,9 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
     assert "sbatch " not in code and "--wait" not in code  # a tile job submits none
     rung = code_of(SLURM / "run_rung.sbatch")
     assert 'stages="${14:--}"' in rung
-    assert '[ "$stages" = - ] || export REGBENCH_STAGES="$stages"' in rung
+    assert '*) export REGBENCH_STAGES="$stages" ;;' in rung
+    assert "local) stated=(--stages local) ;;" in rung
+    assert 'args+=(${stated[@]+"${stated[@]}"})' in rung
     # ... and it reaches the process inside the image
     assert re.search(r"for v in [^;]*\bREGBENCH_STAGES\b", code_of(SLURM / "env.sh"))
     launcher = code_of(SCRIPT)
@@ -3636,3 +3643,159 @@ def test_the_dry_run_plans_a_700g_rung(dry):
     assert _any(jobs, "rb-stare-multiplex-last-700g-again").opt("--mem") == "700G"
     everything = {**jobs, **jobs.later}
     assert not [n for n in everything if n.startswith("rb-sc-") and "700g" in n]
+
+
+# ── the CPU cross (plan F, task 9): REGBENCH_CPUS and STARE's stages in one job ─────
+def _ladder_jobs(jobs):
+    """Every ladder task, submitted or planned for later (run_rung.sbatch)."""
+    everything = {**jobs, **jobs.later}
+    return {n: j for n, j in everything.items() if j.script == "run_rung.sbatch"}
+
+
+def test_regbench_cpus_is_every_ladder_tasks_allocation_and_nothing_elses(site):
+    done, _, _ = launch(site, env={"REGBENCH_CPUS": "8"}, log="cpus8")
+    jobs = jobs_of(done)
+    ladders = _ladder_jobs(jobs)
+    assert ladders and {j.opt("--cpus-per-task") for j in ladders.values()} == {"8"}
+    # the jobs outside the ladder keep their own allocation (selfcheck, settle, score)
+    plain, _, _ = launch(site, log="cpus-default")
+    base = {**jobs_of(plain), **jobs_of(plain).later}
+    for name, job in {**jobs, **jobs.later}.items():
+        if job.script != "run_rung.sbatch":
+            assert job.opt("--cpus-per-task") == base[name].opt("--cpus-per-task"), name
+
+
+@pytest.mark.parametrize("value", ["6", "2", "0", "eight", "4 8"])
+def test_a_cpu_count_outside_the_cross_is_refused_before_any_sbatch(site, value):
+    done, log, _ = launch(
+        site, env={"REGBENCH_CPUS": value}, log="cpus-bad-" + value.replace(" ", "_")
+    )
+    assert done.returncode == 2
+    assert "REGBENCH_CPUS" in done.stderr and "4, 8 or 16" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+    assert not log.exists() or not log.read_text()
+
+
+def test_a_stare_execution_other_than_jobs_or_local_is_refused(site):
+    done, _, _ = launch(
+        site, env={"REGBENCH_STARE_EXECUTION": "laptop"}, log="exec-bad"
+    )
+    assert done.returncode == 2 and "REGBENCH_STARE_EXECUTION" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+
+
+def test_stare_local_is_one_job_per_case_on_the_ordinary_ladder(site):
+    env = {"REGBENCH_CPUS": "8", "REGBENCH_STARE_EXECUTION": "local"}
+    done, _, _ = launch(site, env=env, log="stare-local")
+    jobs = jobs_of(done)
+    everything = {**jobs, **jobs.later}
+    assert "# STARE: stages run inside one job of 8 CPUs (local)" in done.stdout
+    for run in STAGED:
+        # no stage chain, no tile submitter, no `-last` job
+        assert not [
+            n for n in everything if n.startswith(f"rb-{run}-multiplex-") and (
+                any(f"-{st}-a" in n for st in ("coarse", "tile", "solve", "stitch"))
+                or "-feed-" in n or "-last-" in n
+            )
+        ], run  # fmt: skip
+        # the ordinary ladder's names (rungs() would look for the staged `-last` job)
+        got = [_any(jobs, f"rb-{run}-multiplex-{gb}g") for gb in ladder.RUNGS_GB]
+        again = [
+            _any(jobs, f"rb-{run}-multiplex-{gb}g-again") for gb in ladder.RUNGS_GB
+        ]
+        first = got[0]
+        assert (
+            first.name in jobs
+            and [j.args[11] for j in got] == ["first"] + ["climb"] * 4
+        )
+        # an array over the cases (STARE runs per pair), at the plain round's time
+        assert first.opt("--array").split("%")[0] == "0-3", run
+        assert first.opt("--time") == jobs["rb-palom-multiplex-16g"].opt("--time")
+        for j in got + again:
+            assert j.args[13] == "local", (run, j.name)
+            assert "workers=8" in j.args[3].split(","), (run, j.args[3])
+            assert j.opt("--cpus-per-task") == "8"
+    assert "rb-stare-multiplex-coarse-a1" not in everything
+    assert not [n for n in everything if n.startswith("rb-stare-multiplex-coarse")]
+    # the runs that are one job per unit are the same jobs as under `jobs`; one that
+    # reads a STARE run's results waits for that run's (now plain) ladder instead
+    staged_off, _, _ = launch(site, env={"REGBENCH_CPUS": "8"}, log="stare-jobs8")
+    other = jobs_of(staged_off)
+
+    def without_deps(job, out):
+        return [
+            w.replace(out, "OUT")
+            for w in job.words
+            if not w.startswith("--dependency=")
+        ]
+
+    for name, job in jobs.items():
+        if job.script == "run_rung.sbatch" and job.args[0] not in STAGED:
+            assert without_deps(job, "out-stare-local") == without_deps(
+                other[name], "out-stare-jobs8"
+            ), name
+            plain = {(k, d.replace("-last-", "-")) for k, d in other[name].deps}
+            assert job.deps == plain, name
+    assert "STARE: stages run inside one job" not in staged_off.stdout
+
+
+def test_stare_local_at_four_cpus_names_four_workers(site):
+    done, _, _ = launch(site, "--runs", "stare", env={"REGBENCH_STARE_EXECUTION": "local"},
+                        log="stare-local4")  # fmt: skip
+    jobs = jobs_of(done)
+    first = jobs["rb-stare-multiplex-16g"]
+    assert first.opt("--cpus-per-task") == "4" and first.args[13] == "local"
+    assert first.args[3].split(",")[-1] == "workers=4"
+    assert "# STARE: stages run inside one job of 4 CPUs (local)" in done.stdout
+
+
+def test_the_explicit_defaults_are_the_default_launch(site, dry):
+    env = {"REGBENCH_CPUS": "4", "REGBENCH_STARE_EXECUTION": "jobs"}
+    done, _, _ = launch(site, env=env, log="explicit-defaults")
+    same = [
+        ln.replace("out-explicit-defaults", "out-calls")
+        for ln in _sbatch_lines(done.stdout)
+    ]
+    assert same == _sbatch_lines(dry[1].stdout)
+    assert "STARE: stages run inside one job" not in dry[1].stdout
+
+
+# the commit before the CPU cross: its launcher is what every main-run result was
+# submitted with, so the default launch must submit exactly what it did
+BEFORE_CROSS = "275edda0"
+
+
+def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
+    site, dry, tmp_path
+):
+    have = subprocess.run(
+        ["git", "-C", str(REPO), "cat-file", "-e", f"{BEFORE_CROSS}^{{commit}}"],
+        capture_output=True,
+    )
+    if have.returncode != 0:
+        pytest.skip(f"{BEFORE_CROSS} is not in this clone (shallow)")
+    old = tmp_path / "old"
+    old.mkdir()
+    archive = subprocess.run(
+        ["git", "-C", str(REPO), "archive", BEFORE_CROSS, "benchmarks/regbench/slurm"],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    subprocess.run(["tar", "-x", "-C", str(old)], input=archive.stdout, check=True)
+    old_slurm = old / "benchmarks" / "regbench" / "slurm"
+    argv, base, _ = _launch_command(
+        site, (), {"REGBENCH_REPO": str(REPO)}, True, "before"
+    )
+    argv[1] = str(old_slurm / "submit_cohort.sh")
+    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
+    assert done.returncode == 0, done.stderr
+    then = [
+        ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        for ln in _sbatch_lines(done.stdout)
+    ]
+    assert then and then == _sbatch_lines(dry[1].stdout)
+    later = [ln for ln in done.stdout.splitlines() if ln.startswith(LATER)]
+    now = [ln for ln in dry[1].stdout.splitlines() if ln.startswith(LATER)]
+    assert [
+        ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        for ln in later
+    ] == now

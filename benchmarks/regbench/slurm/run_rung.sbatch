@@ -9,12 +9,15 @@
 #                   <attempt> <memory GB> <realcheck 0|1>
 #                   <this ladder's earlier job ids, comma-separated|->
 #                   <task: first|climb|again> <time limit of this task>
-#                   <stages: -|jobs>
+#                   <stages: -|jobs|local>
 #
 # `jobs`: the run's registration is several scheduler jobs per round (stage.sbatch) and
 # this task is the round's last one. It runs nothing of the registration: it reads the
 # stage jobs' records, moves the benchmark's points through the transform and runs the
 # method's writer (STITCH), with the pipeline's allocation for that process.
+# `local` (REGBENCH_STARE_EXECUTION=local, the CPU cross): such a run as one job per
+# unit, this task starting the stages itself: `run --stages local`, the tiles as many at
+# a time as its option workers says (submit_cohort.sh passes workers=REGBENCH_CPUS).
 # `-`: the run is one job per unit. A run whose registration is stage jobs and that is
 # handed `-` is refused by `run` before it touches a record: its end line says
 # cause=not_submitted whose=launcher, and nothing is registered here in their place.
@@ -37,9 +40,15 @@ source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" method="$2" label="$3" opts="$4" image="$5" gpu="$6" dataset="$7"
 attempt="$8" mem_gb="$9" realcheck="${10}" previous="${11:--}" task="${12:-first}"
 limit="${13:-}" stages="${14:--}"
-# stated here and nowhere else: a run that is one job per unit states nothing
+# stated here and nowhere else: a run that is one job per unit states nothing, and a
+# `local` one states it on its own command line (`run --stages local`)
 unset REGBENCH_STAGES
-[ "$stages" = - ] || export REGBENCH_STAGES="$stages"
+stated=()
+case "$stages" in
+    -) ;;
+    local) stated=(--stages local) ;;
+    *) export REGBENCH_STAGES="$stages" ;;
+esac
 retry=0
 [ "$task" = again ] && retry=1
 export REGBENCH_ATTEMPT="$attempt" REGBENCH_MEM_GB="$mem_gb" REGBENCH_GPU="$gpu"
@@ -60,6 +69,7 @@ if [ "$opts" != - ]; then
     for o in "${items[@]}"; do args+=(--opt "$o"); done
 fi
 [ "$realcheck" = 1 ] && args+=(--realcheck)
+args+=(${stated[@]+"${stated[@]}"})
 [ "${REGBENCH_FORCE:-0}" = 1 ] && args+=(--force)
 # How long a task waits for the scheduler's accounting to name the END state of an
 # earlier task whose record still says "killed", and how often it asks.

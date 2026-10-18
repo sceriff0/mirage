@@ -17,6 +17,10 @@
 ``runs``               the run list, one tab-separated line per run, for the launcher
                        (columns: ``benchmarks/regbench/variants.py``); ``--all`` adds the
                        paused runs
+``pick-patients``      the CPU cross's patients: smallest, median and largest by total
+                       moving gigapixels (``subset.py``), one ``patient<TAB>gpx`` line each
+``subset-cases``       a cases folder of the named patients alone (symlinks to their case
+                       folders), for ``REGBENCH_CASES`` of the CPU cross
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -613,6 +617,24 @@ def build_parser():
         "readable from inside the image",
     )
     pf.add_argument("--dataset", action="append", default=[], choices=DATASETS)
+
+    pk = sub.add_parser(
+        "pick-patients",
+        help="the CPU cross's patients: smallest, median and largest by total moving "
+        "gigapixels",
+    )
+    pk.add_argument("--cases", required=True)
+    pk.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    pk.add_argument(
+        "--n", type=int, default=3, help="evenly spaced ranks, both ends included"
+    )
+    ss = sub.add_parser(
+        "subset-cases", help="a cases folder of the named patients alone (symlinks)"
+    )
+    ss.add_argument("--cases", required=True)
+    ss.add_argument("--groups", required=True, help="patients, comma-separated")
+    ss.add_argument("--to", required=True, help="a new (or empty) folder")
+    ss.add_argument("--dataset", default="multiplex", choices=DATASETS)
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1416,6 +1438,21 @@ def _main(a):
             return _selfcheck(a)
     if a.cmd == "runs":
         return _runs(a)
+    if a.cmd == "pick-patients":
+        from . import subset
+
+        print(f"# rule: {subset.RULE}")
+        for group, gpx in subset.pick(a.cases, a.dataset, a.n):
+            print(f"{group}\t{gpx:.3f}")
+        return 0
+    if a.cmd == "subset-cases":
+        from . import subset
+
+        n = subset.write(a.cases, a.groups.split(","), a.to, a.dataset)
+        print(
+            f"subset-cases: {n} case(s) of {a.groups} linked under {a.to}/{a.dataset}"
+        )
+        return 0
     if a.cmd == "stage":
         return _stage(a)
     if a.cmd == "stages":

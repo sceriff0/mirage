@@ -77,8 +77,9 @@
 # ladder and the scorer take no record of another submission as evidence. REGBENCH_FORCE=1
 # re-runs units whose results are all ok already (the default reuses them).
 #
-# REGBENCH_CPUS (4) and REGBENCH_MEM (16G) are the defaults of jobs outside the ladder
-# (prepare, verdict, score).
+# REGBENCH_CPUS (4) is every ladder task's CPUs (submit_cohort.sh: 4, 8 or 16; 4 is
+# every method's allocation, 8 and 16 exist for the CPU cross only, user ruling
+# 2026-10-16). REGBENCH_MEM (16G) is exported and read by no job.
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
