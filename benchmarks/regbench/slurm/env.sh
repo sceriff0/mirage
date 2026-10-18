@@ -81,9 +81,9 @@
 # ladder and the scorer take no record of another submission as evidence. REGBENCH_FORCE=1
 # re-runs units whose results are all ok already (the default reuses them).
 #
-# REGBENCH_CPUS (4) is every ladder task's CPUs (submit_cohort.sh: 4, 8 or 16; 4 is
-# every method's allocation, 8 and 16 exist for the CPU cross only, user ruling
-# 2026-10-16). REGBENCH_MEM (16G) is exported and read by no job.
+# REGBENCH_CPUS (4) is every ladder task's CPUs (submit_cohort.sh: 4 or 8; 4 is every
+# method's allocation, 8 exists for the CPU cross only, user rulings 2026-10-16 and
+# 2026-10-18). REGBENCH_MEM (16G) is exported and read by no job.
 
 : "${REGBENCH_REPO:=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 : "${REGBENCH_CASES:=$HOME/regbench_cases}"
@@ -120,11 +120,21 @@ regbench_cases_of() {
     [ -n "${!var:-}" ] || return 1
     printf '%s\n' "${!var}"
 }
-# the public datasets' case folders that are set, comma-separated (bound into the images)
+# the case folders of this submission's public datasets (REGBENCH_PUBLIC_SETS, which the
+# launcher exports: those --datasets names, and only those), comma-separated, to bind
+# into the images. A REGBENCH_CASES_<NAME> of a dataset not named is never bound (a stale
+# one in a profile would stop every container job); a named one that is not set or not
+# there is said on stderr and left out (the job that reads it stops on it, naming it).
 _regbench_public_cases() {
-    local v out=""
-    for v in $(compgen -v REGBENCH_CASES_); do
-        [ -n "${!v:-}" ] && out="${out:+$out,}${!v}"
+    local ds dir out=""
+    for ds in ${REGBENCH_PUBLIC_SETS:-}; do
+        if ! dir="$(regbench_cases_of "$ds")"; then
+            echo "regbench: REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "${ds%%@*}") not set for $ds: its cases are not bound" >&2
+        elif [ ! -d "$dir" ]; then
+            echo "regbench: the cases folder of $ds, $dir, does not exist: not bound" >&2
+        else
+            out="${out:+$out,}$dir"
+        fi
     done
     printf '%s' "$out"
 }

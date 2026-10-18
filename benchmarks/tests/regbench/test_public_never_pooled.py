@@ -127,7 +127,10 @@ def test_public_rows_never_reach_cohort_tables(tmp_path):
     root, out, made = scored_cohort.build(tmp_path)
     _public_case(root, out)
     score.score(root, out, datasets=["multiplex", "ibex"], **scored_cohort.SCORE_KW)
-    for name in ("cells", "cells_nuclei", "resources", "summary_cells"):
+    for name in ("cells", "cells_nuclei"):
+        with open(out / "tables" / f"{name}.csv") as fh:
+            assert {r["dataset"] for r in csv.DictReader(fh)} == {"multiplex"}, name
+    for name in ("resources", "summary_cells"):
         with open(out / "tables" / f"{name}.csv") as fh:
             assert {r["dataset"] for r in csv.DictReader(fh)} <= {"multiplex"}, name
     with open(out / "tables" / "ibex" / "cells.csv") as fh:
@@ -144,9 +147,29 @@ def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
     assert set(got["public"]["acrobat"]) == {
         "tissue", "tissue_summary", "tissue_missing", "excluded_runs"
     }  # fmt: skip
+    # the real path: methods.input_rule leaves ASHLAR and PALOM out of a brightfield set
     with open(where / "excluded_runs.csv") as fh:
-        assert "palom" in {r["run"] for r in csv.DictReader(fh)}
+        rows = list(csv.DictReader(fh))
+    assert rows and all(r["reason"].strip() for r in rows)
+    assert {"ashlar", "palom"} <= {r["run"] for r in rows}
+    assert rows == [
+        {"run": n, "reason": w} for n, w in variants.excluded_for("acrobat")
+    ]
     assert not (out / "tables" / "cells.csv").exists()
+
+
+def test_the_command_line_refuses_an_unscored_kind_before_scoring(tmp_path):
+    """``score --dataset multiplex anhir``: ANHIR's scorer is not here yet, so nothing is
+    written, the cohort's tables neither."""
+    from benchmarks.regbench import cli
+
+    root, out, made = scored_cohort.build(tmp_path)
+    with pytest.raises(SystemExit, match=r"anhir.*later"):
+        cli.main(
+            ["score", "--cases", str(root), "--out", str(out), "--workers", "1",
+             "--dataset", "multiplex", "anhir"]
+        )  # fmt: skip
+    assert not (out / "tables").exists()
 
 
 @pytest.mark.parametrize("name", ["anhir", "hyreco_a", "hyreco_b"])

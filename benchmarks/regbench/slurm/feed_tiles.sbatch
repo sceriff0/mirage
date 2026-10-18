@@ -244,9 +244,10 @@ refused() {  # refused <attempt> <what> <the scheduler's words>
 # the_due <attempt>: writes $state.due.a<attempt> once (tile indices over every round's
 # tiles laid end to end for attempt 1, round indices above it)
 the_due() {
-    local attempt="$1" file="$state.due.a$1" args items o dropped rc
+    local attempt="$1" file="$state.due.a$1" args items o dropped rc cases
     [ -e "$file" ] && return 0
-    args=(stages --cases "$(regbench_cases_of "$dataset")" --dataset "$dataset" --method "$method"
+    cases="$(regbench_cases_of "$dataset")" || { echo "REGBENCH_CASES_<NAME> not set for $dataset" >&2; exit 2; }
+    args=(stages --cases "$cases" --dataset "$dataset" --method "$method"
           --layout "$layout" --out "$REGBENCH_OUT" --due "$attempt")
     [ "$label" != - ] && args+=(--label "$label")
     if [ "$opts" != - ]; then

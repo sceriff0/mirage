@@ -1729,6 +1729,16 @@ def _main(a):
     named = list(a.dataset or [])
     public = [d for d in named if public_of(d) is not None]
     cohort = [d for d in named if public_of(d) is None] or None
+    # every kind is checked before anything is scored: a dataset whose scorer is not
+    # here yet stops the call with nothing written, the cohort's tables neither
+    for d in public:
+        kind = public_of(d)["kind"]
+        if kind not in score.SCORED_KINDS:
+            raise SystemExit(
+                score.NO_SCORER_YET.format(
+                    ds=d, kind=kind, scorer=score.KIND_SCORER[kind]
+                )
+            )
     # the cohort, then each public dataset in a call of its own, with its own run list
     # (variants.expected_variants / primary_for): never pooled (score.tables_dir)
     for ds in ([cohort] if cohort or not public else []) + [[d] for d in public]:

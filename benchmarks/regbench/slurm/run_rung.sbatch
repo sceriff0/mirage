@@ -61,7 +61,8 @@ index="${SLURM_ARRAY_TASK_ID:-0}"
 regbench_start run "run=$name" "label=$label" "dataset=$dataset" "unit=index_$index" \
     "rung_gb=$mem_gb" "attempt=$attempt" "task=$task"
 work="${REGBENCH_WORK:-${TMPDIR:-/tmp}}/regbench-$name-${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-0}}-$index"
-args=(run --cases "$(regbench_cases_of "$dataset")" --out "$REGBENCH_OUT" --dataset "$dataset"
+cases="$(regbench_cases_of "$dataset")" || { echo "REGBENCH_CASES_<NAME> not set for $dataset" >&2; exit 2; }
+args=(run --cases "$cases" --out "$REGBENCH_OUT" --dataset "$dataset"
       --method "$method" --index "$index" --work "$work")
 [ "$label" != - ] && args+=(--label "$label")
 if [ "$opts" != - ]; then

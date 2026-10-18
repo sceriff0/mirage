@@ -228,7 +228,14 @@ mark_cut() {
     fi
     run=("${items[@]:$((at + 1)):9}")
     while read -r i; do marks+=(--index "$i"); done < "$plan/due-$k"
-    local args=(chain-mark --cases "$(regbench_cases_of "${run[6]}")" --out "$REGBENCH_OUT" --dataset "${run[6]}"
+    # no cases folder, no record: said, and the watcher goes on (as when chain-mark fails)
+    local cases
+    if ! cases="$(regbench_cases_of "${run[6]}")"; then
+        echo "REGBENCH_CASES_<NAME> not set for ${run[6]}" >&2
+        echo "step $k: the units could not be written down as $cause (no cases folder for ${run[6]}): their records still say the rung below's cause"
+        return 0
+    fi
+    local args=(chain-mark --cases "$cases" --out "$REGBENCH_OUT" --dataset "${run[6]}"
                 --method "${run[1]}" --rung-gb "${run[8]}" --cause "$cause" --why "$why"
                 "${marks[@]}")
     [ "${run[2]}" != - ] && args+=(--label "${run[2]}")

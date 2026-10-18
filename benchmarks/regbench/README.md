@@ -2930,7 +2930,7 @@ The dry run prints three numbers for a submission; each has a limit on the site.
 
 | what the dry run prints | what it is | the site's limit, and how to read it |
 |---|---|---|
-| `N sbatch call(s) would be made now` and `M task(s) in them` | everything the launcher submits at once: 425 calls for the default submission on two datasets, and one task per unit and rung for each run, per case for the scoring arrays | array tasks count against the per-user and per-association `MaxSubmitJobs` and the cluster's `MaxJobCount`: `sacctmgr show assoc user=$USER format=Account,MaxSubmitJobs,MaxJobs`, `sacctmgr show qos format=Name,MaxSubmitPU,MaxWall`, `scontrol show config \| grep -E "MaxArraySize\|MaxJobCount"` |
+| `N sbatch call(s) would be made now` and `M task(s) in them` | everything the launcher submits at once for the default submission (the cohort alone), and one task per unit and rung for each run, per case for the scoring arrays | array tasks count against the per-user and per-association `MaxSubmitJobs` and the cluster's `MaxJobCount`: `sacctmgr show assoc user=$USER format=Account,MaxSubmitJobs,MaxJobs`, `sacctmgr show qos format=Name,MaxSubmitPU,MaxWall`, `scontrol show config \| grep -E "MaxArraySize\|MaxJobCount"` |
 | `T tile task(s)` fed in later | one per tile, never in the queue together | none: they pass through the ceiling |
 | `the most in the queue at once` | M plus each tile submitter's share of `REGBENCH_STAGE_QUEUE_MAX` (at most the total itself) | the same `MaxSubmitJobs`. Lower it with `REGBENCH_STAGE_QUEUE_MAX`, `--runs` or `--datasets` |
 

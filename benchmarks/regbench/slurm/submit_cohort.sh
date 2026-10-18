@@ -279,8 +279,8 @@
 #   REGBENCH_HEAD_IMAGE               the image this script itself reads the run list
 #                                     with (default STARE_REGBENCH)
 #   REGBENCH_CPUS (4)                 every ladder task's --cpus-per-task (run_rung.sbatch,
-#                                     recorded in run.json as cpus_requested): 4, 8 or
-#                                     16, anything else is refused before any sbatch.
+#                                     recorded in run.json as cpus_requested): 4 or 8,
+#                                     anything else is refused before any sbatch.
 #                                     4 CPUs is every method's allocation; REGBENCH_CPUS
 #                                     exists for the CPU cross only (user ruling
 #                                     2026-10-16). The other jobs keep their own.
@@ -344,6 +344,11 @@ DRY="${REGBENCH_DRY:-0}"
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
 PUBLIC_DATASETS="anhir hyreco_a hyreco_b acrobat ibex mcmicro phenocycler rashid"
+# each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
+# (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
+# scorer: a dataset of a kind not scored yet is refused up front (landmarks: Task 21)
+PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks acrobat=tissue ibex=nuclei mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
+SCORED_KINDS="tissue nuclei"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0
 while [ $# -gt 0 ]; do
@@ -418,14 +423,28 @@ trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 # --datasets is checked up front, before anything is read or submitted: the cohort, or a
 # public dataset whose cases folder is named (REGBENCH_CASES_<NAME>)
+public_sets=""
 DATASETS_SAID="the cohort is multiplex; the public datasets are ${PUBLIC_DATASETS// /, }"
 [ -n "${datasets// /}" ] || die "--datasets is empty: $DATASETS_SAID. Nothing was submitted."
 for ds in $datasets; do
     [ "$ds" = multiplex ] && continue
     has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
     [ "$prepare" != 1 ] || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) only. Nothing was submitted."
-    regbench_cases_of "$ds" > /dev/null || die "--datasets '$ds': REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds") is not set: export the folder its cases were prepared under. Nothing was submitted."
+    # ruling R14: HyReCo's core set is hyreco_a; its second set only on request
+    [ "$ds" != hyreco_b ] || [ "${HYRECO_ADDITIONAL:-0}" = 1 ] \
+        || die "--datasets 'hyreco_b': HyReCo's additional set runs only with HYRECO_ADDITIONAL=1 (ruling R14; its core set is hyreco_a). Nothing was submitted."
+    kind=""
+    for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
+    has "$SCORED_KINDS" "$kind" \
+        || die "--datasets '$ds': a $kind dataset, and score() scores ${SCORED_KINDS// / and } only: its methods do not run ahead of their scorer. Nothing was submitted."
+    ds_var="REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds")"
+    ds_cases="$(regbench_cases_of "$ds")" || die "--datasets '$ds': $ds_var is not set: export the folder its cases were prepared under. Nothing was submitted."
+    [ -d "$ds_cases" ] || die "--datasets '$ds': $ds_var=$ds_cases does not exist: export the folder its cases were prepared under. Nothing was submitted."
+    has "$public_sets" "$ds" || public_sets="${public_sets:+$public_sets }$ds"
 done
+# the public datasets of this submission, and only those, are bound into the images
+# (env.sh: _regbench_public_cases); set always, so a value left in a profile is not read
+export REGBENCH_PUBLIC_SETS="$public_sets"
 
 # whole numbers of at least <least>: a zero here is an array of no task, or a loop
 # that never ends
@@ -789,14 +808,20 @@ for ds in $datasets; do
     echo "# $ds: $(wc -l < "$t" | tr -d ' ') run(s) of its own list (runs --dataset $ds); the scorer writes $REGBENCH_OUT/tables/$ds/"
 done
 
+# the submission's runs: the named datasets' lists, one row per run name (the first
+# list that has it, the cohort's first), so a submission without multiplex selects,
+# checks and sizes no run of the cohort's alone. The default launch's is $table itself
+if [ "$datasets" = multiplex ]; then
+    union="$table"
+else
+    union="$scratch/runs-union.tsv"
+    lists=()
+    for ds in $datasets; do lists+=("$(table_of "$ds")"); done
+    awk -F'\t' '!seen[$1]++' "${lists[@]}" > "$union" \
+        || die "cannot join the run lists of $datasets ($union). Nothing was submitted."
+fi
 all_names="" selected=""
-while IFS=$'\t' read -r name _; do all_names="$all_names $name"; done < "$table"
-for ds in $datasets; do
-    [ "$ds" = multiplex ] && continue
-    while IFS=$'\t' read -r name _; do
-        has "$all_names" "$name" || all_names="$all_names $name"
-    done < "$(table_of "$ds")"
-done
+while IFS=$'\t' read -r name _; do all_names="$all_names $name"; done < "$union"
 for r in $only_runs; do has "$all_names" "$r" || die "--runs: no run named '$r' (see: python -m benchmarks.regbench runs)"; done
 for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
@@ -1184,7 +1209,7 @@ while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$selected" "$name" || continue
     [ "$gpu" = 1 ] && gpu_runs="$gpu_runs $name"
     has "$images" "$image" || images="$images $image"
-done < "$table"
+done < "$union"
 if [ -n "$gpu_runs" ] && [ -z "${REGBENCH_SBATCH_GPU:-}" ]; then
     die "these runs need a GPU and REGBENCH_SBATCH_GPU is empty:$gpu_runs. Export the site's request (e.g. REGBENCH_SBATCH_GPU=\"--gres=gpu:nvidia_h200:1\"), or leave them out with --runs. Nothing was submitted."
 fi
@@ -1274,7 +1299,7 @@ preflight() {
             grep -q '^preflight FAIL \[' <<< "$out" \
                 || echo "preflight FAIL [$image $method] the image did not start, or has neither python nor python3, or the harness does not import there (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
         fi
-    done < "$table"
+    done < "$union"
     image="$REGBENCH_SCORER_IMAGE"
     out="$(regbench_py "$image" preflight --scorer --image "$image" --writable "$REGBENCH_OUT" 2>&1)" && code=0 || code=$?
     preflight_lines "$out"
@@ -1317,7 +1342,7 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
     for stage in ${stages//,/ }; do
         case "$stage" in coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
     done
-done < "$table"
+done < "$union"
 if [ "$any_staged" = 1 ]; then
     alloc_rows="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --stage-allocation)" \
         || die "cannot read the pipeline's allocation per stage (python -m benchmarks.regbench runs --stage-allocation). Nothing was submitted."
@@ -1405,12 +1430,12 @@ needed=""
 while IFS=$'\t' read -r name _ _ _ _ _ _ after checked_by _; do
     has "$selected" "$name" || continue
     has "$needed" "$checked_by" || needed="$needed $checked_by"
-done < "$table"
+done < "$union"
 # a checking run that reads another's results needs that one's selfcheck too
 while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     has "$needed" "$name" || continue
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
-done < "$table"
+done < "$union"
 
 
 # The chains' retry plans (plan_open, above) are written while the jobs are submitted.
@@ -1463,7 +1488,7 @@ while IFS=$'\t' read -r name method label opts image gpu _ after _ mask _; do
     done
     plan_watch "rb-sc-$name" "$first_id" "$first_name" - "$base" -
     printf -v "SC_LAST_$name" '%s' "$JOB_ID"
-done < "$table"
+done < "$union"
 
 # the small jobs: the settle job. One sacct over this submission's run jobs and their
 # steps (score_cohort.sbatch: settle_ids), then one pass over the run.json files: hours
