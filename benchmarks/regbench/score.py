@@ -1972,6 +1972,15 @@ NOT_LAUNCHED = "not launched by this submission (it has no result on this datase
 NO_ROW = "it has no row on this dataset (not expected here)"
 
 
+LAPTOP_SUFFIX = "_laptop"
+
+
+def is_laptop(method):
+    """A ``regbench local`` row (``<run>_laptop``, with or without an off-seam suffix):
+    scored and tabled, never compared with the cluster rows and never the primary."""
+    return method.split(NON)[0].endswith(LAPTOP_SUFFIX)
+
+
 def compared_rows(rows, primary=None):
     """``(inside, outside)`` for the rows of ONE dataset: the rows the common block and
     the shared subsets are computed among, and ``{row: why it is not one of them}``.
@@ -1981,7 +1990,11 @@ def compared_rows(rows, primary=None):
     a record. A run that was never launched (a submission of some of the runs) has
     every case ``not run``; counting it would empty the block for everyone. What a
     selfcheck said never takes a row out: the checks are reported, never a gate."""
-    names = list(primary) if primary else [m for m in _methods(rows) if _is_run(m)]
+    names = (
+        list(primary)
+        if primary
+        else [m for m in _methods(rows) if _is_run(m) and not is_laptop(m)]
+    )
     inside, outside = [], {}
     for name in names:
         mine = [r for r in rows if r["method"] == name]
@@ -2184,7 +2197,7 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
             if not ref:
                 continue
             for m in _methods(of_fam):
-                if m == against:
+                if m == against or is_laptop(m):
                     continue
                 mine = [r for r in of_fam if r["method"] == m and not _excluded(r)]
                 both = {r["case_id"] for r in mine} & {r["case_id"] for r in ref}

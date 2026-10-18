@@ -62,6 +62,7 @@ SOURCE = "regbench"
 COHORT = "multiplex"
 OUTLINES, NUCLEI = "outlines", "nuclei"
 INITIAL = "initial"
+LAPTOP_SUFFIX = "_laptop"  # score.LAPTOP_SUFFIX: a `regbench local` result
 STARE_FAMILY = "stare"
 VALIS_FAMILY = "valis_mirage"
 
@@ -82,6 +83,7 @@ WRITTEN = (
     "cost_points",
     "cost_fits",
     "pipeline_cost_fits",
+    "laptop",
 )
 
 RULE = (
@@ -876,6 +878,55 @@ def cohort_counts(pp, rows, dataset):
     return out
 
 
+def laptop(out, dataset, pp):
+    """One row per laptop result (``regbench local``, a row ``<run>_laptop``) and case:
+    the wall to the written image (``total_to_image_s`` = register + write), the process
+    tree's peak, the CPU-hours, the machine ``run.json: machine`` recorded, the tool
+    version and the Dice from ``cells.csv`` (outlines). A case it was not run on has none."""
+    res = {
+        (r.get("method"), r.get("case_id")): r
+        for r in _res_rows(out, dataset)
+    }
+    rows = []
+    for p in pp:
+        if not (p["dataset"] == dataset and p["set"] == OUTLINES):
+            continue
+        if not p["row"].endswith(LAPTOP_SUFFIX) or p["cause"] == "not_run":
+            continue  # a case the laptop was not run on is not a laptop row
+        rec = {}
+        path = Path(out, p["row"], dataset, p["case_id"], "run.json")
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            pass
+        mach = rec.get("machine") if isinstance(rec.get("machine"), dict) else {}
+        r = res.get((p["row"], p["case_id"]), {})
+        version = (rec.get("info") or {}).get("version")
+        rows.append(
+            schema.empty_row(
+                "laptop",
+                source=SOURCE,
+                dataset=p["dataset"],
+                patient_id=p["patient_id"],
+                panel=p["panel"],
+                case_id=p["case_id"],
+                row=p["row"],
+                wall_s=_num(r.get("total_to_image_s")),
+                peak_rss_gb=_num(r.get("peak_rss_gb")),
+                cpu_h_used=_num(r.get("cpu_h_used")),
+                cpu_model=mach.get("cpu_model"),
+                n_cores_logical=mach.get("n_cores_logical"),
+                n_cores_physical=mach.get("n_cores_physical"),
+                mem_total_gb=mach.get("mem_total_gb"),
+                os=mach.get("os"),
+                python=mach.get("python"),
+                stare_version=version if version else p.get("tool_version"),
+                dice_matched=p["dice_matched"],
+            )
+        )
+    return rows
+
+
 # ── build and write ──────────────────────────────────────────────────────────
 def build(out, dataset=COHORT, cases_root=None):
     """``{table name: rows}`` for every table of ``WRITTEN``."""
@@ -904,6 +955,7 @@ def build(out, dataset=COHORT, cases_root=None):
         "cost_points": cost_points,
         "cost_fits": fits.method_fits(cost_points),
         "pipeline_cost_fits": fits.pipeline_fits(out),
+        "laptop": laptop(out, dataset, pp),
     }
 
 

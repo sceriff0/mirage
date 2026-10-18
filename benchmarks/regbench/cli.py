@@ -23,6 +23,9 @@
                        folders), for ``REGBENCH_CASES`` of the CPU cross
 ``staged-results``     the STARE results under ``--out`` its stage jobs made (the launcher
                        refuses ``REGBENCH_STARE_EXECUTION=local`` into such a folder)
+``local``              STARE's stages on ONE cohort slide on a laptop, stored as
+                       ``<run>_laptop`` with the machine's spec in its run.json
+                       (``local.py``)
 ``cpu-scaling``        the CPU-scaling table: the named rows at 4 and 8 CPUs
                        (``paper/cpu_scaling.py``)
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``);
@@ -208,6 +211,24 @@ def build_parser():
         help="print three numbers on one line: cases, patients, and the rounds of the "
         "largest patient (what the launcher sizes its arrays and time limits from)",
     )
+
+    lo = sub.add_parser(
+        "local",
+        help="STARE's stages on one cohort slide on a laptop (stored as <run>_laptop)",
+    )
+    lo.add_argument("--cases", required=True)
+    lo.add_argument("--out", required=True)
+    lo.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    lo.add_argument("--case-id", required=True)
+    lo.add_argument("--run", required=True, help="a STARE run of `regbench runs`")
+    lo.add_argument("--workers", type=int, default=None, help="default: every core")
+    lo.add_argument(
+        "--submission",
+        default=None,
+        help="the submission this result belongs to (REGBENCH_SUBMISSION, as a cluster "
+        "run records it): `score --submission ID` admits it then",
+    )
+    lo.add_argument("--force", action="store_true", help="run a result that is ok already")
 
     r = sub.add_parser("run")
     r.add_argument("--cases", required=True)
@@ -1549,6 +1570,10 @@ def _main(a):
         from . import nuclei
 
         return nuclei.main(a)
+    if a.cmd == "local":
+        from . import local
+
+        return local.main(a)
     if a.cmd == "preflight":
         from . import preflight
 
