@@ -9,6 +9,7 @@ The fixture is two patients: P1 with three rounds, P2 with one (four cases).
 
 from __future__ import annotations
 
+import csv
 import importlib
 import json
 import os
@@ -1141,7 +1142,9 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     waited = {n.strip("<>") for _, n in settle.deps}
     assert not any(n.startswith("rb-sc-") for n in waited)
     rescore = jobs["rb-rescore"]
-    assert rescore.script == "score_cohort.sbatch" and rescore.args[:1] == ["score"]
+    # it settles again first (ruling: a selfcheck chain still running at the first
+    # settle is marked by the second), then writes the tables
+    assert rescore.script == "score_cohort.sbatch" and rescore.args[:1] == ["rescore"]
     rewaited = {n.strip("<>") for _, n in rescore.deps}
     assert {k for k, _ in rescore.deps} == {"afterany"} and "rb-score" in rewaited
     for run in RUNS:
@@ -1173,7 +1176,12 @@ def test_the_settle_step_of_the_batch_script():
         and code.count("sacct -n -P -j") == 1
         and "sacct -n -X" not in code
     )
-    assert code.count("settle_killed") == 3  # defined, the settle job, the scorer
+    # defined, the settle job, the re-score (always), the scorer (when not settled)
+    assert code.count("settle_killed") == 4
+    rescore = code[code.index('if [ "$kind" = rescore ]') :]
+    assert rescore.index("settle_killed") < rescore.index(
+        'regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"'
+    )
     job = code[
         code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
     ]
@@ -2166,6 +2174,8 @@ def test_a_run_whose_image_has_no_path_is_dropped_not_the_launch(site, tmp_path)
                             log="no-path-scorer")  # fmt: skip
     assert scorer.returncode == 2 and not log.exists()
     assert "The scorer's image needs its path" in scorer.stderr
+    # M8: a hard stop, and it names itself as one (the README's integrity refusals)
+    assert "integrity refusal (the scorer's image)" in scorer.stderr
 
 
 def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
@@ -2283,6 +2293,43 @@ def test_a_runs_subset_divides_the_tile_queue_by_the_subset(site):
     for name in ("stare", "stare_clahe"):
         line = next(ln for ln in lines if ln.startswith(f"# {name} on "))
         assert "at most 50 in the queue (its share of the total 100)" in line
+
+
+def test_a_run_dropped_at_tile_sizing_on_a_later_dataset_leaves_the_tile_count(
+    site, tmp_path
+):
+    """Fix round 1 (review M1): a run sized on the cohort and then dropped at tile
+    sizing on a later dataset is not counted among the runs that feed the tile queue:
+    TILE_RUNS is rebuilt from the runs left, so the share is the total over one."""
+    cases = tmp_path / "acrobat_tiles"
+    _case(cases, "acrobat", "A1", "A1")
+    wrap = tmp_path / "wrap"
+    wrap.mkdir()
+    (wrap / "python").write_text(
+        "#!/bin/bash\n"
+        'case " $* " in *" stages "*"acrobat"*) echo boom >&2; exit 1 ;; esac\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    (wrap / "python").chmod(0o755)
+    env = {
+        "REGBENCH_CASES_ACROBAT": str(cases),
+        "REGBENCH_STAGE_QUEUE_MAX": "100",
+        "REGBENCH_RUN_LANES": "4",
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{wrap}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+    }
+    done, _, _ = launch(
+        site, "--runs", "stare stare_clahe", "--datasets", "multiplex acrobat",
+        env=env, log="tiles-later",
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    assert "# DROPPED stare (run_config): cannot size its tile arrays on acrobat" in (
+        done.stdout
+    )
+    assert (
+        "# tile queue: REGBENCH_STAGE_QUEUE_MAX=100 split over 1 tile submitter(s) "
+        "feeding at once (1 run(s) with one, REGBENCH_RUN_LANES=4): 100 each"
+    ) in done.stdout.splitlines()
 
 
 @pytest.mark.parametrize(
@@ -3734,6 +3781,36 @@ def test_a_step_sbatch_refuses_every_time_is_written_down_as_submit_refused(tmp_
     assert "cause=submit_refused whose=infrastructure" in done.stdout.splitlines()[-1]
 
 
+def test_a_refused_selfcheck_step_is_written_down_too(tmp_path):
+    """Minor (fix round 1): a refused `notok` / `stage` step is not a step of a run's
+    ladder, so chain-mark cannot write it on a record; its units are rows of
+    logs/refused_units.tsv, and the scorer makes each a loss row of its cause."""
+    from benchmarks.regbench import score
+
+    steps = [["notok", "rb-sc-x-64g", "--mem=64G", "selfcheck.sbatch", "x"]]
+    fail = "REGBENCH_END kind=selfcheck status=failed cause=oom whose=method"
+    done, sent, out = _watch(
+        tmp_path, {0: fail, 1: None}, steps, range_="0-1", python="exit 0",
+        sbatch_fails="rb-sc-x-64g", extra_env=FAST_RETRY,
+    )  # fmt: skip
+    assert done.returncode == 1 and sent == [], done.stdout + done.stderr
+    with open(out / "logs" / "refused_units.tsv", newline="") as fh:
+        rows = list(csv.DictReader(fh, delimiter="\t"))
+    assert [(r["plan"], r["step"], r["job"], r["index"], r["cause"]) for r in rows] == [
+        ("plan", "1", "rb-sc-x-64g", "0", "submit_refused"),
+        ("plan", "1", "rb-sc-x-64g", "1", "submit_refused"),
+    ]
+    assert "Memory specification" in rows[0]["why"]
+    lost = score.loss_rows(out, tmp_path / "cases", ["multiplex"], None, [], [], [],
+                           [], [])  # fmt: skip
+    got = [(r["run"], r["case_id"], r["cause"], r["source"]) for r in lost
+           if r["source"] == "logs/refused_units.tsv"]  # fmt: skip
+    assert got == [
+        ("plan", "0", "submit_refused", "logs/refused_units.tsv"),
+        ("plan", "1", "submit_refused", "logs/refused_units.tsv"),
+    ]
+
+
 def test_a_step_sbatch_refuses_once_is_submitted_on_its_next_try(tmp_path):
     """B7: a refusal that does not last (a busy slurmctld) costs a wait, not the
     units: the next try goes through, and nothing is written down."""
@@ -3792,6 +3869,11 @@ def test_a_watcher_that_gives_up_says_why_for_the_settle_job(tmp_path):
     ).read_text()
     assert not (plan / "done").exists()
     assert "cause=watcher_gave_up whose=infrastructure" in done.stdout.splitlines()[-1]
+    # M6: the watcher itself writes the units it was waiting for down first, so a
+    # settle job that fails does not leave them the method's
+    call = (tmp_path / "python.log").read_text()
+    assert "chain-mark" in call and "--cause watcher_gave_up" in call
+    assert "--index 0" in call
     again, _, _ = _watch(tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0",
                          python="exit 0", link=2)  # fmt: skip
     assert again.returncode == 0, again.stdout + again.stderr

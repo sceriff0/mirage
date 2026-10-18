@@ -93,10 +93,11 @@
 #      ran, half of it did, or none of it. Everything here waits (`afterany`) for every
 #      ladder, and for NO selfcheck (Task 28, B5): the selfchecks never gate, nor do they
 #      delay the tables. When there are selfchecks, `rb-rescore` (score_cohort.sbatch
-#      score) waits for the scorer AND every selfcheck's watcher and writes the tables
-#      again, with every verdict in them; the case records are kept, so it only reads.
+#      rescore) waits for the scorer AND every selfcheck's watcher, settles again and
+#      writes the tables again, with every verdict in them; the case records are read
+#      (the selfcheck statuses are set on the rows, not keyed), so it computes nothing.
 #
-#   6. with --compute-all, after the scorer: compute-all, the WHOLE pipeline traced per
+#   6. with --compute-all, after the scorer and the re-score: compute-all, the WHOLE pipeline traced per
 #      patient and registration backend (compute_all.sbatch, one Nextflow head job per
 #      run; `python -m benchmarks.regbench compute-all plan` lists them, every valis
 #      patient then every tiled one). The heads are dealt onto REGBENCH_COMPUTE_LANES
@@ -1287,7 +1288,7 @@ if [ -n "$missing" ]; then
     if [ "$DRY" = 1 ] || [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" = 1 ]; then
         echo "# not set:$missing (those jobs would use the python on PATH)"
     elif has "$missing" "REGBENCH_SIF_$REGBENCH_SCORER_IMAGE"; then
-        die "not set:$missing. The scorer's image needs its path (or REGBENCH_ALLOW_PATH_PYTHON=1 to use the python on PATH): nothing could be scored. Nothing was submitted."
+        die "integrity refusal (the scorer's image): not set:$missing. The scorer's image needs its path (or REGBENCH_ALLOW_PATH_PYTHON=1 to use the python on PATH): nothing could be scored. Nothing was submitted."
     else
         # B4: the runs of an image with no path are dropped, the others go on
         while IFS=$'\t' read -r name _ _ _ image _; do
@@ -1398,7 +1399,7 @@ preflight() {
         grep -q '^preflight FAIL \[' <<< "$out" \
             || echo "preflight FAIL [$image the scorer] the image did not start, or has neither python nor python3 (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
     fi
-    [ "$failed" = 0 ] || die "the scorer's image failed the preflight (the 'preflight FAIL' lines above): nothing could be scored. Nothing was submitted."
+    [ "$failed" = 0 ] || die "integrity refusal (the scorer's image): the scorer's image failed the preflight (the 'preflight FAIL' lines above): nothing could be scored. Nothing was submitted."
     if [ "$preflight_only" != 1 ]; then
         none_left "the preflight"
     fi
@@ -1516,6 +1517,15 @@ for ds in $sized; do
     done < "$(table_of "$ds")"
 done
 none_left "their tile arrays"
+# a run dropped at sizing on a LATER dataset was added above on an earlier one: the
+# runs that feed the tile queue are rebuilt from the runs left (review M1)
+kept_tile_runs="" N_TILE_RUNS=0
+for name in $TILE_RUNS; do
+    has "$selected" "$name" || continue
+    kept_tile_runs="$kept_tile_runs $name"
+    N_TILE_RUNS=$((N_TILE_RUNS + 1))
+done
+TILE_RUNS="$kept_tile_runs"
 # THE TILE QUEUE CEILING IS A TOTAL: REGBENCH_STAGE_QUEUE_MAX is divided by the number of
 # runs with a tile submitter that can feed AT ONCE (floor, at least 1) and each submitter
 # is given its share, REGBENCH_STAGE_QUEUE_RUN, which feed_tiles.sbatch reads. Set before
@@ -1896,18 +1906,25 @@ submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$score
     --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score \
     ${scored_sets[@]+"${scored_sets[@]}"}
 SCORER_JOB="$JOB_ID"
-# the light re-score (B5): after the scorer and every selfcheck's watcher, the tables
-# again with every verdict (the case records are kept: it computes nothing anew)
+# the light re-score (B5): after the scorer and every selfcheck's watcher, settle again,
+# then the tables with every verdict (the case records are read: the selfcheck statuses
+# are set on the rows at table time, never in a record's key)
 if [ -n "$sc_dep" ]; then
     submit "rb-rescore" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$SCORER_JOB:$sc_dep" \
         --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
-        "$HERE/score_cohort.sbatch" score ${scored_sets[@]+"${scored_sets[@]}"}
+        "$HERE/score_cohort.sbatch" rescore ${scored_sets[@]+"${scored_sets[@]}"}
     RESCORE_JOB="$JOB_ID"
 fi
 fi
 
 # ── 6 and 7. compute-all: the whole pipeline per patient and backend, last and alone ──
 if [ "$computing" = 1 ]; then
+    # the plan, written down: a head that never made its folder is still a row of
+    # pipeline_cost_summary (no_trace, compute_all.planned)
+    if [ "$DRY" != 1 ]; then
+        mkdir -p "$REGBENCH_OUT/logs/compute"
+        printf '%s\n' "$COMPUTE_PLAN" > "$REGBENCH_OUT/logs/compute/plan.tsv"
+    fi
     i=0 heads=""
     while IFS=$'\t' read -r backend patient _ _; do
         [ -n "$backend" ] || continue
@@ -1917,7 +1934,9 @@ if [ "$computing" = 1 ]; then
         if [ -n "${!prev:-}" ]; then
             deps=(--dependency="afterany:${!prev}")
         elif [ -n "$SCORER_JOB" ]; then
-            deps=(--dependency="afterany:$SCORER_JOB")
+            # LAST and ALONE (I3): after the scorer AND the re-score, so no selfcheck
+            # and no scorer runs beside a measured pipeline
+            deps=(--dependency="afterany:$SCORER_JOB${RESCORE_JOB:+:$RESCORE_JOB}")
         fi
         submit "rb-compute-$backend-$patient" "${COMMON[@]}" "$LOG_ONE" ${deps[@]+"${deps[@]}"} \
             --cpus-per-task=2 --mem=8G --time="$(limit "$compute_s")" \
@@ -1926,8 +1945,8 @@ if [ "$computing" = 1 ]; then
         heads="${heads:+$heads:}$JOB_ID"
         i=$((i + 1))
     done <<< "$COMPUTE_PLAN"
-    # compute starts after the scorer, as before B5; its own scoring also waits for
-    # rb-rescore, so two scorers never write the tables at once
+    # its own scoring waits for its heads, which wait for rb-rescore (above): two
+    # scorers never write the tables at once
     submit "rb-score-compute" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$heads${RESCORE_JOB:+:$RESCORE_JOB}" \
         --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
         "$HERE/score_cohort.sbatch" score

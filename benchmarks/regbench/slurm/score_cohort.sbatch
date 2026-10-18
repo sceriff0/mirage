@@ -32,6 +32,11 @@
 #                                no word of having done it (a node without `sacct`, a
 #                                job that was lost): the cases that changes are computed
 #                                again here, never read from a record made before it
+#   score_cohort.sbatch rescore  (rb-rescore, Task 28 B5) after the scorer and every
+#                                selfcheck: settle AGAIN (what a selfcheck chain still
+#                                running at the first settle left is marked now), then
+#                                the same as `score`. The case records are read: the
+#                                selfcheck statuses are set on the rows, never keyed
 #
 #
 # `tissue` and `score` take the datasets of the submission when it named a public one
@@ -51,7 +56,7 @@ workers="${SLURM_CPUS_PER_TASK:-1}"
 verdicts="$REGBENCH_OUT/logs/verdicts.tsv"
 case "$kind" in
     case) regbench_start "score_$kind" "dataset=$dataset" "unit=index_${SLURM_ARRAY_TASK_ID:--}" ;;
-    score) export REGBENCH_RECORD="$REGBENCH_OUT/tables/summary.md"; regbench_start score ;;
+    score|rescore) export REGBENCH_RECORD="$REGBENCH_OUT/tables/summary.md"; regbench_start score ;;
     *) regbench_start "$kind" ;;
 esac
 
@@ -173,7 +178,10 @@ fi
 # which the scorer does not read (its key holds every run.json's bytes), so its rows are
 # made again below.
 jobs="$REGBENCH_OUT/logs/jobs.tsv"
-if already_settled; then
+if [ "$kind" = rescore ]; then
+    echo "settle: again, after every selfcheck chain ended (rb-rescore)"
+    settle_killed || echo "settle: not done again: the first settle's word stands"
+elif already_settled; then
     echo "settle: done by the settle job, before the cases were scored"
 else
     echo "settle: the settle job left no record for this submission; settling here (a case whose result changes is scored again in this job)"

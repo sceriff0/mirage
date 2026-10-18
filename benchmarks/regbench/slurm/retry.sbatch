@@ -46,9 +46,10 @@
 # method's, B7) and the chain stops there.
 #
 # A WATCHER THAT GIVES UP (the queue could not be read REGBENCH_RETRY_SQUEUE_TRIES times
-# in a row) writes why in <plan folder>/gave_up before it exits: the settle job writes
-# the units it was still waiting for, and those it never submitted, as
-# `watcher_gave_up` (chains.mark_in_flight, S3). A later link that takes the chain over
+# in a row) first writes the units of the step it was at down as `watcher_gave_up`
+# itself (chain-mark, M6), then why in <plan folder>/gave_up before it exits: the settle
+# job writes the units it was still waiting for, and those it never submitted, as
+# `watcher_gave_up` too (chains.mark_in_flight, S3). A later link that takes the chain over
 # removes the file: the chain is not given up while a link goes on with it.
 #
 # THE WATCHER IS A CHAIN OF LINKS (REGBENCH_RETRY_WATCHERS, submit_cohort.sh): link 1
@@ -117,8 +118,13 @@ if [ -s "$done_file" ]; then
 fi
 # this link goes on with the chain: an earlier link's giving up is no longer the end
 rm -f "$plan/gave_up"
-# give_up <why>: the watcher stops; the settle job writes what was due as watcher_gave_up
+# give_up <why> [k]: the watcher stops. It first writes the units of step k (the step
+# it was submitting or waiting for) down as watcher_gave_up itself (M6), so a settle job
+# that fails does not leave them the method's; the settle job writes the rest.
 give_up() {
+    if [ -n "${2:-}" ] && [ -s "$plan/due-$2" ]; then
+        mark_cut "$2" watcher_gave_up "the watcher gave up: $1"
+    fi
     printf '%s %s\n' "$(date +%FT%T)" "$1" > "$plan/gave_up.new" && mv "$plan/gave_up.new" "$plan/gave_up"
     end failed watcher_gave_up
     exit 1
@@ -248,7 +254,17 @@ mark_cut() {
         case "${items[$i]}" in */run_rung.sbatch) at="$i" ;; esac
     done
     if [ "$at" -lt 0 ]; then
-        echo "step $k: not a step of a run's ladder; its units are not written down here (the selfcheck, stage and nuclei records say what became of them)"
+        # not a step of a run's ladder (a selfcheck's or a stage's next attempt): no
+        # record of it takes the cause, so each unit is a row of
+        # logs/refused_units.tsv, which the scorer makes a loss row of that cause
+        local refused="$REGBENCH_OUT/logs/refused_units.tsv" flat
+        flat="$(tr '\t\n' '  ' <<< "$why")"
+        mkdir -p "$REGBENCH_OUT/logs"
+        [ -s "$refused" ] || printf 'plan\tstep\tjob\tindex\tcause\twhy\n' > "$refused"
+        while read -r i; do
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(basename "$plan")" "$k" "${items[1]}" "$i" "$cause" "$flat" >> "$refused"
+        done < "$plan/due-$k"
+        echo "step $k: not a step of a run's ladder; its $(wc -l < "$plan/due-$k" | tr -d ' ') unit(s) are written down as $cause in $refused"
         return 0
     fi
     run=("${items[@]:$((at + 1)):9}")
@@ -277,7 +293,7 @@ if [ -s "$submitting" ] && { [ ! -s "$state" ] || [ "$(cut -d' ' -f1 "$submittin
     read -r k_was job_was < "$submitting"
     if ! found="$(in_queue "$job_was")"; then
         echo "link $link: the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row while looking for step $k_was ($job_was), which an earlier link was submitting when it ended: it is NOT submitted again (it may be in the queue already). This link stops here; submit again into the same results folder once the queue answers"
-        give_up "the queue could not be read while looking for step $k_was ($job_was)"
+        give_up "the queue could not be read while looking for step $k_was ($job_was)" "$k_was"
     fi
     if [ -n "$found" ]; then
         echo "link $link: step $k_was ($job_was) was submitted by an earlier link that ended before it recorded the id; it is in the queue as $found"
@@ -303,7 +319,7 @@ if [ -s "$state" ]; then
     recorded "$k_was" "$job_was" "$id_was"
     if ! gone "$id_was"; then
         echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $job_was ($id_was) is left in the queue, and a later link of this chain (if any) goes on"
-        give_up "the queue could not be read while waiting for step $k_was ($job_was, $id_was)"
+        give_up "the queue could not be read while waiting for step $k_was ($job_was, $id_was)" "$k_was"
     fi
     k=$((k_was + 1)) n_steps="$k_was"
 fi
@@ -343,18 +359,15 @@ while [ -s "$plan/step-$k" ]; do
         refused="$got"
         if [ "$try" -ge "$REGBENCH_RETRY_SUBMIT_TRIES" ]; then
             rm -f "$submitting"
-            case "$kind" in
-                again|climb)
-                    echo "$(wc -l <<< "$due" | tr -d ' ') unit(s) of this step are written down as submit_refused (not the method's): $jobname was refused $try times"
-                    mark_cut "$k" submit_refused "sbatch refused $jobname $try times: $(tr '\n' ' ' <<< "$refused")" ;;
-            esac
+            echo "$(wc -l <<< "$due" | tr -d ' ') unit(s) of this step are written down as submit_refused (not the method's): $jobname was refused $try times"
+            mark_cut "$k" submit_refused "sbatch refused $jobname $try times: $(tr '\n' ' ' <<< "$refused")"
             finish failed submit_refused 1
         fi
         sleep "$wait_s"
         wait_s=$((wait_s * 2)) try=$((try + 1))
         # a refusal can still have queued the job: never queue it twice
         if ! found="$(in_queue "$jobname")"; then
-            give_up "the queue could not be read after sbatch refused $jobname"
+            give_up "the queue could not be read after sbatch refused $jobname" "$k"
         fi
         if [ -n "$found" ]; then
             echo "sbatch said it refused $jobname, but the queue has it as $found: taken"
@@ -374,7 +387,7 @@ while [ -s "$plan/step-$k" ]; do
     echo "step $k ($jobname, $kind): submitted as $id for $(wc -l <<< "$due" | tr -d ' ') unit(s): --array=$array"
     if ! gone "$id"; then
         echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $jobname ($id) is left in the queue, and a later link of this chain (if any) goes on"
-        give_up "the queue could not be read while waiting for step $k ($jobname, $id)"
+        give_up "the queue could not be read while waiting for step $k ($jobname, $id)" "$k"
     fi
     k=$((k + 1))
 done

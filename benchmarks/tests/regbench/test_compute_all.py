@@ -551,15 +551,32 @@ def test_score_writes_the_pipeline_tables_and_the_block(tmp_path):
 
 
 # ── the submitter: compute runs last, alone, on its own lanes ─────────────────
-def _compute_launch(site, *args, env=None, log="compute"):  # noqa: F811
+def _compute_launch(site, *args, env=None, log="compute", dry=True):  # noqa: F811
     sheet = _sheet(site[0] / f"{log}-input.csv", ("P1", "P2"))
     return launch(
-        site, *args, env={"REGBENCH_INPUT": str(sheet), **(env or {})}, log=log
+        site, *args, env={"REGBENCH_INPUT": str(sheet), **(env or {})}, log=log,
+        dry=dry,
     )
 
 
+def test_a_real_compute_launch_writes_the_plan_down(site):  # noqa: F811
+    """M5: the plan is written down (logs/compute/plan.tsv), so a head that never made
+    its folder is still a row of pipeline_cost_summary."""
+    done, _, out = _compute_launch(
+        site, "--compute-all", "--runs", "stare", "--datasets", "multiplex",
+        log="plan", dry=False,
+        env={"REGBENCH_ALLOW_PATH_PYTHON": "1", "REGBENCH_SUBMISSION": "plan-1"},
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    plan = (out / "logs" / "compute" / compute_all.PLAN_FILE).read_text().splitlines()
+    assert [tuple(line.split("\t")[:2]) for line in plan] == [
+        ("valis", "P1"), ("valis", "P2"), ("tiled", "P1"), ("tiled", "P2")
+    ]  # fmt: skip
+
+
 def test_the_submitter_runs_compute_last_on_lanes(site):  # noqa: F811
-    done, _, _ = _compute_launch(site, "--compute-all")
+    done, _, out = _compute_launch(site, "--compute-all")
+    assert not (out / "logs" / "compute" / compute_all.PLAN_FILE).exists()  # dry
     jobs = jobs_of(done)
     names = list(jobs)
     heads = [
@@ -574,12 +591,16 @@ def test_the_submitter_runs_compute_last_on_lanes(site):  # noqa: F811
     assert names[-1] == "rb-score-compute"
     # two lanes (the default): the first head of each lane after the scorer, every
     # other head after the head before it on its lane
-    assert jobs[heads[0]].deps == {("afterany", "<rb-score>")}
-    assert jobs[heads[1]].deps == {("afterany", "<rb-score>")}
+    # ... and after rb-rescore when there is one (I3: compute stays LAST and ALONE,
+    # never beside a selfcheck or the re-score)
+    assert "rb-rescore" in jobs  # the default launch has selfchecks
+    first = {("afterany", "<rb-score>"), ("afterany", "<rb-rescore>")}
+    assert jobs[heads[0]].deps == first
+    assert jobs[heads[1]].deps == first
     assert jobs[heads[2]].deps == {("afterany", f"<{heads[0]}>")}
     assert jobs[heads[3]].deps == {("afterany", f"<{heads[1]}>")}
     # its scoring also waits for rb-rescore (B5): two scorers never write the tables
-    rescore = {("afterany", "<rb-rescore>")} if "rb-rescore" in jobs else set()
+    rescore = {("afterany", "<rb-rescore>")}
     assert jobs["rb-score-compute"].deps == {
         ("afterany", f"<{h}>") for h in heads
     } | rescore
@@ -700,3 +721,24 @@ def test_a_patient_with_no_trace_is_a_row_and_a_blank_cpu_is_counted(tmp_path):
     assert [(r["patient_id"], r["cause"], r["run"]) for r in lost] == [
         ("P2", "no_trace", "compute_valis")
     ]
+
+
+def test_a_planned_patient_that_left_no_folder_is_a_row(tmp_path):
+    """M5 (Task 28 fix round 1): a patient the compute plan names, or whose head wrote
+    an end line, but who has no ``compute/<backend>/<patient>/`` folder is a row
+    (complete_run 0, no_trace), never a patient that is not there."""
+    out = tmp_path / "out"
+    _trace(out, "valis", "P1", VALIS_ROWS, end="ok")
+    logs = out / "logs" / "compute"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / compute_all.PLAN_FILE).write_text(
+        f"valis\tP1\t{out}/compute/valis/P1\tx\nvalis\tP2\t{out}/compute/valis/P2\ty\n"
+    )
+    (logs / "tiled").mkdir()
+    (logs / "tiled" / "P3.end").write_text("REGBENCH_END kind=compute status=failed\n")
+    summary = compute_all.summarise(compute_all.rows(out))
+    by = {(s["backend"], s["patient"]): s for s in summary}
+    assert by[("valis", "P2")]["complete_run"] == 0
+    assert by[("valis", "P2")]["reason"] == "no_trace"
+    assert by[("tiled", "P3")]["reason"] == "no_trace"
+    assert by[("valis", "P1")]["complete_run"] == 1

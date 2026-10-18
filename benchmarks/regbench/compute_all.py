@@ -307,11 +307,42 @@ def _mul(*values):
     return out
 
 
+PLAN_FILE = "plan.tsv"  # <out>/logs/compute/: the launcher's `compute-all plan` lines
+
+
+def planned(out):
+    """``{(backend, patient)}`` the compute-all plan named: the launcher's copy of
+    ``compute-all plan`` (``logs/compute/plan.tsv``) and every head's end line
+    (``logs/compute/<backend>/<patient>.end``)."""
+    logs = Path(out) / "logs" / "compute"
+    got = set()
+    try:
+        lines = (logs / PLAN_FILE).read_text().splitlines()
+    except (OSError, UnicodeDecodeError):
+        lines = []
+    for line in lines:
+        cols = line.split("\t")
+        if len(cols) >= 2 and cols[0] in BACKENDS and cols[1]:
+            got.add((cols[0], cols[1]))
+    for backend in BACKENDS:
+        for end in sorted((logs / backend).glob("*.end")):
+            got.add((backend, end.stem))
+    return got
+
+
 def rows(out) -> Rows:
     """One row per task of every ``<out>/compute/<backend>/<patient>/trace/trace.txt``
-    (a folder moved aside to ``compute/.replaced`` is not read)."""
+    (a folder moved aside to ``compute/.replaced`` is not read); a planned patient
+    (:func:`planned`) that left no folder is a ``no_trace`` run (M5)."""
     got = Rows()
     got.runs, got.names = {}, {}
+    for backend, patient in sorted(planned(out)):
+        if not (Path(out) / "compute" / backend / patient).is_dir():
+            got.runs[(backend, patient)] = {
+                "ended_ok": _ended_ok(out, backend, patient),
+                "input_gb": math.nan,
+                "no_trace": True,
+            }
     for backend in BACKENDS:
         root = Path(out) / "compute" / backend
         if not root.is_dir():
