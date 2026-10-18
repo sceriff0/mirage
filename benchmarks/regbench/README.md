@@ -1539,6 +1539,10 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `realcheck_unreadable` | infrastructure | score | a realcheck.json (or the run.json beside it) cannot be read: the run's realcheck verdict is `unreadable` (verdicts.tsv) |
 | `fit_points_dropped` | infrastructure | paper | a cost fit left points out (no finite target or predictor, or no input size): `n_dropped` of cost_fits / pipeline_cost_fits (S12; `paper/losses.csv`) |
 | `paper_record_unreadable` | infrastructure | paper | a run.json the paper tables could not read: `n_unreadable` of versions / run_parameters, one row per run (S13; `paper/losses.csv`) |
+| `plot_points_dropped` | infrastructure | paper | a cost figure could not draw a patient's value (no figure, `<= 0` on a log axis, a `rusage` peak in a peak comparison, a GPU row without a CPU twin on a CPU axis): `paper/figures/losses.csv` (T31) |
+| `plot_lower_bound` | infrastructure | paper | a cost figure drew a value that is a lower bound (`cost_points.lower_bound`): kept, flagged (`paper/figures/losses.csv`) |
+| `plot_placeholder` | infrastructure | paper | a cost figure is its placeholder: its input is absent or all NA (`paper/figures/losses.csv`) |
+| `stare_local4_differs` | integrity | paper | `stare_local4` scored a case differently from `stare` (`paper/losses.csv`, effect `flagged`) |
 | `not_run` | infrastructure | run | no result of this submission: nobody ran it |
 | `stale_result` | integrity | run | a result made for an earlier version of the case or by another submission |
 | `preflight_failed` | infrastructure | submit | the run's image failed the preflight: the run was not submitted |
@@ -1574,7 +1578,8 @@ says `cost_bound=upper`.
 | `logs/refused_units.tsv` | results folder | the units of a refused (or given-up) selfcheck or stage step, which no record can carry (`retry.sbatch` `mark_cut`): a row each, of its cause. A watcher that gives up writes the units of the step it was at down itself (`watcher_gave_up`) before it exits, so a failed settle job does not leave them the method's |
 | `logs/compute/plan.tsv` | results folder | the compute-all plan the launcher submitted: a planned patient that left no folder is a `no_trace` row (so is one with an end line and no folder) |
 | `tables/losses_run.csv` | tables | the run-level rows (dataset blank) alone |
-| `paper/losses.csv` | paper | the paper stage's rows (`fit_points_dropped`, `paper_record_unreadable`) |
+| `paper/losses.csv` | paper | the paper stage's rows (`fit_points_dropped`, `paper_record_unreadable`, `stare_local4_differs`) |
+| `paper/figures/losses.csv` | paper | what the cost figures could not draw or drew as a lower bound, and their placeholders (`plot_points_dropped`, `plot_lower_bound`, `plot_placeholder`) |
 | `pipeline_cost_summary.csv` | tables | `reason` and `n_tasks_unmeasured` per compute-all patient (`no_trace`, `failed_task`, `cached`, `no_ok_end`) |
 | `summary.json` | tables | `losses`: the counts by stage, cause, blame and effect |
 
@@ -1758,6 +1763,99 @@ Per round and per patient, in this order: CPU-hours used and reserved by the
 registration, their ratio, GPU-hours with the device, memory-hours, then the times
 (registration, writer, to the registered image) and the peak memory. No single column
 is "the" cost.
+
+### The paper's cost: the rules every number obeys (`paper/costs.py`)
+
+The paper tables (`method_summary`, `cost_points`, `cost_fits`, `end_to_end`) and the
+cost figures (Fig. 3e, 3f, 2c and the supplementary CPU cross and end-to-end panels)
+read the tables above by six rules, the same for every method (user ruling
+2026-10-18, "fair and sound for all methods"):
+
+1. **One unit: the patient.** Every method has one point per patient. A pair method
+   (STARE, DeeperHistReg, PALOM) is the patient's sums from `summary_resources.csv`
+   (CPU-hours, GB-hours, GPU-hours, wall time); its peak is the largest of its rounds.
+   A per-patient method is its launch. Per-round points are drawn only in Fig. 2c,
+   where every method is per round (a per-patient method only where its launch timed
+   each round, `register_s_per_round_from = info`), and the per-patient facet beside it
+   holds every method. `cost_fits` are per patient for every method.
+2. **Common patients are the headline; survivors are second.** The common set is
+   computed once per dataset, over every row the paper compares (each family's primary
+   row and its best row), by the scorer's own rule (`score.common_patients`, strict).
+   Every cost column of `method_summary` is `<stem>_common_med` (the headline) with
+   `<stem>_survivors_med` beside it, and every row carries `n_patients_common`,
+   `n_patients_survivors`, `n_capped`, `n_failed` and `n_excluded`. The figures draw
+   the common set; each tick reads `n=<common>/<all> (capped c, failed f)`.
+3. **Rows.** A family's cost is its PRIMARY row (drawn filled); its best-Dice row is
+   drawn hollow and labelled "best (ceiling)". `method_summary.row_kind` says which
+   (`primary`, `best`, `local_4cpu`, `cpu_twin`); `which` is the old name of the same
+   column, kept for one release (deprecated).
+4. **Clock and unit are columns.** Every cost stem has `<stem>_clock` and
+   `<stem>_unit`; `cost_points` has `clock` and `unit`. `wall_kind` is generalised into
+   `clock` (deprecated):
+
+   | `clock` | what the time is | rows |
+   |---|---|---|
+   | `whole_process` | the registration in one process, in one job of 4 CPUs (`register_s`) | every method but STARE's stage jobs |
+   | `local_4cpu` | STARE's stages inside ONE job of 4 CPUs, its tiles 4 at a time (`stare_local4`) | `stare_local4` |
+   | `critical_path_unlimited` | STARE's stage jobs: COARSE + the longest tile + SOLVE, every tile at once, no queue (`wall_unlimited_parallel_s`) | STARE's staged rows |
+   | `with_queue` | STARE's stage jobs from the first COARSE start to the end of SOLVE, queue waits in (`elapsed_with_queue_s`) | STARE's staged rows |
+
+   `unit` is `patient` everywhere but Fig. 2c's per-round facet (`round`). Every axis
+   label names its clock, and every wall time was measured on SHARED nodes (the
+   `contention` header line): the headline is CPU-hours.
+5. **Uncertainty.** Every median has the bootstrap 95% interval over patients of
+   `score.bootstrap_interval`, the accuracy tables' own (2000 resamples, seed
+   20261011): `<stem>_<common|survivors>_ci_low` / `_ci_high` in the tables, a bar
+   beside each median in the figures.
+6. **Nothing silent.** A patient without a figure is counted
+   (`n_<stem>_<set>_missing`); a lower bound is flagged (`cost_points.lower_bound`:
+   unmeasured stage attempts or records, a polled CPU counter, a wasted attempt nobody
+   billed) and counted (`n_lower_bound`); a peak read by `rusage` alone is flagged
+   (`peak_rss_comparable = False`), counted (`n_peak_not_comparable`) and in no peak
+   comparison; a round that registered and was scored as an imputed failure is costed
+   (it used the resources) and counted (`n_imputed_costed`). Every point a figure could
+   not draw (no figure, or `<= 0` on a log axis), every lower-bound point it drew and
+   every placeholder is a row of `paper/figures/losses.csv` (stage `paper`).
+
+**`stare_local4`: the wall time at 4 CPUs.** A cost row of STARE's: the `stare` run with
+`--stages local` and `workers=4`, every case of the cohort in ONE job of 4 CPUs on the
+ordinary memory ladder, under the same `resources.Monitor` as every one-process method.
+It is scored like every row, and its accuracy must equal `stare`'s: the paper tables
+compare the two case by case and a mismatch is a loss row (`stare_local4_differs`,
+blame `integrity`, effect `flagged`). It is never a best-row candidate. The launcher
+submits it by default (its own reuse key: no other row's moves); it needs
+`REGBENCH_CPUS=4` and is dropped from a launch at another count. Fig. 3f's wall panel is
+every method at 4 CPUs with STARE as `stare_local4`; STARE's staged critical path and
+its time with the queue are two extra markers, each labelled, never on that axis
+without their label.
+
+**Memory one job needs, and the cluster-wide demand.** `fold_peak_vs_stare` is gone (it
+divided a sampled tree peak by a single stage job's high-water mark). In its place:
+`fold_peak_vs_stare_local4` (a one-process peak over `stare_local4`'s, the same Monitor,
+the common patients) and, for STARE's stage jobs, `peak_largest_job_gb` (the largest
+single attempt: what a node must give one job) and `peak_concurrent_gb` (the most the
+jobs of one round held at once: at every moment the sum of the peaks of the attempts
+running then, as `peak_cpus_at_once` is computed). Fig. 3e shows the first, with the
+second as a labelled marker.
+
+**Used against reserved.** `gb_h_used` is peak x duration per attempt (the attempt's own
+peak: a one-process row's `peak_rss_gb`, a stage attempt's `peak_rss_mb`), beside
+`gb_h_reserved`, which measures the REQUEST policy: STARE's stage jobs at the pipeline's
+per-process requests (COARSE 2 GB, tile 4 GB, SOLVE 1 GB, x attempt), every other method
+on the ladder's 16 GB floor. `cpu_h_reserved_scheduler` and `gb_h_reserved_scheduler`
+are "what the cluster held": sacct's `AllocCPUS x ElapsedRaw` and `ReqMem x ElapsedRaw`
+over every job of the row's good attempts (STARE: its good stage jobs AND the round's
+driver job; the others: the launch), blank and counted without sacct. Fig. 3f draws
+CPU-hours reserved as the bar with used inside it and the total (good + wasted) as a
+marker, and GB-hours as used with the wasted request stacked on it.
+
+**The same work, stated.** `method_summary` gives `convert_s_*` (the method's own
+conversion outside its clock), `convert_inside_clock` (`yes`: inside the registration
+clock, `no`: timed apart, `none`: the method converts nothing), `working_px` and
+`channels_read`; an `affine_ashlar` row gives `prior_cpu_h` (the anchor row's cost up
+to the stage it reads: STARE's COARSE attempts, or VALIS's `_rigid` row) and
+`with_prior_cpu_h`. `end_to_end` and `figS_end_to_end` stack conversion, registration,
+writer and the prior per row.
 
 ### CPU-hours: one definition for every method (`billing.py`)
 
@@ -2800,6 +2898,49 @@ variables: they are frozen (`ladder.py`).
 None of this is checked by the script; each is a way a launch goes wrong that no job
 reports.
 
+**The cost instruments, on the first real rows (T31; only the cluster can say).** Read
+the first scored `resources.csv` / `summary_resources.csv` before trusting any cost
+figure; each item names the column that answers it.
+
+- [ ] **C1. The CPU counter** is the step cgroup's: `cpu_instrument` is `cgroup_v2` or
+  `cgroup_v1`; inside `apptainer exec`, `/proc/self/cgroup` shows a `step_batch` path
+  and its `cpu.stat` can be read.
+- [ ] **C2. Confinement and allocation**: `cpus_affinity == cpus_requested` (the
+  `cores_confined` header line now counts stage jobs too); with hyperthreads, how many
+  physical cores 4 logical CPUs are; whether a 1-CPU SOLVE or a 2-CPU tile is rounded
+  up (`AllocCPUS` in `logs/accounting_stages.psv` against `cpus_requested`).
+- [ ] **C3. The threads each library started** under that cpuset (`workers_seen`,
+  `torch_num_threads`, `dask_cpu_count`, `cv2_num_threads`, `vips_concurrency`, the
+  JVM's `availableProcessors`), and `cpu_efficiency` per stage job
+  (`stare_stage_peaks.csv`: `coarse_/tile_/solve_cpu_efficiency`).
+- [ ] **C4. sacct**: steps rolled into the job line or not (the parser copes either way),
+  and `TotalCPU` non-zero for the batch step; `AllocCPUS`, `ReqMem`, `MaxRSS` filled
+  (`cpu_h_reserved_scheduler`, `gb_h_reserved_scheduler`; blank and counted in
+  `reservation_jobs` when not).
+- [ ] **C5. What `memory.peak` measures**: task or job level, page cache in or out
+  (`cgroup_peak_gb`, `stage_cgroup_peak_gb`, `driver_job_peak_gb`).
+- [ ] **C6. GPU**: `torch.cuda.device_count() == 1` under `--gres=gpu:1` (else `gpu_h`
+  is multiplied); the GPU nodes' CPU model (`cpu_model`).
+- [ ] **C7. Mixed hardware**: `cpu_model` per method and row (`stage_cpu_model` for
+  STARE's stage jobs); GPU and CPU rows on different generations.
+- [ ] **C8.** `OMP_NUM_THREADS=1` reaches the ASHLAR job (`threads_env`).
+- [ ] **C9. STARE's per-job overhead**: `cpu_h_reserved_scheduler` against
+  `cpu_h_reserved` on the staged rows.
+- [ ] **C10. VALIS's heap**: the heap a rung asked for against what the JVM got.
+  `jvm_peak_heap_gb` is `NA` (no instrument reads it: a label, not a figure); until one
+  does, `peak_rss_gb` of a JVM row is bounded by `-Xmx` (the `JVM_RSS` header line).
+- [ ] **C11. The tile throttle's cost**: `elapsed_with_queue_s` against
+  `wall_unlimited_parallel_s`, `peak_cpus_at_once` against `n_tiles x 2`.
+- [ ] **C12.** How often compute-all's traces leave `%cpu` blank (`pipeline_cost.csv`).
+- [ ] **C13. The GPU partition's rungs** (`GRANT_GPU_MB`): DeeperHistReg's GPU ladder may
+  end below 700 GB where its CPU ladder does not (`n_capped`).
+- [ ] **C14. The OOM watcher** can be read (`oom_watch`): it decides whether a kill is
+  `wasted` or `killed_unsettled` (billed from the scheduler, `wasted_from_scheduler`).
+- [ ] **Contention** (R14): the `contention` header line (`load_start`/`load_end`,
+  `other_jobs_start`/`other_jobs_end` per attempt, `telemetry` yes/partly/no). Wall
+  times are on shared nodes; the headline is CPU-hours. `REGBENCH_WAVES=1` gives a
+  timing replicate with one method on the nodes at a time.
+
 - **A checkout of its own, left alone until the tables exist.** Every job imports the
   harness from the checkout at the moment it starts (`REGBENCH_REPO` is bound into the
   image and put on `PYTHONPATH`), not from a copy made at submission. A `git pull`, a
@@ -2983,11 +3124,19 @@ subset is assumed to be under `$REGBENCH_OUT` already, and the script says so.
 
 ### The CPU cross
 
-4 CPUs is every method's allocation. The CPU cross runs the six primary rows again at 8
-CPUs on a few patients, to show how each method's wall time and CPU-hours move
-with the allocation (user ruling 2026-10-16: `REGBENCH_CPUS` exists for this alone;
-  user ruling 2026-10-18: 4 and 8 CPUs only, not 16).
+4 CPUs is every method's allocation. The CPU cross runs each family's BEST-DICE row
+again, at 4 AND at 8 CPUs, on a few patients, to show what more CPUs buy: speed-up,
+CPU-hours and peak memory per patient (user ruling 2026-10-16: `REGBENCH_CPUS` exists
+for this alone; user ruling 2026-10-18: 4 and 8 CPUs only, not 16; the cross's rows
+are the best-Dice rows, DeeperHistReg's among its CPU rows, T31 R12).
 
+- **The rows**: `regbench cross-runs --out MAIN [--dataset multiplex]` prints each
+  family's best-Dice row of the MAIN run's tables (`tables.best_of`, the paper's own
+  rule), DeeperHistReg's among its CPU rows, one `family<TAB>row` line each and a
+  `# --rows a,b,...` line. It refuses a MAIN with no scored cells table.
+  `regbench cpu-scaling --main MAIN` takes the same list; `--rows` names others. A GPU
+  row is refused (`cpu_scaling.build`): the cross measures CPUs, and a GPU row's host
+  side is not the method. `stare_local4` is never one (it is a cost row of `stare`).
 - **The patients** are a rule: the smallest, median and largest by total moving
   gigapixels (the sum of `mov_hw` over a patient's rounds, ties by name; `subset.py`).
   `regbench pick-patients --cases C [--n 3]` prints them, one `patient<TAB>gpx` line
@@ -2996,42 +3145,53 @@ with the allocation (user ruling 2026-10-16: `REGBENCH_CPUS` exists for this alo
 - **Their cases** are a folder of symlinks to the prepared case folders (and a copy of
   `manifest.csv`): `regbench subset-cases --cases C --groups P1,P2,P3 --to D`. It
   refuses a `D` that is not empty. Nothing is prepared again.
+- **Both counts, the same submission style** (T31 R13): every cross row runs at 4 AND
+  at 8 CPUs, each count in its own folder (`out_c4`, `out_c8`), so no point is the main
+  run's result under another load. Each point is run twice: `REGBENCH_REPEAT=2` is the
+  same submission into `rep1/` and `rep2/` of the folder (each repeat its own results;
+  the two repeats are submitted together, so they share the nodes' time like every
+  other job: the figure draws their spread).
 - **`REGBENCH_CPUS`** (4 or 8; anything else, 16 included, stops the launch before any `sbatch`)
   is every ladder task's `--cpus-per-task`, recorded in `run.json` as
   `cpus_requested`. The selfchecks and the prepare, settle, tissue and score jobs keep
-  their own allocation.
+  their own allocation. `stare_local4` is dropped from a launch at 8 CPUs
+  (`submit_dropped.csv`, `run_config`): it is the 4-CPU row by definition.
 - **`REGBENCH_STARE_EXECUTION=local`** makes every STARE run one job per case on the
   ordinary ladder: its stages start inside that job (`run --stages local`, option
   `workers=$REGBENCH_CPUS`, so the tiles run that many at a time). There is no stage
   chain and no tile submitter. The launch prints `# STARE: stages run inside one job
   of N CPUs (local)`. Such a result's reuse key has the execution `local`, so it is
   never reused for a staged result, and a staged one is never reused for it.
-
-One results folder per CPU count, each on the subset's cases, the six primary runs only:
+- **What `cpu_scaling` checks, per point** (never hidden): `cpus_checked` (every
+  record's `cpus_requested` against the point's count: `yes`, or `no: <seen>`),
+  `cpu_model` and `cpu_model_matches` (one CPU model over every count and repeat of the
+  patient), and `n_patients_incomplete` (patients not complete at every count, left
+  out and counted). Speed-up is taken inside one (row, execution, repeat) only.
 
 ```bash
+regbench_py STARE_REGBENCH cross-runs --out "$MAIN"          # the rows
 regbench_py STARE_REGBENCH pick-patients --cases "$REGBENCH_CASES"
 regbench_py STARE_REGBENCH subset-cases --cases "$REGBENCH_CASES" \
     --groups <the three patients> --to "$ROOT/cases_cross"
-RUNS="stare valis_mirage valis120_hires deeperhistreg_hr_gpu ashlar palom"
-REGBENCH_CPUS=8 REGBENCH_STARE_EXECUTION=local REGBENCH_OUT=$ROOT/out_c8 \
-REGBENCH_CASES=$ROOT/cases_cross \
-    benchmarks/regbench/slurm/submit_cohort.sh --runs "$RUNS" -- <site options>
-# STARE's 4-CPU point, also local, in a folder of its own
-REGBENCH_STARE_EXECUTION=local REGBENCH_OUT=$ROOT/out_c4 \
-REGBENCH_CASES=$ROOT/cases_cross \
-    benchmarks/regbench/slurm/submit_cohort.sh --runs stare -- <site options>
+RUNS="<the rows cross-runs printed, space-separated>"
+for c in 4 8; do
+    REGBENCH_CPUS=$c REGBENCH_REPEAT=2 REGBENCH_STARE_EXECUTION=local \
+    REGBENCH_OUT=$ROOT/out_c$c REGBENCH_CASES=$ROOT/cases_cross \
+        benchmarks/regbench/slurm/submit_cohort.sh --runs "$RUNS" -- <site options>
+done
+regbench_py STARE_REGBENCH cpu-scaling --main "$MAIN" \
+    --point 4=$ROOT/out_c4 --point 8=$ROOT/out_c8 --to "$MAIN/paper/cpu_scaling.csv"
 ```
 
-STARE's points at 4 and 8 CPUs are both `local`, so they compare with one another.
-The other methods' 4-CPU points are the main run's results on those patients; they are
-not run again. Never point a `local` launch at the main `REGBENCH_OUT`: its STARE
-results have another reuse key, so every STARE unit there would run again and replace
-the staged result. The launcher refuses it before any `sbatch` when the folder holds a
-STARE result of its stage jobs (`regbench staged-results --out O` lists them); a staged
-launch over `local` results is not refused. Without `REGBENCH_CPUS` and `REGBENCH_STARE_EXECUTION` the launcher
-submits exactly what it submitted before the cross existed. A test compares the default
-dry run with the one from the launcher at 275edda0.
+Never point a `local` launch at the main `REGBENCH_OUT`: its STARE results have another
+reuse key, so every STARE unit there would run again and replace the staged result.
+The launcher refuses it before any `sbatch` when the folder holds a STARE result of its
+stage jobs (`regbench staged-results --out O` lists them); a staged launch over `local`
+results is not refused, and `stare_local4` (its own reuse key) never triggers it.
+Without `REGBENCH_CPUS`, `REGBENCH_STARE_EXECUTION`, `REGBENCH_REPEAT` and
+`REGBENCH_WAVES` the launcher submits exactly what it submitted before the cross
+existed, plus `stare_local4`'s own jobs (T31 R2). A test compares the default dry run
+with the one from the launcher at 275edda0, `stare_local4`'s jobs set aside.
 
 ### The preflight, and what every image is started with
 
