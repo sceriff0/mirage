@@ -93,6 +93,7 @@ import numpy as np
 
 from . import (
     DATASETS,
+    ashlar_discard,
     billing,
     compute_all,
     cost,
@@ -159,6 +160,7 @@ TABLES = (
     "resources",
     "summary_resources",
     "stare_stage_peaks",
+    "ashlar_discard",
     "nonband_cells",
     "nonband_summary",
     "nonband_missing",
@@ -3785,6 +3787,14 @@ def score(
         for _, case, names, *_ in jobs
         for r in stage_peaks.rows(out, [case], names)
     ]
+    # ASHLAR's replaced tiles per round and cell (score side: reads run.json)
+    discards = [
+        {k: table_schema.NA if v is None else v for k, v in r.items()}
+        for case in {
+            (j[1].dataset, str(j[1].case_id)): j[1] for j in jobs
+        }.values()  # a case once, not per job
+        for r in ashlar_discard.rows(out, [case])
+    ]
     cost_summary = summarise_cost(res_summary, primary)
     confined = cost.cores_confined(res)
     cost_header = cost.header_lines(res)
@@ -3834,6 +3844,11 @@ def score(
         tables / "stare_stage_peaks.csv",
         peaks,
         table_schema.columns("stare_stage_peaks")[1:],
+    )
+    write_csv(
+        tables / "ashlar_discard.csv",
+        discards,
+        table_schema.columns("ashlar_discard")[1:],
     )
     write_csv(tables / "cost_summary.csv", cost_summary)
     write_csv(tables / "common_block.csv", common)
@@ -3920,6 +3935,7 @@ def score(
         "resources": res,
         "summary_resources": res_summary,
         "stare_stage_peaks": peaks,
+        "ashlar_discard": discards,
         "nonband_cells": non_cells,
         "nonband_summary": non_summary,
         "nonband_missing": non_lost,
