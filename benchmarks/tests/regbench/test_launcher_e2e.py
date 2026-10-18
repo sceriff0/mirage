@@ -174,15 +174,17 @@ def test_3_out_of_memory_to_the_top_rung_is_the_methods(tmp_path, one_case):
     assert "ladder_cut_gb" not in rec
 
 
-def test_3_a_rung_no_node_can_grant_is_the_launchers(tmp_path, one_case):
+def test_3_a_rung_no_node_can_grant_is_capped(tmp_path, one_case):
     """The partition's largest node has 300000 MB: 512 and 700 GB are never planned;
-    the unit that ran out of memory at 256 GB is written down as not_submitted."""
+    the unit that ran out of memory at 256 GB is written down as capped (Task 28, B6:
+    the method's, imputed; it was not_submitted)."""
     done, out, jobs = cohort(tmp_path, one_case, oom_below=100000, sinfo="cpu*|300000|")
     assert "can NEVER be granted there" in done.stdout + done.stderr
     named = by_name(jobs)
     assert "rb-palom-multiplex-256g" in named and "rb-palom-multiplex-512g" not in named
     rec = record(out)
-    assert rec["cause"] == "not_submitted" and rec["ladder_cut_gb"] == 512
+    assert rec["cause"] == "capped" and rec["ladder_cut_gb"] == 512
+    assert "capped at 256 GB" in rec["error"] and "512 GB" in rec["error"]
     assert rec["cause_from"].startswith("oom at rung 3 (256 GB)")
     assert "NOT SUBMITTED, the partition cannot grant this rung" in log_of(
         jobs, "rb-palom-multiplex-retry"

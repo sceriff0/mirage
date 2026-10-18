@@ -86,6 +86,22 @@ T7_GOLDEN_SHA256 = "3fd78aea36cb84e7d1f731049d671835a35e8fa2a4fa04c279ab21b99928
 
 # the three columns T10 added (patient_id, panel, tool_version): not in the T7 golden
 T10_COLUMNS = ("patient_id", "panel", "tool_version")
+# the columns Task 28 added (attrition, failures, resources, summary_resources): with them
+# stripped too the golden is still the T7 golden, so no value of an older column moved
+T28_COLUMNS = (
+    "checkpoint_rounds",
+    "not_prepared",
+    "killed_unsettled",
+    "settled",
+    "launches_failed_capped",
+    "launches_failed_held",
+    "launches_failed_killed_unsettled",
+    "launches_failed_result_unreadable",
+    "launches_failed_submit_refused",
+    "launches_failed_watcher_gave_up",
+    "cost_bound",
+    "unmeasured_records",
+)
 
 
 def test_the_golden_minus_dropme_is_the_t7_golden():
@@ -95,7 +111,7 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
             {
                 ("n_not_run_or_blocked" if k == "n_not_run_or_lost" else k): v
                 for k, v in row.items()
-                if k not in T10_COLUMNS
+                if k not in T10_COLUMNS and k not in T28_COLUMNS
             }
             for row in rows
             if not _dropme(row)

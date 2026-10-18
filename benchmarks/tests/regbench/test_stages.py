@@ -1374,11 +1374,14 @@ def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monke
         in (run["error"])
     )
     assert "the tile submitter did not finish" in run["error"]
-    from benchmarks.regbench import failure_log, resources, score
+    from benchmarks.regbench import failure_log, losses, resources, score
 
     assert failure_log.classify(run["cause"]) == failure_log.LAUNCHER
     assert run["cause"] in resources.NOT_THE_METHOD and run["cause"] in score.CAUSES
-    assert set(score.NOT_THE_METHOD) == set(resources.NOT_THE_METHOD)
+    # Task 28 adds the causes the frozen writers cannot say (losses.NOT_THE_METHOD_EXTRA)
+    assert set(score.NOT_THE_METHOD) == set(resources.NOT_THE_METHOD) | set(
+        losses.NOT_THE_METHOD_EXTRA
+    )
     # the submitter finished: the tile's job was in the queue and left no record
     state = stages.feed_state(out, "S-2", "stare", case.dataset)
     state.parent.mkdir(parents=True)

@@ -336,8 +336,11 @@ def test_failed_method_is_a_row_not_a_gap(toy):
     root, case, out = toy
     write_json(
         result_dir(out, "ghost", case) / "run.json",
-        {"ok": False, "error": "node failure", "cause": "killed", "launch_id": "77"},
-    )
+        # settled: the scheduler ended it (Task 28, S1: a kill nobody settled is
+        # killed_unsettled, not the method's)
+        {"ok": False, "error": "node failure", "cause": "killed", "launch_id": "77",
+         "scheduler": {"state": "FAILED"}},
+    )  # fmt: skip
     score(root, out, ["multiplex"])
     rows = rows_of(out, "cells")
     init, failed = _row(rows, "P1_r1", "initial"), _row(rows, "P1_r1", "ghost")

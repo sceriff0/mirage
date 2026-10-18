@@ -578,7 +578,11 @@ def test_the_submitter_runs_compute_last_on_lanes(site):  # noqa: F811
     assert jobs[heads[1]].deps == {("afterany", "<rb-score>")}
     assert jobs[heads[2]].deps == {("afterany", f"<{heads[0]}>")}
     assert jobs[heads[3]].deps == {("afterany", f"<{heads[1]}>")}
-    assert jobs["rb-score-compute"].deps == {("afterany", f"<{h}>") for h in heads}
+    # its scoring also waits for rb-rescore (B5): two scorers never write the tables
+    rescore = {("afterany", "<rb-rescore>")} if "rb-rescore" in jobs else set()
+    assert jobs["rb-score-compute"].deps == {
+        ("afterany", f"<{h}>") for h in heads
+    } | rescore
     assert jobs["rb-score-compute"].script == "score_cohort.sbatch"
     assert jobs["rb-score-compute"].args == ["score"]
     for h in heads:

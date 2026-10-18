@@ -40,8 +40,11 @@ def test_every_cell_row_has_the_three_columns(tmp_path):
 
 
 
-# score.pair_code() at 0df7acec, before the labels: adding them moved no pair record code
-PAIR_CODE_SCORE_PY = "1145a3e665506c6f68565eefe06e3a4d832044d6056f2c72d21e139dd32ec096"
+# score.pair_code() at 0df7acec, before the labels: adding them moved no pair record code.
+# Task 28 (S4) changed `_load_run` on purpose (an unreadable run.json or warped.npz, or an
+# ok result with no warped.npz, is result_unreadable, and the unsettled kill is
+# reclassified), so every kept case record is scored once again: the new value is that one
+PAIR_CODE_SCORE_PY = "3880f8cfe2e925e2ff1e37658898ce6c0fe6c43d351ba6dc66d8b12eb63b221e"
 
 
 def test_the_labels_leave_the_pair_code_alone():

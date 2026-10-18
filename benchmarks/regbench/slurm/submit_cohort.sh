@@ -1846,7 +1846,7 @@ for ds in $sized; do
 done
 
 # ── 5. per-case scoring and tissue, then the scorer, in the scorer's image ────────────
-SCORER_JOB=""
+SCORER_JOB="" RESCORE_JOB=""
 if [ "$compute_only" != 1 ]; then
 dep=""
 for j in $finals; do dep="${dep:+$dep:}$j"; done
@@ -1902,7 +1902,7 @@ if [ -n "$sc_dep" ]; then
     submit "rb-rescore" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$SCORER_JOB:$sc_dep" \
         --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
         "$HERE/score_cohort.sbatch" score ${scored_sets[@]+"${scored_sets[@]}"}
-    SCORER_JOB="$JOB_ID"
+    RESCORE_JOB="$JOB_ID"
 fi
 fi
 
@@ -1926,7 +1926,9 @@ if [ "$computing" = 1 ]; then
         heads="${heads:+$heads:}$JOB_ID"
         i=$((i + 1))
     done <<< "$COMPUTE_PLAN"
-    submit "rb-score-compute" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$heads" \
+    # compute starts after the scorer, as before B5; its own scoring also waits for
+    # rb-rescore, so two scorers never write the tables at once
+    submit "rb-score-compute" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$heads${RESCORE_JOB:+:$RESCORE_JOB}" \
         --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
         "$HERE/score_cohort.sbatch" score
     echo "# compute-all: $i head(s) -> $REGBENCH_OUT/compute/<backend>/<patient>/ (trace/trace.txt); their end lines in $REGBENCH_OUT/logs/compute/; the tables pipeline_cost*.csv from rb-score-compute"
