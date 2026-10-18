@@ -633,13 +633,20 @@ def _prior(row, cost_rows, res_rows, common, peaks):
     (R15). ``affine=stare``: STARE's COARSE (``stare_stage_peaks.coarse_cpu_h`` /
     ``coarse_s``, summed over the patient's rounds); ``affine=valis``: the
     ``valis_mirage_rigid`` row's ``cpu_h_used`` and ``register_s``. NaN otherwise."""
+    cpu, sec = _prior_values(row, cost_rows, common, peaks)
+    return _median(cpu), _median(sec)
+
+
+def _prior_values(row, cost_rows, common, peaks):
+    """``([prior_cpu_h], [prior_s])`` per patient of ``common`` (``_prior``'s rule);
+    empty lists for a row with no prior."""
     try:
         run = variants.run_of(row)
     except KeyError:
-        return math.nan, math.nan
+        return [], []
     anchor = (run.opts or {}).get("affine")
     if run.method != "ashlar" or anchor in (None, "", "none"):
-        return math.nan, math.nan
+        return [], []
     if anchor == "stare":
         by = {}
         for r in peaks:
@@ -649,12 +656,11 @@ def _prior(row, cost_rows, res_rows, common, peaks):
                 got = by.setdefault(p, [0.0, 0.0])
                 got[0] += c
                 got[1] += t
-        cpu = [by[p][0] for p in common if p in by]
-        sec = [by[p][1] for p in common if p in by]
-        return _median(cpu), _median(sec)
+        return ([by[p][0] for p in sorted(common) if p in by],
+                [by[p][1] for p in sorted(common) if p in by])
     rigid = f"{VALIS_FAMILY}_rigid"
     mine = [r for r in _complete(cost_rows) if r["method"] == rigid and r["group"] in common]
-    return _median(r.get("cpu_h_used") for r in mine), _median(r.get("register_s") for r in mine)
+    return [r.get("cpu_h_used") for r in mine], [r.get("register_s") for r in mine]
 
 
 def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, common=None, peaks=()):
@@ -824,18 +830,34 @@ def _point_row(dataset, p):
     return schema.empty_row("cost_points", source=SOURCE, dataset=dataset, **vals)
 
 
-def end_to_end(summary, cost_rows, res_rows, e2e_rows, peaks, dataset, common):
+def end_to_end(summary, cost_rows, res_rows, e2e_rows, peaks, dataset, common, points=None):
     """``end_to_end`` (R15, P11): per ``method_summary`` row, the medians over the
     common patients of the method's own conversion, its registration, its writer and,
     for an anchored ASHLAR row, the prior it reads, from the scorer's
     ``cost_end_to_end.csv``; each row says whether the conversion is inside the
-    registration's clock (``convert_inside_clock``)."""
+    registration's clock (``convert_inside_clock``). A common patient the row did not
+    complete (``points``: its cost_points) is no part of its medians (T31 fix I5), and
+    every median carries its bootstrap interval."""
     out = []
     for m in summary:
         row = m["row"]
+        done = common if points is None else {
+            p["unit_id"] for p in points
+            if p["row"] == row and p["unit_kind"] == costs.PATIENT
+            and p["status"] == costs.COMPLETE and p["unit_id"] in common
+        }
         mine = [
-            r for r in e2e_rows if r.get("method") == row and r.get("group") in common
+            r for r in e2e_rows if r.get("method") == row and r.get("group") in done
         ]
+        stats = {}
+        for col, src in (("convert_s", "method_convert_s"), ("estimate_s", "estimate_s"),
+                         ("write_s", "write_s")):
+            vals = [r.get(src) for r in mine]
+            stats[f"{col}_med"] = _median(vals)
+            stats[f"{col}_ci_low"], stats[f"{col}_ci_high"] = costs.interval(vals)
+        prior_s = _prior_values(row, cost_rows, done, peaks)[1]
+        stats["prior_s_med"] = _median(prior_s)
+        stats["prior_s_ci_low"], stats["prior_s_ci_high"] = costs.interval(prior_s)
         out.append(
             schema.empty_row(
                 "end_to_end",
@@ -845,12 +867,10 @@ def end_to_end(summary, cost_rows, res_rows, e2e_rows, peaks, dataset, common):
                 row=row,
                 row_kind=m["row_kind"],
                 clock=m["clock"],
+                unit=costs.PATIENT,
                 n_patients=len({r.get("group") for r in mine}),
-                convert_s_med=_median(r.get("method_convert_s") for r in mine),
-                estimate_s_med=_median(r.get("estimate_s") for r in mine),
-                write_s_med=_median(r.get("write_s") for r in mine),
                 prior_cpu_h=m.get("prior_cpu_h"),
-                prior_s_med=_prior(row, cost_rows, res_rows, common, peaks)[1],
+                **stats,
                 convert_inside_clock=m.get("convert_inside_clock"),
             )
         )
@@ -907,9 +927,11 @@ def valis_stages(pp, dataset):
     return out
 
 
-def stare_tiers(pp, cost_rows, dataset):
+def stare_tiers(pp, cost_rows, dataset, points=(), common=()):
     """One row per STARE run: tier, stride and preprocessing from its options (defaults
-    ``high``, 64, ``none``), accuracy and cost."""
+    ``high``, 64, ``none``), accuracy and cost. The cost is ``costs.summary_columns``'
+    (the cost rules: the common patients, an interval, the clock and the unit; T31 fix
+    I5), from the row's patient points."""
     out = []
     for name, final in terminal_rows(dataset).items():
         if family_of(final) != STARE_FAMILY:
@@ -917,8 +939,14 @@ def stare_tiers(pp, cost_rows, dataset):
         run = _run(name)
         opts = run.opts if run is not None else {}
         stats = _stage_stats(pp, final, dataset)
-        mine = [r for r in _complete(cost_rows) if r["method"] == final]
-        peaks = _finite(r.get("peak_rss_gb") for r in mine)
+        mine = [r for r in cost_rows if r["method"] == final]
+        clock = costs.clock_of(final, mine[0]) if mine else costs.WHOLE
+        sc = costs.summary_columns(points, final, set(common), clock)
+        cost = {k: sc[k] for k in (
+            "n_patients_common", "n_patients_survivors", "n_peak_not_comparable", "clock",
+            "unit", "cpu_h_used_common_med", "cpu_h_used_common_ci_low",
+            "cpu_h_used_common_ci_high", "peak_rss_gb_common_med", "peak_rss_gb_common_ci_low",
+            "peak_rss_gb_common_ci_high")}
         out.append(
             schema.empty_row(
                 "stare_tiers",
@@ -932,8 +960,7 @@ def stare_tiers(pp, cost_rows, dataset):
                 dice_q25=stats["dice_q25"],
                 dice_q75=stats["dice_q75"],
                 n_pairs=stats["n_pairs"],
-                peak_task_gb_max=max(peaks) if peaks else math.nan,
-                cpu_h_used_med=_median(r.get("cpu_h_used") for r in mine),
+                **cost,
             )
         )
     return out
@@ -1182,6 +1209,8 @@ def laptop(out, dataset, pp):
                 panel=p["panel"],
                 case_id=p["case_id"],
                 row=p["row"],
+                clock=costs.WHOLE,
+                unit="case",
                 wall_s=_num(r.get("total_to_image_s")),
                 peak_rss_gb=_num(r.get("peak_rss_gb")),
                 cpu_h_used=_num(r.get("cpu_h_used")),
@@ -1231,12 +1260,13 @@ def build(out, dataset=COHORT, cases_root=None):
         # every row: local4_differs reads the cost row's pairs; per_pair.csv is written
         # without it (write_all: accuracy_pairs, T31 fix C1)
         "per_pair": every,
-        "end_to_end": end_to_end(summary, cost_rows, res_rows, e2e, peaks, dataset, common),
+        "end_to_end": end_to_end(summary, cost_rows, res_rows, e2e, peaks, dataset, common,
+                                 points),
         "method_best": best,
         "method_best_per_method": got["method_best_per_method"],
         "method_summary": summary,
         "valis_stages": valis_stages(pp, dataset),
-        "stare_tiers": stare_tiers(pp, cost_rows, dataset),
+        "stare_tiers": stare_tiers(pp, cost_rows, dataset, points, common),
         "stare_stage_peaks": _copied(out, dataset, "stare_stage_peaks"),
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),
         "versions": versions(out, dataset),

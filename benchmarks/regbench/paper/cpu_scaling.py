@@ -183,6 +183,8 @@ def build(points, rows, dataset=tables.COHORT):
                         and cell["wall_s"] > 0
                     ):
                         speedup = base["wall_s"] / cell["wall_s"]
+                    clock = (costs.LOCAL4 if ex == "local" else costs.WHOLE
+                             if ex == ONE_PROCESS else costs.CRITICAL)
                     out_rows.append(
                         schema.empty_row(
                             "cpu_scaling",
@@ -193,8 +195,9 @@ def build(points, rows, dataset=tables.COHORT):
                             execution=ex,
                             repeat=rep,
                             wall_s=cell["wall_s"],
-                            wall_clock=costs.LOCAL4 if ex == "local" else costs.WHOLE
-                            if ex == ONE_PROCESS else costs.CRITICAL,
+                            wall_clock=clock,
+                            clock=clock,  # of the CPU-hours and the peak too (T31 fix I5)
+                            unit=costs.PATIENT,
                             cpu_h_used=cell["cpu_h_used"],
                             peak_rss_gb=cell["peak_rss_gb"],
                             speedup_vs_4=speedup,

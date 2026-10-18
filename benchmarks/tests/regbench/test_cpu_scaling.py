@@ -179,3 +179,10 @@ def test_the_cross_rows_are_each_familys_best_and_deeperhistregs_on_cpu(monkeypa
 def test_cross_rows_refuses_an_unscored_folder(tmp_path):
     with pytest.raises(SystemExit, match="cross-runs"):
         cpu_scaling.cross_rows(tmp_path)
+
+
+def test_every_figure_of_a_point_names_its_clock_and_unit(points):
+    """T31 fix I5: rule 4 for the CPU-hours and the peak too, not only the wall."""
+    by = {r["execution"]: r for r in cpu_scaling.build(points, ["stare"])}
+    assert by["local"]["clock"] == "local_4cpu" and by["local"]["unit"] == "patient"
+    assert all(r["clock"] == r["wall_clock"] for r in by.values())

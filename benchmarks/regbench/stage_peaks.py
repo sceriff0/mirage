@@ -116,6 +116,8 @@ def round_row(run_json, stage_dir, case):
         "panel": panel_of(case),
         "case_id": case.case_id,
         "row": None,
+        "clock": "stage_job",  # each figure is one stage job's own (rule 4, T31 fix I5)
+        "unit": "round",
         "tier": tier,
         "stride": stride,
         "coarse_peak_gb": _peak_gb(stages.read_record(stage_dir, "coarse")),

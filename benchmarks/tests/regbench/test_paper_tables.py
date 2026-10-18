@@ -434,3 +434,39 @@ def test_the_paper_writes_its_own_losses_csv(scored):
     want = [f for f in built["cost_fits"] + built["pipeline_cost_fits"]
             if f["n_dropped"]]  # fmt: skip
     assert len(fits_rows) == len(want) > 0  # no cases folder: no input_gb
+
+
+def _pt(row, pid, status, cpu, peak):
+    return {"row": row, "unit_kind": "patient", "unit_id": pid, "status": status,
+            "cpu_h_used": cpu, "peak_rss_gb": peak, "peak_rss_comparable": True}
+
+
+def test_stare_tiers_cost_is_over_the_common_patients_with_its_interval_clock_and_unit(monkeypatch):
+    """T31 fix I5: the tier table's cost follows the cost rules (2, 4, 5): the headline
+    is over the common patients, never the row's survivors, with an interval."""
+    monkeypatch.setattr(tables, "family_of", variants.family)
+    monkeypatch.setattr(tables, "terminal_rows", lambda ds: {"stare_medium": "stare_medium"})
+    points = [_pt("stare_medium", "P1", "complete", 1.0, 2.0),
+              _pt("stare_medium", "P2", "complete", 3.0, 4.0),
+              _pt("stare_medium", "P3", "complete", 100.0, 200.0)]  # not common: left out
+    cost = [{"method": "stare_medium", "n_jobs": "5", "group": p} for p in ("P1", "P2", "P3")]
+    (r,) = tables.stare_tiers([], cost, "multiplex", points, {"P1", "P2"})
+    assert r["cpu_h_used_common_med"] == 2.0 and r["peak_rss_gb_common_med"] == 3.0
+    assert r["cpu_h_used_common_ci_low"] <= 2.0 <= r["cpu_h_used_common_ci_high"]
+    assert (r["n_patients_common"], r["n_patients_survivors"]) == (2, 3)
+    assert r["clock"] == "critical_path_unlimited" and r["unit"] == "patient"
+
+
+def test_end_to_end_reads_the_common_patients_the_row_completed_with_intervals():
+    """T31 fix I5: a common patient this row did not complete (a twin's or local4's
+    failed patient) is no part of its medians; every median has its interval."""
+    summary = [{"row": "x", "family": "palom", "row_kind": "cpu_twin", "clock": "whole_process",
+                "prior_cpu_h": None, "convert_inside_clock": "no"}]
+    points = [_pt("x", "P1", "complete", 1, 1), _pt("x", "P2", "complete", 1, 1),
+              _pt("x", "P3", "failed", 1, 1)]
+    e2e = [{"method": "x", "group": p, "method_convert_s": s, "estimate_s": s, "write_s": s}
+           for p, s in (("P1", 10), ("P2", 20), ("P3", 1000))]
+    (r,) = tables.end_to_end(summary, [], [], e2e, [], "multiplex", {"P1", "P2", "P3"}, points)
+    assert r["n_patients"] == 2 and r["estimate_s_med"] == 15.0
+    assert r["estimate_s_ci_low"] <= 15.0 <= r["estimate_s_ci_high"]
+    assert r["unit"] == "patient" and r["clock"] == "whole_process"

@@ -88,3 +88,41 @@ def test_cell_values_and_a_failed_write_leaves_the_file(tmp_path):
     with pytest.raises(KeyError):
         schema.write(p, "laptop", [row, {"source": "x", "bogus": 1}])
     assert p.read_bytes() == before
+
+
+# T31 fix I5: rules 4 and 5 hold in EVERY paper table, not only method_summary
+COST_UNITS = {"CPU-h", "GB-h", "GPU-h", "s", "GB"}
+# a GB that is no measured cost: a configured request, or the machine's memory
+NOT_A_COST = {("stare_tier_table", "reg_tile_mem_gb"), ("stare_tier_table", "stitch_mem_gb"),
+              ("laptop", "mem_total_gb")}
+_SUFFIXES = ("_common_med", "_survivors_med", "_common_ci_low", "_common_ci_high",
+             "_survivors_ci_low", "_survivors_ci_high", "_ci_low", "_ci_high", "_med", "_max",
+             "_p50")
+
+
+def _stem(name):
+    for suf in _SUFFIXES:
+        if name.endswith(suf):
+            return name[: -len(suf)]
+    return name
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_every_cost_column_names_its_clock_and_unit_and_a_median_its_interval(name):
+    cols = {c.name: c for c in schema.TABLES[name].cols}
+    bad = []
+    for c in cols.values():
+        if c.unit not in COST_UNITS or (name, c.name) in NOT_A_COST:
+            continue
+        stem = _stem(c.name)
+        if not {"clock", f"{stem}_clock"} & cols.keys():
+            bad.append(f"{c.name}: no clock")
+        if not {"unit", f"{stem}_unit"} & cols.keys():
+            bad.append(f"{c.name}: no unit")
+        if c.name.endswith("_med") and "DEPRECATED" not in c.what:
+            base = c.name[: -len("_med")]
+            # its own interval, or it is the alias of a headline that has one
+            if not ({f"{base}_ci_low", f"{base}_ci_high"} <= cols.keys()
+                    or {f"{base}_common_ci_low", f"{base}_common_ci_high"} <= cols.keys()):
+                bad.append(f"{c.name}: a median with no interval")
+    assert not bad, bad
