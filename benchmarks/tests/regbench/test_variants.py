@@ -90,8 +90,11 @@ OTHER_FIRST = [
     "deeperhistreg_hr_fluo_cpu",
 ]
 N_OTHER_RUNS = 20  # 11 VALIS + 8 DeeperHistReg + PALOM
+# T31 R2: STARE at 4 CPUs in one job, a cost row of stare's (never a best-row candidate)
+LOCAL_4CPU = ["stare_local4"]
 EXPECTED = [
     *[v for n in _stare_names() for v in _stare_variants(n)],
+    *[v for n in LOCAL_4CPU for v in _stare_variants(n)],
     *OTHER_FIRST,
     *ashlar.ASHLAR_CELLS,
     "palom_affine",
@@ -138,11 +141,11 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 # 45 as before, the paused row never counted; 47 since STARE's medium and low tiers were
 # added beside high on 2026-10-17; 55 since the pipeline's VALIS runs at three tiers x
 # micro-registration depth 0, 1, 2, the same day)
-N_RUNS = 55
+N_RUNS = 56  # T31: + stare_local4
 
 
 def test_counts():
-    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    n_runs = len(_stare_names()) + len(LOCAL_4CPU) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
     cohort = variants.runs_for(None)
     assert n_runs == len(cohort) == N_RUNS
@@ -158,7 +161,7 @@ def test_counts():
 def test_run_names_are_unique_and_the_stride_runs_are_exactly_the_generated_set():
     names = [variants.run_name(r) for r in variants.RUNS]
     assert len(names) == len(set(names)) == len(variants.RUNS)
-    stare = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
+    stare = [variants.run_name(r) for r in _stare_runs()]
     assert sorted(stare) == sorted(_stare_names() + _brightfield_stare_names())
     stride = {n for n in names if n.startswith("stare_s")}
     # stare_s<stride>_<level>: one per non-default stride and level, no more
@@ -388,7 +391,7 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
 
     both = [r for r in variants.RUNS if r.method == "stare"]
     assert {variants.run_name(r) for r in both} == set(
-        _stare_names() + _brightfield_stare_names()
+        _stare_names() + _brightfield_stare_names() + LOCAL_4CPU
     )
     for stare in both:
         assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
@@ -468,12 +471,14 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert len(got) == len(variants.runs_for(None))
     assert all(len(r) == len(COLUMNS) == 16 for r in got)
     # the runs whose registration is several scheduler jobs per round: every STARE run
+    # but the 4-CPU cost row, whose column reads `local` (its stages in one job)
     staged = {r[0]: r[15] for r in got if r[15] != "-"}
-    assert set(staged) == set(_stare_names())
+    assert set(staged) == set(_stare_names() + LOCAL_4CPU)
     for run in variants.runs_for(None):
         if run.method != "stare":
             continue
-        assert staged[variants.run_name(run)] == "coarse,tile,solve,stitch"
+        want = "local" if variants.run_name(run) in LOCAL_4CPU else "coarse,tile,solve,stitch"
+        assert staged[variants.run_name(run)] == want
     assert [r[0] for r in got] == [
         variants.run_name(r) for r in variants.runs_for(None)
     ]
@@ -615,7 +620,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
         "deeperhistreg_fluo_gpu",
     }
     assert variants.expected_variants() == [v for v in EXPECTED if v not in gone]
-    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    n_runs = len(_stare_names()) + len(LOCAL_4CPU) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (n_runs - 2, len(GPU) - 1, len(PER_PATIENT) - 1)
     # the family keeps its primary, and its members are the runs that run
     assert variants.members("valis120") == ["valis120_hires"]
@@ -712,7 +717,7 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
     # every STARE cell is checked by `stare`, so they are paused with it (the
     # brightfield regimes' cells too, which the cohort's counts never held)
-    stare_cells = [*_stare_names(), *_brightfield_stare_names()]
+    stare_cells = [*_stare_names(), *_brightfield_stare_names(), *LOCAL_4CPU]
     pause(monkeypatch, *stare_cells)
     monkeypatch.setattr(
         variants, "PRIMARY", tuple(v for v in variants.PRIMARY if v != "stare")
@@ -723,9 +728,9 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     anchored = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "stare"]
     pause(monkeypatch, *stare_cells, *anchored)
     variants.check()
-    n_runs = len(_stare_names()) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
+    n_runs = len(_stare_names()) + len(LOCAL_4CPU) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (
-        n_runs - len(_stare_names()) - len(anchored),
+        n_runs - len(_stare_names()) - len(LOCAL_4CPU) - len(anchored),
         len(GPU),
         len(PER_PATIENT) - len(anchored),
     )
@@ -912,11 +917,17 @@ from benchmarks.regbench import regimes as rg  # noqa: E402
 from benchmarks.regbench.methods import ashlar as ashlar_adapter  # noqa: E402
 
 
+def _stare_runs():
+    """Every STARE run of the stride x level and tier grid: the 4-CPU cost row
+    (``LOCAL_4CPU``, T31) is a STARE run outside the grid."""
+    return [r for r in variants.RUNS if r.method == "stare" and variants.run_name(r) not in LOCAL_4CPU]
+
+
 def _generated_stare():
     """The STARE runs generated from the stride x level cross: every STARE run but the
     two tier runs (``STARE_TIER_RUNS``), which are listed beside it."""
-    got = [r for r in variants.RUNS if r.method == "stare" and "tier" not in r.opts]
-    tiers = [variants.run_name(r) for r in variants.RUNS if r.method == "stare"]
+    got = [r for r in _stare_runs() if "tier" not in r.opts]
+    tiers = [variants.run_name(r) for r in _stare_runs()]
     assert [n for n in tiers if n not in {variants.run_name(r) for r in got}] == (
         STARE_TIER_RUNS
     )
@@ -1122,7 +1133,7 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
 COHORT_RUNS = [
     "stare", "stare_s128_none", "stare_s256_none", "stare_clahe", "stare_s128_clahe",
     "stare_s256_clahe", "stare_percentile", "stare_s128_percentile",
-    "stare_s256_percentile", "stare_medium", "stare_low", "valis_mirage",
+    "stare_s256_percentile", "stare_medium", "stare_low", "stare_local4", "valis_mirage",
     "valis_mirage_high_m0", "valis_mirage_high_m1", "valis_mirage_medium_m0",
     "valis_mirage_medium_m1", "valis_mirage_medium_m2", "valis_mirage_low_m0",
     "valis_mirage_low_m1", "valis_mirage_low_m2", "valis120", "valis120_hires",
@@ -1138,6 +1149,8 @@ COHORT_RUNS = [
     "ashlar_astare_n01_s240", "ashlar_astare_n05_s15", "ashlar_astare_n05_s60",
     "ashlar_astare_n05_s240", "palom",
 ]  # fmt: skip
+# T31 R2 adds ONE line, stare_local4's: the sha is of the lines without it, so every
+# other run's line is byte-identical to before
 COHORT_RUNS_SHA256 = "2a608b13030e81da52113e422501023a820118605eb0fc9fc81820a2681b67a4"
 
 
@@ -1147,7 +1160,8 @@ def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
     assert [variants.run_name(r) for r in variants.runs_for(None)] == COHORT_RUNS
     assert len(COHORT_RUNS) == N_RUNS
     for dataset in (None, "multiplex"):
-        lines = "\n".join("\t".join(r) for r in variants.runs_table(dataset=dataset))
+        lines = "\n".join("\t".join(r) for r in variants.runs_table(dataset=dataset)
+                           if r[0] not in LOCAL_4CPU)
         assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256
 
 
@@ -1207,3 +1221,15 @@ def test_valis_mirage_tier_by_micro_grid():
     assert len(names) == 9
     # neither is a primary row: `valis_mirage` stays the family's primary
     assert variants.primary_of("valis_mirage") == "valis_mirage"
+
+
+def test_stare_local4_is_a_4_cpu_cost_row_of_stare():
+    run = by_name()["stare_local4"]
+    assert run.opts == {"workers": "4"} and not run.gpu
+    assert tuple(variants.LOCAL_4CPU) == ("stare_local4",)
+    assert "stare_local4" in variants.COST_ONLY
+    assert variants.family("stare_local4") == "stare"
+    row = next(r for r in variants.runs_table() if r[0] == "stare_local4")
+    assert row[15] == "local"  # the launcher's own-local column
+    assert variants.cpu_twin("deeperhistreg_hr_gpu") == "deeperhistreg_hr_cpu"
+    assert variants.cpu_twin("deeperhistreg_hr_cpu") is None

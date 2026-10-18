@@ -617,7 +617,9 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
             [str(i), str(gb)] for i, gb in enumerate(gbs, 1)
         ], run
         # only the last job of a run in several jobs is told to collect them
-        assert {j.args[13] for j in got} == {"jobs" if run in STAGED else "-"}, run
+        # (stare_local4: its stages inside its one job, T31 R2)
+        want = "jobs" if run in STAGED else "local" if run in variants.LOCAL_4CPU else "-"
+        assert {j.args[13] for j in got} == {want}, run
         assert [j.args[11] for j in got] == ["first"] + ["climb"] * 4, run
         assert got[0].args[10] == "-"
         assert all("--wait" not in j.words for j in got)
@@ -1329,7 +1331,8 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     # watcher of COARSE and of SOLVE, its two tile submitters (the tile jobs are theirs
     # to submit), and the last job's first array and watcher (and 2 of its
     # preprocessing) where another run has the ladder's 2. No retry is submitted.
-    assert set(STAGED) == {n for n, r in RUNS.items() if r.method == "stare"}
+    assert set(STAGED) == {n for n, r in RUNS.items()
+                           if r.method == "stare" and n not in variants.LOCAL_4CPU}
     assert len(sizes) == len(COHORT_DATASETS)
     assert (
         len(jobs)
@@ -1842,7 +1845,7 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
     assert STAGED == {
         n: ("coarse", "tile", "solve", "stitch")
         for n, r in RUNS.items()
-        if r.method == "stare"
+        if r.method == "stare" and n not in variants.LOCAL_4CPU
     }
     for run, names in STAGED.items():
         spec = RUNS[run]
@@ -4221,8 +4224,14 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     )  # fmt: skip
     subprocess.run(["tar", "-x", "-C", str(old)], input=archive.stdout, check=True)
     old_slurm = old / "benchmarks" / "regbench" / "slurm"
+    # T31 R2 adds ONE run to the default launch, stare_local4 (STARE at 4 CPUs in one
+    # job, a cost row of stare's; its run-list column `local` is not one the old
+    # launcher knows): the old launcher submits every OTHER run, and the new default
+    # launch must be exactly that plus stare_local4's own jobs, with nothing else
+    # waiting for them but the settle and scoring jobs that wait for every run
+    others = " ".join(n for n in RUNS if n not in variants.LOCAL_4CPU)
     argv, base, _ = _launch_command(
-        site, (), {"REGBENCH_REPO": str(REPO)}, True, "before"
+        site, ("--runs", others), {"REGBENCH_REPO": str(REPO)}, True, "before"
     )
     argv[1] = str(old_slurm / "submit_cohort.sh")
     done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
@@ -4234,7 +4243,19 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     # Task 28, B5, the one change to the default graph: the settle job no longer
     # waits for the selfchecks' watchers, and rb-rescore (after the scorer and them)
     # is added
-    now_lines = _sbatch_lines(dry[1].stdout)
+    local = tuple(variants.LOCAL_4CPU)
+
+    def own(ln):
+        return any(f"rb-{r}-" in Job(ln).name for r in local)
+
+    def without(ln):
+        for r in local:
+            ln = re.sub(rf":<rb-{r}-[^>]*>", "", ln)
+        return ln
+
+    every_line = _sbatch_lines(dry[1].stdout)
+    assert any(own(ln) for ln in every_line)  # it IS in the default launch
+    now_lines = [without(ln) for ln in every_line if not own(ln)]
     rescore = [ln for ln in now_lines if Job(ln).name == "rb-rescore"]
     assert len(rescore) == 1 and "<rb-score>" in rescore[0]
     then = [
@@ -4243,7 +4264,8 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     ]
     assert then and then == [ln for ln in now_lines if ln not in rescore]
     later = [ln for ln in done.stdout.splitlines() if ln.startswith(LATER)]
-    now = [ln for ln in dry[1].stdout.splitlines() if ln.startswith(LATER)]
+    now = [without(ln) for ln in dry[1].stdout.splitlines()
+           if ln.startswith(LATER) and not own(ln[len(LATER):])]
     assert [
         ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
         for ln in later
@@ -4325,3 +4347,64 @@ def test_a_datasets_cases_folder_is_the_cohorts_or_its_own(tmp_path):
     assert done.stdout.split("\n")[:3] == [
         str(tmp_path / "c"), str(tmp_path / "m"), "nucset: none"
     ]  # fmt: skip
+
+
+def test_stare_local4_is_one_job_per_case_at_4_cpus_with_its_own_workers(dry):
+    """T31 R2: STARE at 4 CPUs in one job, its stages inside it (``--stages local``
+    from the run list's column `local`), on the ordinary ladder; its options name its
+    workers (4), never appended to."""
+    jobs, _, _ = dry
+    for run in variants.LOCAL_4CPU:
+        got = rungs(jobs, run)
+        assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 5
+        assert {j.args[13] for j in got} == {"local"}
+        assert not [n for n in jobs if n.startswith(f"rb-{run}-") and ("-coarse-" in n or "-feed-" in n)]
+
+
+def test_stare_local4_is_dropped_at_another_cpu_count(site):
+    done, _, _ = launch(site, env={"REGBENCH_CPUS": "8"}, log="local4-at-8")
+    jobs = jobs_of(done)
+    assert not [n for n in jobs if any(n.startswith(f"rb-{r}-") for r in variants.LOCAL_4CPU)]
+    assert "DROPPED stare_local4 (run_config)" in done.stdout
+
+
+def test_waves_submit_one_method_after_the_other(site, dry):
+    """T31 R14, REGBENCH_WAVES=1: a method's first jobs wait for every job of the method
+    before it in the run list (a timing replicate with no other method on the nodes);
+    off by default, the plain launch has no such wait."""
+
+    def waits(job):
+        return {name.strip("<>") for _, name in job.deps}
+
+    def head(jobs, run, dataset="multiplex"):
+        if run in STAGED:
+            return jobs[f"rb-{run}-{dataset}-{STAGED[run][0]}-a1"]
+        return jobs.get(f"rb-{run}-{dataset}-first-16g") or rungs(jobs, run, dataset)[0]
+
+    done, _, _ = launch(site, env={"REGBENCH_WAVES": "1"}, log="waves")
+    jobs = jobs_of(done)
+    runs = list(variants.runs_for(None))
+    for prev, run in zip(runs, runs[1:]):
+        if prev.method == run.method:
+            continue
+        before = [variants.run_name(r) for r in runs[: runs.index(run)] if r.method == prev.method]
+        got = waits(head(jobs, variants.run_name(run)))
+        # the wave waits for the last job of every run of the method before it
+        assert {last_job(n) for n in before} <= got, variants.run_name(run)
+        plain = waits(head(dry[0], variants.run_name(run)))
+        assert not ({last_job(n) for n in before} <= plain) or run.after, variants.run_name(run)
+    bad, _, _ = launch(site, env={"REGBENCH_WAVES": "2"}, log="waves-bad")
+    assert bad.returncode != 0 and "REGBENCH_WAVES='2'" in bad.stderr + bad.stdout
+
+
+def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
+    """T31 R13, REGBENCH_REPEAT=2: the launch twice, into rep1 and rep2 of REGBENCH_OUT
+    (each repeat its own results: no repeat reuses another's)."""
+    done, _, out = launch(site, env={"REGBENCH_REPEAT": "2"}, log="repeat")
+    assert done.returncode == 0, done.stderr
+    assert f"REGBENCH_OUT={out}/rep1" in done.stdout and f"REGBENCH_OUT={out}/rep2" in done.stdout
+    lines = _sbatch_lines(done.stdout)
+    half = [ln for ln in lines if "/rep1" in ln]
+    assert half and len(lines) == 2 * len(half)
+    assert sorted(ln.replace("/rep1", "/rep2") for ln in half) == sorted(
+        ln for ln in lines if "/rep2" in ln)

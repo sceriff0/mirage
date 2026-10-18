@@ -191,6 +191,12 @@
 #                                     The dry run prints how many sbatch calls are made
 #                                     now, how many tile tasks are fed in later, and
 #                                     the most tasks in the queue at once
+#   REGBENCH_REPEAT (1)               the same submission N times, repeat k into
+#                                     $REGBENCH_OUT/rep<k> (the CPU cross's repetitions,
+#                                     README "The CPU cross"); 1 is the launch as it was
+#   REGBENCH_WAVES (0)                1: one method at a time, each method's first jobs
+#                                     after every job of the method before it (afterany):
+#                                     a timing replicate with no other method on the nodes
 #   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
 #   REGBENCH_RUN_ORDER                the order the runs are SUBMITTED in, and so dealt
 #                                     onto the lanes: family or run names, space-separated
@@ -364,6 +370,7 @@ PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks mcmicro=nucl
 SCORED_KINDS="tissue nuclei"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0
+ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
@@ -504,6 +511,26 @@ need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
 need_int REGBENCH_SCORE_CPUS 1
 need_int REGBENCH_RETRY_WATCHERS 1
+# REGBENCH_REPEAT=N (T31 R13, the CPU cross's two repetitions per point): the same
+# submission N times, repeat k into $REGBENCH_OUT/rep<k> (its own results, so no repeat
+# reuses another's; `cpu_scaling` reads each rep<k> as one repeat). 1 (the default) is
+# the launch as it always was
+: "${REGBENCH_REPEAT:=1}"
+need_int REGBENCH_REPEAT 1
+if [ "$REGBENCH_REPEAT" -gt 1 ] && [ -z "${REGBENCH_REPEAT_INDEX:-}" ]; then
+    [ -n "${REGBENCH_OUT:-}" ] || die "REGBENCH_REPEAT=$REGBENCH_REPEAT needs REGBENCH_OUT (each repeat is a folder of it). Nothing was submitted."
+    for ((k = 1; k <= REGBENCH_REPEAT; k++)); do
+        echo "# repeat $k of $REGBENCH_REPEAT: REGBENCH_OUT=$REGBENCH_OUT/rep$k"
+        REGBENCH_REPEAT_INDEX="$k" REGBENCH_OUT="$REGBENCH_OUT/rep$k" \
+            bash "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} || exit $?
+    done
+    exit 0
+fi
+# REGBENCH_WAVES=1 (T31 R14, a timing replicate): the runs are submitted one method at
+# a time, each method's first jobs after every job of the method before it in the run
+# list (afterany), so no two methods share the nodes' time. Off (0) by default
+: "${REGBENCH_WAVES:=0}"
+case "$REGBENCH_WAVES" in 0|1) ;; *) die "REGBENCH_WAVES='$REGBENCH_WAVES': 0 or 1. Nothing was submitted." ;; esac
 # the CPU cross: 4 (every method's allocation) or 8, and who starts STARE's stages
 case "$LADDER_CPUS" in
     4|8) ;;
@@ -816,10 +843,27 @@ if [ -n "${REGBENCH_RUN_ORDER:-}" ]; then
 fi
 REGBENCH_SCORER_IMAGE="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --scorer-image)"
 export REGBENCH_SCORER_IMAGE
+# A run whose `stages` column (the 16th) reads `local` is ALWAYS its stages inside one
+# job on the ordinary ladder (T31 R2: stare_local4, STARE at 4 CPUs in one job, a cost
+# row of stare's): OWN_LOCAL, with the workers its own options name (never appended),
+# and its column read as `-` like every LOCAL_RUN's. The other runs' rows are unchanged
+own_local() {  # <run list>
+    local name stages
+    while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
+        [ "${stages:-}" = local ] || continue
+        has "$OWN_LOCAL" "$name" || OWN_LOCAL="$OWN_LOCAL $name"
+        has "$LOCAL_RUNS" "$name" || LOCAL_RUNS="$LOCAL_RUNS $name"
+    done < "$1"
+    if ! awk -F'\t' -v OFS='\t' 'NF >= 16 && $16 == "local" { $16 = "-" } { print }' "$1" > "$1.own" \
+        || ! mv "$1.own" "$1"; then
+        die "cannot read the run list's stages column ($1). Nothing was submitted."
+    fi
+}
 # REGBENCH_STARE_EXECUTION=local: the run list's `stages` column (the 16th) is read as
 # `-` by every loop below, so no stage chain, layout or tile submitter is made; the runs
 # it named are LOCAL_RUNS, laddered one job per case with `local` (ladder, below)
-LOCAL_RUNS=""
+LOCAL_RUNS="" OWN_LOCAL=""
+own_local "$table"
 if [ "$STARE_EXECUTION" = local ]; then
     while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
         [ "${stages:--}" = - ] || LOCAL_RUNS="$LOCAL_RUNS $name"
@@ -845,6 +889,7 @@ for ds in $datasets; do
     regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$ds" ${order[@]+"${order[@]}"} > "$t" \
         || die "cannot read the run list of $ds (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
     [ -s "$t" ] || die "the run list of $ds is empty (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
+    own_local "$t"
     if [ "$STARE_EXECUTION" = local ]; then
         while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
             [ "${stages:--}" = - ] || has "$LOCAL_RUNS" "$name" || LOCAL_RUNS="$LOCAL_RUNS $name"
@@ -893,6 +938,7 @@ fi
 if [ "$STARE_EXECUTION" = local ] && [ -d "$REGBENCH_OUT" ]; then
     for r in $LOCAL_RUNS; do
         has "$selected" "$r" || continue
+        has "$OWN_LOCAL" "$r" && continue  # its own reuse key: never a staged result's
         staged_found="$(regbench_py "$REGBENCH_HEAD_IMAGE" staged-results --out "$REGBENCH_OUT")" \
             || die "cannot read which STARE results under $REGBENCH_OUT ran as stage jobs (python -m benchmarks.regbench staged-results). Nothing was submitted."
         if [ -n "$staged_found" ]; then
@@ -1266,6 +1312,15 @@ if [ "$prepare" = 1 ]; then
 fi
 
 # ── refusals, before anything is submitted ────────────────────────────────────────────
+# an OWN_LOCAL run is a 4-CPU cost row (its options name workers=4): at another ladder
+# CPU count it would not be what it says, so it is dropped (the CPU cross runs the
+# families' rows, not it)
+if [ "$LADDER_CPUS" != 4 ]; then
+    for r in $OWN_LOCAL; do
+        drop_run "$r" run_config "it is STARE at 4 CPUs in one job and REGBENCH_CPUS=$LADDER_CPUS"
+    done
+    none_left "REGBENCH_CPUS=$LADDER_CPUS"
+fi
 gpu_runs="" images=""
 while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$selected" "$name" || continue
@@ -1774,6 +1829,9 @@ staged() {
 N_FED=0 FED_RUNS=""
 feed_time="$(limit "$feed_s")"
 finals="" prev_ds="" n_laned=0
+WAVE_METHOD="" WAVE_PREV="" WAVE_CUR=""
+# wave_add <jobs>: what the next method's wave waits for (REGBENCH_WAVES=1)
+wave_add() { [ -z "$1" ] || WAVE_CUR="${WAVE_CUR:+$WAVE_CUR:}$1"; }
 for ds in $sized; do
     n_cases="CASES_$ds"; n_groups="GROUPS_$ds"; rounds="ROUNDS_$ds"
     while IFS=$'\t' read -r name method label opts image gpu scope after _ _ _ _ _ _ realcheck stages; do
@@ -1813,9 +1871,16 @@ for ds in $sized; do
             lane="LANE_LAST_${!lane}"
             [ -n "${!lane:-}" ] && base="$(deps_and "$base" "afterany:${!lane}")"
         fi
+        if [ "$REGBENCH_WAVES" = 1 ]; then
+            if [ "$method" != "$WAVE_METHOD" ]; then
+                WAVE_PREV="$WAVE_CUR" WAVE_CUR="" WAVE_METHOD="$method"
+            fi
+            [ -n "$WAVE_PREV" ] && base="$(deps_and "$base" "afterany:$WAVE_PREV")"
+        fi
         if [ "${stages:--}" != - ]; then
             staged "$base"
             printf -v "LAST_${ds}_$name" '%s' "$LADDER_LAST"
+            wave_add "$LADDER_LAST"
             finals="$finals $LADDER_LAST"
             if [ "$REGBENCH_RUN_LANES" -gt 0 ]; then
                 lane="LANE_OF_$name"
@@ -1830,7 +1895,9 @@ for ds in $sized; do
         start=0 ends="" execution=-
         # REGBENCH_STARE_EXECUTION=local: its stages inside the task, the tiles
         # $LADDER_CPUS at a time (STARE's option workers)
-        if has "$LOCAL_RUNS" "$name"; then
+        if has "$OWN_LOCAL" "$name"; then
+            execution=local  # its own options name its workers
+        elif has "$LOCAL_RUNS" "$name"; then
             execution=local
             if [ "$opts" = - ]; then opts="workers=$LADDER_CPUS"; else opts="$opts,workers=$LADDER_CPUS"; fi
         fi
@@ -1846,6 +1913,7 @@ for ds in $sized; do
             ends="${ends:+$ends:}$LADDER_LAST"
         fi
         [ -n "$ends" ] && printf -v "LAST_${ds}_$name" '%s' "$ends"
+        wave_add "$ends"
         last="LAST_${ds}_$name"
         if [ "$REGBENCH_RUN_LANES" -gt 0 ] && [ -n "${!last:-}" ]; then
             lane="LANE_OF_$name"

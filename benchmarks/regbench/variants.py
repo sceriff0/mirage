@@ -69,7 +69,9 @@ only ever added at the end, so a position never changes.
                        for it.
 16. ``stages``         for a run whose registration is several scheduler jobs per round
                        (``stages_of()``): their names in order, joined by commas
-                       (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit.
+                       (``coarse,tile,solve,stitch``); ``-`` for a run that is one job per unit;
+                       ``local`` for a run whose stages run inside its one job of 4 CPUs
+                       (``LOCAL_4CPU``: ``stare_local4``, a cost row of ``stare``).
 
 The STARE runs of a set are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``; a baseline cell, STARE unchanged, is one run in every regime),
@@ -205,6 +207,34 @@ def _stare_tier_runs():
     )
 
 
+# STARE at 4 CPUs in ONE job (Task 31, ruling R2/P4): the `stare` configuration with
+# `--stages local` and its tiles 4 at a time, every case of the cohort on the ordinary
+# ladder, under the same resources.Monitor as every one-process method. A COST row: its
+# accuracy must equal `stare`'s (the paper tables compare them case by case), it is
+# never a best-row candidate (COST_ONLY), and its results have their own name, so no
+# other row's reuse key moves. Column 16 of `runs` is `local` for it: the launcher runs
+# it as one job per case whatever REGBENCH_STARE_EXECUTION is, and only at
+# REGBENCH_CPUS=4.
+STARE_LOCAL4 = "stare_local4"
+LOCAL_4CPU = (STARE_LOCAL4,)
+LOCAL_STAGES = "local"
+
+
+def _stare_local4_runs():
+    return (
+        Run(
+            "stare",
+            STARE_LOCAL4,
+            {"workers": "4"},
+            "STARE_REGBENCH",
+            False,
+            None,
+            True,
+            (regimes.COHORT_REGIME,),
+        ),
+    )
+
+
 def _valis_mirage_runs():
     """The pipeline's VALIS at its three tiers x micro-registration depth 0, 1, 2
     (``methods.valis_mirage.TIERS`` x ``MICRO``): ``valis_mirage`` (``high``, 2, the shipped
@@ -257,6 +287,7 @@ def _ashlar_runs():
 RUNS = (
     *_stare_regime_runs(),
     *_stare_tier_runs(),
+    *_stare_local4_runs(),
     *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
@@ -377,6 +408,8 @@ CHECKED_BY = {
     **{r.label: "stare" for r in _stare_regime_runs() if r.label is not None},
     # the tier runs too: the same adapter and pointing path at other tile sizes
     **{r.label: "stare" for r in _stare_tier_runs()},
+    # STARE at 4 CPUs in one job: `stare` itself, another execution
+    **{r.label: "stare" for r in _stare_local4_runs()},
     # the pipeline's VALIS at its other tier x depth cells: the same adapter and point path
     **{r.label: "valis_mirage" for r in _valis_mirage_runs() if r.label is not None},
 }
@@ -731,7 +764,10 @@ def scope(method):
 
 def stages_of(run):
     """The scheduler jobs one round of this run is registered in, in order, or ``()``
-    for a run that is one job per unit: the method's ``STAGES`` (``regbench.stages``)."""
+    for a run that is one job per unit: the method's ``STAGES`` (``regbench.stages``).
+    A ``LOCAL_4CPU`` run is one job per unit (its stages run inside it, T31 R2)."""
+    if run_name(run) in LOCAL_4CPU:
+        return ()
     return tuple(getattr(methods.load(run.method), "STAGES", ()) or ())
 
 
@@ -773,6 +809,34 @@ def primary_of(family_name):
     for variant in PRIMARY:
         if family(variant) == family_name:
             return variant
+    return None
+
+
+# rows that are a cost measurement of another row and never a best-row candidate
+COST_ONLY = LOCAL_4CPU
+# a GPU row's CPU twin: the same configuration on the CPU (R11, P7)
+_TWIN = (("_gpu", "_cpu"),)
+
+
+def cpu_twin(name):
+    """The CPU twin of a GPU result name (``deeperhistreg_hr_gpu`` ->
+    ``deeperhistreg_hr_cpu``), or None: for a name that is no GPU run's, or whose twin
+    is no run."""
+    run = None
+    try:
+        run = run_of(str(name))
+    except (KeyError, SystemExit, ValueError):
+        return None
+    if run is None or not run.gpu:
+        return None
+    for gpu, cpu in _TWIN:
+        if str(name).endswith(gpu):
+            twin = str(name)[: -len(gpu)] + cpu
+            try:
+                other = run_of(twin)
+            except (KeyError, SystemExit, ValueError):
+                return None
+            return twin if other is not None and not other.gpu else None
     return None
 
 
@@ -1013,7 +1077,9 @@ def runs_table(paused=False, dataset=None, order=None):
                 "1" if run.active else "0",
                 ",".join(checked_rows(run_name(run))),
                 realcheck_row(run_name(run)) or NONE,
-                ",".join(stages_of(run)) or NONE,
+                LOCAL_STAGES
+                if run_name(run) in LOCAL_4CPU
+                else ",".join(stages_of(run)) or NONE,
             )
         )
     return table
