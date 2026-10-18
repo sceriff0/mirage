@@ -4781,8 +4781,8 @@ def _score_cells(
     from . import ladder
 
     booked = Path(accounting or Path(out) / "logs" / "accounting.psv")
-    # the stage jobs' own accounting (score_cohort.sbatch's settle: `sacct -X` of the
-    # COARSE, tile and SOLVE jobs), for the stage attempts the scheduler killed (R6)
+    # the stage jobs' own accounting (score_cohort.sbatch's settle: `sacct` of the
+    # COARSE, tile and SOLVE jobs with their steps, never -X), for the stage attempts the scheduler killed (R6)
     # and what the cluster held for them (R7)
     staged_booked = Path(out) / "logs" / STAGE_ACCOUNTING
     acct = ladder.read_accounting(booked) if booked.is_file() else None

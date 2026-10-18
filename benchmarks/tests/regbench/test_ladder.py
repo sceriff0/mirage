@@ -755,13 +755,23 @@ def test_the_accounting_is_asked_with_the_steps(script):
     """Both queries feed a CPU figure (`cpu_h_scheduler`, and a lost attempt's
     `scheduler_cpu_s`): with -X it could only ever be zero."""
     text = (Path(ladder.__file__).parent / "slurm" / script).read_text()
-    calls = [
-        line.split("#")[0]
-        for line in text.splitlines()
-        if "sacct " in line.split("#")[0] and "ElapsedRaw,TotalCPU" in line
+    code = [line.split("#")[0] for line in text.splitlines()]
+    # the fields may be spelled out or held in a variable the script assigns first
+    # (score_cohort.sbatch: SETTLE_FIELDS, T31): a call through it is one of these too
+    names = [
+        line.split("=", 1)[0].strip()
+        for line in code
+        if "=" in line and "ElapsedRaw,TotalCPU" in line.split("=", 1)[1]
     ]
-    assert len(calls) == 1
-    assert " -X" not in calls[0] and "--allocations" not in calls[0], calls[0]
+    calls = [
+        line
+        for line in code
+        if "sacct " in line
+        and ("ElapsedRaw,TotalCPU" in line or any(f"${n}" in line or "${" + n + "}" in line for n in names))
+    ]
+    assert calls, f"{script}: no sacct call asks for TotalCPU"
+    for call in calls:
+        assert " -X" not in call and "--allocations" not in call, call
 
 
 SACCT_STEPS = r"""#!/bin/bash

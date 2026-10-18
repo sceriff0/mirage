@@ -93,16 +93,19 @@ stage_ids() {
     awk -F'\t' '$2 ~ /-(coarse|tile|solve)-a[0-9]+(-o[0-9]+)?$/ && !seen[$3]++ { print $3 }' "$1" \
         | paste -sd, -
 }
-# their accounting, one line per job or array task (-X: no steps, so the hundreds of
-# tile tasks stay one short query): a stage attempt the scheduler killed before it
-# recorded its end is settled from it at table time, and what the cluster held for the
-# stage jobs is read from it (score.bill_from_disk: R6, R7). Never a reason to fail.
+# their accounting WITH the steps (no -X: the job's line alone reports no CPU time and
+# no MaxRSS, "Without including steps, utilization statistics for job allocation(s)
+# will be reported as zero"; ladder.parse_accounting adds the steps up, and
+# billing.parse_reservations takes their largest MaxRSS): a stage attempt the scheduler
+# killed before it recorded its end is settled from it at table time, and what the
+# cluster held for the stage jobs is read from it (score.bill_from_disk: R6, R7). Never
+# a reason to fail.
 settle_stages() {
     local jobs="$REGBENCH_OUT/logs/jobs.tsv" into="$REGBENCH_OUT/logs/accounting_stages.psv" ids
     [ -s "$jobs" ] && command -v sacct >/dev/null || return 0
     ids="$(stage_ids "$jobs")"
     [ -n "$ids" ] || return 0
-    if sacct -X -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$into.new" 2>/dev/null && [ -s "$into.new" ]; then
+    if sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$into.new" 2>/dev/null && [ -s "$into.new" ]; then
         mv "$into.new" "$into"
         echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') stage job(s) -> $into"
     else
