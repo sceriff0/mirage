@@ -19,8 +19,9 @@ result name of each active run); outlines only; a case counts for a candidate un
 ``excluded_from_summaries`` (imputed failures COUNT); the comparison is on the cases every
 candidate has a non-excluded row on (``n_cases_common``); per candidate, the patient median
 of ``dice_matched`` over those cases, then the median over patients; the highest wins; ties
-go to the lower median of ``cpu_h_used`` (``summary_resources.csv``) over the patients every
-candidate completed, then to the name.
+go to the name, device-blind (T31 R11: no cost decides a tie, since a GPU row's CPU-hours
+are not its cost); a cost-only row (``variants.COST_ONLY``: ``stare_local4``) is never a
+candidate.
 
 **No matched pair is Dice 0.** ``pairs.record`` gives ``dice_matched = nan`` to a case with
 no pair (an imputed failure on a large offset, or a bad registration). On a non-excluded row
