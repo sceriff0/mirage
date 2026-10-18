@@ -335,10 +335,25 @@ def _summary(rec):
         "log_path",
         "time_limit",
         "error",
+        "cpu_model",
+        "cpus_requested",
+        "cpus_affinity",
+        "cpus_node",
+        "loadavg_start",
+        "loadavg_end",
+        "cgroup_peak_mb",
     )
     out = {k: rec.get(k) for k in keys}
     out["error"] = str(out["error"] or "")[-300:]
     return out
+
+
+def _loadavg():
+    """The 1-, 5- and 15-minute load as ``/proc/loadavg`` writes them; None without."""
+    try:
+        return " ".join(f"{v:.2f}" for v in os.getloadavg())
+    except (OSError, AttributeError):
+        return None
 
 
 def run_command(
@@ -390,6 +405,13 @@ def run_command(
         "time_limit": alloc["time"],
         "launch_id": host["launch_id"],
         "host": host["host"],
+        # R9, R14: the CPU this job ran on and the cores it could use, as a one-process
+        # run records them, and the node's load at its start (os.getloadavg)
+        "cpu_model": host["cpu_model"],
+        "cpus_requested": host["cpus_requested"],
+        "cpus_affinity": host["cpus_affinity"],
+        "cpus_node": host["cpus_node"],
+        "loadavg_start": _loadavg(),
         "log_path": host["log_path"],
         "submission": host["submission"],
         "started": time.time(),
@@ -446,6 +468,9 @@ def run_command(
         wall_s=wall,
         cpu_s=usage.ru_utime + usage.ru_stime,
         peak_rss_mb=usage.ru_maxrss * scale / resources.MB,
+        # R5: this job's own cgroup peak (the whole job, memory.peak), None without one
+        cgroup_peak_mb=resources._cgroup_peak_mb(),
+        loadavg_end=_loadavg(),
     )
     _write(path, rec)
     return rec
@@ -565,7 +590,12 @@ def summarise(coarse, tiles, solve):
 
     def cpu_h(rows, measured=False):
         if measured:
-            return sum(a.get("cpu_s") or 0.0 for _, a in rows) / 3600.0
+            # R17: an attempt that recorded no CPU time makes the sum unknown (NaN),
+            # never a sum over fewer attempts
+            cpu = [a.get("cpu_s") for _, a in rows]
+            if any(not _number(c) for c in cpu):
+                return math.nan
+            return sum(cpu) / 3600.0
         return sum(a["cpus"] * a["wall_s"] for _, a in rows) / 3600.0
 
     return {
