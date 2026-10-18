@@ -159,10 +159,34 @@ def _stand_in(name, names, direction, writes=True, origin=None):
                                  register=register)
 
 
+def _with_pyramid(cases_root, tmp_path):
+    """The toy case ``rigid`` copied into a cases folder of its own, its reference slide
+    rewritten with one reduced pyramid level (a SubIFD at half size)."""
+    import shutil
+
+    import tifffile
+
+    root = tmp_path / "cases_pyr"
+    dest = root / "multiplex" / "rigid"
+    shutil.copytree(Path(cases_root) / "multiplex" / "rigid", dest)
+    rec = json.loads((dest / "case.json").read_text())
+    plane = _plane(rec["ref_nuclear"])
+    path = dest / "ref_pyramid.ome.tif"
+    with tifffile.TiffWriter(path, ome=True, bigtiff=True) as tw:
+        tw.write(plane[None], subifds=1, tile=(256, 256), metadata={"axes": "CYX"})
+        tw.write(plane[None, ::2, ::2], subfiletype=1, tile=(256, 256))
+    rec["ref_nuclear"] = str(path)
+    (dest / "case.json").write_text(json.dumps(rec))
+    return root, load_case(dest)
+
+
+@pytest.mark.parametrize("pyramid", [False, True], ids=["density", "pyramid"])
 def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
-    tmp_path, toy_cases, cases_root, monkeypatch
+    tmp_path, toy_cases, cases_root, monkeypatch, pyramid
 ):
     case = toy_cases["rigid"]
+    if pyramid:
+        cases_root, case = _with_pyramid(cases_root, tmp_path)
     out = tmp_path / "out"
     rows = {
         "stare": _stand_in("stare", ("stare_rigid", "stare"), MOV_TO_REF),
@@ -197,6 +221,14 @@ def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
         return real(path, channel, y0, y1, x0, x1)
 
     monkeypatch.setattr(overlays, "read_region", recording)
+    levels = []
+    real_level = overlays.read_level
+
+    def recording_level(path, channel, k):
+        levels.append((str(path), k))
+        return real_level(path, channel, k)
+
+    monkeypatch.setattr(overlays, "read_level", recording_level)
     # only the toy case: the session's other toy cases are not candidates
     got = overlays.build(cases_root, out, roi_um=120.0, case_id="rigid")
     roi_px = int(round(120.0 / case.pixel_size_um))
@@ -220,8 +252,36 @@ def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
     assert float(drawn["stare"]["d_final_um"]) < float(drawn["stare"]["d_initial_um"])
     src = (fig_dir / "fig3a_overlays_source_data.csv").read_text()
     assert "no image written" in src and "no rigid stage" in src
+    # the overview: the reference's own reduced level when it has one, never level 0
+    before = (fig_dir / "fig1c_overlay_before_source_data.csv").read_text()
+    if pyramid:
+        assert levels and all(k >= 1 for _, k in levels), levels
+        assert {p for p, _ in levels} == {case.ref_nuclear}
+        assert "pyramid level 1 (512 x 512 px)" in before and "pyramid level 1" in src
+    else:
+        assert levels == []
+        assert overlays.NO_LEVEL in before and overlays.NO_LEVEL in src
     run = json.loads((result_dir(out, "palom", case) / "run.json").read_text())
     assert not (run.get("native") or {}).get("files")
+
+
+def test_the_overview_level_is_the_largest_reduced_one_within_the_bound(tmp_path):
+    import tifffile
+
+    plane = np.arange(64 * 96, dtype=np.uint16).reshape(64, 96)
+    path = tmp_path / "p.ome.tif"
+    with tifffile.TiffWriter(path, ome=True) as tw:
+        tw.write(plane[None], subifds=2, tile=(16, 16), metadata={"axes": "CYX"})
+        tw.write(plane[None, ::2, ::2], subfiletype=1, tile=(16, 16))
+        tw.write(plane[None, ::4, ::4], subfiletype=1, tile=(16, 16))
+    assert overlays.overview_level(path, max_side=4096) == 1
+    assert overlays.overview_level(path, max_side=30) == 2
+    assert overlays.overview_level(path, max_side=10) is None
+    got = overlays.read_level(path, 0, 2)
+    assert got.shape == (16, 24) and got[1, 1] == plane[4, 4]
+    flat = tmp_path / "flat.ome.tif"
+    write_nuclear(flat, plane)
+    assert overlays.overview_level(flat) is None  # level 0 never counts
 
 
 def test_without_the_best_rows_every_figure_is_a_placeholder(tmp_path, cases_root):

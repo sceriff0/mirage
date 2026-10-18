@@ -50,7 +50,11 @@ row's moved moving outlines magenta) and a scale bar in um:
 The moved outlines of a ``ref_to_mov`` row are the native moving outlines brought onto the
 reference grid through the inverse of its lattice (drawing only; its residuals stay in the
 moving frame). An overview panel shows the whole reference as nucleus density (reference
-cyan, native moving magenta, from the case's points, no pixel read) with the field's box.
+cyan, native moving magenta, from the case's points, no pixel read) with the field's box,
+unless the reference slide has a reduced pyramid level (a series level / SubIFD, never level
+0) whose long side is at most ``OVERVIEW_MAX_SIDE``: then the largest such level is read
+whole (``read_level``, a bounded read) and its nuclear channel drawn in cyan, the box in that
+level's scale. The fallback is labelled ``NO_LEVEL`` in the panel and the source data.
 
 **Reading.** Every crop is read by region (``read_region``: ``tifffile`` ``aszarr`` +
 ``zarr``), never the whole slide: the field itself, or for a resampled panel the box its
@@ -95,6 +99,8 @@ MIN_NUCLEI = 40
 INVERT_TOL_PX = 1e-3
 INVERT_MAX_ITER = 200
 READ_PAD_PX = 8
+OVERVIEW_MAX_SIDE = 4096  # a reduced pyramid level this small is read whole for the overview
+NO_LEVEL = "nucleus density (no pyramid level)"
 READ_GROWTH = 1.5  # a resampled panel may read a box this much larger than the field
 REF_RGB = np.array([0.0, 1.0, 1.0])  # cyan
 MOV_RGB = np.array([1.0, 0.0, 1.0])  # magenta
@@ -138,6 +144,60 @@ def _level(tif):
     return levels[0]
 
 
+def _levels(tif):
+    series = tif.series[0]
+    return list(getattr(series, "levels", None) or [series])
+
+
+def overview_level(path, max_side=OVERVIEW_MAX_SIDE):
+    """The index of the largest REDUCED pyramid level (SubIFD / series level >= 1) of a
+    TIFF whose long side is at most ``max_side``, or None. Level 0 never counts."""
+    import tifffile
+
+    with tifffile.TiffFile(str(path)) as tif:
+        levels = _levels(tif)
+        best = None
+        for k, level in enumerate(levels[1:], start=1):
+            axes, shape = str(level.axes), tuple(int(v) for v in level.shape)
+            if max(_hw(axes, shape)) <= max_side and (
+                best is None or max(_hw(axes, shape)) > best[1]
+            ):
+                best = (k, max(_hw(axes, shape)))
+        return best[0] if best else None
+
+
+def read_level(path, channel, k):
+    """One channel of pyramid level ``k`` of a TIFF, whole, as float64 (an ``S`` axis is
+    averaged). Called only for a reduced level within ``OVERVIEW_MAX_SIDE``."""
+    import tifffile
+    import zarr
+
+    with tifffile.TiffFile(str(path)) as tif:
+        level = _levels(tif)[int(k)]
+        axes = str(level.axes)
+        store = tif.series[0].aszarr(level=int(k))
+        try:
+            arr = zarr.open(store, mode="r")
+            idx = tuple(
+                int(channel) if ax == "C" else slice(None) if ax in "YXS" else 0
+                for ax in axes
+            )
+            block = np.asarray(arr[idx], dtype=np.float64)
+        finally:
+            store.close()
+    if "S" in axes:
+        block = block.mean(axis=-1)
+    return block
+
+
+def level_hw(path, k):
+    import tifffile
+
+    with tifffile.TiffFile(str(path)) as tif:
+        level = _levels(tif)[int(k)]
+        return _hw(str(level.axes), tuple(int(v) for v in level.shape))
+
+
 def image_info(path):
     """``(axes, shape)`` of the full-resolution level of a TIFF, no pixel read."""
     import tifffile
@@ -165,7 +225,7 @@ def read_region(path, channel, y0, y1, x0, x1):
     with tifffile.TiffFile(str(path)) as tif:
         level = _level(tif)
         axes = str(level.axes)
-        store = level.aszarr()
+        store = tif.series[0].aszarr(level=0)
         try:
             arr = zarr.open(store, mode="r")
             idx = []
@@ -765,7 +825,42 @@ def _draw_panel(ax, title, panel, ref, ref_rings, s, um_per_px):
                 ha="right", va="top", fontsize=ps.TICK_PT - 1)
 
 
-def _overview(ax, sets, roi, title="whole reference (nuclei)"):
+def _overview(ax, sets, roi, title="whole reference"):
+    """The whole reference with the field boxed: its own reduced pyramid level when it
+    has one (``overview_level``), else nucleus density. Returns what was drawn."""
+    case = sets.case
+    path = Path(case.ref_nuclear)
+    k = overview_level(path) if path.is_file() else None
+    if k is None:
+        _density_overview(ax, sets, roi, f"{title}: {NO_LEVEL}")
+        return NO_LEVEL
+    lh, lw = level_hw(path, k)
+    h0, w0 = _hw(*image_info(path))
+    fx, fy = w0 / lw, h0 / lh
+    plane = read_level(path, _channel(path, case, "ref"), k)
+    ax.imshow(_norm(plane)[..., None] * REF_RGB, interpolation="nearest")
+    ax.add_patch(Rectangle((roi["roi_x"] / fx - 0.5, roi["roi_y"] / fy - 0.5),
+                           roi["roi_px"] / fx, roi["roi_px"] / fy,
+                           fill=False, edgecolor="#F0E442", linewidth=0.8))
+    status = f"pyramid level {k} ({lw} x {lh} px)"
+    _overview_frame(ax, f"{title}, {status}", lw, lh, float(case.pixel_size_um) * fx)
+    return status
+
+
+def _overview_frame(ax, title, w, h, um):
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for side in ("top", "right", "bottom", "left"):
+        ax.spines[side].set_visible(False)
+    ax.set_title(_wrap(title, 44), fontsize=ps.TICK_PT)
+    bar = min(SCALE_BARS_UM, key=lambda b: abs(b - w * um / 4.0))
+    ax.plot([0.05 * w, 0.05 * w + bar / um], [0.93 * h, 0.93 * h], color="white", lw=1.2)
+    ax.text(0.05 * w + bar / um / 2.0, 0.90 * h, f"{bar:g} \u00b5m", color="white",
+            ha="center", va="bottom", fontsize=ps.TICK_PT - 1,
+            bbox={"facecolor": "black", "edgecolor": "none", "pad": 0.6, "alpha": 0.7})
+
+
+def _density_overview(ax, sets, roi, title):
     case = sets.case
     h, w = (int(v) for v in (case.ref_hw or (0, 0)))
     pts = np.concatenate([sets.ref_c, sets.mov_c])
@@ -790,17 +885,7 @@ def _overview(ax, sets, roi, title="whole reference (nuclei)"):
     ax.imshow(img, extent=(0, w, h, 0), interpolation="nearest")
     ax.add_patch(Rectangle((roi["roi_x"], roi["roi_y"]), roi["roi_px"], roi["roi_px"],
                            fill=False, edgecolor="#F0E442", linewidth=0.8))
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for side in ("top", "right", "bottom", "left"):
-        ax.spines[side].set_visible(False)
-    ax.set_title(title, fontsize=ps.TICK_PT)
-    um = float(case.pixel_size_um)
-    bar = min(SCALE_BARS_UM, key=lambda b: abs(b - w * um / 4.0))
-    ax.plot([0.05 * w, 0.05 * w + bar / um], [0.93 * h, 0.93 * h], color="white", lw=1.2)
-    ax.text(0.05 * w + bar / um / 2.0, 0.90 * h, f"{bar:g} µm", color="white",
-            ha="center", va="bottom", fontsize=ps.TICK_PT - 1,
-            bbox={"facecolor": "black", "edgecolor": "none", "pad": 0.6, "alpha": 0.7})
+    _overview_frame(ax, title, w, h, float(case.pixel_size_um))
 
 
 def _title(stage, row):
@@ -838,9 +923,9 @@ def _draw_rows(name, drawn, sets, roi, fig_dir, overview=True):
         line = axes[k * ncols : (k + 1) * ncols]
         if overview:
             if k == 0:
-                _overview(line[0], sets, roi)
+                drew = _overview(line[0], sets, roi)
                 data.append(_source(name, family, row, sets.case, roi, "overview",
-                                    _panel("drawn"), "overview"))
+                                    _panel(drew), "overview"))
             else:
                 line[0].axis("off")
             line = line[1:]
@@ -856,11 +941,11 @@ def _draw_rows(name, drawn, sets, roi, fig_dir, overview=True):
 def _draw_before(name, sets, roi, panels, ref, ref_rings, fig_dir):
     plots._style()
     fig, axes = ps.figure(width="onehalf", height_mm=62.0, nrows=1, ncols=2)
-    _overview(axes[0], sets, roi, "whole slide (nuclei), field boxed")
+    drew = _overview(axes[0], sets, roi, "whole slide, field boxed")
     _draw_panel(axes[1], BEFORE, panels["initial"], ref, ref_rings, roi["roi_px"],
                 float(sets.case.pixel_size_um))
     data = [
-        _source(name, STARE_FAMILY, "", sets.case, roi, "overview", _panel("drawn"), "overview"),
+        _source(name, STARE_FAMILY, "", sets.case, roi, "overview", _panel(drew), "overview"),
         _source(name, STARE_FAMILY, "", sets.case, roi, "initial", panels["initial"], BEFORE),
     ]
     ps.panel_labels(axes)
