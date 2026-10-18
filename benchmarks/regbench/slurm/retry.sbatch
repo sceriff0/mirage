@@ -184,7 +184,7 @@ in_queue() {
     while :; do
         # the id comes from stdout alone: a squeue that answers can still warn on stderr
         if got="$(squeue -h -u "$(id -un)" --name="$name" -o '%i' 2>"$err")"; then
-            got="$(grep -m1 -E '^[0-9]+(_|$)' <<< "$got" || true)"
+            got="$(grep -m1 -E '^[0-9]+(_|$)' <<< "$got")" || got=""
             echo "${got%%_*}"
             return 0
         fi
