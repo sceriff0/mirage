@@ -196,14 +196,22 @@ def _paper_dir(out, dataset):
     return base if dataset == COHORT else base / dataset
 
 
-def _records(out, row, dataset):
-    """Every ``run.json`` of one result name on a dataset, in case order."""
+def _records(out, row, dataset, unreadable=None):
+    """Every ``run.json`` of one result name on a dataset, in case order. One that
+    cannot be read (or is no JSON object) is not a record: its path is appended to
+    ``unreadable`` when a list is given, so the table can count it (S13: never a
+    silent skip)."""
     found = []
     for path in sorted(Path(out, row, dataset).glob("*/run.json")):
         try:
-            found.append(json.loads(path.read_text()))
+            rec = json.loads(path.read_text())
         except (OSError, ValueError):
+            rec = None
+        if not isinstance(rec, dict):
+            if unreadable is not None:
+                unreadable.append(str(path))
             continue
+        found.append(rec)
     return found
 
 
@@ -702,7 +710,12 @@ def versions(out, dataset):
     rows = []
     for name, final in terminal_rows(dataset).items():
         run = _run(name)
-        recs = [rec for v in _variants_of_name(name) for rec in _records(out, v, dataset)]
+        bad = []
+        recs = [
+            rec
+            for v in _variants_of_name(name)
+            for rec in _records(out, v, dataset, bad)
+        ]
         mine = _records(out, final, dataset)
         infos = [rec.get("info") or {} for rec in recs]
         tools = [((i.get("implementation") or {}).get("package")) for i in infos]
@@ -719,6 +732,7 @@ def versions(out, dataset):
                 versions_seen=_distinct(vers),
                 image=f"REGBENCH_SIF_{run.image}" if run is not None else None,
                 n_results=len(mine),
+                n_unreadable=len(bad),
             )
         )
     return rows
@@ -745,7 +759,8 @@ def run_parameters(out, dataset):
     rows = []
     for name, final in terminal_rows(dataset).items():
         run = _run(name)
-        recs = _records(out, final, dataset)
+        bad = []
+        recs = _records(out, final, dataset, bad)
         params = None
         for rec in recs:
             p = ((rec.get("info") or {}).get("implementation") or {}).get("parameters")
@@ -769,6 +784,7 @@ def run_parameters(out, dataset):
                     method=method,
                     key=k,
                     value=None if v is None else _value(v),
+                    n_unreadable=len(bad),
                     **{"from": src},
                 )
             )

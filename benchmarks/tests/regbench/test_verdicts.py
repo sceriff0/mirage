@@ -490,3 +490,27 @@ def test_selfcheck_json_keeps_the_allocation_of_every_attempt(tmp_path, monkeypa
     on_disk = json.loads((tmp_path / "selfcheck.json").read_text())
     assert on_disk["attempts"] == rec["attempts"]
     assert variants.selfcheck_status("stare", on_disk)[0] == "not_checked"
+
+
+def test_an_unreadable_realcheck_is_reported_unreadable_not_skipped(tmp_path):
+    """Task 28, S14: a realcheck.json that cannot be read was skipped, so the run read
+    ``not_checked`` (or ``ok`` beside a readable one) and the loss was nowhere."""
+    root, out = tmp_path / "cases", tmp_path / "out"
+    first, second = a_case(root, "P1_a", "P1"), a_case(root, "P1_b", "P1")
+    for case in (first, second):
+        write_json(
+            result_dir(out, "valis_mirage", case) / "run.json",
+            {"ok": True, "submissions": ["s1"]},
+        )
+    write_json(result_dir(out, "valis_mirage", first) / "realcheck.json", {"flag": False})
+    (result_dir(out, "valis_mirage", second) / "realcheck.json").write_text("{trunc")
+    _, _, lines = _verdict(out, "valis_mirage")
+    line = _line(lines, "valis_mirage", "realcheck")
+    assert line[2] == "unreadable"
+    assert line[5] == "realcheck.json unreadable on P1_b"
+    # a flag still wins the status, and the unreadable one is still said
+    write_json(result_dir(out, "valis_mirage", first) / "realcheck.json", {"flag": True})
+    _, _, lines = _verdict(out, "valis_mirage")
+    line = _line(lines, "valis_mirage", "realcheck")
+    assert line[2] == "flagged"
+    assert line[5] == "flagged on P1_a; realcheck.json unreadable on P1_b"

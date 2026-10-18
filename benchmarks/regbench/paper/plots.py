@@ -580,13 +580,15 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
     fig, axes = ps.figure(width="double", nrows=1, ncols=2, aspect=0.95)
     n = {f: 0 for f, _ in _best_rows(got["best"])}
     data = []
+    dropped = 0  # S12: points of a drawn row with no finite size or value, said below
     for ax, key, scale, ylab, target in (
         (axes[0], "peak_rss_gb", 1.0, "Peak memory (GB)", "peak_rss_gb"),
         (axes[1], "wall_s", 1 / 60.0, "Wall time (min)", "wall_s"),
     ):
         for row, fam in mine.items():
-            pts = [p for p in got["cost"] if p["row"] == row and _fin(p.get("input_gb"))
-                   and _fin(p.get(key))]
+            every = [p for p in got["cost"] if p["row"] == row]
+            pts = [p for p in every if _fin(p.get("input_gb")) and _fin(p.get(key))]
+            dropped += len(every) - len(pts)
             if not pts:
                 continue
             x = np.array([_num(p["input_gb"]) for p in pts])
@@ -614,7 +616,9 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
     seen = dict(zip(labels, handles))
     if seen:
         fig.legend(seen.values(), seen.keys(), loc="outside lower center", ncol=min(4, len(seen)),
-                   title="Method (best row; line: least-squares fit)")
+                   title="Method (best row; line: least-squares fit)"
+                   + (f"; {dropped} point(s) dropped: no input size or value"
+                      if dropped else ""))
     files = _save(fig, fig_dir, "fig2c_cost_vs_input",
                   _Table(["panel", "family", "row", "input_gb", "value", "fit"], data))
     return _result(files, n)
@@ -677,7 +681,12 @@ def figS_pipeline_cost_fits(paper_dir, fig_dir):
     height = min(ps.MAX_HEIGHT_MM, 16 + 5.0 * len(ok))
     fig, axes = ps.figure(width="double", height_mm=height, nrows=1, ncols=2,
                           sharey=True)
-    labels = [f"{r['process']}\n({r['backend']}, n={r['n']})" for r in ok]
+    labels = [
+        f"{r['process']}\n({r['backend']}, n={r['n']}"
+        + (f", {int(_num(r['n_dropped']))} dropped" if _num(r.get("n_dropped")) > 0 else "")
+        + ")"
+        for r in ok
+    ]
     data = []
     for ax, key, xlab in ((axes[0], "slope", "Slope: peak memory per input size (GB per GB)"),
                           (axes[1], "intercept", "Intercept: peak memory at no input (GB)")):

@@ -47,6 +47,25 @@ def test_pipeline_fits_join_size_logs(tmp_path):
     assert rows[("TILED_STITCH", "peak_rss_gb")]["slope"] == 0.0
 
 
+def test_pipeline_fits_count_the_tasks_they_drop(tmp_path):
+    """Task 28, S12: a completed task with no input size or no finite target was left
+    out of its fit and counted nowhere; ``n_dropped`` says how many."""
+    out = tmp_path / "out"
+    (out / "tables").mkdir(parents=True)
+    (out / "tables" / "pipeline_cost.csv").write_text(
+        "backend,patient,process,tag,realtime_s,peak_rss_gb\n"
+        "tiled,P1,TILED_STITCH,P1_a,10,2.0\ntiled,P1,TILED_STITCH,P1_b,20,2.0\n"
+        "tiled,P1,TILED_STITCH,P1_c,,2.0\ntiled,P1,TILED_STITCH,P1_nosize,40,2.0\n")
+    logs = out / "compute" / "tiled" / "P1" / "results" / "size_logs"
+    logs.mkdir(parents=True)
+    (logs / "input_sizes.csv").write_text(SIZE_LOG_FIXTURE)
+    rows = {(r["process"], r["target"]): r for r in fits.pipeline_fits(out)}
+    assert rows[("TILED_STITCH", "realtime_s")]["n"] == 2
+    assert rows[("TILED_STITCH", "realtime_s")]["n_dropped"] == 2  # no size + blank
+    assert rows[("TILED_STITCH", "peak_rss_gb")]["n_dropped"] == 1  # no size
+    assert all(list(r) == schema.columns("pipeline_cost_fits") for r in rows.values())
+
+
 # ── points ───────────────────────────────────────────────────────────────────
 def _write(path, rows):
     cols = list(rows[0])
@@ -128,3 +147,7 @@ def test_method_fits_follow_the_schema(cohort):
     pair = {(r["target"], r["predictor"]): r for r in rows if r["row"] == "pair"}
     assert pair[("wall_s", "input_gb")]["n"] == 5 and pair[("wall_s", "input_gb")]["fit_ok"] is False
     assert pair[("peak_rss_gb", "input_gpx")]["fit_ok"] is False  # one size
+    # every point of the row is counted: used or dropped (S12)
+    points = fits.points(out, "multiplex", cases, excluded=frozenset())
+    n_pair = sum(p["row"] == "pair" for p in points)
+    assert all(r["n"] + r["n_dropped"] == n_pair for r in rows if r["row"] == "pair")

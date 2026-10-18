@@ -865,16 +865,20 @@ def selfcheck_status(name, record):
 
 
 REAL_OK, REAL_FLAGGED, REAL_NOT_CHECKED = "ok", "flagged", "not_checked"
+REAL_UNREADABLE = "unreadable"
 
 
 def realcheck_status(name, out, submission=""):
-    """``(status, row, flagged case ids)``: what the realchecks of the run ``name`` say,
-    from every ``realcheck.json`` of its realcheck row under ``out`` (only the run's
-    first unit writes one). REPORTED, never a gate.
+    """``(status, row, flagged case ids, unreadable case ids)``: what the realchecks of
+    the run ``name`` say, from every ``realcheck.json`` of its realcheck row under
+    ``out`` (only the run's first unit writes one). REPORTED, never a gate.
 
-    ``flagged`` when one is flagged; ``not_checked`` when there is none of this
-    submission beside an ``ok`` result (the unit failed, or wrote no image); else
-    ``ok``. Status and row are ``-`` for a run that has no realcheck."""
+    ``flagged`` when one is flagged; ``unreadable`` when a realcheck.json (or the
+    run.json beside it) cannot be read and none is flagged (Task 28, S14: it was
+    skipped, and the run then read ``not_checked`` or ``ok``); ``not_checked`` when
+    there is none of this submission beside an ``ok`` result (the unit failed, or
+    wrote no image); else ``ok``. Status and row are ``-`` for a run that has no
+    realcheck."""
     import json
     from pathlib import Path
 
@@ -882,21 +886,35 @@ def realcheck_status(name, out, submission=""):
 
     row = realcheck_row(name)
     if row is None:
-        return NONE, NONE, []
-    found, flagged = 0, []
+        return NONE, NONE, [], []
+    found, flagged, unreadable = 0, [], []
     for path in sorted(Path(out, row).glob("*/*/realcheck.json")):
+        if not (path.parent / "run.json").exists():
+            continue  # a realcheck beside no run answers for nothing (review item 13)
         try:
             run = json.loads((path.parent / "run.json").read_text())
             check = json.loads(path.read_text())
         except (OSError, ValueError):
+            unreadable.append(path.parent.name)
+            continue
+        if not isinstance(run, dict) or not isinstance(check, dict):
+            unreadable.append(path.parent.name)
             continue
         if not run.get("ok") or not ladder.mine(run, submission):
             continue  # a realcheck an earlier launch left answers for nothing here
         found += 1
         if check.get("flag"):
             flagged.append(path.parent.name)
-    status = REAL_FLAGGED if flagged else REAL_OK if found else REAL_NOT_CHECKED
-    return status, row, flagged
+    status = (
+        REAL_FLAGGED
+        if flagged
+        else REAL_UNREADABLE
+        if unreadable
+        else REAL_OK
+        if found
+        else REAL_NOT_CHECKED
+    )
+    return status, row, flagged, unreadable
 
 
 def selfcheck_mask(method):

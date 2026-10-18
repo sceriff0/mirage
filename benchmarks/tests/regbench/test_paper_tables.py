@@ -217,6 +217,19 @@ def test_versions_and_run_parameters_and_hosts(scored):
     assert p and p[0]["from"].startswith("the run's options")
 
 
+def test_an_unreadable_record_is_counted_in_versions_and_run_parameters(scored):
+    """Task 28, S13: an unreadable run.json was skipped silently by ``_records``."""
+    assert all(r["n_unreadable"] == 0 for r in tables.build(scored, "multiplex")["versions"])
+    (path,) = sorted((scored / "stare" / "multiplex").glob("*/run.json"))[:1]
+    path.write_text("{trunc")
+    built = tables.build(scored, "multiplex")
+    v = {r["row"]: r for r in built["versions"]}
+    assert v["stare"]["n_unreadable"] == 1 and v["stare"]["n_results"] == 3
+    assert v["rtm"]["n_unreadable"] == 0
+    p = [r for r in built["run_parameters"] if r["row"] == "stare"]
+    assert p and all(r["n_unreadable"] == 1 for r in p)
+
+
 def test_cohort_counts_per_patient(scored):
     built = tables.build(scored, "multiplex")
     c = {(r["patient_id"], r["row"]): r for r in built["cohort_counts"]}

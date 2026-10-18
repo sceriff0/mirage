@@ -14,7 +14,9 @@
 
 A fit is ``fit_ok`` only with three points and two distinct sizes (rounded to 1e-9): three
 tasks of one size are a degenerate design that least squares still solves. Otherwise its
-slope, intercept, r2 and sigma are blank.
+slope, intercept, r2 and sigma are blank. Every fit row counts the points it left
+out (``n_dropped``: no finite target or predictor, or for a pipeline task no input
+size), and the figures say "k dropped" (Task 28, S12: a point is never lost silently).
 
 The size of a unit's input is read from the slide files named by the prepared cases
 (``case.json: ref_image, mov_image``), so it needs ``cases_root``; without it ``input_gb``
@@ -168,8 +170,11 @@ def _finite_or_none(v):
 
 
 # ── cost_fits ────────────────────────────────────────────────────────────────
-def _fit_row(name, xs, ys, **ident):
-    return schema.empty_row(name, source=SOURCE, **ident, **fit(xs, ys))
+def _fit_row(name, xs, ys, n_dropped=0, **ident):
+    """One fit row; ``n_dropped`` counts the points left out of it (S12)."""
+    return schema.empty_row(
+        name, source=SOURCE, **ident, **fit(xs, ys), n_dropped=n_dropped
+    )
 
 
 def method_fits(points_rows):
@@ -187,6 +192,7 @@ def method_fits(points_rows):
                         "cost_fits",
                         [b[0] for b in both],
                         [b[1] for b in both],
+                        n_dropped=len(mine) - len(both),
                         dataset=ds, family=fam, row=row, target=target, predictor=pred,
                     )
                 )
@@ -216,7 +222,7 @@ def pipeline_fits(out):
     runs = {}
     for r in tasks:
         runs.setdefault((r["backend"], r["patient"]), []).append(r)
-    points_by = {}
+    points_by, no_size = {}, {}
     for (backend, patient), rows in runs.items():
         log = Path(out) / "compute" / backend / patient / "results" / "size_logs" / "input_sizes.csv"
         joined = report.join_size(rows, report.parse_size_log(log))
@@ -224,6 +230,9 @@ def pipeline_fits(out):
             if r.get("status") not in (None, "", "COMPLETED"):
                 continue
             if r["input_bytes"] is None:
+                key = (backend, r["process"])
+                no_size[key] = no_size.get(key, 0) + 1
+                points_by.setdefault(key, [])
                 continue
             points_by.setdefault((backend, r["process"]), []).append(r)
     result = []
@@ -236,6 +245,7 @@ def pipeline_fits(out):
                     "pipeline_cost_fits",
                     [b[0] for b in both],
                     [b[1] for b in both],
+                    n_dropped=no_size.get((backend, process), 0) + len(rows) - len(both),
                     backend=backend, process=process, target=target, predictor="input_gb",
                 )
             )
