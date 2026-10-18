@@ -809,7 +809,7 @@ def cost_points(pp, best_rows, cost_rows, res_rows, dataset, cases=None):
         kinds = costs.row_kinds(row, primary, best, local4, twins)
         mine = [r for r in cost_rows if r["method"] == row]
         pts = costs.patient_points(row, fam, mine, res_rows, common, kinds, imputed, gb)
-        rounds, without = costs.round_points(row, fam, res_rows, excluded, kinds, gb)
+        rounds, _ = costs.round_points(row, fam, res_rows, excluded, kinds, gb, common)
         for p in pts + rounds:
             out.append(_point_row(dataset, p))
     return common, out

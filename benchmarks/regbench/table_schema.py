@@ -352,7 +352,8 @@ _TABLE_LIST = [
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
        ("target", "", "wall_s, peak_rss_gb or cpu_h_used"),
        ("predictor", "", "input_gb or input_gpx"),
-       ("unit", "", "patient"), ("patient_set", "", "survivors: the row's complete patients"),
+       ("unit", "", "patient"), ("patient_set", "", "common: the common patients the row completed (every compared row "
+        "completed them; the set fig. 2c draws)"),
        ("scale", "", "log-log"), ("min_n", "count", "points a fit needs (5)"),
        ("slope", "", "the exponent: target grows as predictor^slope"),
        ("slope_ci_low", "", "95% interval of the slope (Student's t, n - 2 d.f.), low"),

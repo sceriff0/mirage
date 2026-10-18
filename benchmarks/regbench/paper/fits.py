@@ -7,8 +7,9 @@
             every method is per round: a pair method's ok rounds, and a per-patient
             method's rounds only where its launch timed each round
             (``register_s_per_round_from = info``).
-``method_fits``  ``log10(target) ~ log10(predictor)`` per row over its complete patients
-            (``patient_set = survivors``), by ordinary least squares on log-log axes,
+``method_fits``  ``log10(target) ~ log10(predictor)`` per row over the COMMON patients
+            (``patient_set = common``: complete for every compared row, the set every
+            cost figure draws; T31 fix I4), by ordinary least squares on log-log axes,
             with the 95% interval of the slope (Student's t, n - 2 degrees of freedom)
             and the residual s.d. (ddof = 1). Below ``MIN_FIT_POINTS`` (5) points there
             is no fit (the figure shows the count, no line).
@@ -172,13 +173,15 @@ def _fit_row(name, xs, ys, n_dropped=0, log=False, min_n=3, **ident):
 
 
 def method_fits(points_rows):
-    """The ``cost_fits`` rows: per row, target and predictor, log-log, over the row's
-    complete patients (``unit = patient``, ``status = complete``; P10, P13)."""
+    """The ``cost_fits`` rows: per row, target and predictor, log-log, over the common
+    patients the row completed (``unit = patient``, ``status = complete``,
+    ``in_common``; a point without the flag, a draft's, counts as common; P10, P13)."""
     out = []
     pts = [
         p
         for p in points_rows
         if p.get("unit_kind", "patient") == "patient" and p.get("status", "complete") == "complete"
+        and p.get("in_common") is not False
     ]
     keys = dict.fromkeys((p["dataset"], p["family"], p["row"]) for p in pts)
     for ds, fam, row in keys:
@@ -196,7 +199,7 @@ def method_fits(points_rows):
                         log=True,
                         min_n=MIN_FIT_POINTS,
                         dataset=ds, family=fam, row=row, target=target, predictor=pred,
-                        unit="patient", patient_set="survivors",
+                        unit="patient", patient_set="common",
                     )
                 )
     return out

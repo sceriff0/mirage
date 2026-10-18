@@ -54,12 +54,13 @@ PRIMARY, BEST, LOCAL_4CPU, CPU_TWIN, OTHER = ROW_KINDS = (
     "cpu_twin",
     "other",
 )
-COMPLETE, CAPPED, FAILED, EXCLUDED, NOT_RUN = STATUSES = (
+COMPLETE, CAPPED, FAILED, EXCLUDED, NOT_RUN, NOT_SPLIT = STATUSES = (
     "complete",
     "capped",
     "failed",
     "excluded",
     "not_run",
+    "not_split",  # a round of a per-patient launch that did not time it (fig. 2c only)
 )
 RUSAGE = "rusage"  # resources.py: a peak from getrusage alone, a LOWER bound
 POLLED = "polled (may undercount)"  # resources.POLLED
@@ -406,20 +407,32 @@ def patient_points(row, family, cost_rows, res_rows, common, kinds, imputed, gb_
     return out
 
 
-def round_points(row, family, res_rows, excluded, kinds, gb_of=None):
+def round_points(row, family, res_rows, excluded, kinds, gb_of=None, common=None):
     """fig. 2c's per-round points: every ok round of a pair method; a per-patient
     method's round only where its launch timed each round (``register_s_per_round_from
     = info``: ``info.register_s_round``), with its CPU-hours split in proportion to its
-    time and no peak (one launch has one peak). ``(points, rounds of a per-patient
-    method with no per-round figure)``."""
+    time and no peak (one launch has one peak). A per-patient method's round that its
+    launch did not time is a point too, of status ``not_split`` and no figure, so the
+    figure counts it (rule 6, T31 fix M2). ``in_common`` is the round's PATIENT's
+    (``common``; None without it). ``(points, rounds with no per-round figure)``."""
     out, without = [], 0
     kind, is_p, is_b = kinds
     for x in res_rows:
         if x.get("method") != row or not flag(x.get("ok")) or (x.get("case_id"), row) in excluded:
             continue
         group = x.get("unit") == PATIENT
+        shared = None if common is None else x.get("group") in common
         if group and x.get("register_s_per_round_from") != "info":
             without += 1
+            out.append({
+                "family": family, "row": row, "row_kind": kind, "is_primary": is_p,
+                "is_best": is_b, "unit_kind": ROUND, "unit": ROUND,
+                "unit_id": x.get("case_id"), "status": NOT_SPLIT, "in_common": shared,
+                "clock": clock_of(row, x), "input_gb": gb_of([x]) if gb_of else None,
+                "input_gpx": num(x.get("moving_gpx")),
+                "wall_s": math.nan, "cpu_h_used": math.nan, "peak_rss_gb": math.nan,
+                "device": x.get("device") or None,
+            })
             continue
         if group:
             launch_s, round_s = num(x.get("register_s")), num(x.get("register_s_per_round"))
@@ -430,7 +443,7 @@ def round_points(row, family, res_rows, excluded, kinds, gb_of=None):
         out.append({
             "family": family, "row": row, "row_kind": kind, "is_primary": is_p,
             "is_best": is_b, "unit_kind": ROUND, "unit": ROUND,
-            "unit_id": x.get("case_id"), "status": COMPLETE, "in_common": None,
+            "unit_id": x.get("case_id"), "status": COMPLETE, "in_common": shared,
             "clock": clock_of(row, x),
             "input_gb": gb_of([x]) if gb_of else None,
             "input_gpx": num(x.get("moving_gpx")),

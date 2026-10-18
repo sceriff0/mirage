@@ -234,3 +234,46 @@ def test_the_fold_is_over_the_patients_both_rows_completed():
     # a patient outside the common set is in no fold
     got = tables.fold_vs_local4(pts, "valis_a", local, {"P1"})
     assert got["n_patients_fold"] == 1 and got["fold_peak_vs_stare_local4"] == pytest.approx(3.0)
+
+
+# ── T31 fix I4, M2: fig. 2c by the same rules ────────────────────────────────
+def _round(row, case, patient_in_common, status="complete", **kw):
+    return _pt(row, "P0", costs.PRIMARY, True, False, unit_kind="round", unit="round",
+               unit_id=case, in_common=patient_in_common, status=status, **kw)
+
+
+def test_fig2c_draws_the_common_patients_with_their_counts_and_no_gpu_row_on_cpu_hours(paper):
+    pts = schema.read(paper / "cost_points.csv")
+    pts += [_round("valis_a", "P0_r1", True), _round("valis_a", "P5_r1", False),
+            _round("valis_a", "P1_r1", True, status=costs.NOT_SPLIT, cpu_h_used=None,
+                   peak_rss_gb=None, wall_s=None)]
+    schema.write(paper / "cost_points.csv", "cost_points", pts)
+    schema.write(paper / "cost_fits.csv", "cost_fits", [schema.empty_row(
+        "cost_fits", source="regbench", dataset="multiplex", family="valis_mirage",
+        row="valis_a", target="cpu_h_used", predictor="input_gpx", fit_ok=False)])
+    res = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
+    rows = _source(res)
+    drawn = {(r["panel"], r["row"], r["unit_id"]) for r in rows if r["fit"] in ("False", "")}
+    # rule 2 / P13: the common patients only, on both facets
+    assert ("patient:cpu_h_used", "valis_a", "P0") in drawn
+    assert ("patient:cpu_h_used", "valis_a", "P5") not in drawn
+    assert ("round:cpu_h_used", "valis_a", "P0_r1") in drawn
+    assert ("round:cpu_h_used", "valis_a", "P5_r1") not in drawn
+    # R11: a GPU row's CPU-hours are never on a CPU-hours axis: its CPU twin is
+    cpu = {r for p, r, _ in drawn if p.endswith("cpu_h_used")}
+    assert "dhr_gpu" not in cpu and "dhr_cpu" in cpu
+    # P10: every row's count, n=<common>/<all> (capped, failed), in the legend
+    assert any("n=5/6 (capped 0, failed 0)" in t for t in res["legend"]), res["legend"]
+    # M2, rule 6: a common patient's round with no per-round figure is a loss row
+    lost = {(x["run"], x["case_id"], x["cause"]) for x in res["losses"]}
+    assert ("valis_a", "P1_r1", "plot_points_dropped") in lost
+
+
+def test_a_per_patient_methods_round_without_its_own_figure_is_a_point_that_says_so():
+    res = [{"method": "valis_a", "group": "P1", "case_id": "P1_r1", "ok": "True",
+            "unit": "patient", "register_s_per_round_from": "split"}]
+    pts, without = costs.round_points("valis_a", "valis_mirage", res, set(),
+                                      (costs.PRIMARY, True, False), common={"P1"})
+    assert without == 1
+    assert [(p["unit_id"], p["status"], p["in_common"]) for p in pts] == [
+        ("P1_r1", costs.NOT_SPLIT, True)]

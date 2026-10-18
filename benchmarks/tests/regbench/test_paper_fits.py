@@ -82,6 +82,8 @@ def cohort(tmp_path, monkeypatch):
     reference + 1 GiB moving (sparse files)."""
     monkeypatch.setattr(tables, "family_of", lambda v: "fam")
     monkeypatch.setattr(tables, "terminal_rows", lambda ds: {"pp": "pp", "pair": "pair"})
+    # pp is the family's primary: the common set (P1, P3) is over it (T31 fix I4)
+    monkeypatch.setattr(tables, "primary_of", lambda fam, dataset=None: "pp")
     out, cases = tmp_path / "out", tmp_path / "cases"
     (out / "tables").mkdir(parents=True)
     ids = {"P1": ["P1_r1", "P1_r2"], "P2": ["P2_r1", "P2_r2"], "P3": ["P3_r1", "P3_r2"]}
@@ -118,9 +120,13 @@ def test_every_patient_is_a_point_and_says_what_became_of_it(cohort):
     # silently; only a complete one enters a fit
     out, cases = cohort
     pts = fits.points(out, "multiplex", cases)
-    status = {p["unit_id"]: p["status"] for p in pts if p["row"] == "pp"}
+    status = {p["unit_id"]: p["status"] for p in pts
+              if p["row"] == "pp" and p["unit_kind"] == "patient"}
     assert status == {"P1": "complete", "P2": "failed", "P3": "complete"}
-    assert all(p["unit_kind"] == "patient" for p in pts if p["row"] == "pp")
+    # M2: a per-patient launch that did not time its rounds has them as points of
+    # status not_split (no figure), so fig. 2c counts them; the failed round is none
+    rounds = {p["unit_id"]: p["status"] for p in pts if p["row"] == "pp" and p["unit_kind"] == "round"}
+    assert rounds == {c: "not_split" for c in ("P1_r1", "P1_r2", "P2_r1", "P3_r1", "P3_r2")}
     fitted = {(r["target"], r["predictor"]): r for r in fits.method_fits(pts) if r["row"] == "pp"}
     assert all(r["n"] + r["n_dropped"] == 2 for r in fitted.values())  # P1, P3
 
@@ -152,7 +158,8 @@ def test_method_fits_follow_the_schema(cohort):
     assert len(rows) == len(fits.METHOD_TARGETS) * len(fits.METHOD_PREDICTORS)
     assert {r["row"] for r in rows} == {"pp"}
     assert all(list(r) == schema.columns("cost_fits") for r in rows)
-    assert all(r["unit"] == "patient" and r["patient_set"] == "survivors" for r in rows)
+    # T31 fix I4: fitted over the COMMON patients (rule 2), as every cost figure draws
+    assert all(r["unit"] == "patient" and r["patient_set"] == "common" for r in rows)
     assert all(r["fit_ok"] is False and r["n"] == 2 for r in rows)  # 2 < 5 patients
 
 

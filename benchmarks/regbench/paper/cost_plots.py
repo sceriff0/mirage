@@ -458,18 +458,27 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
     fig, axes = ps.figure(width="double", nrows=2, ncols=2, aspect=0.95)
     axes = np.asarray(axes).reshape(2, 2)
     rows = _rows_to_draw(cost, got["best"])
-    data, losses, n = [], [], {}
+    # R11: on the CPU-hours facets a GPU row is its CPU twin (or left out, counted)
+    cpu_rows, gpu_left = _cpu_entries(cost, got["best"])
+    data, losses, n, legend = [], [], {}, []
     for r_i, unit in enumerate(("round", "patient")):
         for c_i, (key, ylab) in enumerate((("peak_rss_gb", "Peak memory (GB)"),
                                             ("cpu_h_used", "CPU-hours"))):
             ax = axes[r_i, c_i]
-            for fam, row, kind in rows:
-                pts = [p for p in cost if p.get("row") == row
-                       and (p.get("unit_kind") or "patient") == unit]
+            facet = rows if key != "cpu_h_used" else [(f, r, k) for f, r, k, _ in cpu_rows]
+            for fam, row, kind in facet:
+                # rule 2 / P13: the common patients only (a round: its patient's), as
+                # fig. 3e/3f and the fits; the others are in the legend's count
+                every = [p for p in cost if p.get("row") == row
+                         and (p.get("unit_kind") or "patient") == unit]
+                pts = [p for p in every if _common(p)]
                 if unit == "patient":
                     pts = [p for p in pts if _status(p) == costs.COMPLETE]
                 good, gone = [], []
                 for p in pts:
+                    if _status(p) == costs.NOT_SPLIT:
+                        gone.append((p, "a per-patient launch that did not time this round"))
+                        continue
                     x, y = P._num(p.get("input_gpx")), P._num(p.get(key))
                     if key == "peak_rss_gb" and not _comparable(p):
                         gone.append((p, "a rusage peak (a lower bound) is not compared"))
@@ -483,9 +492,14 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
                 xs = np.array([g[1] for g in good])
                 ys = np.array([g[2] for g in good])
                 hollow = kind == costs.BEST
+                label = P._label(fam) + (f" {CEILING}" if hollow else "")
+                if unit == "patient":  # P10: each row's count, as every cost tick
+                    _, counts, _, _ = _group(cost, row, key, peaks=key == "peak_rss_gb")
+                    label = (f"{label} [{row}] n={counts['common']}/{counts['all']} "
+                             f"(capped {counts['capped']}, failed {counts['failed']})")
+                    legend.append(label)
                 ax.scatter(xs, ys, s=7, facecolor="none" if hollow else colors[fam],
-                           edgecolor=colors[fam], linewidths=0.6,
-                           label=P._label(fam) + (f" {CEILING}" if hollow else ""))
+                           edgecolor=colors[fam], linewidths=0.6, label=label)
                 n[f"{unit}:{key}:{fam}:{kind}"] = len(good)
                 for p, x, y in good:
                     data.append({"panel": f"{unit}:{key}", "unit": unit, "family": fam, "row": row,
@@ -513,19 +527,25 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
             ax.set_title("per round (pair methods; a per-patient method only where it timed "
                          "each round)" if unit == "round" else "per patient (every method; "
                          "line: log-log fit, >= 5 patients)", fontsize=ps.TICK_PT)
+    for fam, row, kind, why in gpu_left:
+        for p in _patients(cost, row):
+            if _status(p) == costs.COMPLETE and _common(p):
+                losses.append(_loss(name, "cpu_h_used", p, "plot_points_dropped", "dropped", why))
     ps.panel_labels(list(axes.ravel()))
-    handles, labels = axes[1, 0].get_legend_handles_labels()
-    seen = dict(zip(labels, handles))
+    seen = {}
+    for ax in (axes[1, 0], axes[1, 1]):
+        handles, labels = ax.get_legend_handles_labels()
+        seen.update(zip(labels, handles))
     fits_ok = [f for f in got["fits"] if P._flag(f.get("fit_ok"))]
     short = [f for f in got["fits"] if not P._flag(f.get("fit_ok")) and f.get("predictor") == "input_gpx"]
     if seen:
-        fig.legend(seen.values(), seen.keys(), loc="outside lower center", ncol=min(4, len(seen)),
+        fig.legend(seen.values(), seen.keys(), loc="outside lower center", ncol=min(2, len(seen)),
                    title=f"Method (filled: primary; hollow: {CEILING}); {len(fits_ok)} fit(s) "
                          f"drawn, {len(short)} not (fewer than 5 patients or 2 sizes)")
     return P._result(
         P._save(fig, fig_dir, name, P._Table(["panel", "unit", "family", "row", "row_kind",
                                                "unit_id", "input_gpx", "value", "fit"], data)),
-        n, losses=losses)
+        n, losses=losses, legend=legend)
 
 
 # ── supplementary: the CPU cross ─────────────────────────────────────────────
