@@ -395,8 +395,10 @@ def test_other_seam_owners_other_checks_are_other_records(small):
     root, out, spy, _ = small
     kw = {"seam_owners": ("tiles",)}
     check(small, cases=SMALL, records=0, **kw)
+    # a selfcheck status is set at table time, not in the case key (fix round 1, I2):
+    # the re-score reads every case record, and its tables are a fresh scoring's
     kw["row_checks"] = {**KW["row_checks"], "stare": "no_stage_image"}
-    check(small, cases=SMALL, records=0, **kw)
+    check(small, cases=[], records=0, **kw)
 
 
 def test_another_submission_is_another_record(small, monkeypatch):
@@ -572,7 +574,7 @@ def test_the_key_is_written_where_a_person_can_read_it(small):
     assert key["results"]["ghost"] == {"run.json": "", "warped.npz": ""}
     crash = key["results"]["crash"]
     assert crash["run.json"] and not crash["warped.npz"]
-    assert key["checks"]["rtm"] == "no_stage_image" and "truth" not in key["checks"]
+    assert "checks" not in key  # set at table time (fix round 1, I2)
     assert len(key["points.npz"]) == len(key["case.json"]) == 64
     assert {"numpy", "scipy", "scikit-image", "python"} <= set(key["libraries"])
     assert key["settings"]["null_directions"] == pairs.NULL_DIRECTIONS
