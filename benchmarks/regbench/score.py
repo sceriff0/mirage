@@ -417,6 +417,28 @@ def jvm_heap_lines(res_rows):
     ]
 
 
+NOT_RECORDED = "not recorded"
+
+
+def panel_of(case):
+    """The moving slide's channel panel as ``A_B_C``: the manifest stores the names
+    ``|``-separated (a string), a prepared case holds them as a list; either is read."""
+    extra = case.extra or {}
+    for key in ("channels_mov", "channel_names"):
+        names = extra.get(key)
+        if isinstance(names, str):
+            names = [n for n in names.split("|") if n]
+        if isinstance(names, (list, tuple)) and names:
+            return "_".join(str(n) for n in names)
+    return NOT_RECORDED
+
+
+def version_of(run):
+    """The tool version the run recorded (``info.version``), else ``not recorded``."""
+    version = ((run or {}).get("info") or {}).get("version")
+    return str(version) if version else NOT_RECORDED
+
+
 def resource_row(run, moving_px=None, stage=None, accounting=None):
     """One run's cost, as recorded at ITS variant's yield.
 
@@ -1543,11 +1565,14 @@ def _score_case(job, pool=None, fresh=False, progress=None):
         "tier": tier_of(case),
         "case_id": case.case_id,
         "group": case.group,
+        "patient_id": case.group,
+        "panel": panel_of(case),
         "unit": unit_of(case),
         "family": case.family,
         "pose": case.pose,
     }
     res_rows = []
+    versions = {INITIAL: "-"}  # variant -> the tool version its run recorded
     flat = {"fold_pct": 0.0, "sd_log_jac": 0.0}
     wanted = {}  # the pair records the rows read, in the order they are first named
     initial = (INITIAL, "")
@@ -1572,6 +1597,7 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                 rec = recs[spec]
                 return {
                     **base,
+                    "tool_version": versions.get(method.split(NON)[0], NOT_RECORDED),
                     "set": which,
                     **marks,
                     "method": method,
@@ -1628,11 +1654,13 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                 run, warped, problem, cause = {}, None, "", ""
             else:
                 run, warped, problem, cause = ctx.load(v)
+                versions[v] = version_of(run)
                 if first:
                     res_rows.append(
                         {
                             **base,
                             "method": v,
+                            "tool_version": versions[v],
                             **resource_row(
                                 run or {"cause": "not_run"}, moving_pixels(case)
                             ),
