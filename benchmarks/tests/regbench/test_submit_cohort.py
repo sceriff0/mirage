@@ -67,6 +67,7 @@ N_JOBS = (
     + 1
     + len(COHORT_DATASETS)
     + 2
+    + 1  # rb-rescore, after the scorer and every selfcheck (Task 28, B5)
     + len(COHORT_DATASETS) * MORE
 )
 # the last job of a staged round has the benchmark's ladder (its own work is in it)
@@ -1113,9 +1114,11 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
         i for i, n in enumerate(order) if re.search(r"-\d+g$", n) and "-sc-" not in n
     )
     assert last_selfcheck < first_array
-    assert order[-2:] == ["rb-tissue", "rb-score"]
-    # settle, then the case arrays, then tissue, then the tables
-    assert order[-4:-2] == ["rb-settle", "rb-score-case-multiplex"]
+    # settle, then the case arrays, then tissue, then the tables; then (Task 28, B5)
+    # the light re-score, after the scorer and every selfcheck
+    assert order[-5:] == [
+        "rb-settle", "rb-score-case-multiplex", "rb-tissue", "rb-score", "rb-rescore"
+    ]  # fmt: skip
     # a job never waits for one printed after it
     seen = set()
     for line in _sbatch_lines(done.stdout):
@@ -1126,17 +1129,24 @@ def test_the_lines_come_in_the_order_the_work_does(dry):
 
 def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
     """`regbench settle` rewrites the run.json of a result the scheduler ended. It is a
-    job of its own that waits for every registration and every selfcheck, and every
-    scoring job waits for it: no case is scored from a result that is about to change."""
+    job of its own that waits for every registration, and every scoring job waits for
+    it: no case is scored from a result that is about to change. It waits for NO
+    selfcheck (Task 28, B5): `rb-rescore` waits for the scorer and every selfcheck's
+    watcher, and writes the tables again with every verdict."""
     jobs, _, _ = dry
     settle = jobs["rb-settle"]
     assert settle.script == "score_cohort.sbatch" and settle.args == ["settle"]
     assert (settle.opt("--cpus-per-task"), settle.opt("--mem")) == ("1", "4G")
     assert {k for k, _ in settle.deps} == {"afterany"}  # whatever became of them
     waited = {n.strip("<>") for _, n in settle.deps}
+    assert not any(n.startswith("rb-sc-") for n in waited)
+    rescore = jobs["rb-rescore"]
+    assert rescore.script == "score_cohort.sbatch" and rescore.args[:1] == ["score"]
+    rewaited = {n.strip("<>") for _, n in rescore.deps}
+    assert {k for k, _ in rescore.deps} == {"afterany"} and "rb-score" in rewaited
     for run in RUNS:
-        # the scorer reports every selfcheck's verdict: it waits for each of them
-        assert f"rb-sc-{variants.checked_by(run)}-{retry_link(LINKS)}" in waited
+        # the re-score reports every selfcheck's verdict: it waits for each of them
+        assert f"rb-sc-{variants.checked_by(run)}-{retry_link(LINKS)}" in rewaited
         for dataset in COHORT_DATASETS:
             assert last_job(run, dataset) in waited, (run, dataset)
     # every array of the per-case scoring waits for it, and for nothing else directly
@@ -1151,7 +1161,7 @@ def test_the_killed_results_are_settled_before_any_case_is_scored(dry):
         assert {n.strip("<>") for _, n in jobs[name].deps} >= {j.name for j in arrays}
     # no job that registers or checks anything waits for the settle job
     for name, job in jobs.items():
-        if name not in ("rb-tissue", "rb-score") and job not in arrays:
+        if name not in ("rb-tissue", "rb-score", "rb-rescore") and job not in arrays:
             assert ("afterany", "<rb-settle>") not in job.deps, name
 
 
@@ -1307,6 +1317,7 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
             + 1
             + len(sizes)
             + 2
+            + 1  # rb-rescore (Task 28, B5)
             + len(sizes) * MORE
         )
     )
@@ -2081,7 +2092,6 @@ def _python_that_fails_on(tmp_path, word):
     "word, said",
     [
         ("--stage-allocation", "cannot read the pipeline's allocation per stage"),
-        ("stages", "cannot size the tile arrays of stare on multiplex"),
     ],
 )
 def test_a_read_that_fails_stops_the_launch_before_anything_is_queued(
@@ -2099,6 +2109,63 @@ def test_a_read_that_fails_stops_the_launch_before_anything_is_queued(
     assert "already queued" not in done.stderr
     assert not (out / "logs" / "submission").exists()
     assert not (out / "logs" / "jobs.tsv").exists()
+
+
+def _dropped(out):
+    import csv as _csv
+
+    path = out / "submit_dropped.csv"
+    with open(path, newline="") as fh:
+        return list(_csv.DictReader(fh))
+
+
+def test_a_run_whose_tile_arrays_cannot_be_sized_is_dropped_not_the_launch(
+    site, tmp_path
+):
+    """Task 28, B4: a per-run configuration problem drops THAT run (a row of
+    submit_dropped.csv, listed again at the end); the others are submitted."""
+    wrap = _python_that_fails_on(tmp_path, "stages")
+    env = {
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        "PATH": f"{wrap}:{site[2]}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+    }
+    done, log, out = launch(site, "--runs", "stare palom", env=env, dry=False,
+                            log="early-stages")  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    sent = log.read_text()
+    assert "rb-palom-" in sent and "rb-stare-" not in sent
+    rows = _dropped(out)
+    assert [(r["run"], r["reason"]) for r in rows] == [("stare", "run_config")]
+    assert "cannot size its tile arrays on multiplex" in rows[0]["detail"]
+    tail = done.stdout[done.stdout.index("# DROPPED from this submission"):]
+    assert "stare,run_config," in tail
+    # every run dropped: then, and only then, the launch stops
+    alone, log, _ = launch(site, "--runs", "stare", env=env, dry=False,
+                           log="early-stages-alone")  # fmt: skip
+    assert alone.returncode == 2 and not log.exists()
+    assert "every selected run was dropped" in alone.stderr
+
+
+def test_a_run_whose_image_has_no_path_is_dropped_not_the_launch(site, tmp_path):
+    """Task 28, B4: the runs of an image with no path (no SIF, conda or venv) are
+    dropped; the scorer's image with none still stops the launch."""
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    (venv / "bin" / "python3").symlink_to(sys.executable)
+    env = {"REGBENCH_VENV_STARE_REGBENCH": str(venv)}
+    done, log, out = launch(site, "--runs", "stare palom", env=env, dry=False,
+                            log="no-path")  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    rows = _dropped(out)
+    assert [(r["run"], r["reason"]) for r in rows] == [("palom", "run_config")]
+    assert "REGBENCH_SIF_PALOM" in rows[0]["detail"]
+    sent = log.read_text()
+    assert "rb-sc-stare-64g" in sent and "palom" not in sent
+    scorer, log, _ = launch(site, "--runs", "stare palom", env={}, dry=False,
+                            log="no-path-scorer")  # fmt: skip
+    assert scorer.returncode == 2 and not log.exists()
+    assert "The scorer's image needs its path" in scorer.stderr
 
 
 def test_every_read_of_the_launcher_comes_before_its_first_sbatch():
@@ -2545,11 +2612,14 @@ def test_a_second_submission_is_refused_while_the_first_is_still_queued(site, tm
         site,
         "--runs",
         "palom",
-        env={**env, "SQUEUE_FAILS": "1"},
+        env={**env, "SQUEUE_FAILS": "1", "REGBENCH_SQUEUE_WAIT_S": "0"},
         dry=False,
         log="twice",
     )
     assert blind.returncode == 2 and "the queue cannot be read (squeue)" in blind.stderr
+    # B13: it was asked again before the launch stopped
+    assert "asked 5 times" in blind.stderr
+    assert blind.stdout.count("the queue could not be read (squeue), try") == 4
     # --score-only is refused the same way, unless it is told to score all the same
     queue.write_text(f"{one} {one}_4\n999999 999999\n")
     env_q = {**env, "SQUEUE_FILE": str(queue)}
@@ -2649,23 +2719,31 @@ def test_a_gpu_is_asked_for_only_where_the_run_list_says(dry):
             assert (GPU in job.words) is RUNS[job.args[0]].gpu, job.name
 
 
-def test_gpu_runs_are_refused_without_a_request_string(site):
-    done, log, _ = launch(site, env={"REGBENCH_SBATCH_GPU": ""}, log="nogpu")
-    assert done.returncode == 2 and not _sbatch_lines(done.stdout) and not log.exists()
-    assert "REGBENCH_SBATCH_GPU is empty" in done.stderr
+def test_gpu_runs_are_dropped_without_a_request_string(site):
+    """Task 28, B4: a run that needs a GPU with no request string is dropped (a row of
+    submit_dropped.csv), and the runs that need none are submitted."""
+    done, log, out = launch(site, env={"REGBENCH_SBATCH_GPU": ""}, log="nogpu")
+    assert done.returncode == 0, done.stderr
+    names = {Job(ln).name for ln in _sbatch_lines(done.stdout)}
     for run, spec in RUNS.items():
-        assert (
-            f" {run}" in done.stderr.split("is empty:")[1].split(".")[0]
-        ) is spec.gpu
-    assert "Nothing was submitted" in done.stderr
-    # the same refusal on the real path, and the runs that need none can still go
-    real, log, _ = launch(
-        site, env={"REGBENCH_SBATCH_GPU": ""}, dry=False, log="nogpu2"
-    )
-    assert real.returncode == 2 and not log.exists()
-    cpu = " ".join(n for n, r in RUNS.items() if not r.gpu)
-    ok, _, _ = launch(site, "--runs", cpu, env={"REGBENCH_SBATCH_GPU": ""}, log="cpu")
-    assert ok.returncode == 0 and GPU not in ok.stdout
+        dropped = f"# DROPPED {run} (run_config): it needs a GPU" in done.stdout
+        assert dropped is spec.gpu, run
+        assert any(n.startswith(f"rb-{run}-") for n in names) is (not spec.gpu), run
+    assert not any(GPU in ln for ln in _sbatch_lines(done.stdout))
+    # the real path writes the table
+    real, log, out = launch(
+        site, env={"REGBENCH_SBATCH_GPU": "", "REGBENCH_ALLOW_PATH_PYTHON": "1"},
+        dry=False, log="nogpu2",
+    )  # fmt: skip
+    assert real.returncode == 0 and log.exists(), real.stderr
+    rows = _dropped(out)
+    assert {r["run"] for r in rows} == {n for n, r in RUNS.items() if r.gpu}
+    assert {r["reason"] for r in rows} == {"run_config"}
+    # only GPU runs selected: nothing is left, the launch stops
+    gpu = " ".join(n for n, r in RUNS.items() if r.gpu)
+    none, log, _ = launch(site, "--runs", gpu, env={"REGBENCH_SBATCH_GPU": ""},
+                          log="gpu-only")  # fmt: skip
+    assert none.returncode == 2 and "every selected run was dropped" in none.stderr
 
 
 def _exec_line(tmp_path, image, **env):
@@ -2826,8 +2904,13 @@ def test_the_pinned_stare_source_is_fetched_once_for_the_images_without_one(tmp_
 
 
 # ── the preflight: before anything is submitted ───────────────────────────────
-def test_the_preflight_stops_the_launch_with_one_line_per_failure(site, tmp_path):
-    """The stand-in "image" is this machine's python: it has STARE and not PALOM."""
+def test_the_preflight_drops_the_runs_it_fails_with_one_line_per_failure(
+    site, tmp_path
+):
+    """The stand-in "image" is this machine's python: it has STARE and not PALOM.
+    Task 28, B3: the runs of the (image, method) that failed are dropped (rows of
+    submit_dropped.csv); the others are submitted. Only with no run left does the
+    launch stop."""
     env = {
         "REGBENCH_ALLOW_PATH_PYTHON": "1",
         "REGBENCH_PREFLIGHT": "1",
@@ -2836,7 +2919,7 @@ def test_the_preflight_stops_the_launch_with_one_line_per_failure(site, tmp_path
     bad, log, out = launch(
         site, "--runs", "stare palom", env=env, dry=False, log="preflight-bad"
     )
-    assert bad.returncode == 2 and not log.exists()  # no sbatch was called
+    assert bad.returncode == 0 and log.exists(), bad.stderr  # stare was submitted
     lines = [ln for ln in bad.stdout.splitlines() if ln.startswith("preflight")]
     fails = [ln for ln in lines if ln.startswith("preflight FAIL")]
     assert fails == [
@@ -2848,9 +2931,17 @@ def test_the_preflight_stops_the_launch_with_one_line_per_failure(site, tmp_path
     assert any(
         ln.startswith("preflight [PALOM palom] ") and "failure(s)" in ln for ln in lines
     )
-    assert (
-        "the preflight failed" in bad.stderr and "Nothing was submitted." in bad.stderr
+    rows = _dropped(out)
+    assert [(r["run"], r["reason"]) for r in rows] == [("palom", "preflight_failed")]
+    assert rows[0]["detail"].startswith("[PALOM palom] preflight FAIL [PALOM palom]")
+    sent = log.read_text()
+    assert "rb-sc-stare-64g" in sent and "palom" not in sent
+    # palom alone: no run left, the launch stops with nothing queued
+    stop, log, out = launch(
+        site, "--runs", "palom", env=env, dry=False, log="preflight-stop"
     )
+    assert stop.returncode == 2 and not log.exists()
+    assert "every selected run was dropped (the preflight" in stop.stderr
     assert not (out / "logs" / "jobs.tsv").exists()
     # a launch the preflight stopped is not "the last submission" of the folder
     assert not (out / "logs" / "submission").exists()
@@ -3585,10 +3676,11 @@ def test_a_takeover_never_takes_a_squeue_warning_for_a_job_id(tmp_path):
     assert "--job-name=rb-x-16g-again" not in " ".join(sent)
 
 
-def test_a_rung_the_partition_cannot_grant_is_written_down_as_the_launchers(tmp_path):
-    """F2: a `cut` step is never submitted. The units that would climb to it are
-    written down by `regbench chain-mark` as not_submitted (the launcher's), and the
-    chain ends ok: the ladder stops at the rung below."""
+def test_a_rung_the_partition_cannot_grant_is_written_down_as_capped(tmp_path):
+    """F2, then Task 28 B6: a `cut` step is never submitted. The units that would climb
+    to it are written down by `regbench chain-mark` as capped (the method's, imputed:
+    the ladder reached the largest rung the partition grants), and the chain ends ok:
+    the ladder stops at the rung below."""
     steps = [
         STEPS[0],
         ["cut", "rb-x-64g", "the partition's largest node has 32000 MB", "--mem=64G"]
@@ -3608,31 +3700,102 @@ def test_a_rung_the_partition_cannot_grant_is_written_down_as_the_launchers(tmp_
     assert words[words.index("-m") + 2] == "chain-mark"
     got = dict(zip(words[::1], words[1::1]))
     assert got["--method"] == "palom" and got["--dataset"] == "multiplex"
-    assert got["--rung-gb"] == "64" and got["--cause"] == "not_submitted"
+    assert got["--rung-gb"] == "64" and got["--cause"] == "capped"
     assert words.count("--index") == 1 and got["--index"] == "0"
     assert "--label" not in words
     assert (tmp_path / "plan" / "done").read_text().split() == ["ok", "-", "0"]
 
 
-def test_a_step_sbatch_refuses_is_written_down_as_the_launchers(tmp_path):
-    """F2: sbatch refusing a climb step (a rung the site will not grant) is the
-    launcher's failure, written down for its units; the chain stops there."""
-    steps = [
-        STEPS[0],
-        ["climb", "rb-x-64g", "--mem=64G"] + RUNG + ["2", "64", "0", "@EARLIER@"],
-    ]
-    ends = {0: "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb"}
+REFUSED_STEPS = [
+    STEPS[0],
+    ["climb", "rb-x-64g", "--mem=64G"] + RUNG + ["2", "64", "0", "@EARLIER@"],
+]
+OOM_END = "REGBENCH_END kind=run status=failed cause=oom whose=method wants=climb"
+FAST_RETRY = {"REGBENCH_RETRY_SUBMIT_WAIT_S": "0", "REGBENCH_RETRY_SUBMIT_TRIES": "3"}
+
+
+def test_a_step_sbatch_refuses_every_time_is_written_down_as_submit_refused(tmp_path):
+    """F2, then Task 28 B7: a climb step sbatch refuses is asked again (with a wait
+    that doubles), and only after its last try are its units written down, as
+    submit_refused (not the method's); the chain stops there."""
     done, sent, _ = _watch(
-        tmp_path, ends, steps, range_="0-0", python="exit 0", sbatch_fails="rb-x-64g"
-    )
+        tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0", python="exit 0",
+        sbatch_fails="rb-x-64g", extra_env=FAST_RETRY,
+    )  # fmt: skip
     assert done.returncode == 1 and sent == [], done.stdout + done.stderr
-    assert "sbatch REFUSED rb-x-64g" in done.stdout
+    assert "sbatch REFUSED rb-x-64g (--array=0), try 1 of 3" in done.stdout
+    assert "try 3 of 3" in done.stdout and "try 4" not in done.stdout
     call = (tmp_path / "python.log").read_text()
-    assert "chain-mark" in call and "--cause not_submitted" in call
+    assert "chain-mark" in call and "--cause submit_refused" in call
     assert "Memory specification can not be satisfied" in call
     assert (tmp_path / "plan" / "done").read_text().split() == [
-        "failed", "not_submitted", "1"
+        "failed", "submit_refused", "1"
     ]  # fmt: skip
+    assert "cause=submit_refused whose=infrastructure" in done.stdout.splitlines()[-1]
+
+
+def test_a_step_sbatch_refuses_once_is_submitted_on_its_next_try(tmp_path):
+    """B7: a refusal that does not last (a busy slurmctld) costs a wait, not the
+    units: the next try goes through, and nothing is written down."""
+    flag = tmp_path / "refused-once"
+    sbatch_once = tmp_path / "bin-pre"
+    sbatch_once.mkdir(parents=True)
+    real = tmp_path / "bin" / "sbatch"
+    (sbatch_once / "sbatch").write_text(
+        "#!/bin/bash\n"
+        f'if [ ! -e "{flag}" ]; then touch "{flag}"; '
+        'echo "sbatch: error: Socket timed out on send/recv" >&2; exit 1; fi\n'
+        f'exec "{real}" "$@"\n'
+    )
+    (sbatch_once / "sbatch").chmod(0o755)
+    path = f"{sbatch_once}:{tmp_path / 'bin'}:{os.environ['PATH']}"
+    env = {**FAST_RETRY, "PATH": path}
+    done, sent, _ = _watch(
+        tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0", python="exit 0",
+        extra_env=env,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "try 1 of 3" in done.stdout and "try 2" not in done.stdout
+    assert [s.split()[1] for s in sent] == ["--job-name=rb-x-64g"]
+    assert not (tmp_path / "python.log").exists()
+
+
+def test_a_refusal_whose_job_is_in_the_queue_after_all_is_never_submitted_twice(
+    tmp_path,
+):
+    """B7: before trying again the queue is asked for the step by its name; a refused
+    call that queued the job anyway is taken, not submitted a second time."""
+    found = 'case "$*" in *--name=rb-x-64g*) echo 77 ;; esac; exit 0'
+    done, sent, _ = _watch(
+        tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0", python="exit 0",
+        sbatch_fails="rb-x-64g", squeue=found, extra_env=FAST_RETRY,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "the queue has it as 77: taken" in done.stdout
+    assert "try 2" not in done.stdout and sent == []
+    assert "77" in (tmp_path / "out" / "logs" / "submitted" / "t.ids").read_text()
+
+
+def test_a_watcher_that_gives_up_says_why_for_the_settle_job(tmp_path):
+    """S3: a watcher that cannot read the queue writes `gave_up` (why) before it ends
+    without `done`: the settle job writes what was due as watcher_gave_up. A link that
+    takes the chain over removes it."""
+    never = 'echo "slurm_load_jobs error: Socket timed out" >&2; exit 1'
+    done, sent, _ = _watch(
+        tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0", python="exit 0",
+        squeue=never, extra_env={"REGBENCH_RETRY_SQUEUE_TRIES": "2"},
+    )  # fmt: skip
+    assert done.returncode == 1 and len(sent) == 1, done.stdout + done.stderr
+    plan = tmp_path / "plan"
+    assert "the queue could not be read while waiting for step 2" in (
+        plan / "gave_up"
+    ).read_text()
+    assert not (plan / "done").exists()
+    assert "cause=watcher_gave_up whose=infrastructure" in done.stdout.splitlines()[-1]
+    again, _, _ = _watch(tmp_path, {0: OOM_END}, REFUSED_STEPS, range_="0-0",
+                         python="exit 0", link=2)  # fmt: skip
+    assert again.returncode == 0, again.stdout + again.stderr
+    assert not (plan / "gave_up").exists()
 
 
 def _rung_task(tmp_path, python_body):
@@ -3970,7 +4133,17 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
         ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
         for ln in _sbatch_lines(done.stdout)
     ]
-    assert then and then == _sbatch_lines(dry[1].stdout)
+    # Task 28, B5, the one change to the default graph: the settle job no longer
+    # waits for the selfchecks' watchers, and rb-rescore (after the scorer and them)
+    # is added
+    now_lines = _sbatch_lines(dry[1].stdout)
+    rescore = [ln for ln in now_lines if Job(ln).name == "rb-rescore"]
+    assert len(rescore) == 1 and "<rb-score>" in rescore[0]
+    then = [
+        re.sub(r":<rb-sc-[^>]*>", "", ln) if Job(ln).name == "rb-settle" else ln
+        for ln in then
+    ]
+    assert then and then == [ln for ln in now_lines if ln not in rescore]
     later = [ln for ln in done.stdout.splitlines() if ln.startswith(LATER)]
     now = [ln for ln in dry[1].stdout.splitlines() if ln.startswith(LATER)]
     assert [

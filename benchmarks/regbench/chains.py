@@ -13,8 +13,14 @@ row it is of, ``run``), and the chain's watcher leaves there:
               is a chain NO LINK FINISHED: its watcher's links were all ended (time
               limit, a lost node) or never ran, and what was still due was not submitted
 
-Two writers here, both of RECORDS (``run.json``) and both in the vocabulary that exists
-(``resources.NOT_THE_METHOD``: no new cause):
+``gave_up``  the watcher gave up (the queue could not be read): the reason. Set by
+              ``retry.sbatch`` before it exits without ``done``; the settle job then
+              writes what was still due as ``watcher_gave_up`` (Task 28, S3)
+
+Two writers here, both of RECORDS (``run.json``). Their causes are
+``resources.NOT_THE_METHOD``'s and, since Task 28, ``losses.NOT_THE_METHOD_EXTRA``'s
+(``watcher_gave_up``, ``submit_refused``) and ``capped`` (the method's: the ladder
+reached the largest rung the partition grants):
 
 :func:`mark`           the units a chain could not take up its ladder (a rung the
                        partition cannot grant, a step sbatch refused): ``not_submitted``,
@@ -33,8 +39,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DONE, LAST, STATE, RUN = "done", "last", "state", "run"
+DONE, LAST, STATE, RUN, GAVE_UP = "done", "last", "state", "run", "gave_up"
 LADDER_CUT = "ladder_cut_gb"
+# the causes ``mark`` writes (``regbench chain-mark --cause``)
+NOT_SUBMITTED, CAPPED = "not_submitted", "capped"
+SUBMIT_REFUSED, WATCHER_GAVE_UP = "submit_refused", "watcher_gave_up"
+MARK_CAUSES = (NOT_SUBMITTED, CAPPED, SUBMIT_REFUSED, WATCHER_GAVE_UP)
+UNMARKED = "unmarked_units.csv"
+UNMARKED_COLUMNS = ("plan", "index", "reason")
 
 
 def retry_root(out, submission):
@@ -73,6 +85,15 @@ def done(plan):
     except OSError:
         return None
     return tuple(words[:3]) if words else None
+
+
+def gave_up(plan):
+    """Why the chain's watcher gave up (``gave_up``), or None."""
+    try:
+        text = Path(plan, GAVE_UP).read_text().strip()
+    except OSError:
+        return None
+    return text or "the watcher gave up"
 
 
 def last_jobs(plan):
@@ -150,7 +171,12 @@ def mark(out, cases_root, dataset, method, label, indices, rung_gb, cause, why,
     that the next rung would have run again change (a memory cause, or a ``killed`` or
     ``infrastructure`` one). A ``killed`` record is settled first by its script's note
     (``ladder.read_exits``), as the next rung's task would have. Returns how many
-    records changed."""
+    records changed.
+
+    ``capped`` (a rung the partition cannot grant, B6) is written only over a MEMORY
+    failure (the ladder would have climbed for it); the record's ``error`` then says
+    ``capped at <the rung below> GB`` and the unit is the method's, imputed. Any other
+    failure below a cut rung is ``not_submitted``, as before."""
     from . import ladder, resources
     from .cases import write_json
 
@@ -158,6 +184,8 @@ def mark(out, cases_root, dataset, method, label, indices, rung_gb, cause, why,
     exits = ladder.read_exits(out)
     climbs = (*resources.MEMORY_CAUSES, ladder.KILLED, ladder.INFRASTRUCTURE)
     n = 0
+    if cause not in MARK_CAUSES:
+        raise ValueError(f"chains.mark: {cause!r} is not one of {MARK_CAUSES}")
     for index in indices:
         if not 0 <= int(index) < len(units):
             continue
@@ -177,6 +205,16 @@ def mark(out, cases_root, dataset, method, label, indices, rung_gb, cause, why,
                 f"launcher: {why}"
             )
             rec["cause"] = cause
+            if cause == CAPPED and was not in resources.MEMORY_CAUSES:
+                rec["cause"] = NOT_SUBMITTED
+            elif cause == CAPPED:
+                below = f"{float(gb):g} GB" if isinstance(gb, (int, float)) else (
+                    "the rung below"
+                )
+                rec["error"] = (
+                    f"capped at {below}: the next rung, {float(rung_gb):g} GB, cannot "
+                    f"be granted ({why}); last failure {was}"
+                )
             rec[LADDER_CUT] = float(rung_gb)
             write_json(path, rec)
             n += 1
@@ -208,6 +246,16 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
       ``ladder_cut_gb`` the rung of that step). An oom at 16 GB whose 64 GB step was
       never submitted is the launcher's, not the method's.
 
+    A chain whose watcher GAVE UP (``gave_up``: the queue could not be read) has both
+    kinds written as ``watcher_gave_up`` instead (S3): what it was waiting for, and what
+    it never submitted, were lost to the watcher, not to the method or the launcher.
+
+    A run's chain whose units cannot be listed (its ``run`` file is unreadable, or the
+    cases of its dataset cannot be read) is no longer passed over in silence (S2): each
+    of its units is a row of ``<out>/logs/unmarked_units.csv`` (``plan,index,reason``;
+    written at every settle, header alone when there is none), and the scorer makes
+    each an ``unmarked_unit`` row of ``losses.csv``.
+
     Returns ``{plan or "-": records changed}``."""
     import re
 
@@ -217,10 +265,30 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
     changed = {}
     pending = {}
     cut = []
+    unmarked = {}
+
+    def cannot_list(plan, reason, only=None):
+        idxs = sorted(last_jobs(plan), key=lambda i: (len(i), i)) or [""]
+        for idx in idxs if only is None else only:
+            unmarked.setdefault((plan.name, idx), reason)
+
+    def outside(plan, all_units):
+        """The plan's units its case list does not have (S2)."""
+        beyond = [
+            i for i in sorted(last_jobs(plan), key=lambda i: (len(i), i))
+            if not (i.isdigit() and int(i) < len(all_units))
+        ]
+        if beyond:
+            cannot_list(
+                plan, f"not among the {len(all_units)} unit(s) its cases list", beyond
+            )
+
     if cases_root:
         for plan in unfinished(out, submission):
             row = read_run(plan)
             if row is None:
+                if Path(plan, RUN).exists():  # a run's ladder whose row cannot be read
+                    cannot_list(plan, f"its {RUN} file is unreadable or short")
                 continue
             for idx, job in last_jobs(plan).items():
                 job_id = job.rsplit("-", 1)[-1]
@@ -232,8 +300,10 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
                 continue
             try:
                 all_units = _units(cases_root, row["dataset"], row["method"])
-            except (SystemExit, Exception):  # noqa: BLE001 - a run this checkout lacks
+            except (SystemExit, Exception) as exc:  # noqa: BLE001 - logged (S2)
+                cannot_list(plan, f"its units cannot be listed: {exc}")
                 continue
+            outside(plan, all_units)
             held = {str(i) for i, _ in pending.get(plan, [])}
             for index, unit in enumerate(all_units):
                 if str(index) in held:
@@ -262,11 +332,13 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
                         cut.append((plan, row, index, k, jobname, int(gb.group(1))))
                     break
     for plan, row, index, k, jobname, gb in cut:
+        quit_ = gave_up(plan)
         n = mark(
             out, cases_root, row["dataset"], row["method"], row["label"], [index], gb,
-            "not_submitted",
-            f"the chain's watcher did not finish ({plan.name}): step {k} ({jobname}) "
-            "was never submitted by any of its links",
+            WATCHER_GAVE_UP if quit_ else NOT_SUBMITTED,
+            f"the chain's watcher did not finish ({plan.name}"
+            + (f"; it gave up: {quit_}" if quit_ else "")
+            + f"): step {k} ({jobname}) was never submitted by any of its links",
             submission,
         )  # fmt: skip
         if n:
@@ -285,10 +357,13 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
             changed["-"] = changed.get("-", 0) + 1
     for plan, units in pending.items():
         row = read_run(plan)
+        quit_ = gave_up(plan)
         try:
             all_units = _units(cases_root, row["dataset"], row["method"])
-        except (SystemExit, Exception):  # noqa: BLE001 - a run this checkout lacks
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - logged (S2)
+            cannot_list(plan, f"its units cannot be listed: {exc}")
             continue
+        outside(plan, all_units)
         for idx, state in units:
             if not 0 <= int(idx) < len(all_units):
                 continue
@@ -298,15 +373,45 @@ def mark_in_flight(out, accounting, submission=None, cases_root=None):
             for path, rec in _records(paths, submission):
                 if rec.get("ok") or rec.get("cause") == ladder.INFRASTRUCTURE:
                     continue
+                if rec.get("cause") == WATCHER_GAVE_UP:
+                    continue
                 rec["cause_from"] = (
                     f"{rec.get('cause') or 'exception'} at rung "
                     f"{rec.get('attempt') or '?'}; "
                     + IN_FLIGHT.format(state=state, plan=plan.name)
+                    + (f"; the watcher gave up: {quit_}" if quit_ else "")
                 )
-                rec["cause"] = ladder.INFRASTRUCTURE
+                rec["cause"] = WATCHER_GAVE_UP if quit_ else ladder.INFRASTRUCTURE
                 write_json(path, rec)
                 changed[plan.name] = changed.get(plan.name, 0) + 1
+    if cases_root:
+        write_unmarked(out, unmarked)
     return changed
+
+
+def write_unmarked(out, unmarked):
+    """``<out>/logs/unmarked_units.csv`` from ``{(plan, index): reason}`` (header alone
+    when empty)."""
+    import csv
+
+    path = Path(out) / "logs" / UNMARKED
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(UNMARKED_COLUMNS)
+        for (plan, idx), reason in sorted(unmarked.items()):
+            w.writerow((plan, idx, reason))
+
+
+def read_unmarked(out):
+    """The rows of ``<out>/logs/unmarked_units.csv`` (``[]`` without it)."""
+    import csv
+
+    try:
+        with open(Path(out) / "logs" / UNMARKED, newline="") as fh:
+            return list(csv.DictReader(fh))
+    except OSError:
+        return []
 
 
 def summary_lines(out, submission):

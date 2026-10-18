@@ -91,7 +91,10 @@
 #      reads the records, computes whatever case has none that is still valid, and
 #      writes the tables (`score --verdicts`). The tables are the same whether the array
 #      ran, half of it did, or none of it. Everything here waits (`afterany`) for every
-#      selfcheck and every ladder.
+#      ladder, and for NO selfcheck (Task 28, B5): the selfchecks never gate, nor do they
+#      delay the tables. When there are selfchecks, `rb-rescore` (score_cohort.sbatch
+#      score) waits for the scorer AND every selfcheck's watcher and writes the tables
+#      again, with every verdict in them; the case records are kept, so it only reads.
 #
 #   6. with --compute-all, after the scorer: compute-all, the WHOLE pipeline traced per
 #      patient and registration backend (compute_all.sbatch, one Nextflow head job per
@@ -122,6 +125,15 @@
 # (the refusal prints the line), or use another REGBENCH_OUT. --score-only is refused
 # the same way (it would score, and settle, results whose tasks are still running):
 # REGBENCH_SCORE_WHILE_QUEUED=1 scores anyway. --prepare is not refused.
+#
+# A RUN IS DROPPED, NEVER THE SUBMISSION (Task 28, B3/B4). A run whose image fails the
+# preflight, whose GPU or image path is not set, or whose own configuration cannot be
+# submitted (a staged run with a realcheck, a stage no job is defined for, tile arrays
+# that cannot be sized) is left out, with a row of $REGBENCH_OUT/submit_dropped.csv
+# (`run,reason,detail`; reason preflight_failed or run_config), and the others are
+# submitted; the dropped ones are listed again at the end, and the scorer makes each a
+# row of losses.csv. Only when no run is left does the launch stop. The scorer's own
+# image failing its preflight still stops it: nothing could be scored.
 #
 # A SUBMISSION ID IS USED ONCE per REGBENCH_OUT. A call that would run anything under an
 # id this folder already holds a submission of (logs/submitted/<id>.ids) is refused: the
@@ -421,6 +433,34 @@ trap 'on_signal HUP 129' HUP
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+# drop_run <run> <reason> <detail>: the run is left out of this submission (removed from
+# `selected`) and is a row of submit_dropped.csv (B3/B4); the others go on
+DROPPED_ROWS="" DROPPED_RUNS=""
+csv_field() { local v="${1//\"/\"\"}"; printf '"%s"' "${v//$'\n'/ }"; }
+write_dropped() {
+    [ "$DRY" = 1 ] && return 0
+    [ -n "${REGBENCH_OUT:-}" ] || return 0
+    mkdir -p "$REGBENCH_OUT" 2>/dev/null || return 0
+    { echo "run,reason,detail"; printf '%s' "$DROPPED_ROWS"; } > "$REGBENCH_OUT/submit_dropped.csv.new" \
+        && mv "$REGBENCH_OUT/submit_dropped.csv.new" "$REGBENCH_OUT/submit_dropped.csv"
+}
+drop_run() {
+    local run="$1" reason="$2" detail="$3" r kept=""
+    has "$selected" "$run" || return 0
+    for r in $selected; do [ "$r" = "$run" ] || kept="$kept $r"; done
+    selected="$kept"
+    DROPPED_RUNS="$DROPPED_RUNS $run"
+    DROPPED_ROWS="$DROPPED_ROWS$run,$reason,$(csv_field "$detail")"$'\n'
+    echo "# DROPPED $run ($reason): $detail. The other runs are submitted (submit_dropped.csv)"
+    write_dropped
+}
+# none_left <what dropped them>: no run is left to submit
+SELECTED_ANY=0
+none_left() {
+    [ "$SELECTED_ANY" = 1 ] || return 0  # --score-only / --compute-only select none
+    [ -n "${selected// /}" ] && return 0
+    die "every selected run was dropped ($1:$DROPPED_RUNS; the lines above). Nothing was submitted."
+}
 # --datasets is checked up front, before anything is read or submitted: the cohort, or a
 # public dataset whose cases folder is named (REGBENCH_CASES_<NAME>)
 public_sets=""
@@ -730,8 +770,16 @@ else
     # scoring: it would score, and settle, results whose tasks are still running.
     if [ "$prepare" != 1 ] && [ "$preflight_only" != 1 ] && [ -s "$JOBS_FILE" ] \
         && ! { [ "$score_only" = 1 ] && [ "${REGBENCH_SCORE_WHILE_QUEUED:-0}" = 1 ]; }; then
-        in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)" \
-            || die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), so it cannot be shown that its jobs have ended. Nothing was submitted."
+        # a queue that does not answer is asked again (B13): REGBENCH_SQUEUE_TRIES (5)
+        # times, REGBENCH_SQUEUE_WAIT_S (10) seconds apart, before the launch stops
+        tries=0
+        until in_queue="$(squeue -h -u "$(id -un)" -o '%F %A' 2>/dev/null)"; do
+            tries=$((tries + 1))
+            [ "$tries" -ge "${REGBENCH_SQUEUE_TRIES:-5}" ] \
+                && die "$REGBENCH_OUT already holds a submission ($JOBS_FILE) and the queue cannot be read (squeue), asked $tries times ${REGBENCH_SQUEUE_WAIT_S:-10}s apart, so it cannot be shown that its jobs have ended. Nothing was submitted."
+            echo "# the queue could not be read (squeue), try $tries of ${REGBENCH_SQUEUE_TRIES:-5}: asked again in ${REGBENCH_SQUEUE_WAIT_S:-10}s"
+            sleep "${REGBENCH_SQUEUE_WAIT_S:-10}"
+        done
         still="$(tr ' ' '\n' <<< "$in_queue" | grep -Fxf <(cut -f3 "$JOBS_FILE" | cut -d_ -f1 | sort -u) | sort -u | paste -sd' ' -)" || still=""
         if [ -n "$still" ] && [ "$compute_only" = 1 ]; then
             die "--compute-only: $(wc -w <<< "$still" | tr -d ' ') job(s) of an earlier call into $REGBENCH_OUT are still pending or running ($still). compute-all runs ALONE, after them: a cost measured beside them is not a cost. Wait for them; or cancel them:  scancel $still ; or use --compute-all in the submission itself. Nothing was submitted."
@@ -826,6 +874,12 @@ for r in $only_runs; do has "$all_names" "$r" || die "--runs: no run named '$r' 
 for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
+# a submission that runs anything writes its own submit_dropped.csv (header alone when
+# no run is dropped); --score-only leaves the scored submission's as it is
+if [ "$scoring_earlier" != 1 ] && [ "$preflight_only" != 1 ] && [ "$prepare" != 1 ] && [ -n "${selected// /}" ]; then
+    write_dropped
+fi
+[ -n "${selected// /}" ] && [ "$scoring_earlier" != 1 ] && SELECTED_ANY=1
 # --score-only: no run is selected, so nothing of steps 1 to 4 is submitted
 if [ "$scoring_earlier" = 1 ]; then
     [ -z "$only_runs" ] || echo "# $step_flag: --runs is not used (the scorer scores every run of the submission)"
@@ -1103,6 +1157,13 @@ if [ "$prepare" = 1 ]; then
                 if [ "$DRY" != 1 ]; then
                     { mkdir -p "$REGBENCH_CASES" && { [ "$REGBENCH_MANIFEST" -ef "$REGBENCH_CASES/manifest.csv" ] || cp "$REGBENCH_MANIFEST" "$REGBENCH_CASES/manifest.csv"; }; } \
                         || die "--prepare: cannot copy the manifest $REGBENCH_MANIFEST to $REGBENCH_CASES/manifest.csv. Nothing was submitted."
+                    # and what the manifest dropped (manifest_dropped.csv, beside it):
+                    # attrition.csv's checkpoint_rounds and rows of losses.csv (S7)
+                    dropped_of="$(dirname "$REGBENCH_MANIFEST")/manifest_dropped.csv"
+                    if [ -f "$dropped_of" ] && ! [ "$dropped_of" -ef "$REGBENCH_CASES/manifest_dropped.csv" ]; then
+                        cp "$dropped_of" "$REGBENCH_CASES/manifest_dropped.csv" \
+                            || echo "# WARNING --prepare: cannot copy $dropped_of to $REGBENCH_CASES: the manifest's drops are then read from beside the manifest only"
+                    fi
                 fi
                 # the nuclei and the outlines of every native slide first: StarDist on
                 # each slide, its cell mask traced to the outlines (nuclei.sbatch).
@@ -1211,7 +1272,11 @@ while IFS=$'\t' read -r name _ _ _ image gpu _; do
     has "$images" "$image" || images="$images $image"
 done < "$union"
 if [ -n "$gpu_runs" ] && [ -z "${REGBENCH_SBATCH_GPU:-}" ]; then
-    die "these runs need a GPU and REGBENCH_SBATCH_GPU is empty:$gpu_runs. Export the site's request (e.g. REGBENCH_SBATCH_GPU=\"--gres=gpu:nvidia_h200:1\"), or leave them out with --runs. Nothing was submitted."
+    # B4: each such run is dropped, the others go on
+    for r in $gpu_runs; do
+        drop_run "$r" run_config "it needs a GPU and REGBENCH_SBATCH_GPU is empty (export the site's request, e.g. REGBENCH_SBATCH_GPU=\"--gres=gpu:nvidia_h200:1\")"
+    done
+    none_left "no GPU request"
 fi
 missing=""
 for image in $images $REGBENCH_SCORER_IMAGE; do
@@ -1221,8 +1286,18 @@ done
 if [ -n "$missing" ]; then
     if [ "$DRY" = 1 ] || [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" = 1 ]; then
         echo "# not set:$missing (those jobs would use the python on PATH)"
+    elif has "$missing" "REGBENCH_SIF_$REGBENCH_SCORER_IMAGE"; then
+        die "not set:$missing. The scorer's image needs its path (or REGBENCH_ALLOW_PATH_PYTHON=1 to use the python on PATH): nothing could be scored. Nothing was submitted."
     else
-        die "not set:$missing. Each image of the run list needs its path (or REGBENCH_ALLOW_PATH_PYTHON=1 to use the python on PATH). Nothing was submitted."
+        # B4: the runs of an image with no path are dropped, the others go on
+        while IFS=$'\t' read -r name _ _ _ image _; do
+            has "$missing" "REGBENCH_SIF_$image" && drop_run "$name" run_config "not set: REGBENCH_SIF_$image (its image needs a path, or REGBENCH_ALLOW_PATH_PYTHON=1 to use the python on PATH)"
+        done < "$union"
+        none_left "images with no path"
+        images=""
+        while IFS=$'\t' read -r name _ _ _ image _; do
+            has "$selected" "$name" && ! has "$images" "$image" && images="$images $image"
+        done < "$union"
     fi
 fi
 
@@ -1266,7 +1341,8 @@ fetch_stare_source() {
     done
 }
 preflight() {
-    local seen="" failed=0 name method image out code key where=() slides=() ds
+    local seen="" failed=0 name method image out code key where=() slides=() ds failed_keys="" fail_said
+    PF_KEYS_SAID=""
     if [ "${REGBENCH_PREFLIGHT:-1}" = 0 ]; then
         echo "# WARNING preflight SKIPPED (REGBENCH_PREFLIGHT=0): nothing checked that the images hold what their runs import"
         return 0
@@ -1295,11 +1371,25 @@ preflight() {
         out="$(regbench_py "$image" preflight --method "$method" --image "$image" "${where[@]}" "${slides[@]}" 2>&1)" && code=0 || code=$?
         preflight_lines "$out"
         if [ "$code" != 0 ]; then
-            failed=1
             grep -q '^preflight FAIL \[' <<< "$out" \
                 || echo "preflight FAIL [$image $method] the image did not start, or has neither python nor python3, or the harness does not import there (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
+            failed_keys="$failed_keys $key"
+            fail_said="$(grep -E '^preflight FAIL \[' <<< "$out" | head -n 3 | tr '\n' ' ')" || fail_said=""
+            printf -v "PF_SAID_${#failed_keys}" '%s' "${fail_said:-the image did not start, or the harness does not import there (exit $code)}"
+            PF_KEYS_SAID="$PF_KEYS_SAID $key=${#failed_keys}"
         fi
     done < "$union"
+    # B3: the runs of an (image, method) that failed are dropped; the others go on
+    if [ -n "$failed_keys" ]; then
+        local said_of n
+        while IFS=$'\t' read -r name method _ _ image _; do
+            has "$selected" "$name" || continue
+            has "$failed_keys" "$image:$method" || continue
+            n="$(tr ' ' '\n' <<< "$PF_KEYS_SAID" | sed -n "s/^$image:$method=//p" | head -n 1)" || n=""
+            said_of="PF_SAID_$n"
+            drop_run "$name" preflight_failed "[$image $method] ${!said_of:-the preflight failed}"
+        done < "$union"
+    fi
     image="$REGBENCH_SCORER_IMAGE"
     out="$(regbench_py "$image" preflight --scorer --image "$image" --writable "$REGBENCH_OUT" 2>&1)" && code=0 || code=$?
     preflight_lines "$out"
@@ -1308,14 +1398,25 @@ preflight() {
         grep -q '^preflight FAIL \[' <<< "$out" \
             || echo "preflight FAIL [$image the scorer] the image did not start, or has neither python nor python3 (exit $code): $(tail -n 3 <<< "$out" | tr '\n' ' ')"
     fi
-    [ "$failed" = 0 ] || die "the preflight failed (the 'preflight FAIL' lines above, one per failure). Nothing was submitted."
+    [ "$failed" = 0 ] || die "the scorer's image failed the preflight (the 'preflight FAIL' lines above): nothing could be scored. Nothing was submitted."
+    if [ "$preflight_only" != 1 ]; then
+        none_left "the preflight"
+    fi
+    if [ -n "$failed_keys" ]; then
+        echo "# preflight: failed for$failed_keys (the 'preflight FAIL' lines above); their runs are dropped:$DROPPED_RUNS"
+        [ "$preflight_only" = 1 ] && return 1
+        return 0
+    fi
     echo "# preflight: ok"
 }
 
 if [ "$preflight_only" = 1 ]; then
     rung_check
     fetch_stare_source
-    preflight
+    if ! preflight; then
+        echo "# --preflight: nothing was submitted"
+        exit 2
+    fi
     echo "# --preflight: nothing was submitted"
     exit 0
 fi
@@ -1338,10 +1439,18 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ realcheck stages; do
     has "$selected" "$name" || continue
     [ "${stages:--}" = - ] && continue
     any_staged=1
-    [ "${realcheck:--}" = - ] || die "$name runs as several jobs per round and has a realcheck: the launcher runs no first unit with --realcheck for such a run. Nothing was submitted."
+    if [ "${realcheck:--}" != - ]; then
+        drop_run "$name" run_config "it runs as several jobs per round and has a realcheck: the launcher runs no first unit with --realcheck for such a run"
+        continue
+    fi
     for stage in ${stages//,/ }; do
-        case "$stage" in coarse|tile|solve|stitch) ;; *) die "$name: no job is defined for the stage '$stage' (column stages of the run list). Nothing was submitted." ;; esac
+        case "$stage" in coarse|tile|solve|stitch) ;; *) drop_run "$name" run_config "no job is defined for the stage '$stage' (column stages of the run list)"; continue 2 ;; esac
     done
+done < "$union"
+none_left "their configuration"
+any_staged=0
+while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
+    has "$selected" "$name" && [ "${stages:--}" != - ] && any_staged=1
 done < "$union"
 if [ "$any_staged" = 1 ]; then
     alloc_rows="$(regbench_py "$REGBENCH_HEAD_IMAGE" runs --stage-allocation)" \
@@ -1370,8 +1479,6 @@ for ds in $sized; do
     while IFS=$'\t' read -r name method label opts image _ _ _ _ _ _ _ _ _ _ stages; do
         has "$selected" "$name" || continue
         [ "${stages:--}" = - ] && continue
-        # a run's datasets follow one another, so it is ONE submitter's worth of queue
-        case ",$stages," in *,tile,*) has "$TILE_RUNS" "$name" || { TILE_RUNS="$TILE_RUNS $name"; N_TILE_RUNS=$((N_TILE_RUNS + 1)); } ;; esac
         layout="$REGBENCH_OUT/logs/stages/$REGBENCH_SUBMISSION/$name-$ds.tsv"
         made="$layout"
         if [ "$DRY" = 1 ]; then
@@ -1384,10 +1491,20 @@ for ds in $sized; do
             IFS=, read -ra items <<< "$opts"
             for o in "${items[@]}"; do what+=(--opt "$o"); done
         fi
-        read -r n_rounds n_tiles < <(regbench_py "$image" "${what[@]}") \
-            || die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages). Nothing was submitted."
-        case "${n_rounds:-}:${n_tiles:-}" in *[!0-9:]*|:*|*:) die "cannot size the tile arrays of $name on $ds (python -m benchmarks.regbench stages printed '${n_rounds:-} ${n_tiles:-}'). Nothing was submitted." ;; esac
-        [ "$n_tiles" -gt 0 ] && [ "$n_rounds" -gt 0 ] || die "$name on $ds: no tile to register (python -m benchmarks.regbench stages printed '$n_rounds $n_tiles'). Nothing was submitted."
+        if ! read -r n_rounds n_tiles < <(regbench_py "$image" "${what[@]}"); then
+            drop_run "$name" run_config "cannot size its tile arrays on $ds (python -m benchmarks.regbench stages)"
+            continue
+        fi
+        case "${n_rounds:-}:${n_tiles:-}" in *[!0-9:]*|:*|*:)
+            drop_run "$name" run_config "cannot size its tile arrays on $ds (python -m benchmarks.regbench stages printed '${n_rounds:-} ${n_tiles:-}')"
+            continue ;;
+        esac
+        if ! { [ "$n_tiles" -gt 0 ] && [ "$n_rounds" -gt 0 ]; }; then
+            drop_run "$name" run_config "no tile to register on $ds (python -m benchmarks.regbench stages printed '$n_rounds $n_tiles')"
+            continue
+        fi
+        # a run's datasets follow one another, so it is ONE submitter's worth of queue
+        case ",$stages," in *,tile,*) has "$TILE_RUNS" "$name" || { TILE_RUNS="$TILE_RUNS $name"; N_TILE_RUNS=$((N_TILE_RUNS + 1)); } ;; esac
         if [ "$DRY" != 1 ]; then
             # the caller's own sbatch arguments, for the jobs the submitter submits
             : > "${made%.tsv}.sbatch_args"
@@ -1398,6 +1515,7 @@ for ds in $sized; do
         printf -v "TILES_OF_${ds}_$name" '%s' "$n_tiles"
     done < "$(table_of "$ds")"
 done
+none_left "their tile arrays"
 # THE TILE QUEUE CEILING IS A TOTAL: REGBENCH_STAGE_QUEUE_MAX is divided by the number of
 # runs with a tile submitter that can feed AT ONCE (floor, at least 1) and each submitter
 # is given its share, REGBENCH_STAGE_QUEUE_RUN, which feed_tiles.sbatch reads. Set before
@@ -1732,10 +1850,12 @@ SCORER_JOB=""
 if [ "$compute_only" != 1 ]; then
 dep=""
 for j in $finals; do dep="${dep:+$dep:}$j"; done
-# and every selfcheck (its watcher): the scorer reports their verdicts
+# NOT the selfchecks (B5): the tables wait for the registrations alone, and rb-rescore
+# (below) writes them again once every selfcheck's watcher has ended
+sc_dep=""
 for r in $needed; do
     last="SC_LAST_$r"
-    [ -n "${!last:-}" ] && dep="${dep:+$dep:}${!last}"
+    [ -n "${!last:-}" ] && sc_dep="${sc_dep:+$sc_dep:}${!last}"
 done
 # after everything this call submitted (--score-only submitted nothing before this)
 after_all=()
@@ -1776,6 +1896,14 @@ submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$score
     --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score \
     ${scored_sets[@]+"${scored_sets[@]}"}
 SCORER_JOB="$JOB_ID"
+# the light re-score (B5): after the scorer and every selfcheck's watcher, the tables
+# again with every verdict (the case records are kept: it computes nothing anew)
+if [ -n "$sc_dep" ]; then
+    submit "rb-rescore" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$SCORER_JOB:$sc_dep" \
+        --cpus-per-task="$CPUS" --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 \
+        "$HERE/score_cohort.sbatch" score ${scored_sets[@]+"${scored_sets[@]}"}
+    SCORER_JOB="$JOB_ID"
+fi
 fi
 
 # ── 6 and 7. compute-all: the whole pipeline per patient and backend, last and alone ──
@@ -1804,7 +1932,11 @@ if [ "$computing" = 1 ]; then
     echo "# compute-all: $i head(s) -> $REGBENCH_OUT/compute/<backend>/<patient>/ (trace/trace.txt); their end lines in $REGBENCH_OUT/logs/compute/; the tables pipeline_cost*.csv from rb-score-compute"
 fi
 
-[ "$N_CUT" = 0 ] || echo "# WARNING memory ladder: $N_CUT ladder(s) stop below a rung no node of $GRANT_WHERE can grant ($GRANT_MB MB): their units that would climb to it are written down as the launcher's (not_submitted), not the method's"
+[ "$N_CUT" = 0 ] || echo "# WARNING memory ladder: $N_CUT ladder(s) stop below a rung no node of $GRANT_WHERE can grant ($GRANT_MB MB): their units that would climb to it are written down as capped (the method's, imputed: losses.csv names the cap), the ladder stopping at the rung below"
+if [ -n "$DROPPED_RUNS" ]; then
+    echo "# DROPPED from this submission ($(wc -w <<< "$DROPPED_RUNS" | tr -d ' ') run(s); $([ "$DRY" = 1 ] && echo "a real submission writes them to $REGBENCH_OUT/submit_dropped.csv" || echo "$REGBENCH_OUT/submit_dropped.csv"); the scorer makes each a row of losses.csv):"
+    printf '%s' "$DROPPED_ROWS" | sed 's/^/#   /'
+fi
 [ "$N_LATER" = 0 ] || echo "# retries: none is in the queue. Up to $N_LATER retry array(s) are written down as plans ($REGBENCH_OUT/logs/retry/) and submitted by the chains' watchers (retry.sbatch) only after a failure, for the units that failed"
 echo "# $N_JOBS job(s)$([ "$DRY" = 1 ] && echo ' would be submitted; nothing was' || echo ' submitted'), $N_TASKS task(s) in them (an array counts once as a job and once per task): $N_JOBS sbatch call(s) $([ "$DRY" = 1 ] && echo 'would be made now' || echo 'were made now')"
 if [ "$N_FED" -gt 0 ]; then

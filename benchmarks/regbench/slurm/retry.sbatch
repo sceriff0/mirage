@@ -33,10 +33,23 @@
 #             be granted (submit_cohort.sh read it off `sinfo` before the first sbatch)
 #
 # A RUNG THAT CANNOT BE GRANTED. A `cut` step is never submitted: the units that would
-# climb to it are written down as the LAUNCHER's (`regbench chain-mark`: cause
-# not_submitted, the memory failure below kept in cause_from, `ladder_cut` = the rung),
-# so their rows are counted apart from the method's failures and say that the ladder
-# stopped there. The same is done for the units of a step sbatch REFUSES.
+# climb to it are written down as `capped` (`regbench chain-mark`: the memory failure
+# below kept in cause_from, `ladder_cut` = the rung, the error "capped at <the rung
+# below> GB"): the method's, imputed, and their rows say that the ladder stopped at the
+# largest rung the partition grants (Task 28, B6).
+#
+# A STEP SBATCH REFUSES is asked again, REGBENCH_RETRY_SUBMIT_TRIES (5) times in all,
+# waiting REGBENCH_RETRY_SUBMIT_WAIT_S (60) seconds and twice as long after each refusal;
+# before each new try the queue is asked whether the refused call went through after
+# all (a slurmctld that timed out can still have queued it), so a step is never queued
+# twice. Refused every time, its units are written down as `submit_refused` (not the
+# method's, B7) and the chain stops there.
+#
+# A WATCHER THAT GIVES UP (the queue could not be read REGBENCH_RETRY_SQUEUE_TRIES times
+# in a row) writes why in <plan folder>/gave_up before it exits: the settle job writes
+# the units it was still waiting for, and those it never submitted, as
+# `watcher_gave_up` (chains.mark_in_flight, S3). A later link that takes the chain over
+# removes the file: the chain is not given up while a link goes on with it.
 #
 # THE WATCHER IS A CHAIN OF LINKS (REGBENCH_RETRY_WATCHERS, submit_cohort.sh): link 1
 # waits for the first array, each later link for the link before it (`afterany`), and
@@ -66,12 +79,15 @@
 # the queue; a test holds the predicate to never keeping out one the ladder would run.
 #
 # It gives up (exit 1, the rest of the chain is not submitted) when sbatch refuses a
-# step or the queue cannot be read REGBENCH_RETRY_SQUEUE_TRIES (30) times in a row.
+# step every time it is asked, or the queue cannot be read REGBENCH_RETRY_SQUEUE_TRIES
+# (30) times in a row.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
 name="$1" plan="$2" first_id="$3" first_name="$4" range="$5" link="${6:-1}"
 : "${REGBENCH_RETRY_POLL_S:=60}"
 : "${REGBENCH_RETRY_SQUEUE_TRIES:=30}"
+: "${REGBENCH_RETRY_SUBMIT_TRIES:=5}"
+: "${REGBENCH_RETRY_SUBMIT_WAIT_S:=60}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 ends="$REGBENCH_OUT/logs/end"
 ids_file="${REGBENCH_IDS_FILE:-$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.ids}"
@@ -79,8 +95,9 @@ mkdir -p "$(dirname "$ids_file")"
 state="$plan/state" done_file="$plan/done" submitting="$plan/submitting"
 
 end() {  # end <status> <cause|-> : the last line of the log
-    local cause=""
-    [ "$2" = - ] || cause=" cause=$2 whose=launcher"
+    local cause="" whose=launcher
+    case "$2" in submit_refused|watcher_gave_up) whose=infrastructure ;; esac
+    [ "$2" = - ] || cause=" cause=$2 whose=$whose"
     regbench_say_end "REGBENCH_END kind=retry run=$name chain=$first_name link=$link status=$1$cause log=${REGBENCH_LOG:--}"
 }
 regbench_start retry "run=$name" "chain=$first_name" "link=$link"
@@ -98,6 +115,14 @@ if [ -s "$done_file" ]; then
     end "$was_status" "$was_cause"
     exit "${was_code:-0}"
 fi
+# this link goes on with the chain: an earlier link's giving up is no longer the end
+rm -f "$plan/gave_up"
+# give_up <why>: the watcher stops; the settle job writes what was due as watcher_gave_up
+give_up() {
+    printf '%s %s\n' "$(date +%FT%T)" "$1" > "$plan/gave_up.new" && mv "$plan/gave_up.new" "$plan/gave_up"
+    end failed watcher_gave_up
+    exit 1
+}
 
 # last: "<index> <job name>-<job id>" per unit, the last job that held the unit
 last="$plan/last"
@@ -252,8 +277,7 @@ if [ -s "$submitting" ] && { [ ! -s "$state" ] || [ "$(cut -d' ' -f1 "$submittin
     read -r k_was job_was < "$submitting"
     if ! found="$(in_queue "$job_was")"; then
         echo "link $link: the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row while looking for step $k_was ($job_was), which an earlier link was submitting when it ended: it is NOT submitted again (it may be in the queue already). This link stops here; submit again into the same results folder once the queue answers"
-        end failed not_submitted
-        exit 1
+        give_up "the queue could not be read while looking for step $k_was ($job_was)"
     fi
     if [ -n "$found" ]; then
         echo "link $link: step $k_was ($job_was) was submitted by an earlier link that ended before it recorded the id; it is in the queue as $found"
@@ -279,8 +303,7 @@ if [ -s "$state" ]; then
     recorded "$k_was" "$job_was" "$id_was"
     if ! gone "$id_was"; then
         echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $job_was ($id_was) is left in the queue, and a later link of this chain (if any) goes on"
-        end failed not_submitted
-        exit 1
+        give_up "the queue could not be read while waiting for step $k_was ($job_was, $id_was)"
     fi
     k=$((k_was + 1)) n_steps="$k_was"
 fi
@@ -298,8 +321,8 @@ while [ -s "$plan/step-$k" ]; do
     echo "$due" > "$plan/due-$k"
     if [ "$kind" = cut ]; then
         why="${items[2]}"
-        echo "step $k ($jobname): NOT SUBMITTED, the partition cannot grant this rung ($why): $(wc -l <<< "$due" | tr -d ' ') unit(s) that would climb to it are written down as the launcher's (not_submitted)"
-        mark_cut "$k" not_submitted "$why"
+        echo "step $k ($jobname): NOT SUBMITTED, the partition cannot grant this rung ($why): $(wc -l <<< "$due" | tr -d ' ') unit(s) that would climb to it are written down as capped (the method's, imputed: the ladder stops at the rung below)"
+        mark_cut "$k" capped "$why"
         echo "$first_name: the ladder stops at the rung below; $n_sent retry step(s) were submitted"
         finish ok - 0
     fi
@@ -314,16 +337,31 @@ while [ -s "$plan/step-$k" ]; do
         args+=("$item")
     done
     printf '%s %s\n' "$k" "$jobname" > "$submitting"
-    if ! got="$(sbatch --parsable --job-name="$jobname" "${args[@]}" < /dev/null 2>&1)"; then
-        rm -f "$submitting"
-        echo "sbatch REFUSED $jobname (--array=$array): $got"
-        case "$kind" in
-            again|climb)
-                echo "$(wc -l <<< "$due" | tr -d ' ') unit(s) of this step are written down as the launcher's (not_submitted): $jobname was refused"
-                mark_cut "$k" not_submitted "sbatch refused $jobname: $(tr '\n' ' ' <<< "$got")" ;;
-        esac
-        finish failed not_submitted 1
-    fi
+    try=1 wait_s="$REGBENCH_RETRY_SUBMIT_WAIT_S"
+    until got="$(sbatch --parsable --job-name="$jobname" "${args[@]}" < /dev/null 2>&1)"; do
+        echo "sbatch REFUSED $jobname (--array=$array), try $try of $REGBENCH_RETRY_SUBMIT_TRIES: $got"
+        refused="$got"
+        if [ "$try" -ge "$REGBENCH_RETRY_SUBMIT_TRIES" ]; then
+            rm -f "$submitting"
+            case "$kind" in
+                again|climb)
+                    echo "$(wc -l <<< "$due" | tr -d ' ') unit(s) of this step are written down as submit_refused (not the method's): $jobname was refused $try times"
+                    mark_cut "$k" submit_refused "sbatch refused $jobname $try times: $(tr '\n' ' ' <<< "$refused")" ;;
+            esac
+            finish failed submit_refused 1
+        fi
+        sleep "$wait_s"
+        wait_s=$((wait_s * 2)) try=$((try + 1))
+        # a refusal can still have queued the job: never queue it twice
+        if ! found="$(in_queue "$jobname")"; then
+            give_up "the queue could not be read after sbatch refused $jobname"
+        fi
+        if [ -n "$found" ]; then
+            echo "sbatch said it refused $jobname, but the queue has it as $found: taken"
+            got="$found"
+            break
+        fi
+    done
     id="$(awk 'NF { last = $0 } END { print last }' <<< "$got")"
     [ "$id" = "$got" ] || awk -v id="$id" '$0 != id && NF { print "sbatch said: " $0 }' <<< "$got"
     id="${id%%;*}"
@@ -336,8 +374,7 @@ while [ -s "$plan/step-$k" ]; do
     echo "step $k ($jobname, $kind): submitted as $id for $(wc -l <<< "$due" | tr -d ' ') unit(s): --array=$array"
     if ! gone "$id"; then
         echo "the queue could not be read $REGBENCH_RETRY_SQUEUE_TRIES times in a row: giving up; $jobname ($id) is left in the queue, and a later link of this chain (if any) goes on"
-        end failed not_submitted
-        exit 1
+        give_up "the queue could not be read while waiting for step $k ($jobname, $id)"
     fi
     k=$((k + 1))
 done

@@ -156,3 +156,73 @@ def test_a_unit_whose_next_step_no_link_submitted_is_the_launchers(tmp_path):
     assert "step 2 (rb-palom-multiplex-64g)" in rec["cause_from"]
     assert _read(writer)["cause"] == "writer"
     assert changed == {"rb-palom-multiplex": 1}
+
+
+def test_a_cut_rung_over_a_memory_failure_is_capped_and_the_methods(tmp_path):
+    """Task 28, B6: the ladder reached the largest rung the partition grants. Over a
+    memory failure that is `capped` (the method's: a cost result, imputed) with the cap
+    in its error; over any other failure the next rung would run again, it stays
+    `not_submitted`."""
+    root, (c0, c1) = _cases(tmp_path)
+    out = tmp_path / "out"
+    oom = _rec(out, c0, mem_requested_gb=512)
+    lost = _rec(out, c1, cause="infrastructure", mem_requested_gb=512)
+    n = chains.mark(out, root, "multiplex", "palom", "", [0, 1], 720, "capped",
+                    "the largest node of cpu has 515000 MB", SUB)  # fmt: skip
+    assert n == 2
+    rec = _read(oom)
+    assert rec["cause"] == "capped" and rec[chains.LADDER_CUT] == 720.0
+    assert rec["error"].startswith("capped at 512 GB: the next rung, 720 GB")
+    assert _read(lost)["cause"] == "not_submitted"
+    import pytest
+
+    with pytest.raises(ValueError):
+        chains.mark(out, root, "multiplex", "palom", "", [0], 1, "oom", "x", SUB)
+
+
+def test_a_watcher_that_gave_up_leaves_its_units_as_watcher_gave_up(tmp_path):
+    """S3: the chain's watcher gave up (`gave_up`): what it was waiting for, and what
+    it never submitted, are `watcher_gave_up` (not the method's), not infrastructure
+    or not_submitted."""
+    root, (c0, c1) = _cases(tmp_path)
+    out = tmp_path / "out"
+    oom = _rec(out, c0, attempt=1, mem_requested_gb=16)
+    waiting = _rec(out, c1, attempt=1)
+    plan = _plan(out, "rb-palom-multiplex",
+                 "0 rb-palom-multiplex-16g-60\n1 rb-palom-multiplex-16g-62\n",
+                 state="k=1\njob=rb-palom-multiplex-16g-again\nid=61\n")  # fmt: skip
+    (plan / "step-1").write_text("again\nrb-palom-multiplex-16g-again\n--mem=16G\n")
+    (plan / "step-2").write_text("climb\nrb-palom-multiplex-64g\n--mem=64G\n")
+    (plan / "gave_up").write_text("2026-10-18T10:00:00 the queue could not be read\n")
+    accounting = {"60_0": {"state": "COMPLETED"}, "62_1": {"state": "PENDING"}}
+    chains.mark_in_flight(out, accounting, SUB, root)
+    rec = _read(oom)
+    assert rec["cause"] == "watcher_gave_up" and "it gave up" in rec["cause_from"]
+    rec = _read(waiting)
+    assert rec["cause"] == "watcher_gave_up"
+    assert "the watcher gave up: " in rec["cause_from"]
+
+
+def test_a_chain_whose_units_cannot_be_listed_is_written_down(tmp_path, capsys):
+    """S2: a run's chain whose `run` file is unreadable, or whose cases cannot be read,
+    is never passed over in silence: each unit is a row of unmarked_units.csv, and the
+    settle command says how many."""
+    root, _ = _cases(tmp_path)
+    out = tmp_path / "out"
+    bad = _plan(out, "rb-broken-multiplex", "0 rb-x-16g-60\n3 rb-x-16g-60\n")
+    (bad / "run").write_text("palom\n")  # short: unreadable
+    gone = _plan(out, "rb-gone-multiplex", "1 rb-y-16g-61\n")
+    (gone / "run").write_text("palom\npalom\n-\n-\nno_such_dataset\n")
+    (gone / "step-1").write_text("climb\nrb-y-64g\n--mem=64G\n")
+    chains.mark_in_flight(out, {}, SUB, root)
+    rows = chains.read_unmarked(out)
+    assert [(r["plan"], r["index"]) for r in rows] == [
+        ("rb-broken-multiplex", "0"),
+        ("rb-broken-multiplex", "3"),
+        ("rb-gone-multiplex", "1"),
+    ]
+    assert "unreadable" in rows[0]["reason"] and "unit(s) its cases list" in rows[2]["reason"]
+    # nothing to report: the file is the header alone
+    other = tmp_path / "other"
+    chains.mark_in_flight(other, {}, SUB, root)
+    assert (other / "logs" / chains.UNMARKED).read_text().strip() == "plan,index,reason"

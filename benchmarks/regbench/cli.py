@@ -410,7 +410,15 @@ def build_parser():
     cm.add_argument("--label", default=None)
     cm.add_argument("--index", type=int, action="append", required=True)
     cm.add_argument("--rung-gb", type=float, required=True)
-    cm.add_argument("--cause", required=True, choices=("not_submitted",))
+    cm.add_argument(
+        "--cause",
+        required=True,
+        choices=("not_submitted", "capped", "submit_refused", "watcher_gave_up"),
+        help="not_submitted: the launcher did not; capped: a rung the partition cannot "
+        "grant, above a memory failure (the method's, imputed); submit_refused: sbatch "
+        "refused the step after its retries; watcher_gave_up: the queue could not be "
+        "read (chains.MARK_CAUSES)",
+    )
     cm.add_argument("--why", required=True)
 
     st = sub.add_parser(
@@ -1370,10 +1378,15 @@ def _realcheck_line(out, name, submission):
     """The ``verdicts.tsv`` line of a run's realcheck (``-`` for a run without one)."""
     from . import variants
 
-    status, row, flagged = variants.realcheck_status(name, out, submission)
+    status, row, flagged, unreadable = variants.realcheck_status(name, out, submission)
     log = variants.NONE
+    said = []
     if flagged:
-        log = "flagged on " + ",".join(flagged)
+        said.append("flagged on " + ",".join(flagged))
+    if unreadable:
+        said.append("realcheck.json unreadable on " + ",".join(unreadable))
+    if said:
+        log = "; ".join(said)
     elif status == variants.REAL_NOT_CHECKED:
         log = "no realcheck of this submission beside an ok result"
     return [name, "realcheck", status, variants.NONE, row, log]
@@ -1700,9 +1713,17 @@ def _main(a):
             print(
                 f"settle: WARNING {n} result(s) of "
                 + ("tasks still running" if where == "-" else f"the chain {where}")
-                + " the scheduler had not ended: recorded as infrastructure, not the "
-                "method's"
+                + " the scheduler had not ended: recorded as infrastructure (or "
+                "watcher_gave_up), not the method's"
             )
+        lost = chains.read_unmarked(a.out) if a.cases else []
+        for r in lost:
+            print(
+                f"settle: WARNING unit {r['index'] or '?'} of the chain {r['plan']} "
+                f"could not be listed ({r['reason']}): nothing of it was written down "
+                "(logs/unmarked_units.csv; an `unmarked_unit` row of losses.csv)"
+            )
+        print(f"settle: n_unmarked_units={len(lost)}")
         return 0
     if a.cmd == "status":
         from . import status
@@ -1717,7 +1738,8 @@ def _main(a):
         )  # fmt: skip
         print(
             f"chain-mark: {n} result(s) of {a.label or a.method} on {a.dataset} "
-            f"(unit(s) {', '.join(map(str, a.index))}) recorded as {a.cause}: the "
+            f"(unit(s) {', '.join(map(str, a.index))}) recorded as {a.cause} (or "
+            f"not_submitted, where capped was not over a memory failure): the "
             f"{a.rung_gb:g} GB rung was not submitted ({a.why})"
         )
         return 0
@@ -1741,6 +1763,7 @@ def _main(a):
             )
     # the cohort, then each public dataset in a call of its own, with its own run list
     # (variants.expected_variants / primary_for): never pooled (score.tables_dir)
+    nothing, names = [], []
     for ds in ([cohort] if cohort or not public else []) + [[d] for d in public]:
         one = None if ds is None or public_of(ds[0]) is None else ds[0]
         expected = None if a.only_run else variants.expected_variants(one)
@@ -1750,7 +1773,7 @@ def _main(a):
             primary = list(variants.PRIMARY)
         else:
             primary = variants.primary_for(one)
-        score.score(
+        got = score.score(
             a.cases,
             a.out,
             ds,
@@ -1773,7 +1796,18 @@ def _main(a):
             fresh=a.fresh,
             manifest=a.manifest if one is None else None,
         )
+        scored = [got] if one is None else list((got.get("public") or {}).values())
+        # a tissue dataset's block counts as scored: it has no case rows to count
+        nothing += [g.get("n_scored_cases", 1) for g in scored]
+        names.append(one or "the cohort")
     from . import failure_log
 
+    if nothing and not any(nothing):
+        # rule 3: non-zero only when NOTHING could be scored; losses.csv is written
+        failure_log.emit_end("score", "failed", "unreadable_record")
+        raise SystemExit(
+            f"score: no case of {', '.join(names)} could be scored (every one raised: "
+            "score_errors.csv, losses.csv)"
+        )
     failure_log.emit_end("score", "ok")
     return 0

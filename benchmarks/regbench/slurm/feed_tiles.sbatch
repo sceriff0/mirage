@@ -142,13 +142,20 @@ queued() {
     n="$(grep -c "^$prefix" <<< "$names")" || n=0
     echo "$n"
 }
-# gave_up <reason>: the marker a round reads (stages.feed_problem), the end line, exit 1
+# gave_up <reason> [<count> [<squeue reason>]]: the marker a round reads
+# (stages.feed_problem: its first four lines go into the round's record), the end line,
+# exit 1. With a squeue reason (held, or stalled) the "gave up:" line STARTS with
+# "held (squeue reason <it>)", which the scorer reads as the cause `held`
+# (losses.HELD_MARK, Task 28 B8), and a `held_reason:` line names it alone.
 gave_up() {
+    local why="$1"
+    [ -n "${3:-}" ] && why="held (squeue reason $3): $why"
     {
         echo "time: $(date +%FT%T)"
         echo "run: $name  dataset: $dataset  submission: ${REGBENCH_SUBMISSION:-}  link: $link"
-        echo "gave up: $1"
+        echo "gave up: $why"
         echo "tile tasks of this run still queued or running: ${2:-unknown}"
+        [ -n "${3:-}" ] && echo "held_reason: $3"
         echo "they are left in the queue; every job id of this submission, one per line: $ids_file"
         echo "cancel them: scancel \$(cat \"$ids_file\")"
         echo "go on: the next link of the chain, or submit again (submit_cohort.sh); what is ok is reused"
@@ -198,7 +205,7 @@ waiting() {
     for reason in $REGBENCH_STAGE_HELD_REASONS; do
         grep -q "|$reason\$" <<< "$left" && held="$held $reason"
     done
-    [ -n "$held" ] && gave_up "$what: $Q tile task(s) have not left the queue for $((SECONDS - first))s and at least one does not leave by itself (reason:$held); see the log for the list" "$Q"
+    [ -n "$held" ] && gave_up "$what: $Q tile task(s) have not left the queue for $((SECONDS - first))s and at least one does not leave by itself (reason:$held); see the log for the list" "$Q" "${held# }"
     # the reasons that are not "waiting its turn", among the tasks listed
     others="$(awk -F'|' -v ok=" $REGBENCH_STAGE_WAIT_REASONS " 'index(ok, " " $4 " ") == 0 { print $4 }' <<< "$left" | sort -u | paste -sd' ' -)"
     if [ -n "$left" ] && [ -z "$others" ]; then
@@ -207,7 +214,7 @@ waiting() {
         return 0
     fi
     [ $((SECONDS - first - turn)) -ge "$REGBENCH_STAGE_STALL_MAX_S" ] \
-        && gave_up "$what: no tile task has left the queue for $((SECONDS - first))s, $((SECONDS - first - turn))s of them not merely waiting its turn (REGBENCH_STAGE_STALL_MAX_S=$REGBENCH_STAGE_STALL_MAX_S; reasons: ${others:-none listed}); see the log for the list" "$Q"
+        && gave_up "$what: no tile task has left the queue for $((SECONDS - first))s, $((SECONDS - first - turn))s of them not merely waiting its turn (REGBENCH_STAGE_STALL_MAX_S=$REGBENCH_STAGE_STALL_MAX_S; reasons: ${others:-none listed}); see the log for the list" "$Q" "${others:-none listed}, stalled"
     echo "$(date +%FT%T) $what: none of them is held; waiting on (at most $REGBENCH_STAGE_STALL_MAX_S s without one leaving, the time in which all only wait their turn not counted)"
     return 0
 }

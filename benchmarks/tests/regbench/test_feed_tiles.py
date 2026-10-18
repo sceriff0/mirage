@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from benchmarks.regbench import failure_log, stages
+from benchmarks.regbench import failure_log, losses, stages
 
 REPO = Path(__file__).resolve().parents[3]
 SLURM = REPO / "benchmarks" / "regbench" / "slurm"
@@ -442,6 +442,9 @@ def test_a_refusal_is_recorded_as_the_launchers_and_a_later_link_goes_on(tmp_pat
     # what a round whose tiles never reached the queue is told
     said = stages.feed_problem(site.out, "S-1", "stare", "multiplex")
     assert said.startswith("the tile submitter was refused by the scheduler")
+    # ... which the scorer reads as submit_refused, not the method's (Task 28, B7)
+    rec = {"ok": False, "cause": "not_submitted", "error": said}
+    assert losses.reclassify(rec)["cause"] == "submit_refused"
     # the next link of the chain: the limit is gone, the rest is fed, nothing twice
     (site.fake / "refuse_from").unlink()
     done = site.run(link=2, **env)
@@ -589,14 +592,20 @@ def test_tile_tasks_that_do_not_leave_the_queue_end_the_wait_loudly(
     waited_on = done.stdout.count("none of them is held; waiting on")
     assert (waited_on >= 1) is bool(bound)
     marker = Path(f"{site.state}.refused").read_text()
-    assert "gave up: after the last attempt" in marker and gives_up_on in marker
+    # Task 28 B8: the squeue reason leads the "gave up:" line (held, or stalled), and
+    # the scorer reads the unit's cause as `held` off the round's record
+    said = reason.split("|")[1]
+    assert f"gave up: held (squeue reason {said}" in marker
+    assert "after the last attempt" in marker and gives_up_on in marker
+    assert f"held_reason: {said}" in marker
     assert "tile tasks of this run still queued or running: 4" in marker
     assert "they are left in the queue" in marker
     assert not Path(f"{site.state}.done").exists()
     assert "status=refused cause=not_submitted whose=launcher" in last(done)
-    assert stages.feed_problem(site.out, "S-1", "stare", "multiplex").startswith(
-        "the tile submitter gave up: "
-    )
+    problem = stages.feed_problem(site.out, "S-1", "stare", "multiplex")
+    assert problem.startswith("the tile submitter gave up: ")
+    rec = {"ok": False, "cause": "not_submitted", "error": problem}
+    assert losses.reclassify(rec)["cause"] == "held"
 
 
 @pytest.mark.parametrize("reason", ["PENDING|Priority", "PENDING|Resources"])
@@ -650,8 +659,8 @@ def test_a_wait_for_room_is_ended_the_same_way(tmp_path):
     assert done.returncode == 1, done.stdout + done.stderr
     assert sorted(site.tiles()) == list(range(4))  # the second array never had room
     marker = Path(f"{site.state}.refused").read_text()
-    assert "gave up: attempt 1, waiting for 2 free slot(s) of 4" in marker
-    assert "JobHeldAdmin" in marker
+    assert "gave up: held (squeue reason JobHeldAdmin): attempt 1, waiting for 2 free " in marker
+    assert "held_reason: JobHeldAdmin" in marker
 
 
 def test_an_array_that_ended_is_found_in_the_accounting_since_the_first_start(

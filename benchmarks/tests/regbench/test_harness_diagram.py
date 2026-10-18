@@ -56,6 +56,7 @@ PREFIXES = (
     "rb-settle",
     "rb-score-case",
     "rb-score",
+    "rb-rescore",
     "rb-compute",
     "rb-score-compute",
 )
