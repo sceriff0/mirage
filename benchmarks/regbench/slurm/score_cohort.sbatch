@@ -88,30 +88,53 @@ settle_ids() {
 SETTLE_FIELDS=JobID,State,ElapsedRaw,TotalCPU,AllocCPUS,ReqMem,MaxRSS
 # the stage jobs of a registration in several jobs (COARSE, every tile, SOLVE: their
 # names end in -<stage>-a<attempt>[-o<offset>]), as the launcher and the tile feeder
-# name them in jobs.tsv: their ids, comma-separated
+# name them in jobs.tsv, of THIS submission (logs/submitted/<submission>.ids, as
+# settle_ids; without that file every stage job of jobs.tsv): their ids, comma-separated
 stage_ids() {
-    awk -F'\t' '$2 ~ /-(coarse|tile|solve)-a[0-9]+(-o[0-9]+)?$/ && !seen[$3]++ { print $3 }' "$1" \
-        | paste -sd, -
+    local mine="$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.ids"
+    awk -F'\t' -v mine="$mine" '
+        BEGIN { own = 0; while ((getline id < mine) > 0) { want[id] = 1; own = 1 } }
+        $2 ~ /-(coarse|tile|solve)-a[0-9]+(-o[0-9]+)?$/ && (!own || ($3 in want)) && !seen[$3]++ { print $3 }
+    ' "$1" | paste -sd, -
+}
+# one bound for every sacct of the settle (T31 fix I1): REGBENCH_SACCT_TIMEOUT_S (1800)
+# seconds, exit 124 past it; unbounded only on a node without coreutils' timeout
+: "${REGBENCH_SACCT_TIMEOUT_S:=1800}"
+regbench_sacct() {
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$REGBENCH_SACCT_TIMEOUT_S" sacct "$@"
+    else
+        sacct "$@"
+    fi
 }
 # their accounting WITH the steps (no -X: the job's line alone reports no CPU time and
 # no MaxRSS, "Without including steps, utilization statistics for job allocation(s)
 # will be reported as zero"; ladder.parse_accounting adds the steps up, and
 # billing.parse_reservations takes their largest MaxRSS): a stage attempt the scheduler
 # killed before it recorded its end is settled from it at table time, and what the
-# cluster held for the stage jobs is read from it (score.bill_from_disk: R6, R7). Never
-# a reason to fail.
+# cluster held for the stage jobs is read from it (score.bill_from_disk: R6, R7). It
+# runs AFTER settle_killed, wherever that runs (the settle job, the re-score, the scorer
+# when the settle job left no word), so a killed rung is always settled first, and with
+# its bound; a failure is a WARNING line, never a failed settle (T31 fix I1).
 settle_stages() {
-    local jobs="$REGBENCH_OUT/logs/jobs.tsv" into="$REGBENCH_OUT/logs/accounting_stages.psv" ids
+    local jobs="$REGBENCH_OUT/logs/jobs.tsv" into="$REGBENCH_OUT/logs/accounting_stages.psv" ids rc
     [ -s "$jobs" ] && command -v sacct >/dev/null || return 0
     ids="$(stage_ids "$jobs")"
     [ -n "$ids" ] || return 0
-    if sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$into.new" 2>/dev/null && [ -s "$into.new" ]; then
+    regbench_sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$into.new" 2>/dev/null
+    rc=$?
+    if [ "$rc" -eq 0 ] && [ -s "$into.new" ]; then
         mv "$into.new" "$into"
-        echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') stage job(s) -> $into"
+        echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') stage job(s) of submission ${REGBENCH_SUBMISSION:-?} -> $into"
     else
         rm -f "$into.new"
-        echo "settle: sacct gave no accounting of the stage jobs (their killed attempts stay unmeasured)"
+        if [ "$rc" -eq 124 ]; then
+            echo "settle: WARNING: the stage jobs' accounting did not end within $REGBENCH_SACCT_TIMEOUT_S s (REGBENCH_SACCT_TIMEOUT_S): their killed attempts stay unmeasured (unmeasured_attempts)"
+        else
+            echo "settle: WARNING: the stage jobs' accounting gave nothing (sacct exit $rc): their killed attempts stay unmeasured (unmeasured_attempts)"
+        fi
     fi
+    return 0
 }
 settle_killed() {
     local jobs="$REGBENCH_OUT/logs/jobs.tsv" acct="$REGBENCH_OUT/logs/accounting.psv" ids
@@ -138,7 +161,7 @@ settle_killed() {
     # do (`regbench ... settle` adds them up: ladder.parse_accounting)
     # AllocCPUS, ReqMem and MaxRSS after the four the settle reads: what the cluster
     # held for each job (billing.parse_reservations, R7); the settle reads fields 1-4
-    if ! sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$acct" 2>/dev/null \
+    if ! regbench_sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$acct" 2>/dev/null \
         || [ ! -s "$acct" ]; then
         echo "settle: sacct gave no accounting of the jobs in $jobs"
         return 1
@@ -153,13 +176,14 @@ already_settled() {
 
 if [ "$kind" = settle ]; then
     rm -f "$settled"
-    settle_stages
     if settle_killed; then
-        regbench_say_end "REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
+        end="REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
     else
         # the scorer tries again; if it cannot either, such results stay "killed"
-        regbench_say_end "REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark exit=1 log=${REGBENCH_LOG:--}"
+        end="REGBENCH_END kind=settle status=failed cause=settle_unfinished whose=benchmark exit=1 log=${REGBENCH_LOG:--}"
     fi
+    settle_stages
+    regbench_say_end "$end"
     exit 0
 fi
 if [ "$kind" = case ]; then
@@ -212,11 +236,13 @@ jobs="$REGBENCH_OUT/logs/jobs.tsv"
 if [ "$kind" = rescore ]; then
     echo "settle: again, after every selfcheck chain ended (rb-rescore)"
     settle_killed || echo "settle: not done again: the first settle's word stands"
+    settle_stages
 elif already_settled; then
     echo "settle: done by the settle job, before the cases were scored"
 else
     echo "settle: the settle job left no record for this submission; settling here (a case whose result changes is scored again in this job)"
     settle_killed || echo "settle: not done: a result the scheduler ended stays 'killed' in the tables"
+    settle_stages
 fi
 
 shared_args

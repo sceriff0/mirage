@@ -1196,7 +1196,15 @@ def test_the_settle_step_of_the_batch_script():
     killed = code[code.index("settle_killed() {") : code.index("already_settled() {")]
     stages = code[code.index("settle_stages() {") : code.index("settle_killed() {")]
     assert killed.count("sacct -n -P -j") == 1 and stages.count("sacct -n -P -j") == 1
-    assert code.count("settle_stages") == 2  # defined, and run by the settle job alone
+    # both through the one bounded call (T31 fix I1), never a bare sacct of their own
+    assert "regbench_sacct -n -P -j" in killed and "regbench_sacct -n -P -j" in stages
+    # defined, then run right AFTER each of the three settle_killed calls (the settle
+    # job, the re-score, the scorer): a killed rung is always settled first
+    assert code.count("settle_stages") == 4
+    calls = [i for i in range(len(code)) if code.startswith("settle_killed", i)][1:]
+    for i in calls:
+        after = code[i:]
+        assert after.index("settle_stages") < after.index("\nfi") + 1, code[i : i + 200]
     # defined, the settle job, the re-score (always), the scorer (when not settled)
     assert code.count("settle_killed") == 4
     rescore = code[code.index('if [ "$kind" = rescore ]') :]
@@ -1207,7 +1215,7 @@ def test_the_settle_step_of_the_batch_script():
         code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
     ]
     assert "settle_killed" in job and "exit 0" in job  # never blocks the scoring
-    assert job.index("settle_stages") < job.index("settle_killed")
+    assert job.index("settle_killed") < job.index("settle_stages") < job.index("regbench_say_end")
     assert "cause=settle_unfinished whose=benchmark" in job
     # it says for which submission it was done, and only after it was
     done = code[code.index("settle_killed() {") : code.index("already_settled() {")]
@@ -1265,6 +1273,76 @@ def test_the_settle_job_asks_the_accounting_of_this_submissions_run_tasks_only(
     (asked,) = calls.read_text().splitlines()
     assert asked.split()[asked.split().index("-j") + 1] == "11,13,14"
 
+
+
+# a stand-in for coreutils' timeout (absent on some build hosts): the same contract,
+# exit 124 when the command outlives its limit
+TIMEOUT_SHIM = """#!{py}
+import subprocess, sys
+try:
+    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+"""
+
+
+def _settle_folder(tmp_path, sacct_body):
+    out, bin_ = tmp_path / "out", tmp_path / "bin"
+    (out / "logs" / "submitted").mkdir(parents=True)
+    bin_.mkdir()
+    (out / "logs" / "jobs.tsv").write_text(
+        "t\trb-palom-multiplex-16g\t11\n"  # this submission's run task
+        "t\trb-stare-multiplex-P1_r1-coarse-a1\t21\n"  # its stage jobs
+        "t\trb-stare-multiplex-P1_r1-tile-a1-o0\t22\n"
+        "t\trb-stare-multiplex-P0_r1-solve-a1\t8\n"  # an EARLIER submission's
+    )
+    (out / "logs" / "submitted" / "now.ids").write_text("11\n21\n22\n")
+    calls = tmp_path / "sacct.args"
+    (bin_ / "sacct").write_text(f'#!/bin/bash\necho "$*" >> "{calls}"\n' + sacct_body)
+    (bin_ / "sacct").chmod(0o755)
+    (bin_ / "timeout").write_text(TIMEOUT_SHIM.format(py=sys.executable))
+    (bin_ / "timeout").chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_}:{Path(sys.executable).parent}:{os.environ['PATH']}",
+        "REGBENCH_REPO": str(REPO),
+        "REGBENCH_OUT": str(out),
+        "REGBENCH_SUBMISSION": "now",
+        "REGBENCH_SCORER_IMAGE": "STARE_REGBENCH",
+        "REGBENCH_SACCT_TIMEOUT_S": "1",
+    }
+    done = subprocess.run(
+        ["bash", str(SLURM / "score_cohort.sbatch"), "settle"],
+        env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    return out, calls, done
+
+
+def test_the_stage_accounting_is_this_submissions_after_the_run_tasks_and_bounded(tmp_path):
+    """T31 fix I1: the stage jobs' accounting is asked AFTER the run tasks' (a killed
+    rung is always settled first), for THIS submission's stage jobs only, with the
+    same bound as the run tasks' query; it is never a reason for the settle to fail."""
+    out, calls, done = _settle_folder(
+        tmp_path, 'case "$*" in *21,22*) echo "21|COMPLETED|10|00:00:05|1|4G|" ;; esac\n')
+    assert done.returncode == 0, done.stdout + done.stderr
+    asked = calls.read_text().splitlines()
+    ids = [a.split()[a.split().index("-j") + 1] for a in asked]
+    assert ids == ["11", "21,22"]  # run tasks first; the earlier submission's job 8 is not asked
+    assert all(" -X" not in a for a in asked)
+    assert (out / "logs" / "accounting_stages.psv").read_text().startswith("21|COMPLETED")
+
+
+def test_a_stage_accounting_that_outlives_its_bound_is_a_warning(tmp_path):
+    out, calls, done = _settle_folder(
+        tmp_path, 'case "$*" in *21,22*) sleep 5 ;; esac\n')
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "settle: WARNING: the stage jobs' accounting" in done.stdout
+    assert "did not end within 1 s" in done.stdout
+    assert not (out / "logs" / "accounting_stages.psv").exists()
+    # the run tasks were still asked, first, and the settle job still says how it ended
+    first = calls.read_text().splitlines()[0].split()
+    assert first[first.index("-j") + 1] == "11"
+    assert "REGBENCH_END kind=settle" in done.stdout + done.stderr
 
 def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     jobs, _, _ = dry
