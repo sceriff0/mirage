@@ -28,6 +28,9 @@
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``)
 ``overlays``           the overlay zooms (before, after rigid, after the whole transform) of
                        one field of a cohort case, per method's best row (``paper/overlays.py``)
+``collect``            the interim collection: the existing arm, sweep and interim regbench
+                       results in the paper tables' columns, NA for what is still to come
+                       (``paper/collect.py``; never read by ``score`` or ``paper``)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -699,6 +702,23 @@ def build_parser():
     cs.add_argument("--rows", required=True, help="result names, comma-separated")
     cs.add_argument("--to", required=True)
     cs.add_argument("--dataset", default="multiplex", choices=DATASETS)
+
+    co = sub.add_parser(
+        "collect",
+        help="the interim collection (benchmarks/regbench/paper/collect.py): every paper table "
+        "under --to from the existing arm, sweep and interim regbench results, NA for every "
+        "measurement still to come; interim only, never read by `score` or `paper`",
+    )
+    co.add_argument("--to", required=True,
+                    help="a folder outside every folder read (refused inside a results folder)")
+    co.add_argument("--arms", default=None, help="the arm results root (<arm>/<patient>/qc/...)")
+    co.add_argument("--sweep", default=None, help="the sweep results root (<run_id>/trace/...)")
+    co.add_argument("--sweep-plan", default=None, help="the sweep's run plan CSV (run_id)")
+    co.add_argument("--regbench", action="append", default=[], metavar="FOLDER",
+                    help="an interim regbench results folder; repeat for several")
+    co.add_argument("--cases", default=None,
+                    help="the folder the cohort cases were prepared under: one expected per_pair "
+                    "row per (case, terminal row of the run list)")
 
     rn = sub.add_parser("runs")
     rn.add_argument(
@@ -1503,6 +1523,10 @@ def _main(a):
         from .paper import overlays
 
         return overlays.main(a)
+    if a.cmd == "collect":
+        from .paper import collect
+
+        return collect.main(a)
     if a.cmd == "cpu-scaling":
         from .paper import cpu_scaling
 
