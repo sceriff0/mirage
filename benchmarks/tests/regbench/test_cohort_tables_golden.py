@@ -84,6 +84,10 @@ def test_the_dropme_rows_move_no_other_row(tmp_path):
 T7_GOLDEN_SHA256 = "3fd78aea36cb84e7d1f731049d671835a35e8fa2a4fa04c279ab21b99928b731"
 
 
+# the three columns T10 added (patient_id, panel, tool_version): not in the T7 golden
+T10_COLUMNS = ("patient_id", "panel", "tool_version")
+
+
 def test_the_golden_minus_dropme_is_the_t7_golden():
     want = json.loads(GOLDEN.read_text())
     back = {
@@ -91,6 +95,7 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
             {
                 ("n_not_run_or_blocked" if k == "n_not_run_or_lost" else k): v
                 for k, v in row.items()
+                if k not in T10_COLUMNS
             }
             for row in rows
             if not _dropme(row)
