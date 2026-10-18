@@ -669,11 +669,6 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
     if points is None or common is None:
         common, points = cost_points(pp, best_rows, cost_rows, res_rows, dataset)
     local4 = next(iter(getattr(variants, "LOCAL_4CPU", ())), None)
-    local4_peak = (
-        costs.summary_columns(points, local4, common, costs.LOCAL4)["peak_rss_gb_common_med"]
-        if local4
-        else math.nan
-    )
     out = []
     for fam in _families(dataset):
         for which, row in _summary_kinds(fam, best, primary, cost_rows, dataset):
@@ -685,7 +680,6 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
             mine = [r for r in cost_rows if r["method"] == row]
             clock = costs.clock_of(row, mine[0]) if mine else costs.WHOLE
             sc = costs.summary_columns(points, row, common, clock)
-            peak = _num(sc["peak_rss_gb_common_med"])
             shared = [
                 p
                 for p in points
@@ -718,9 +712,7 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
                     rung_gb_med=sc["rung_gb_common_med"],
                     wasted_attempts=int(sum(_num(p.get("wasted_attempts")) for p in shared
                                             if math.isfinite(_num(p.get("wasted_attempts"))))),
-                    fold_peak_vs_stare_local4=peak / local4_peak
-                    if math.isfinite(peak) and math.isfinite(_num(local4_peak)) and local4_peak > 0
-                    else math.nan,
+                    **fold_vs_local4(points, row, local4, common),
                     peak_largest_job_gb=sc["peak_largest_job_gb_common_med"],
                     peak_concurrent_gb=sc["peak_concurrent_gb_common_med"],
                     gpu_peak_gb=sc["gpu_peak_gb_common_med"],
@@ -737,6 +729,39 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
                 )
             )
     return out
+
+
+FOLD_STAGED = ("STARE's stage jobs: a stage job's high-water mark is not the sampler's "
+               "process-tree peak (no fold)")
+FOLD_GPU = "GPU row: its host RSS only (the GPU's memory is gpu_peak_gb)"
+
+
+def fold_vs_local4(points, row, local4, common):
+    """``fold_peak_vs_stare_local4`` of one row (T31 fix I3): the median of ``row``'s
+    peaks over the median of ``stare_local4``'s, over the SAME patients: common ones
+    both rows completed with a comparable peak (``n_patients_fold``). NaN for a row in
+    several jobs (its peak is a stage job's, another instrument); a GPU row's is its
+    host RSS and says so (``fold_note``)."""
+    def peaks(name):
+        return {
+            p["unit_id"]: _num(p.get("peak_rss_gb"))
+            for p in points
+            if p.get("row") == name and p.get("unit_kind") == costs.PATIENT
+            and p.get("status") == costs.COMPLETE and p["unit_id"] in common
+            and p.get("peak_rss_comparable") is not False
+            and math.isfinite(_num(p.get("peak_rss_gb")))
+        }
+
+    mine_pts = [p for p in points if p.get("row") == row and p.get("unit_kind") == costs.PATIENT]
+    if any(p.get("clock") == costs.CRITICAL for p in mine_pts):
+        return {"fold_peak_vs_stare_local4": math.nan, "n_patients_fold": 0,
+                "fold_note": FOLD_STAGED}
+    note = FOLD_GPU if any("gpu" in str(p.get("device") or "") for p in mine_pts) else ""
+    a, b = peaks(row), peaks(local4) if local4 else {}
+    both = sorted(set(a) & set(b))
+    num, den = _median(a[p] for p in both), _median(b[p] for p in both)
+    fold = num / den if both and math.isfinite(den) and den > 0 else math.nan
+    return {"fold_peak_vs_stare_local4": fold, "n_patients_fold": len(both), "fold_note": note}
 
 
 JVM_PEAK_NA = (

@@ -201,3 +201,36 @@ def test_stare_local4_scoring_a_case_differently_is_an_integrity_loss():
     got = tables.local4_differs(rows, "multiplex")
     assert [(r["case_id"], r["cause"], r["blame"], r["effect"]) for r in got] == [
         ("P1_r2", "stare_local4_differs", "integrity", "flagged")]
+
+
+# ── T31 fix I3: the fold against stare_local4 ────────────────────────────────
+def _fold_pts(row, peaks, clock=costs.WHOLE, device="cpu", status="complete"):
+    return [{"row": row, "unit_kind": "patient", "unit_id": p, "status": status,
+             "clock": clock, "device": device, "peak_rss_gb": v, "peak_rss_comparable": True}
+            for p, v in peaks.items()]
+
+
+def test_the_fold_is_over_the_patients_both_rows_completed():
+    local = variants.STARE_LOCAL4
+    # stare_local4 lost P3 (not complete): the fold reads P1, P2 for both rows, never
+    # one median over {P1, P2, P3} against another over {P1, P2}
+    pts = (_fold_pts(local, {"P1": 2.0, "P2": 4.0})
+           + _fold_pts(local, {"P3": 1.0}, status="failed")
+           + _fold_pts("valis_a", {"P1": 6.0, "P2": 12.0, "P3": 100.0}))
+    common = {"P1", "P2", "P3"}
+    got = tables.fold_vs_local4(pts, "valis_a", local, common)
+    assert got["fold_peak_vs_stare_local4"] == pytest.approx(9.0 / 3.0)
+    assert got["n_patients_fold"] == 2 and got["fold_note"] == ""
+    # STARE's own staged row: a stage job's high-water mark is not the sampler's: none
+    staged = _fold_pts("stare", {"P1": 1.0, "P2": 1.0}, clock=costs.CRITICAL)
+    got = tables.fold_vs_local4(pts + staged, "stare", local, common)
+    assert math.isnan(got["fold_peak_vs_stare_local4"]) and got["n_patients_fold"] == 0
+    assert "stage" in got["fold_note"]
+    # a GPU row: its host RSS only, and it says so
+    gpu = _fold_pts("dhr_gpu", {"P1": 4.0, "P2": 8.0}, device="gpu")
+    got = tables.fold_vs_local4(pts + gpu, "dhr_gpu", local, common)
+    assert got["fold_peak_vs_stare_local4"] == pytest.approx(2.0)
+    assert "GPU" in got["fold_note"] and "host" in got["fold_note"]
+    # a patient outside the common set is in no fold
+    got = tables.fold_vs_local4(pts, "valis_a", local, {"P1"})
+    assert got["n_patients_fold"] == 1 and got["fold_peak_vs_stare_local4"] == pytest.approx(3.0)

@@ -261,8 +261,13 @@ _TABLE_LIST = [
         "patients"),
        ("wasted_attempts", "count", "failed attempts over the common patients (rungs, retried "
         "stage jobs)"),
-       ("fold_peak_vs_stare_local4", "1", "peak_rss_gb_common_med over stare_local4's: both "
-        "read by the same resources.Monitor in one 4-CPU job (fold_peak_vs_stare is gone)"),
+       ("fold_peak_vs_stare_local4", "1", "the row's median peak_rss_gb over stare_local4's, "
+        "both over the SAME patients (n_patients_fold: common, complete for both, a comparable "
+        "peak), both read by the same resources.Monitor in one 4-CPU job; NaN for STARE's "
+        "stage-job row (another instrument; fold_peak_vs_stare is gone)"),
+       ("n_patients_fold", "count", "the patients fold_peak_vs_stare_local4 is over"),
+       ("fold_note", "", "why the fold is blank, or what it is of (a GPU row: its host RSS "
+        "only)"),
        ("peak_largest_job_gb", "GB", "STARE's stage jobs: the largest single attempt's peak, "
         "what a node must give ONE job (median over the common patients)"),
        ("peak_concurrent_gb", "GB", "STARE's stage jobs: the most the jobs of one round held "
