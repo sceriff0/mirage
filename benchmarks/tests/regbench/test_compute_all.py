@@ -664,3 +664,35 @@ def test_an_ok_end_line_does_not_hide_a_failed_task_never_retried_to_success(tmp
         if x["patient"] == "P1"
     )
     assert s["n_failed"] == 1 and s["complete_run"] == 0
+
+
+def test_a_patient_with_no_trace_is_a_row_and_a_blank_cpu_is_counted(tmp_path):
+    """S6 (Task 28): a patient folder with no trace.txt is a row with complete_run 0
+    and a reason, never a patient that is not there; a task whose %cpu the trace left
+    blank is counted, its patient's CPU-hours being a lower bound."""
+    out = tmp_path / "out"
+    blank = [VALIS_ROWS[0], _row(2, "MIRAGE:POSTPROCESS:SEGMENT", pcpu="-")]
+    _trace(out, "valis", "P1", blank)
+    gone = out / "compute" / "valis" / "P2"
+    gone.mkdir(parents=True)
+    (gone / "input_gb.txt").write_text("1.0\n")
+    rows = compute_all.rows(out)
+    summary = compute_all.summarise(rows)
+    by = {s["patient"]: s for s in summary if s["backend"] == "valis"}
+    assert by["P2"]["complete_run"] == 0 and by["P2"]["reason"] == "no_trace"
+    assert by["P2"]["n_tasks"] == 0 and by["P2"]["input_gb"] == 1.0
+    assert by["P1"]["complete_run"] == 1 and by["P1"]["reason"] == ""
+    assert by["P1"]["n_tasks_unmeasured"] == 1
+    assert by["all"]["n_patients"] == 1 and by["all"]["complete_run"] == 0
+    assert by["all"]["n_tasks_unmeasured"] == 1
+    assert [list(s) for s in summary] == [list(compute_all.SUMMARY_COLUMNS)] * len(
+        summary
+    )
+    # and the scorer's losses name it
+    from benchmarks.regbench import score
+
+    lost = score.loss_rows(out, tmp_path / "cases", ["multiplex"], None, [], [], [],
+                           [], summary)  # fmt: skip
+    assert [(r["patient_id"], r["cause"], r["run"]) for r in lost] == [
+        ("P2", "no_trace", "compute_valis")
+    ]

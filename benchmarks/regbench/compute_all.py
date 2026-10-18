@@ -119,6 +119,14 @@ SUMMARY_COLUMNS = (
     "n_retried",
     "n_cached",
     "complete_run",
+    # why ``complete_run`` is 0 (Task 28, S6): ``no_trace`` (the patient's folder has no
+    # trace.txt: nothing of it is measured), ``failed_task`` (a failure not recovered by
+    # a retry), ``cached`` (a task Nextflow reused, whose cost is another run's) or
+    # ``no_ok_end`` (no ok end line); ``|``-joined, blank when complete
+    "reason",
+    # tasks whose ``%cpu`` the trace left blank: their CPU-hours are in no sum, so where
+    # it is not 0 the row's ``cpu_h_used`` is a LOWER BOUND
+    "n_tasks_unmeasured",
     "wall_s",
     "cpu_h_used",
     "cpu_h_reserved",
@@ -310,9 +318,18 @@ def rows(out) -> Rows:
             continue
         for d in sorted(root.iterdir()):
             path = d / "trace" / "trace.txt"
-            if not path.is_file():
+            if not d.is_dir():
                 continue
             patient = d.name
+            if not path.is_file():
+                # a patient that ran (or was meant to) and left no trace: a row of its
+                # own with complete_run 0, never a patient that is not there (S6)
+                got.runs[(backend, patient)] = {
+                    "ended_ok": _ended_ok(out, backend, patient),
+                    "input_gb": _input_gb(d),
+                    "no_trace": True,
+                }
+                continue
             got.runs[(backend, patient)] = {
                 "ended_ok": _ended_ok(out, backend, patient),
                 "input_gb": _input_gb(d),
@@ -419,6 +436,18 @@ def _patient_row(backend, patient, task_rows, run, names):
     n_cached = sum(r["status"] == "CACHED" for r in task_rows)
     used = _sum(r["cpu_h_used"] for r in task_rows)
     reg_used = _sum(r["cpu_h_used"] for r in reg)
+    reason = [
+        why
+        for why, said in (
+            ("no_trace", run.get("no_trace") or not task_rows),
+            ("failed_task", n_failed != n_retried),
+            ("cached", n_cached),
+            ("no_ok_end", not run.get("ended_ok")),
+        )
+        if said
+    ]
+    if reason[:1] == ["no_trace"]:
+        reason = ["no_trace"]  # nothing of the run is known: the rest is not a reason
     return {
         "backend": backend,
         "patient": patient,
@@ -429,9 +458,9 @@ def _patient_row(backend, patient, task_rows, run, names):
         "n_retried": n_retried,
         "n_cached": n_cached,
         # an unrecovered failure, a cached task or no ok end line: not a whole run
-        "complete_run": int(
-            n_failed == n_retried and n_cached == 0 and bool(run.get("ended_ok"))
-        ),
+        "complete_run": int(not reason),
+        "reason": "|".join(reason),
+        "n_tasks_unmeasured": sum(_num(r["pcpu"]) is None for r in task_rows),
         "wall_s": _wall(task_rows),
         "cpu_h_used": used,
         "cpu_h_reserved": _sum(r["cpu_h_reserved"] for r in task_rows),
@@ -451,6 +480,7 @@ SUMMED = (
     "n_failed",
     "n_retried",
     "n_cached",
+    "n_tasks_unmeasured",
     "wall_s",
     "cpu_h_used",
     "cpu_h_reserved",
@@ -466,7 +496,14 @@ def summarise(task_rows, runs=None) -> list[dict]:
     """``pipeline_cost_summary.csv``: per (backend, patient), then per backend the
     ``all`` row over the patients whose run is complete (``complete_run == 1``): sums,
     the largest peak, the share from the sums. Its ``complete_run`` is 1 when every
-    patient listed is in it."""
+    patient listed is in it.
+
+    What the ``all`` row is (S6): ``n_patients`` counts only the complete patients and
+    every sum is over them alone, so a backend whose run lost a patient (``reason`` on
+    that patient's own row, ``no_trace`` among them) is summed over fewer patients and
+    says so with ``complete_run = 0``. A sum skips a NaN figure (``_sum``; unlike
+    ``score._whole``, which blanks a sum one of whose figures is missing), so where
+    ``n_tasks_unmeasured`` is not 0 the CPU-hours are lower bounds."""
     runs = getattr(task_rows, "runs", {}) if runs is None else runs
     names = getattr(task_rows, "names", {})
     out = []
@@ -487,7 +524,15 @@ def summarise(task_rows, runs=None) -> list[dict]:
         total = {"backend": backend, "patient": "all", "n_patients": len(whole)}
         for col in SUMMED:
             total[col] = _sum(p[col] for p in whole) if whole else math.nan
-        for col in ("n_tasks", "n_completed", "n_failed", "n_retried", "n_cached"):
+        total["reason"] = ""
+        for col in (
+            "n_tasks",
+            "n_completed",
+            "n_failed",
+            "n_retried",
+            "n_cached",
+            "n_tasks_unmeasured",
+        ):
             total[col] = int(total[col]) if whole else 0
         total["complete_run"] = int(len(whole) == len(per))
         total["peak_rss_gb"] = _max(p["peak_rss_gb"] for p in whole)

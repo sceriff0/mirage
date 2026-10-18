@@ -89,6 +89,30 @@ WHOSE = {
     "score_case_unfinished": BENCHMARK,
     # the settle job could not read the scheduler's accounting; the scorer tries again
     "settle_unfinished": BENCHMARK,
+    # Task 28 (regbench.losses): the ladder stopped at the partition's cap (the
+    # method's: the ladder is the same for every method, so it is a cost result)
+    "capped": METHOD,
+    # ... and what is not the method's
+    "killed_unsettled": INFRASTRUCTURE,
+    "watcher_gave_up": INFRASTRUCTURE,
+    "submit_refused": INFRASTRUCTURE,
+    "held": INFRASTRUCTURE,
+    "result_unreadable": BENCHMARK,
+    "score_error": BENCHMARK,
+    "realcheck_unreadable": BENCHMARK,
+    # rows of losses.csv that are not an attempt: what the launcher dropped, what the
+    # inputs lacked, what the benchmark's own steps could not read
+    "preflight_failed": LAUNCHER,
+    "run_config": LAUNCHER,
+    "unmarked_unit": BENCHMARK,
+    "no_trace": BENCHMARK,
+    "compute_incomplete": BENCHMARK,
+    "stale_result": BENCHMARK,
+    "manifest_dropped": BENCHMARK,
+    "prepare_dropped": BENCHMARK,
+    "prepare_failed": BENCHMARK,
+    "low_agreement": BENCHMARK,
+    "pixel_size_fallback": BENCHMARK,
 }
 STAGES = (
     "selfcheck",
@@ -388,7 +412,10 @@ def result_events(out, case, variant, mine=None):
         ]
     if run and mine is not None and not mine(run):
         run = {}
-    rows = run_events(run, case.dataset, case.case_id, variant)
+    from . import losses
+
+    # the causes the frozen writers cannot say (killed_unsettled, held), as score reads
+    rows = run_events(losses.reclassify(run), case.dataset, case.case_id, variant)
     for r in rows:
         r["group"] = r["group"] or case.group
     return rows
@@ -400,6 +427,7 @@ REPORTED = "reported; the run went on"
 REALCHECK_CAUSE = {
     "flagged": "realcheck_flagged",
     "not_checked": "realcheck_not_checked",
+    "unreadable": "realcheck_unreadable",
 }
 
 

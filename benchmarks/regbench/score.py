@@ -87,6 +87,8 @@ import pickle
 import sys
 import tempfile
 import time
+import traceback
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -99,6 +101,7 @@ from . import (
     compute_all,
     cost,
     failure_log,
+    losses,
     pairs,
     plugins,
     public_of,
@@ -146,6 +149,8 @@ NUCLEI_TABLES = (
     "cells",
     "summary_cells",
     "common_block",
+    "common_block_per_method",
+    "summary_common_per_method",
     "paired_vs_primary",
     "paired_summary",
     "nonband_cells",
@@ -180,6 +185,12 @@ TABLES = (
     "nuclei_missing",
     "attrition",
     "excluded_runs",
+    # Task 28: the per-method common block, and every loss as a row
+    "common_block_per_method",
+    "summary_common_per_method",
+    "losses",
+    "score_errors",
+    "nuclei_checks",
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
 )
@@ -238,6 +249,14 @@ CAUSES = (
     "not_submitted",
     "benchmark",
     "identical_overlap",
+    # Task 28 (losses.CAUSES): the ladder stopped at the partition's cap (the method's:
+    # a cost result), then what is not the method's
+    "capped",
+    "killed_unsettled",
+    "watcher_gave_up",
+    "result_unreadable",
+    "submit_refused",
+    "held",
     "not_run",  # last: `CAUSES[:-1]` below names the causes of a launch that ran
 )
 NOT_THE_METHOD = (
@@ -246,6 +265,7 @@ NOT_THE_METHOD = (
     "not_submitted",
     "benchmark",
     "identical_overlap",
+    *losses.NOT_THE_METHOD_EXTRA,
 )
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every
@@ -765,6 +785,11 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # attempts whose cost nobody recorded (in NO wasted total)
         "wasted_from_scheduler": int(from_scheduler),
         "wasted_unknown": int(unknown),
+        # R26: `upper` where the row's wasted cost is an upper bound the scheduler gave
+        # for an attempt nobody settled (killed_unsettled: billed as wasted, never lost)
+        "cost_bound": "upper"
+        if run.get("cause") in losses.BILLED_AS_WASTED and not ok
+        else "",
         # attempts that ended for a cause that is not the method's (a node failure, a
         # cancelled job, the benchmark's own step): billed in `lost_*`, in no
         # `wasted_*` and no `total_*`
@@ -778,6 +803,10 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # ended at its time limit): every time and CPU figure of the row is then a
         # LOWER BOUND. Blank for a run that is one job
         "unmeasured_attempts": unmeasured if staged else "",
+        # stage records nobody could read (S5; ``billing.unreadable_stage_records``):
+        # filled by ``bill_from_disk``, which reads the stage folder. Blank for a run
+        # that is one job
+        "unmeasured_records": "",
         # the transform existed when this row failed: its writer, or the job around
         # the writer, failed. The registration is then no wasted attempt
         "registered": bool(run.get("registered")),
@@ -855,6 +884,32 @@ def _in_stages(row):
         return False
 
 
+def _bill_unsettled(row, accounting):
+    """R26: the attempt of a ``killed_unsettled`` row that could not bill itself
+    (``wasted_unknown``) is billed as WASTED by the scheduler's upper bound: its
+    elapsed time x the allocated CPUs (and the requested memory), from
+    ``logs/accounting.psv``. Nothing is changed without that figure; the row keeps
+    ``cost_bound = upper`` either way, so the cost is visibly a bound."""
+    ent = (accounting or {}).get(str(row.get("launch_id") or "")) or {}
+    elapsed = _f(ent.get("elapsed_s"))
+    if elapsed != elapsed or not int(row.get("wasted_unknown") or 0):
+        return
+    hours = elapsed / 3600.0
+    add = {
+        "cpu_h_reserved": _f(row.get("cpus_requested")) * hours,
+        "gb_h_reserved": _f(row.get("mem_requested_gb")) * hours,
+        "cpu_h_used": _f(ent.get("cpu_s")) / 3600.0,
+    }
+    for stem, value in add.items():
+        for col in (f"wasted_{stem}", f"total_{stem}"):
+            if col not in row or value != value:
+                continue
+            was = _f(row.get(col))
+            row[col] = value if was != was else was + value
+    row["wasted_unknown"] = int(row["wasted_unknown"]) - 1
+    row["wasted_from_scheduler"] = int(row.get("wasted_from_scheduler") or 0) + 1
+
+
 def bill_from_disk(res_rows, out, cases, accounting=None):
     """Complete the billing columns of the resource rows with what is not in a
     ``run.json``, in place:
@@ -875,6 +930,8 @@ def bill_from_disk(res_rows, out, cases, accounting=None):
         case = by_id.get((row["dataset"], str(row["case_id"])))
         if case is None:
             continue
+        if row.get("n_jobs") in ("", None) and row.get("cost_bound") == "upper":
+            _bill_unsettled(row, accounting)
         if row.get("n_jobs") in ("", None):  # one job: its own launch
             if accounting is not None and (row["ok"] or row.get("registered")):
                 h, n = billing.scheduler_hours([row.get("launch_id")], accounting)
@@ -888,6 +945,8 @@ def bill_from_disk(res_rows, out, cases, accounting=None):
         folder = billing.find_stage_dir(
             out, row["dataset"], row["case_id"], row["method"], row.get("launch_id")
         )
+        if folder is not None:
+            row["unmeasured_records"] = billing.unreadable_stage_records(folder)
         stage = billing.stage_attempts(folder) if folder is not None else None
         if stage is None:
             continue
@@ -952,8 +1011,13 @@ def _load_run(out, variant, case):
     if (d / "run.json").exists():
         try:
             run = json.loads((d / "run.json").read_text())
-        except ValueError:
-            return {}, None, "run.json is not readable", "exception"
+        except (OSError, ValueError) as exc:
+            # S4: not the method's (it may have written it whole): the record is gone
+            said = f"run.json is not readable ({type(exc).__name__})"
+            return _unreadable({}, said), None, said, UNREADABLE
+        if not isinstance(run, dict):
+            said = "run.json is not readable (not an object)"
+            return _unreadable({}, said), None, said, UNREADABLE
     if not run:
         return {}, None, "not run", "not_run"
     if not of_this_submission(run):
@@ -962,6 +1026,11 @@ def _load_run(out, variant, case):
     if changed:
         # not the method's failure: its polygons no longer fit because the CASE changed
         return {}, None, f"{STALE_CASE} ({', '.join(changed)})", "not_run"
+    # the causes the frozen writers cannot say themselves (killed_unsettled, held)
+    run = losses.reclassify(run)
+    if run.get("ok") and not (d / "warped.npz").exists():
+        said = "the result says ok and has no warped.npz"
+        return _unreadable(run, said), None, said, UNREADABLE
     if not run.get("ok") or not (d / "warped.npz").exists():
         return (
             run,
@@ -969,9 +1038,22 @@ def _load_run(out, variant, case):
             run.get("error") or "no output",
             run.get("cause") or "exception",
         )
-    with np.load(d / "warped.npz") as z:
-        warped = {k: z[k] for k in z.files}
+    try:
+        with np.load(d / "warped.npz") as z:
+            warped = {k: z[k] for k in z.files}
+    except (OSError, ValueError, EOFError, zipfile.BadZipFile) as exc:
+        said = f"warped.npz is not readable ({type(exc).__name__}: {exc})"
+        return _unreadable(run, said), None, said, UNREADABLE
     return run, warped, str(run.get("problem") or ""), ""
+
+
+UNREADABLE = "result_unreadable"
+
+
+def _unreadable(run, said):
+    """A result whose record or map cannot be read, as the tables read it: failed, for
+    ``result_unreadable`` (``losses.CAUSES``: not the method's), with what was said."""
+    return {**run, "ok": False, "cause": UNREADABLE, "error": said}
 
 
 def _seam_masks(
@@ -1781,9 +1863,49 @@ def _case_record(job, key, why, pool=None, fresh=False):
 
 
 def _case_task(task):
-    """One whole case in a pool worker (serial inside): ``(index, rows)``."""
+    """One whole case in a pool worker (serial inside): ``(index, rows)``, or
+    ``(index, ScoreError)`` when its scoring raised (B1: one case, never the cohort)."""
     i, job, key, why, fresh = task
-    return i, _case_record(job, key, why, None, fresh)
+    return i, _guarded(job, key, why, None, fresh)
+
+
+class ScoreError:
+    """A case whose scoring raised: it has no row, and ``score_errors.csv`` names it
+    with the exception's message and the last frame of its traceback. Counted and
+    written, never passed over (``losses``: cause ``score_error``)."""
+
+    def __init__(self, job, exc):
+        case = job[1]
+        frames = traceback.extract_tb(exc.__traceback__)
+        last = frames[-1] if frames else None
+        self.row = {
+            "dataset": case.dataset,
+            "patient_id": case.group,
+            "case_id": str(case.case_id),
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+            "where": f"{Path(last.filename).name}:{last.lineno} in {last.name}"
+            if last
+            else "",
+        }
+
+
+SCORE_ERROR_COLUMNS = ("dataset", "patient_id", "case_id", "error", "where")
+
+
+def _guarded(job, key, why, pool=None, fresh=False):
+    """``_case_record``, or a ``ScoreError`` when it raised: the other cases go on."""
+    try:
+        return _case_record(job, key, why, pool, fresh)
+    except Exception as exc:  # noqa: BLE001 - recorded in score_errors.csv, never lost
+        err = ScoreError(job, exc)
+        print(
+            f"score: {job[1].dataset}/{job[1].case_id}: SCORE ERROR, the case has no "
+            f"row ({err.row['error']} at {err.row['where']}); the other cases go on "
+            "(score_errors.csv)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return err
 
 
 def score_jobs(jobs, workers=1, fresh=False):
@@ -1795,7 +1917,10 @@ def score_jobs(jobs, workers=1, fresh=False):
     one the work runs at ONE level, never both: whole cases side by side when at least
     ``workers`` of them are to be computed, else one case after the other with its
     pair records side by side. One worker is purely serial: no process is started.
-    ``fresh`` reads no record, of a case or of a pair, and replaces them all."""
+    ``fresh`` reads no record, of a case or of a pair, and replaces them all.
+
+    A case whose scoring raises is a ``ScoreError`` in the list (B1): the others are
+    scored all the same, and the caller writes it to ``score_errors.csv``."""
     done = [None] * len(jobs)
     keys, todo = [], []
     for i, job in enumerate(jobs):
@@ -1816,7 +1941,7 @@ def score_jobs(jobs, workers=1, fresh=False):
         return done
     if workers <= 1:
         for i, why in todo:
-            done[i] = _case_record(jobs[i], keys[i], why, None, fresh)
+            done[i] = _guarded(jobs[i], keys[i], why, None, fresh)
         return done
     import multiprocessing
 
@@ -1840,7 +1965,7 @@ def score_jobs(jobs, workers=1, fresh=False):
     )
     with spawn.Pool(workers) as pool:
         for i, why in todo:
-            done[i] = _case_record(jobs[i], keys[i], why, pool, fresh)
+            done[i] = _guarded(jobs[i], keys[i], why, pool, fresh)
     return done
 
 
@@ -1932,7 +2057,13 @@ def score_case(
     (job,) = jobs
     key = case_key(job)
     valid = _read_record(records_dir(out, job[1]) / "case.rec", key)[0] is not None
-    score_jobs(jobs, workers, fresh)
+    (got,) = score_jobs(jobs, workers, fresh)
+    if isinstance(got, ScoreError):
+        # the case task fails, said; the scorer tries it again and, if it raises
+        # there too, writes it to score_errors.csv and scores the others
+        raise SystemExit(
+            f"score-case: {dataset}/{case_id}: {got.row['error']} at {got.row['where']}"
+        )
     return "kept" if valid and not fresh else "scored"
 
 
@@ -2010,12 +2141,28 @@ def compared_rows(rows, primary=None):
     return inside, outside
 
 
-def common_cases(rows, primary=None):
-    """Case ids every compared row registered (``compared_rows``). A round lost for a
-    cause that is not the method's is unregistered, so it is in no common block."""
+# B2: two common blocks, each named in every table that uses one (column
+# ``common_block``). STRICT (the headline): the cases every compared row registered; a
+# round lost for a cause that is not the method's is unregistered, so it takes the case
+# out for EVERY method. PER_METHOD: such a round takes the case out of the block of the
+# method that lost it only (its own summary already leaves it out, ``_excluded``); a
+# failure of a method's own still takes the case out for every method.
+STRICT, PER_METHOD = "strict", "per_method"
+COMMON_BLOCKS = (STRICT, PER_METHOD)
+
+
+def common_cases(rows, primary=None, rule=STRICT):
+    """Case ids of the common block of ``rule`` (``COMMON_BLOCKS``) among the compared
+    rows (``compared_rows``)."""
+    if rule not in COMMON_BLOCKS:
+        raise ValueError(f"common block {rule!r}: one of {COMMON_BLOCKS}")
     inside, _ = compared_rows(rows, primary)
     judged = [r for r in rows if r["method"] in inside]
-    failed = {r["case_id"] for r in judged if r["imputed_initial"]}
+    failed = {
+        r["case_id"]
+        for r in judged
+        if r["imputed_initial"] and (rule == STRICT or not _excluded(r))
+    }
     return {r["case_id"] for r in rows} - failed
 
 
@@ -2042,30 +2189,40 @@ def _readable(r):
     return bool(r["displacement_readable"])
 
 
-def common_block(rows, primary=None):
+def common_block(rows, primary=None, rule=STRICT):
     """One row per (dataset, compared-or-not row): who is in the common block, and why
-    the others are not. Written as ``common_block.csv`` and printed, always."""
+    the others are not. Written as ``common_block.csv`` (``strict``) and
+    ``common_block_per_method.csv`` (``per_method``) and printed, always. On the
+    per-method block ``n_cases_common`` is the method's own: the block less the rounds
+    it lost for a cause that is not its own."""
     out = []
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
         inside, outside = compared_rows(of_ds, primary)
-        common = common_cases(of_ds, primary)
+        common = common_cases(of_ds, primary, rule)
         n_all = len({r["case_id"] for r in of_ds})
         for name in [*inside, *outside]:
+            own = {
+                r["case_id"]
+                for r in of_ds
+                if r["method"] == name and r["case_id"] in common and not _excluded(r)
+            }
+            n = len(common) if rule == STRICT else len(own)
             out.append(
                 {
                     "dataset": ds,
                     "method": name,
                     "in_common_block": name in inside,
                     "why_not": outside.get(name, ""),
-                    "n_cases_common": len(common) if inside else 0,
+                    "n_cases_common": n if inside else 0,
                     "n_cases": n_all,
+                    "common_block": rule,
                 }
             )
     return out
 
 
-def summarise_cells(rows, primary=None):
+def summarise_cells(rows, primary=None, rule=STRICT):
     """One row per (dataset, family, method, subset): ``all`` and ``common``.
 
     ``family`` is empty on the cohort (the column stays, so a table keeps its shape).
@@ -2079,15 +2236,25 @@ def summarise_cells(rows, primary=None):
     cases where EVERY compared row qualifies (``compared_rows``), the same cases for
     every method: the only one of the two that may be set beside another method's.
     ``<headline>_n_nan`` counts the cases whose value does not exist (no pair): they
-    cannot enter a median, and are shown instead of vanishing."""
+    cannot enter a median, and are shown instead of vanishing; so do
+    ``unmapped_frac_n_nan``, ``fold_pct_n_nan`` and ``coverage_n_nan`` beside the
+    maxima and the median read over the finite values only (S11).
+
+    ``rule`` is the common block (``COMMON_BLOCKS``): ``strict`` gives the ``all`` and
+    ``common`` rows; ``per_method`` the ``common`` rows alone, on the per-method block
+    (``summary_common_per_method.csv``). Column ``common_block`` names it on every
+    ``common`` row. ``n_low_agreement_slides`` counts the slides of the method's cases
+    whose nuclei were kept under the agreement threshold (flagged, B9), and
+    ``n_pixel_size_fallback`` the cases scored at the fallback pixel size (S10)."""
     out = []
+    subsets = ("all", "common") if rule == STRICT else ("common",)
     for ds in sorted({r["dataset"] for r in rows}):
         of_ds = [r for r in rows if r["dataset"] == ds]
         inside, _ = compared_rows(of_ds, primary)
-        common = common_cases(of_ds, primary)
+        common = common_cases(of_ds, primary, rule)
         for fam in ("",):  # the cohort has one stratum; `family` stays an empty column
             of_fam = of_ds
-            for subset in ("all", "common"):
+            for subset in subsets:
                 pool = of_fam
                 if subset == "common":
                     if not inside:
@@ -2117,6 +2284,20 @@ def summarise_cells(rows, primary=None):
                             bool(r.get("set_inexact")) for r in mine
                         ),
                         "n_shrunk_cases": sum(bool(r.get("set_shrunk")) for r in mine),
+                        "common_block": rule if subset == "common" else "",
+                        "n_low_agreement_slides": len(
+                            {
+                                s
+                                for r in mine
+                                for s in str(r.get("low_agreement_slides") or "").split(
+                                    "|"
+                                )
+                                if s
+                            }
+                        ),
+                        "n_pixel_size_fallback": sum(
+                            r.get("pixel_size_source") == PX_FALLBACK for r in mine
+                        ),
                     }
                     for h in HEADLINES:
                         per = list(_per_patient(mine, h).values())
@@ -2156,6 +2337,8 @@ def summarise_cells(rows, primary=None):
                     )
                     rec["fold_pct_max"] = _stat(_values(mine, "fold_pct"), np.max)
                     rec["coverage_med"] = _stat(_values(mine, "coverage"), np.median)
+                    for k in ("unmapped_frac", "fold_pct", "coverage"):
+                        rec[f"{k}_n_nan"] = int(np.isnan(_values(mine, k)).sum())
                     # how much of the pipeline's pairing was its fallback, and the
                     # exact assignment's numbers beside the headline (never ranked)
                     share = _values(mine, "fallback_frac")
@@ -2517,6 +2700,7 @@ def summarise_resources(res_rows):
             "n_job_retries",
             "write_cpu_h_allocated",
             "unmeasured_attempts",
+            "unmeasured_records",
         ):
             rec[key] = _stat(_values(split, key), np.sum) if split else ""
         for key in ("peak_cpus_at_once", "write_peak_gb"):
@@ -3074,7 +3258,9 @@ def _nonband_markdown(summary, missing):
 ATTRITION_COLUMNS = (
     "dataset",
     "method",
+    "checkpoint_rounds",
     "manifest_rounds",
+    "not_prepared",
     "prepared",
     "with_outlines",
     "with_nuclei",
@@ -3082,7 +3268,32 @@ ATTRITION_COLUMNS = (
     "registered",
     "scored",
     "scored_nuclei",
+    "killed_unsettled",
+    "settled",
 )
+
+
+def input_drops(out, cases_root, manifest):
+    """``{"checkpoint_rounds", "not_prepared"}`` for ``attrition.csv``: the rounds the
+    input step's checkpoint lists before the manifest's drops (the manifest's rounds
+    plus ``manifest_dropped.csv``'s; None without that table), and the rounds
+    ``prepare_dropped.csv`` lists (None without it)."""
+    mdir = Path(manifest).parent if manifest else None
+    m_path = losses.find("manifest_dropped.csv", mdir, Path(out) / "logs", cases_root)
+    p_rows, p_path = losses.read_prepare_dropped(cases_root)
+    listed = manifest_rounds(manifest)
+    dropped = None
+    if m_path is not None and listed is not None:
+        dropped = 0
+        for r in losses.read_csv(m_path):
+            try:
+                dropped += int(r.get("n_rounds") or 0)
+            except ValueError:
+                dropped += 1
+    return {
+        "checkpoint_rounds": None if dropped is None else listed + dropped,
+        "not_prepared": None if p_path is None else len(p_rows),
+    }
 
 
 def manifest_rounds(path):
@@ -3099,11 +3310,24 @@ def manifest_rounds(path):
         return None
 
 
-def attrition(jobs, cells, nuclei_cells, nuclei_missing, res_rows, manifest=None):
+def attrition(
+    jobs,
+    cells,
+    nuclei_cells,
+    nuclei_missing,
+    res_rows,
+    manifest=None,
+    inputs=None,
+    settled="",
+):
     """Where the rounds go, per dataset and registration row (``attrition.csv``):
 
+    ``checkpoint_rounds``  rounds the input step's checkpoint lists, BEFORE the
+                         manifest's drops (``manifest_dropped.csv``; blank without it)
     ``manifest_rounds``  rounds the cohort's manifest lists (``multiplex`` only, and
                          only when the manifest was given to the scorer; blank else)
+    ``not_prepared``     rounds ``prepare multiplex`` dropped or failed on
+                         (``prepare_dropped.csv``; blank without it)
     ``prepared``         cases prepared from them, as scored here
     ``with_outlines``    of those, cases with outlines on both sides (a cell row exists)
     ``with_nuclei``      of those, cases with bare nuclei on both sides
@@ -3112,8 +3336,13 @@ def attrition(jobs, cells, nuclei_cells, nuclei_missing, res_rows, manifest=None
     ``scored``           cases whose outline row is its own result: not scored at the
                          unregistered pose and not left out of its summaries
     ``scored_nuclei``    the same on the bare nuclei
+    ``killed_unsettled`` rounds whose result says killed and was never settled against
+                         the scheduler's accounting (not the method's; S1)
+    ``settled``          ``yes`` when the settle job settled this submission's killed
+                         results, ``no`` when it did not, blank outside the launcher
 
     One line per dataset without any registration row, so a dataset is never absent."""
+    inputs = inputs or {}
     out = []
     for ds in dict.fromkeys(job[1].dataset for job in jobs):
         ids = {str(job[1].case_id) for job in jobs if job[1].dataset == ds}
@@ -3123,11 +3352,19 @@ def attrition(jobs, cells, nuclei_cells, nuclei_missing, res_rows, manifest=None
 
         outlined = {str(r["case_id"]) for r in of(cells)}
         without = {str(r["case_id"]) for r in of(nuclei_missing) if not r["method"]}
+        cohort = ds == "multiplex"
+
+        def given(key, cohort=cohort):
+            v = inputs.get(key)
+            return v if cohort and v is not None else ""
+
         head = {
             "dataset": ds,
+            "checkpoint_rounds": given("checkpoint_rounds"),
             "manifest_rounds": manifest
             if ds == "multiplex" and manifest is not None
             else "",
+            "not_prepared": given("not_prepared"),
             "prepared": len(ids),
             "with_outlines": len(outlined),
             "with_nuclei": len(outlined - without),
@@ -3150,10 +3387,14 @@ def attrition(jobs, cells, nuclei_cells, nuclei_missing, res_rows, manifest=None
                     "registered": sum(bool(r["ok"]) for r in mine),
                     "scored": own(cells),
                     "scored_nuclei": own(nuclei_cells),
+                    "killed_unsettled": sum(
+                        r["cause"] == "killed_unsettled" for r in mine
+                    ),
+                    "settled": settled,
                 }
             )
         if not names:
-            out.append({**head, "method": ""})
+            out.append({**head, "method": "", "settled": settled})
     return out
 
 
@@ -3548,6 +3789,7 @@ def summary_markdown(
                 "wasted_unknown",
                 "lost_attempts",
                 "unmeasured_attempts",
+                "unmeasured_records",
             ):
                 line[key] = r.get(key, "")
             table.append(line)
@@ -3589,7 +3831,9 @@ def summary_markdown(
             "`cpus_requested` are those of the round's LAST job, which holds the "
             "benchmark's own work and the writer and none of the registration. "
             "`write_s` is the method's own writer; the benchmark's own copying of a "
-            "written image is in no column. `unmeasured_attempts` counts stage "
+            "written image is in no column. `unmeasured_records` counts stage records "
+            "nobody could read (their attempts are in no figure: the row's times and "
+            "CPU-hours are then lower bounds). `unmeasured_attempts` counts stage "
             "attempts with no recorded duration: where it is not 0, that row's times "
             "and CPU-hours are lower bounds. No single column is "
             "the cost. `wasted_from_scheduler` attempts are billed by the scheduler's "
@@ -3696,6 +3940,258 @@ def summary_markdown(
     return "\n".join(parts)
 
 
+# ── every loss and flag as a row (Task 28, ``regbench.losses``) ─────────────────────
+PX_FALLBACK, PX_METADATA = "fallback_0.325", "metadata"
+NUCLEI_CHECK_COLUMNS = (
+    "patient_id",
+    "slide",
+    "one_nucleus_fraction",
+    "threshold",
+    "low_agreement",
+)
+
+
+def _slide_of(case, side):
+    from .manifest import slide_name
+
+    extra = case.extra or {}
+    image = extra.get("reference" if side == "ref" else "moving") or getattr(
+        case, f"{side}_image", ""
+    )
+    return slide_name(image) if image else side
+
+
+def case_flags(case):
+    """What a case's inputs say about it, on every one of its rows: ``low_agreement``
+    (1 when a slide's nuclei were kept under the agreement threshold, B9),
+    ``low_agreement_slides`` (those slides, ``|``-joined) and ``pixel_size_source``
+    (``metadata`` | ``fallback_0.325``, S10)."""
+    extra = case.extra or {}
+    sets = extra.get("cell_sets") or {}
+    low = sorted(
+        f"{case.group}/{_slide_of(case, side)}"
+        for side in ("ref", "mov")
+        if ((sets.get(side) or {}).get("nuclei") or {}).get("low_agreement")
+    )
+    src = str(extra.get("pixel_size_source") or "")
+    return {
+        "low_agreement": int(bool(low)),
+        "low_agreement_slides": "|".join(low),
+        "pixel_size_source": PX_FALLBACK if src == "fallback" else PX_METADATA,
+    }
+
+
+def nuclei_checks(cases):
+    """``nuclei_checks.csv``: one row per slide of the cases (a reference shared by
+    several rounds once): its one-nucleus fraction against its outlines, the
+    threshold, and ``low_agreement`` (kept, scored and flagged when 1)."""
+    from .nuclei import ACCEPT_ONE_NUCLEUS
+
+    out = {}
+    for case in cases:
+        sets = (case.extra or {}).get("cell_sets") or {}
+        for side in ("ref", "mov"):
+            nuc = (sets.get(side) or {}).get("nuclei") or {}
+            key = (case.group, _slide_of(case, side))
+            if key in out:
+                continue
+            frac = (nuc.get("agreement") or {}).get("one_nucleus_frac")
+            out[key] = {
+                "patient_id": case.group,
+                "slide": key[1],
+                "one_nucleus_fraction": "" if frac is None else round(float(frac), 4),
+                "threshold": ACCEPT_ONE_NUCLEUS,
+                "low_agreement": int(bool(nuc.get("low_agreement"))),
+                "_case": str(case.case_id),
+                "_dataset": case.dataset,
+            }
+    return list(out.values())
+
+
+def settle_outcome(out):
+    """``yes`` when the settle job left word of having settled THIS submission's
+    killed results (``logs/settled``), ``no`` when a launcher submitted into the
+    folder and it did not, ``""`` outside the launcher (S1)."""
+    logs = Path(out) / "logs"
+    mine = os.environ.get(SUBMISSION_ENV, "")
+    try:
+        said = (logs / "settled").read_text().splitlines()
+    except OSError:
+        said = None
+    if said is not None and (said[:1] or [""])[0] == mine:
+        return "yes"
+    return "no" if (logs / "jobs.tsv").is_file() else ""
+
+
+def _run_loss(r, of_run, effect=None):
+    cause = r.get("cause") or "exception"
+    detail = str(r.get("problem") or "")
+    if cause == "not_run" and (
+        detail.startswith(STALE) or detail.startswith(STALE_CASE)
+    ):
+        cause = "stale_result"
+    if cause not in losses.CAUSES:
+        detail = f"cause {cause!r} (no loss cause of its own): {detail}"
+        cause = "exception"
+    if effect is None:
+        if cause in ("not_run", "stale_result"):
+            effect = "not_run"
+        elif cause == "capped":
+            effect = "capped"
+        elif r.get("excluded_from_summaries"):
+            effect = "dropped"
+        else:
+            effect = "imputed"
+    method = str(r["method"])
+    return losses.row(
+        dataset=r["dataset"],
+        patient_id=r.get("group", ""),
+        case_id=str(r["case_id"]),
+        run=of_run.get(method.split(NON)[0], method),
+        method=method,
+        cause=cause,
+        effect=effect,
+        detail=detail[:300],
+        source=f"{method}/{r['dataset']}/{r['case_id']}/run.json",
+    )
+
+
+def _fold_not_run(rows):
+    """The results nobody ran: one row per (dataset, method), the cases counted."""
+    out, seen = [], {}
+    for r in rows:
+        if r["cause"] != "not_run":
+            out.append(r)
+            continue
+        key = (r["dataset"], r["method"])
+        if key in seen:
+            seen[key]["n"] += 1
+            continue
+        seen[key] = {"row": r, "n": 1}
+        out.append(r)
+    for got in seen.values():
+        if got["n"] > 1:
+            got["row"]["case_id"] = f"{got['n']} case(s)"
+            got["row"]["patient_id"] = ""
+            got["row"]["source"] = f"{got['row']['method']}/{got['row']['dataset']}/"
+    return out
+
+
+def loss_rows(
+    out,
+    cases_root,
+    datasets,
+    manifest,
+    jobs,
+    cells,
+    res,
+    errors,
+    pipe_summary,
+    run_variants=None,
+    checks=(),
+):
+    """Every row of ``losses.csv`` for ``datasets`` (``regbench.losses``): the
+    per-stage tables found beside the results, the cases and the manifest, then the
+    rounds of every result that did not register (``cells``: the outline rows; ``res``
+    for a case without them), the cases whose scoring raised (``errors``), the slides
+    flagged by the nuclei check (``checks``), the rounds scored at the fallback pixel
+    size, and the compute-all patients without a trace."""
+    of_run = {v: run for run, vs in (run_variants or {}).items() for v in vs}
+    logs = Path(out) / "logs"
+    mdir = Path(manifest).parent if manifest else None
+    got = []
+    path = losses.find("submit_dropped.csv", out)
+    got += losses.submit_rows(losses.read_csv(path))
+    if "multiplex" in datasets:
+        path = losses.find("manifest_dropped.csv", mdir, logs, cases_root)
+        got += losses.manifest_rows(
+            losses.read_csv(path), _shown(path, out, cases_root)
+        )
+        p_rows, path = losses.read_prepare_dropped(cases_root)
+        got += losses.prepare_rows(p_rows, _shown(path, out, cases_root))
+    path = losses.find("unmarked_units.csv", logs)
+    got += losses.unmarked_rows(losses.read_csv(path))
+    for c in checks:
+        if c["low_agreement"]:
+            got.append(
+                losses.row(
+                    dataset=c["_dataset"],
+                    patient_id=c["patient_id"],
+                    case_id=c["_case"],
+                    cause="low_agreement",
+                    effect="flagged",
+                    detail=f"slide {c['slide']}: one-nucleus fraction "
+                    f"{c['one_nucleus_fraction']} under {c['threshold']}",
+                    source="nuclei_checks.csv",
+                )
+            )
+    for job in jobs:
+        case = job[1]
+        if case_flags(case)["pixel_size_source"] == PX_FALLBACK:
+            got.append(
+                losses.row(
+                    dataset=case.dataset,
+                    patient_id=case.group,
+                    case_id=str(case.case_id),
+                    cause="pixel_size_fallback",
+                    effect="flagged",
+                    detail=f"pixel size {case.pixel_size_um} um (the fallback)",
+                    source=f"{case.dataset}/{case.case_id}/case.json",
+                )
+            )
+    cased = {(r["dataset"], str(r["case_id"])) for r in cells}
+    run_rows = [_run_loss(r, of_run) for r in cells if r["imputed_initial"]]
+    run_rows += [
+        _run_loss(r, of_run)
+        for r in res
+        if not r["ok"] and (r["dataset"], str(r["case_id"])) not in cased
+    ]
+    got += _fold_not_run(run_rows)
+    got += losses.score_error_rows(errors)
+    for p in pipe_summary or []:
+        if p.get("reason") and p.get("patient") != "all":
+            got.append(
+                losses.row(
+                    patient_id=p["patient"],
+                    run=f"compute_{p['backend']}",
+                    cause="no_trace"
+                    if "no_trace" in p["reason"].split("|")
+                    else "compute_incomplete",
+                    effect="dropped",
+                    detail=p["reason"],
+                    source=f"compute/{p['backend']}/{p['patient']}/",
+                )
+            )
+    return [r for r in got if r["dataset"] in ("", *datasets)]
+
+
+def _shown(path, out, cases_root):
+    """``path`` as the ``source`` column says it: relative to the results or the cases
+    folder when it is under one."""
+    if path is None:
+        return ""
+    for base in (out, cases_root):
+        try:
+            return str(Path(path).resolve().relative_to(Path(base).resolve()))
+        except (ValueError, OSError, TypeError):
+            continue
+    return str(path)
+
+
+def write_readme(tables):
+    """``tables/README.txt``: the loss table's columns and its cause list."""
+    lines = [
+        "The tables of `regbench score` (summary.md says what each is).",
+        "",
+        *losses.readme_lines(),
+        "",
+        "Selfchecks and realchecks are reported (launch.csv, column selfcheck_status), "
+        "never a gate: no row is left out for them.",
+        "",
+    ]
+    (Path(tables) / "README.txt").write_text("\n".join(lines))
+
+
 def _score_cells(
     tables,
     cases_root,
@@ -3768,9 +4264,27 @@ def _score_cells(
         if made:
             variants_of[ds] = made[0][2]
             jobs += made
+    tables = Path(tables)
     if not jobs:
+        # nothing to score: what was lost before the cases is still written (rule 3)
+        tables.mkdir(parents=True, exist_ok=True)
+        early = loss_rows(out, cases_root, datasets, manifest, [], [], [], [], [])
+        losses.write(tables / "losses.csv", early)
+        print(losses.summary_text(early))
         raise SystemExit(f"no prepared cases under {cases_root}")
     done = score_jobs(jobs, workers, fresh)
+    # B1: a case whose scoring raised has no row; it is named, and the others stand
+    errors = [d.row for d in done if isinstance(d, ScoreError)]
+    all_jobs = jobs
+    kept = [(j, d) for j, d in zip(jobs, done) if not isinstance(d, ScoreError)]
+    jobs = [j for j, _ in kept]
+    done = [d for _, d in kept]
+    # what the case's inputs say, on every row of it (B9, S10): set at table time,
+    # never kept in a case's record
+    for job, rows in zip(jobs, done):
+        flags = case_flags(job[1])
+        for r in (*rows[0], *rows[2], *rows[4]["cells"], *rows[4]["non_cells"]):
+            r.update(flags)
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
     # off the seams: tables of their own, never merged into the ones above
@@ -3785,6 +4299,9 @@ def _score_cells(
     non_summary = _in_set(summarise_nonband(non_cells, primary), OUTLINES)
     summary = _in_set(summarise_cells(cells, primary), OUTLINES)
     common = _in_set(common_block(cells, primary), OUTLINES)
+    # B2: the per-method common block beside the strict one, in tables of its own
+    common_pm = _in_set(common_block(cells, primary, PER_METHOD), OUTLINES)
+    summary_pm = _in_set(summarise_cells(cells, primary, PER_METHOD), OUTLINES)
     excluded = excluded_rounds(cells)
     paired = _in_set(paired_vs_primary(cells), OUTLINES)
     paired_summary = _in_set(summarise_paired(paired), OUTLINES)
@@ -3800,6 +4317,12 @@ def _score_cells(
         set_selfcheck_status(rows, said)
     nuc["summary_cells"] = _in_set(summarise_cells(nuc["cells"], primary), NUCLEI)
     nuc["common_block"] = _in_set(common_block(nuc["cells"], primary), NUCLEI)
+    nuc["common_block_per_method"] = _in_set(
+        common_block(nuc["cells"], primary, PER_METHOD), NUCLEI
+    )
+    nuc["summary_common_per_method"] = _in_set(
+        summarise_cells(nuc["cells"], primary, PER_METHOD), NUCLEI
+    )
     nuc["paired_vs_primary"] = _in_set(paired_vs_primary(nuc["cells"]), NUCLEI)
     nuc["paired_summary"] = _in_set(summarise_paired(nuc["paired_vs_primary"]), NUCLEI)
     nuc["nonband_summary"] = _in_set(
@@ -3808,7 +4331,14 @@ def _score_cells(
     fails = failures(res)  # every run
     run_fails = run_failures(res)
     lost_rounds = attrition(
-        jobs, cells, nuc["cells"], nuclei_missing, res, manifest_rounds(manifest)
+        all_jobs,
+        cells,
+        nuc["cells"],
+        nuclei_missing,
+        res,
+        manifest_rounds(manifest),
+        inputs=input_drops(out, cases_root, manifest),
+        settled=settle_outcome(out),
     )
     from . import ladder
 
@@ -3848,7 +4378,6 @@ def _score_cells(
     pipe_summary = compute_all.summarise(pipe)
     pipe_by_process = compute_all.by_process(pipe, pipe_summary)
 
-    tables = Path(tables)
     tables.mkdir(parents=True, exist_ok=True)
     for name in (*TABLES, *REMOVED_TABLES):
         (tables / f"{name}.csv").unlink(missing_ok=True)
@@ -3892,6 +4421,8 @@ def _score_cells(
     )
     write_csv(tables / "cost_summary.csv", cost_summary)
     write_csv(tables / "common_block.csv", common)
+    write_csv(tables / "common_block_per_method.csv", common_pm)
+    write_csv(tables / "summary_common_per_method.csv", summary_pm)
     write_csv(tables / "paired_summary.csv", paired_summary)
     write_csv(tables / "excluded_rounds.csv", excluded)
     write_csv(tables / "cost_end_to_end.csv", e2e, list(cost.COLUMNS))
@@ -3917,7 +4448,7 @@ def _score_cells(
     write_csv(tables / "nonband_missing.csv", non_lost)
     # the written images against the reference: tables of their own, never ranked
     tis = (
-        tissue.score_all([(j[0], j[1], j[2]) for j in jobs], workers)
+        tissue.score_all([(j[0], j[1], j[2]) for j in all_jobs], workers)
         if with_tissue
         else {}
     )
@@ -3925,7 +4456,7 @@ def _score_cells(
         write_csv(tables / f"{name}.csv", rows)
     events = failure_log.build(
         out,
-        [(j[1], j[2]) for j in jobs],
+        [(j[1], j[2]) for j in all_jobs],
         launch,
         run_variants,
         tis.get("tissue_missing", ()),
@@ -3936,6 +4467,34 @@ def _score_cells(
         w = csv.DictWriter(fh, fieldnames=list(failure_log.COLUMNS), restval="")
         w.writeheader()
         w.writerows(events)
+    # every loss and flag as a row (Task 28): the per-stage tables, then their union
+    checks = nuclei_checks([j[1] for j in all_jobs])
+    with open(tables / "nuclei_checks.csv", "w", newline="") as fh:
+        w = csv.DictWriter(
+            fh, fieldnames=list(NUCLEI_CHECK_COLUMNS), extrasaction="ignore"
+        )
+        w.writeheader()
+        w.writerows(checks)
+    with open(tables / "score_errors.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(SCORE_ERROR_COLUMNS))
+        w.writeheader()
+        w.writerows(errors)
+    lost = loss_rows(
+        out,
+        cases_root,
+        datasets,
+        manifest,
+        jobs,
+        cells,
+        res,
+        errors,
+        pipe_summary,
+        run_variants,
+        checks,
+    )
+    losses.write(tables / "losses.csv", lost)
+    write_readme(tables)
+    unmarked = losses.read_csv(Path(out) / "logs" / "unmarked_units.csv")
     text = summary_markdown(
         summary,
         fails,
@@ -3960,10 +4519,51 @@ def _score_cells(
         pipeline=(pipe, pipe_summary),
     )
     text += excluded_markdown(left_out)
+    settled = settle_outcome(out)
+    text += (
+        "\n## Settle and the chains\n\n"
+        + {
+            "yes": "The settle job settled this submission's killed results against "
+            "the scheduler's accounting.",
+            "no": "The settle job left NO word of settling this submission: a result "
+            "that still says killed is `killed_unsettled` (not the method's).",
+            "": "Not a launcher's submission: no settle job.",
+        }[settled]
+        + f" {len(unmarked)} unit(s) of chains the settle job could not list "
+        "(`n_unmarked_units`, logs/unmarked_units.csv).\n\n"
+    )
+    text += losses.summary_text(lost)
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
+    loss_counts = losses.counts(lost)
+    # the summary record: the same counts the summary prints (rule 3)
+    write_json(
+        tables / "summary.json",
+        {
+            "losses": loss_counts,
+            "n_losses": len(lost),
+            "n_cases": len(all_jobs),
+            "n_scored_cases": len(jobs),
+            "n_score_errors": len(errors),
+            "n_unmarked_units": len(unmarked),
+            "n_low_agreement_slides": sum(c["low_agreement"] for c in checks),
+            "n_pixel_size_fallback": sum(
+                case_flags(j[1])["pixel_size_source"] == PX_FALLBACK for j in jobs
+            ),
+            "settled": settled,
+        },
+    )
     return {
+        "losses": lost,
+        "loss_counts": loss_counts,
+        "score_errors": errors,
+        "nuclei_checks": checks,
+        "common_block_per_method": common_pm,
+        "summary_common_per_method": summary_pm,
+        "n_scored_cases": len(jobs),
+        "n_unmarked_units": len(unmarked),
+        "settled": settled,
         "cells": cells,
         "summary_cells": summary,
         "paired_vs_primary": paired,

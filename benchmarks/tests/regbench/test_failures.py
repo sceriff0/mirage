@@ -22,6 +22,7 @@ from benchmarks.regbench import (
     cost,
     failure_log,
     ladder,
+    losses,
     methods,
     resources,
     score,
@@ -519,8 +520,13 @@ def test_the_failure_table_counts_infrastructure_apart():
     assert "2 round(s) are lost for a reason that is not the method's" in text
     clean = score.failures(rows[:3])
     assert "No round is lost for a reason" in score.summary_markdown([], clean, [])
-    assert set(resources.CAUSES) == set(score.CAUSES)
-    assert set(resources.NOT_THE_METHOD) == set(score.NOT_THE_METHOD)
+    # resources.py is frozen: score's extra causes are Task 28's (regbench.losses)
+    assert set(score.CAUSES) - set(resources.CAUSES) == {
+        "capped", *losses.NOT_THE_METHOD_EXTRA,
+    } - {"score_error"}
+    assert set(score.NOT_THE_METHOD) == {
+        *resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA,
+    }
 
 
 def test_a_killed_attempt_is_billed_by_the_scheduler_or_counted_unknown():

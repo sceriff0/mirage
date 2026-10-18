@@ -763,3 +763,50 @@ def test_the_jvm_heap_is_in_the_tables_as_the_run_recorded_it():
     assert "`valis_mirage` 10 GiB (asked 60)" in line and "palom" not in line
     assert score.jvm_heap_lines([per["palom"]]) == []
     assert line in score.summary_markdown([], [], list(per.values()))
+
+
+def test_an_unreadable_stage_record_is_counted_not_skipped(tmp_path):
+    """S5 (Task 28): a stage record nobody can read has no attempt in any figure; the
+    row says how many there were, so its times and CPU-hours read as lower bounds."""
+    out = tmp_path / "out"
+    folder = out / "stare" / "multiplex" / "P1_r1"
+    run = staged_round(folder)
+    (folder / "run.json").write_text(json.dumps(run))
+    jobs = folder / "stages" / "jobs"
+    assert billing.unreadable_stage_records(folder / "stages") == 0
+    (jobs / "solve.json").write_text("{ cut short")
+    (jobs / "stitch.json").write_text("{ cut short")  # the writer's: not counted
+    assert billing.unreadable_stage_records(folder / "stages") == 1
+    case = types.SimpleNamespace(dataset="multiplex", case_id="P1_r1", mov_hw=None)
+    base = {"dataset": "multiplex", "group": "P1", "case_id": "P1_r1"}
+    row = {**score.resource_row(run), **base, "method": "stare"}
+    assert row["unmeasured_records"] == ""
+    score.bill_from_disk([row], out, [case], {})
+    assert row["unmeasured_records"] == 1
+
+
+def test_an_unsettled_kill_is_billed_as_wasted_by_the_schedulers_upper_bound():
+    """R26 (resources review): `killed_unsettled` is not the method's for the scores
+    (score.NOT_THE_METHOD) but its attempt is billed as WASTED, never lost: an OOM
+    kill nobody settled is otherwise billed to no one. Its cost is the scheduler's
+    upper bound (elapsed x allocated CPUs, requested memory), and the row says
+    `cost_bound = upper`."""
+    assert "killed_unsettled" in score.NOT_THE_METHOD
+    assert billing.kind_of("killed_unsettled") == billing.WASTED
+    assert billing.kind_of("watcher_gave_up") == billing.LOST  # still lost
+    run = single(ok=False, cause="killed_unsettled", resources=None, register_s=None,
+                 previous_attempts=[])  # fmt: skip
+    base = {"dataset": "multiplex", "group": "P1", "case_id": "P1_r1", "method": "palom"}
+    row = {**score.resource_row(run), **base}
+    assert row["cost_bound"] == "upper" and row["lost_attempts"] == 0
+    assert row["wasted_unknown"] == 1
+    case = types.SimpleNamespace(dataset="multiplex", case_id="P1_r1", mov_hw=None)
+    booked = {"20_3": {"state": "RUNNING", "elapsed_s": 7200.0, "cpu_s": 3600.0}}
+    score.bill_from_disk([row], "/nowhere", [case], booked)
+    assert row["wasted_cpu_h_reserved"] == pytest.approx(4 * 2.0)
+    assert row["wasted_gb_h_reserved"] == pytest.approx(64 * 2.0)
+    assert row["total_cpu_h_reserved"] == pytest.approx(4 * 2.0)
+    assert row["wasted_unknown"] == 0 and row["wasted_from_scheduler"] == 1
+    assert row["lost_cpu_h_reserved"] == 0.0
+    # a row whose cause is the method's is no bound
+    assert score.resource_row(single())["cost_bound"] == ""

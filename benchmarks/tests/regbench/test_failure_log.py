@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from benchmarks.regbench import failure_log as fl
-from benchmarks.regbench import ladder, methods, resources, score, selfcheck
+from benchmarks.regbench import ladder, losses, methods, resources, score, selfcheck
 from benchmarks.regbench.cases import result_dir, write_json
 from benchmarks.tests.regbench.test_pipeline import fake, good, toy_case, true_map
 
@@ -43,6 +43,7 @@ def test_every_cause_has_exactly_one_owner():
         "realcheck_flagged",
         "tissue_missing",
         "unreadable_record",
+        *losses.CAUSES,
     }
     assert "oom" in _literal_causes()  # the scan reads something
     # the gate's causes are gone with the gate: reported, never a gate
@@ -65,9 +66,13 @@ def test_the_two_tables_of_what_is_not_the_methods_agree():
         assert (fl.classify(cause) != fl.METHOD) == (
             cause in resources.NOT_THE_METHOD
         ), cause
+    # resources.py is frozen: the causes Task 28 added are losses.NOT_THE_METHOD_EXTRA
     assert tuple(sorted(score.NOT_THE_METHOD)) == tuple(
-        sorted(resources.NOT_THE_METHOD)
+        sorted({*resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA})
     )
+    for cause in losses.NOT_THE_METHOD_EXTRA:
+        assert fl.classify(cause) != fl.METHOD, cause
+    assert "capped" not in score.NOT_THE_METHOD and fl.classify("capped") == fl.METHOD
 
 
 def test_every_non_ok_selfcheck_status_is_an_event_of_the_benchmark():

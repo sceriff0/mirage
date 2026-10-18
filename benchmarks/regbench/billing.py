@@ -166,9 +166,13 @@ def hours(kind, used_h, reserved_h, gb_h=math.nan):
 def kind_of(cause, failed=WASTED):
     """The kind of an attempt that did not end in the row's registration: lost when
     its cause is not the method's, else ``failed``."""
-    from . import resources
+    from . import losses, resources
 
-    return LOST if str(cause or "") in resources.NOT_THE_METHOD else failed
+    cause = str(cause or "")
+    lost = cause in resources.NOT_THE_METHOD or cause in losses.NOT_THE_METHOD_EXTRA
+    # R26: an unsettled kill is not the method's for the scores, but it is billed
+    lost = lost and cause not in losses.BILLED_AS_WASTED
+    return LOST if lost else failed
 
 
 def _recorded(attempts, key):
@@ -243,6 +247,26 @@ def stage_attempts(stage_dir):
                 )
             )
     return (out, unmeasured) if found else None
+
+
+def unreadable_stage_records(stage_dir):
+    """How many of a round's registration stage records (``<stage dir>/jobs/*.json``
+    of COARSE, a tile or SOLVE) could not be read: :func:`stage_attempts` has none of
+    their attempts, so where it is not 0 the row's times and CPU-hours are lower bounds
+    (``resources.csv: unmeasured_records``, S5). 0 for a folder with no record."""
+    from . import stages
+
+    n = 0
+    for path in sorted((Path(stage_dir) / "jobs").glob("*.json")):
+        if path.stem.split("_")[0] not in stages.TO_TRANSFORM:
+            continue
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            n += 1
+            continue
+        n += not isinstance(rec, dict)
+    return n
 
 
 def find_stage_dir(out, dataset, case_id, variant, launch_id):
