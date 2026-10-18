@@ -4,6 +4,122 @@
 registration-only cost. It was moved here from `sceriff0/stare` (branch `benchmarking`,
 commit `f5ce62e`, archived there as the tag `archive/benchmarking-2026-10-08`).
 
+## The whole benchmark in one command
+
+From the folder the benchmark should live in (its `regbench/` holds the inputs, the cases
+and the results), with the site's container module loaded and `REGBENCH_INPUT` naming the
+cohort's samplesheet:
+
+```bash
+REGBENCH_INPUT=/path/to/input.csv \
+  sbatch [--partition=... --account=... --qos=... --time=...] \
+  <repository>/benchmarks/regbench/slurm/launch.sbatch --all [--runs "a b"] [-- extra sbatch args]
+```
+
+`--all --dry-run` submits nothing and prints the stage plan as read from disk, the next
+head's full `sbatch` line, and the launcher's own dry run of the stage it would run now (and
+of the launch as well, once the inputs and the cohort's cases are there).
+
+**What runs, in order.** `--all` is a chain of short head jobs, all named `regbench-launch`.
+Each head runs one stage, submits the next head (`launch.sbatch --all-stage=<next>`) and
+ends. No head sleeps waiting for another, nothing waits on the login node, and nothing uses
+`sbatch --wait`.
+
+| stage | done when (read by the first head) | the head runs | the next head waits for |
+|---|---|---|---|
+| inputs | `$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv` exists | `--inputs`: one Nextflow head, the pipeline's preprocessing | `afterok` on that job (`rb-inputs`) |
+| prepare | the rounds file exists and the cohort has prepared cases | `--prepare`: the rounds, the nuclei array (StarDist on its memory ladder), `rb-prepare-multiplex` | `afterok` on `rb-prepare-*` only, never on the nuclei tasks: one slide that fails is tolerated (`afterany` upstream) |
+| launch | - | the launch, with `--datasets "multiplex <every public dataset whose cases are prepared>"` and `--compute-all` when `REGBENCH_INPUT` is set | nothing: the chain ends, and the launcher's own jobs run |
+
+The first head runs the first stage that is not done (a done prepare stage counts the
+inputs as done too). Every later head is given its stage, so the chain cannot loop or skip.
+The datasets left out of the launch are listed with the reason; without `REGBENCH_INPUT`, a
+line says compute-all is skipped and why. `--runs`, `--datasets` and the launcher's other
+arguments go to the launch, and the arguments after `--` go to every stage's jobs. Each next
+head is submitted with `--parsable --export=ALL --kill-on-invalid-dep=yes
+--dependency=afterok:<ids> --job-name=regbench-launch`, the first head's submit folder as
+`--chdir`, an absolute `--output` (`$REGBENCH_ROOT/logs/regbench-launch-<id>.log`), and the
+first head's own `--partition`, `--account`, `--qos` and `--time`, which it reads from
+`scontrol show job`. `--kill-on-invalid-dep=yes` makes a failed stage cancel the next head
+rather than leave it pending for ever as `DependencyNeverSatisfied`. Heads are never
+`--requeue`d. If a stage queues nothing (for example, the launcher refused it), the chain
+ends with a non-zero exit and says why. It never submits a head that would wait on nothing.
+
+**Watching it.** `squeue --me -n regbench-launch` shows the heads. The chain's record is
+`$REGBENCH_ROOT/logs/chain/<chain id>.tsv` (stage, head_job, ids_file, next_head, at), with
+one line per head. The heads' logs are `$REGBENCH_ROOT/logs/regbench-launch-<id>.log` (the
+first one is where it was submitted from), and the stages' own jobs log under
+`$REGBENCH_OUT/logs/`.
+
+**Stopping it.** Every head prints one line,
+`scancel <heads> $(cat "<ids file>" ...)`, which removes everything the chain has queued so
+far: the heads, and every job id in the stages' ids files (the tile submitters add theirs to
+the launch's file as they feed). The last head's line covers the whole chain.
+
+**Resuming after a stop.** Submit `--all` again. The stages that are done are skipped, and
+the launch reuses every unit that is already ok in `REGBENCH_OUT` and runs the rest. A new
+chain gets a new id (its submission id too). The launcher refuses a second submission while
+jobs of the first are still queued, and says which ones.
+
+**Concurrency.** Every knob is set, or shown with its default, in the SETTINGS of
+`slurm/launch.sbatch`, with what it bounds and when to change it. An exported variable wins
+over the file (`--export=ALL`). At the launch stage the head prints `# peak: ...` from the
+actual settings and run list before its first `sbatch`, and the launcher's dry run gives the
+exact queue figure. With the shipped settings, on the cohort's list (56 runs, 4 of them on a
+GPU, 2 with a realcheck):
+
+| knob | launch.sbatch | bounds | change it when |
+|---|---|---|---|
+| `REGBENCH_RUN_LANES` | 4 (launcher: 0, no limit) | runs in flight: each run waits `afterany` for the one before it on its lane | the cluster is empty (raise it) or the per-user queue limit is hit (lower it) |
+| `REGBENCH_ARRAY_LIMIT` | 20 | tasks of one array at once (`%N`): CPU ladders, the nuclei array on CPUs, the per-case scoring | one run's tasks crowd out the others |
+| `REGBENCH_GPU_ARRAY_LIMIT` | 4 (launcher: `REGBENCH_ARRAY_LIMIT`) | the same for every array of a GPU run (first rung, the watcher's retry arrays, realcheck) and the nuclei array on a GPU: one GPU per task | the site lets one user hold more GPUs |
+| `REGBENCH_STAGE_QUEUE_MAX` | 100 (launcher: 200) | STARE tile tasks pending or running in the whole launch, split over the STARE runs feeding at once (25 each over 4 lanes) | the tiles fill the queue limit |
+| `REGBENCH_STAGE_ARRAY_MAX` | 100 | the tasks in one tile array | the site caps an array's size |
+| `REGBENCH_STAGE_FEEDERS` | 2 | tile submitters chained per STARE run and dataset (7 days each) | one run's tiles take more than 7 days to feed |
+| `REGBENCH_COMPUTE_LANES` | 2 | compute-all Nextflow heads at once, last and alone | rarely: more lanes means more contention in a cost measurement |
+| `REGBENCH_RETRY_WATCHERS` | 2 | links of each chain's watcher (1 CPU, 1 GB, 7 days each) | a ladder climbs for more than 14 days |
+| `REGBENCH_WAVES` | 0 | 1: one method at a time (a timing replicate) | a timing replicate |
+| `REGBENCH_REPEAT` | 1 | the same submission N times, into `rep<k>`, all at once | the CPU cross's repetitions |
+| `REGBENCH_CPUS` | 4 | every ladder task's CPUs (4 or 8) | the CPU cross only |
+| `REGBENCH_TIME` | 24:00:00 | a ladder task's time per round | a method needs more than a day per round |
+| `REGBENCH_SCORE_CPUS`, `REGBENCH_SCORE_MEM` | 8, 64G | each per-case scoring task (the memory also of the tissue and score jobs) | the scorer runs out of memory |
+
+The memory ladder rungs are not a setting: 16, 64, 256, 512, then 700 GB at 4 CPUs
+(`ladder.py`, frozen). The selfchecks climb 64, 256, 512 GB, and the nuclei step goes from
+`REGBENCH_NUCLEI_MEM` (128G) to 256 and then 512 GB. Only the first rung is submitted; a higher
+rung is submitted only for the units that ran out of memory on the rung below it.
+
+The peak, written out (shipped settings, the numbers the head printed on the fixture's run
+list):
+
+- ladder tasks at once ≤ `RUN_LANES` × `ARRAY_LIMIT` = 4 × 20 = 80, since each run in flight
+  holds one first-rung array. A run with a realcheck holds one task more (its own one-unit
+  ladder), so the bound is 82.
+- GPU tasks ≤ (GPU runs in flight) × `GPU_ARRAY_LIMIT` = 4 × 4 = 16, one GPU each.
+- plus every selfcheck: 15 jobs, outside the lanes and all at once (64 GB, 4 CPUs each, 4 of
+  them on a GPU).
+- plus tile tasks ≤ `STAGE_QUEUE_MAX` = 100.
+- plus the small jobs: a watcher link per chain and a tile submitter per STARE run in
+  flight, 1 CPU and 1 GB each.
+- In total, at most 197 tasks: 588 CPUs (tasks × `REGBENCH_CPUS` for the ladder and the
+  selfchecks, the pipeline's 2 per tile task), at most 20 GPUs, and 2672 GB at the first rung
+  (16 GB a ladder task, 64 GB a selfcheck, 4 GB a tile task).
+
+The site settings: `REGBENCH_SITE_CONFIG` (default `conf/ieo.config` of the checkout, which is
+not in the repository; `none` reads no file) is where the GPU request, the image folder and the
+bound folders are read from. `REGBENCH_INPUT` is the samplesheet, which the inputs stage
+needs; when it is set, the launch adds compute-all. The folders are `REGBENCH_ROOT` (default
+`regbench/` in the submit folder), `REGBENCH_INPUTS`, `REGBENCH_CASES` and `REGBENCH_OUT`
+under it, and `REGBENCH_NF_PROFILE` (`singularity,ieo`) is the pipeline's profile for the
+inputs and compute-all.
+
+**What is not in it yet.** The generated known-displacement dataset of plan Task 32 has not
+been built, so `--all` cannot run it. The public datasets the user has not prepared are also
+left out: their data is downloaded and prepared by hand (see "State"), and `--all`
+includes each one only when its cases are prepared under `REGBENCH_CASES_<NAME>`, saying
+which datasets it left out and why. The landmark sets (ANHIR, HyReCo) are left out until
+their scorer exists.
+
 ## The rule
 
 **Each method is run through its own entry point, with one of its own shipped parameter

@@ -5,7 +5,26 @@
 #SBATCH --mem=8G
 #SBATCH --time=04:00:00
 #SBATCH --output=regbench-launch-%j.log
-# The launch as ONE job, everything set in here. From the repository:
+# The launch as ONE job, everything set in here.
+#
+# THE WHOLE BENCHMARK IN ONE COMMAND (README, "The whole benchmark in one command"):
+#
+#   sbatch [site sbatch options] <repository>/benchmarks/regbench/slurm/launch.sbatch --all \
+#       [launcher args, e.g. --runs "a b"] [-- extra sbatch args of every job]
+#   sbatch ... launch.sbatch --all --dry-run   (the plan and the sbatch lines; submits nothing)
+#
+# runs the input step, the prepare step and the launch as a CHAIN OF SHORT HEAD JOBS
+# (job name regbench-launch): each head runs ONE stage, submits the next head (this same
+# file) with afterok on that stage's jobs and --kill-on-invalid-dep=yes, and ends. No
+# head sleeps waiting for another and nothing waits on the login node. The first head
+# runs the first stage not done on disk; each later head is given its stage
+# (--all-stage=prepare, --all-stage=launch), so the chain never loops or skips. Its
+# record is $REGBENCH_ROOT/logs/chain/<chain id>.tsv; every head prints the ONE scancel
+# line that removes everything the chain has queued so far. Submitted again after a
+# stop, --all skips the stages that are done, and the launch reuses every unit that is
+# ok. The flags of the next head, and why each is there: chain_next_head below.
+#
+# The steps one by one, from the repository:
 #
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --inputs    (once; wait for its job)
 #   sbatch <repository>/benchmarks/regbench/slurm/launch.sbatch --prepare   (once; wait for its jobs)
@@ -56,6 +75,31 @@
 #
 set -uo pipefail
 here="${SLURM_SUBMIT_DIR:-$PWD}"
+# --all / --all-stage=<stage> are this script's own (the chain, chain_run below); every
+# other argument is the launcher's, and those after `--` are extra sbatch arguments
+ALL=0 ALL_STAGE="" ALL_DRY=0 ALL_ARGS=() ALL_EXTRA=() seen_dd=0
+for a in "$@"; do
+    if [ "$seen_dd" = 1 ]; then ALL_EXTRA+=("$a"); continue; fi
+    case "$a" in
+        --all) ALL=1 ;;
+        --all-stage=*) ALL=1 ALL_STAGE="${a#--all-stage=}" ;;
+        --dry-run) ALL_DRY=1; ALL_ARGS+=("$a") ;;
+        --) seen_dd=1 ;;
+        *) ALL_ARGS+=("$a") ;;
+    esac
+done
+if [ "$ALL" = 1 ]; then
+    for a in ${ALL_ARGS[@]+"${ALL_ARGS[@]}"}; do
+        case "$a" in --inputs|--prepare|--score-only|--compute-only|--preflight)
+            echo "regbench-launch: --all runs the input step, the prepare step and the launch itself; $a is a step of its own (submit it without --all). Nothing was submitted." >&2
+            exit 2 ;;
+        esac
+    done
+    case "$ALL_STAGE" in
+        ''|inputs|prepare|launch) ;;
+        *) echo "regbench-launch: --all-stage=$ALL_STAGE: the stages are inputs, prepare and launch. Nothing was submitted." >&2; exit 2 ;;
+    esac
+fi
 # the repository: REGBENCH_REPO; else where the file given to sbatch is (the scheduler
 # knows its path: Command= of `scontrol show job`); else the folder submitted from
 asked=""
@@ -76,29 +120,94 @@ launcher="$repo/benchmarks/regbench/slurm/submit_cohort.sh"
 export REGBENCH_REPO="$repo"
 
 # ------------------------------- SETTINGS: edit here -------------------------------
+# A variable exported before sbatch wins over the line here (--export=ALL). A commented
+# line (`#   REGBENCH_X=...`) is the launcher's own default, shown so it can be set.
 # one folder for everything of the benchmark: inputs/, cases/ and out/.
 # Default: regbench/ in the folder the job is submitted from
 : "${REGBENCH_ROOT:=$here/regbench}"
 # the input folder: the input step's preprocessing (preprocess/), the rounds
 # (rounds.csv) and the outlines the nuclei step traces (outlines/)
 : "${REGBENCH_INPUTS:=$REGBENCH_ROOT/inputs}"
-# --inputs, --compute-all, --compute-only: the cohort's samplesheet (the pipeline's
-# --input; required for them)
-# REGBENCH_INPUT=/path/to/input.csv
-# --compute-all, --compute-only: compute-all heads at once (REGBENCH_COMPUTE_LANES,
-# default 2) and the time limit of each (REGBENCH_COMPUTE_TIME, default 7-00:00:00)
+# REGBENCH_INPUT: the cohort's samplesheet (the pipeline's --input). Required by
+# --inputs, --compute-all and --compute-only. With --all: needed by its input stage,
+# and when it is set the launch stage adds --compute-all (unset: skipped, and said)
+#   REGBENCH_INPUT=/path/to/input.csv
 # --inputs and compute-all: the pipeline's profile (the arms' ARMS_PROFILE)
 : "${REGBENCH_NF_PROFILE:=singularity,ieo}"
 : "${REGBENCH_CASES:=$REGBENCH_ROOT/cases}"
 : "${REGBENCH_OUT:=$REGBENCH_ROOT/out}"
 # REGBENCH_MANIFEST is NOT set here: --prepare writes $REGBENCH_INPUTS/rounds.csv from
 # the input step. Export it to take a rounds.csv as it is.
-# how much runs at once
-: "${REGBENCH_RUN_LANES:=4}"          # runs in flight (0: all of them)
-: "${REGBENCH_ARRAY_LIMIT:=20}"       # tasks of one array running at once
-: "${REGBENCH_STAGE_QUEUE_MAX:=100}"  # tile tasks pending or running, in the whole launch (a total)
-# ... split over the runs feeding at once, at most the lanes: 100 over 4 lanes is 25 each
-# the site
+# ── CONCURRENCY: how much runs at once ────────────────────────────────────────────
+# THE PEAK, with the values below (the launch stage prints it from the run list as
+# "# peak: ..."; the launcher's dry run gives the exact queue figure):
+#   ladder tasks <= RUN_LANES x ARRAY_LIMIT    one first-rung array per run in flight;
+#                                              a run with a realcheck: one task more
+#   GPU tasks    <= (GPU runs in flight) x GPU_ARRAY_LIMIT, one GPU each
+#   + every selfcheck: one job each (64 GB, 4 CPUs), OUTSIDE the lanes, all at once
+#   + tile tasks <= STAGE_QUEUE_MAX            STARE's REG-TILE jobs
+#   + the small jobs: a watcher link per chain, a tile submitter per STARE run in
+#     flight (1 CPU, 1 GB each)
+#   CPUs = tasks x REGBENCH_CPUS; memory at the first rung = ladder tasks x 16 GB
+#
+# REGBENCH_RUN_LANES: runs in flight. The runs are dealt onto this many lanes; a run
+# starts when the run before it on its lane has ended (afterany). Default here 4 (the
+# launcher's own: 0, every run at once). Raise it on an empty cluster, lower it when
+# the per-user queue limit is hit. 0: no limit
+: "${REGBENCH_RUN_LANES:=4}"
+# REGBENCH_ARRAY_LIMIT: tasks of ONE array running at once (sbatch --array=...%N): a CPU
+# run's ladder arrays, the nuclei array on CPUs, the per-case scoring arrays. Default
+# 20. Lower it when one run's tasks crowd out the others. Not the tile arrays
+: "${REGBENCH_ARRAY_LIMIT:=20}"
+# REGBENCH_GPU_ARRAY_LIMIT: the same for every array of a run that asks for a GPU (its
+# first rung, its watcher's retry arrays, its realcheck) and the nuclei array on a GPU.
+# Each task holds ONE GPU, so this is the GPUs one array holds at once. Default here 4
+# (unset in the launcher: ARRAY_LIMIT, 20 GPUs for one DeeperHistReg array). Raise it
+# to what the site lets one user hold
+: "${REGBENCH_GPU_ARRAY_LIMIT:=4}"
+# REGBENCH_STAGE_QUEUE_MAX: tile tasks pending or running in the WHOLE launch (a total),
+# split over the STARE runs feeding at once (at most the lanes): 100 over 4 lanes is 25
+# each. Default here 100 (launcher: 200). Lower it when the tiles fill the queue limit
+: "${REGBENCH_STAGE_QUEUE_MAX:=100}"
+# REGBENCH_STAGE_ARRAY_MAX: the most tasks in ONE tile array a tile submitter submits.
+# Default 100. Lower it where the site caps an array's size (MaxArraySize)
+#   REGBENCH_STAGE_ARRAY_MAX=100
+# REGBENCH_STAGE_FEEDERS: tile submitters chained per STARE run and dataset, each with
+# the site's longest time; the second goes on where the first stopped at its limit.
+# Default 2. Raise it only when one run's tiles take more than 7 days to feed
+#   REGBENCH_STAGE_FEEDERS=2
+# REGBENCH_COMPUTE_LANES: compute-all heads (one Nextflow head per patient and backend)
+# at once, LAST and ALONE after the scorer. Default 2: more lanes is more contention
+# in a cost measurement (REGBENCH_COMPUTE_TIME, 7-00:00:00: each head's time limit)
+#   REGBENCH_COMPUTE_LANES=2
+# REGBENCH_RETRY_WATCHERS: links of each chain's watcher (retry.sbatch: 1 CPU, 1 GB, 7
+# days), one after the other: a link ended at its limit leaves the next to go on.
+# Default 2. Raise it only for a ladder that climbs for more than 14 days
+#   REGBENCH_RETRY_WATCHERS=2
+# REGBENCH_WAVES: 1 runs one method at a time, each after every job of the method
+# before it (a timing replicate, nothing else on the nodes). Default 0
+#   REGBENCH_WAVES=0
+# REGBENCH_REPEAT: the same submission N times, repeat k into $REGBENCH_OUT/rep<k> (the
+# CPU cross's repetitions), all at once. Default 1
+#   REGBENCH_REPEAT=1
+# ── a task's allocation ───────────────────────────────────────────────────────────
+# REGBENCH_CPUS: every ladder task's --cpus-per-task: 4 (every method's allocation, the
+# default) or 8 (the CPU cross only)
+#   REGBENCH_CPUS=4
+# REGBENCH_TIME: a ladder task's time limit per round (a patient run gets it times its
+# rounds, never above 7 days). Default 24:00:00
+#   REGBENCH_TIME=24:00:00
+# REGBENCH_SCORE_CPUS / REGBENCH_SCORE_MEM: per task of the per-case scoring arrays (the
+# memory also of the tissue and score jobs). Default 8 CPUs, 64G
+#   REGBENCH_SCORE_CPUS=8
+#   REGBENCH_SCORE_MEM=64G
+# The memory ladder rungs are NOT a setting: 16 -> 64 -> 256 -> 512 -> 700 GB at 4 CPUs
+# (benchmarks/regbench/ladder.py, frozen); the selfchecks 64 -> 256 -> 512 GB; the
+# nuclei step REGBENCH_NUCLEI_MEM (128G) -> 256 -> 512 GB. Only the first rung is
+# submitted; a higher one only for the units that ran out of memory on the one below.
+# REGBENCH_SITE_CONFIG: the site config the GPU request, the image folder and the bound
+# folders are READ from (`none`: export REGBENCH_SBATCH_GPU and REGBENCH_BIND yourself).
+# Default conf/ieo.config of this checkout (it is not in the repository)
 : "${REGBENCH_SITE_CONFIG:=$repo/conf/ieo.config}"
 # the images: REGBENCH_IMAGES is where the site keeps its images (default: the
 # cacheDir of the site config, else images/ under REGBENCH_ROOT). One that is not
@@ -169,8 +278,8 @@ if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ] && [ "$inputs_only" = 0 ]; then
         [ -n "$image" ] || continue
         var="REGBENCH_SIF_$image"
         [ -z "${!var:-}" ] || { export "${var?}"; continue; }
-        # only --prepare runs StarDist
-        if [ "$image" = STARDIST ]; then
+        # only --prepare runs StarDist (and --all, whose chain has the prepare stage)
+        if [ "$image" = STARDIST ] && [ "$ALL" = 0 ]; then
             case " $* " in *" --prepare "*) ;; *) continue ;; esac
         fi
         name="${ref#docker://}"; name="${name//\//-}"; name="${name//:/-}.img"
@@ -198,18 +307,22 @@ fi
 export REGBENCH_ROOT REGBENCH_INPUTS REGBENCH_NF_PROFILE REGBENCH_CASES REGBENCH_OUT REGBENCH_SITE_CONFIG
 [ -z "${REGBENCH_MANIFEST:-}" ] || export REGBENCH_MANIFEST
 [ -z "${REGBENCH_INPUT:-}" ] || export REGBENCH_INPUT
-export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
+export REGBENCH_RUN_LANES REGBENCH_ARRAY_LIMIT REGBENCH_GPU_ARRAY_LIMIT REGBENCH_STAGE_QUEUE_MAX
 [ -z "${REGBENCH_SBATCH_GPU:-}" ] || export REGBENCH_SBATCH_GPU
 # the benchmark's own folder is read inside the images too (REGBENCH_INPUTS is bound
 # by env.sh wherever it is)
-[ -d "$REGBENCH_ROOT" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$REGBENCH_ROOT"
+# (once: a later head of --all inherits the list the head before it made)
+case ",${REGBENCH_BIND:-}," in
+    *",$REGBENCH_ROOT,"*) ;;
+    *) [ -d "$REGBENCH_ROOT" ] && REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$REGBENCH_ROOT" ;;
+esac
 [ -z "${REGBENCH_BIND:-}" ] || export REGBENCH_BIND
 echo "regbench-launch: repository $repo, cases $REGBENCH_CASES, results $REGBENCH_OUT, images $REGBENCH_IMAGES"
 n_bound="$(tr ',' '\n' <<< "${REGBENCH_BIND:-}" | grep -c .)" || n_bound=0
 echo "regbench-launch: bound: ${REGBENCH_BIND:-nothing}"
 rounds="${REGBENCH_MANIFEST:-$REGBENCH_INPUTS/rounds.csv}"
-echo "regbench-launch: inputs $REGBENCH_INPUTS (preprocessing $([ -s "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" ] && echo done || echo "not run yet: --inputs")), rounds file $rounds ($([ -s "$rounds" ] && echo there || echo "not written yet: --prepare"))"
-echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT, tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
+echo "regbench-launch: inputs $REGBENCH_INPUTS (preprocessing $([ -s "$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv" ] && echo "done" || echo "not run yet: --inputs")), rounds file $rounds ($([ -s "$rounds" ] && echo there || echo "not written yet: --prepare"))"
+echo "regbench-launch: lanes $REGBENCH_RUN_LANES, array limit $REGBENCH_ARRAY_LIMIT (GPU runs $REGBENCH_GPU_ARRAY_LIMIT), tile queue $REGBENCH_STAGE_QUEUE_MAX, GPU request ${REGBENCH_SBATCH_GPU:-one GPU}, $n_bound folder(s) bound into the images"
 
 cd "$repo" || exit 2
 echo "[regbench] start kind=launch job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:--} run=- label=- dataset=- unit=- rung_gb=- attempt=- out=$REGBENCH_OUT commit=$(git -C "$repo" rev-parse --short=12 HEAD 2>/dev/null || echo unknown) host=$(hostname 2>/dev/null || echo -) at=$(date +%FT%T) args=$*"
@@ -217,4 +330,10 @@ echo "[regbench] start kind=launch job=${SLURM_JOB_NAME:-local}-${SLURM_JOB_ID:-
 # trap prints the launch's `[regbench] end` line
 REGBENCH_LAUNCH_T0="$(date +%s)"
 export REGBENCH_LAUNCH_T0
+if [ "$ALL" = 1 ]; then
+    # shellcheck source=benchmarks/regbench/slurm/chain.sh
+    source "$repo/benchmarks/regbench/slurm/chain.sh"
+    chain_run
+    exit $?
+fi
 exec bash "$launcher" "$@"

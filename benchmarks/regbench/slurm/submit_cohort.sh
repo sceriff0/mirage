@@ -168,6 +168,15 @@
 #   REGBENCH_ARRAY_LIMIT (20)         tasks of one array that run at once (%N); not
 #                                     applied to the tile arrays, whose limit is
 #                                     REGBENCH_STAGE_QUEUE_MAX
+#   REGBENCH_GPU_ARRAY_LIMIT (REGBENCH_ARRAY_LIMIT)  the same, for every array of a run
+#                                     that asks for a GPU (column `gpu`): its first rung,
+#                                     its watcher's retry arrays (the chain's plan names
+#                                     its limit: <plan folder>/limit, read by
+#                                     retry.sbatch) and its realcheck ladder; and the
+#                                     nuclei array when StarDist runs on a GPU. Each task
+#                                     of such an array holds one GPU, so this is the
+#                                     GPUs one array can hold at once. Unset: the array
+#                                     limit, as before (launch.sbatch sets 4)
 #   REGBENCH_STAGE_ARRAY_MAX (100)    the most tasks in one tile array
 #   REGBENCH_STAGE_QUEUE_MAX (200)    the most tile tasks pending or running at a time
 #                                     in the WHOLE LAUNCH: a total, split evenly over the
@@ -344,6 +353,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_TIME:=24:00:00}"
 : "${REGBENCH_SELFCHECK_TIME:=24:00:00}"
 : "${REGBENCH_ARRAY_LIMIT:=20}"
+: "${REGBENCH_GPU_ARRAY_LIMIT:=$REGBENCH_ARRAY_LIMIT}"
 : "${REGBENCH_RUN_LANES:=0}"
 : "${REGBENCH_SBATCH_GPU=--gres=gpu:1}"
 : "${REGBENCH_STAGE_ARRAY_MAX:=100}"
@@ -371,7 +381,7 @@ PUBLIC_DATASETS="anhir hyreco_a hyreco_b mcmicro phenocycler rashid"
 PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
 SCORED_KINDS="tissue nuclei"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
-compute_all=0 compute_only=0
+compute_all=0 compute_only=0 cases_there=0
 ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -382,6 +392,7 @@ while [ $# -gt 0 ]; do
         --compute-all) compute_all=1; shift ;;
         --compute-only) compute_only=1; shift ;;
         --preflight) preflight_only=1; shift ;;
+        --cases-there) cases_there=1; shift ;;
         --runs) only_runs="$2"; shift 2 ;;
         --datasets) datasets="$2"; shift 2 ;;
         --) shift; break ;;
@@ -471,6 +482,50 @@ none_left() {
     [ -n "${selected// /}" ] && return 0
     die "every selected run was dropped ($1:$DROPPED_RUNS; the lines above). Nothing was submitted."
 }
+# case_sizes <dataset> <cases folder>: "<cases> <patients> <most rounds>" of what is
+# prepared there (`regbench list --sizes`). THE predicate of "the dataset has prepared
+# cases" (n_cases > 0): the launch below sizes its arrays from it, and --cases-there
+# (launch.sbatch --all) asks it before the launch is started
+case_sizes() {
+    regbench_py "$REGBENCH_HEAD_IMAGE" list --cases "$2" --dataset "$1" --sizes
+}
+# --cases-there: one line per dataset (the cohort, then every public one), tab-separated
+# `<dataset> yes|no <why>`: whether a launch could take it now (launch.sbatch --all
+# reads it to name the datasets of its launch stage). Submits nothing, reads nothing else
+if [ "$cases_there" = 1 ]; then
+    for ds in multiplex $PUBLIC_DATASETS; do
+        why="" ds_cases=""
+        if [ "$ds" != multiplex ]; then
+            kind=""
+            for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
+            if ! has "$SCORED_KINDS" "$kind"; then
+                why="a $kind dataset, and score() scores ${SCORED_KINDS// / and } only"
+            elif [ "$ds" = hyreco_b ] && [ "${HYRECO_ADDITIONAL:-0}" != 1 ]; then
+                why="HyReCo's additional set runs only with HYRECO_ADDITIONAL=1"
+            elif ! ds_cases="$(regbench_cases_of "$ds")"; then
+                why="REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds") is not set"
+            elif [ ! -d "$ds_cases" ]; then
+                why="its cases folder $ds_cases does not exist"
+            fi
+        else
+            ds_cases="$(regbench_cases_of multiplex)"
+        fi
+        if [ -z "$why" ]; then
+            n_cases=""
+            if ! read -r n_cases _ < <(REGBENCH_PUBLIC_SETS="${ds#multiplex}" case_sizes "$ds" "$ds_cases"); then
+                why="cannot list the cases under $ds_cases"
+            elif [ "${n_cases:-0}" -eq 0 ]; then
+                why="no prepared cases under $ds_cases"
+            fi
+        fi
+        if [ -z "$why" ]; then
+            printf '%s\tyes\t%s case(s) under %s\n' "$ds" "$n_cases" "$ds_cases"
+        else
+            printf '%s\tno\t%s\n' "$ds" "$why"
+        fi
+    done
+    exit 0
+fi
 # --datasets is checked up front, before anything is read or submitted: the cohort, or a
 # public dataset whose cases folder is named (REGBENCH_CASES_<NAME>)
 public_sets=""
@@ -505,6 +560,7 @@ need_int() {
     printf -v "$var" '%s' "$((10#$value))"
 }
 need_int REGBENCH_ARRAY_LIMIT 1
+need_int REGBENCH_GPU_ARRAY_LIMIT 1
 need_int REGBENCH_STAGE_ARRAY_MAX 1
 need_int REGBENCH_STAGE_QUEUE_MAX 1
 need_int REGBENCH_STAGE_FEED_MIN 1
@@ -1137,7 +1193,7 @@ grantable() {
 # retries, then waits for it. A chain whose units are all ok puts nothing more in the
 # queue. Everything that waited for a chain's last array waits for its watcher.
 N_LATER=0 PLAN="" PLAN_SHOWN="" PLAN_N=0
-plan_open() {  # plan_open <job prefix>
+plan_open() {  # plan_open <job prefix> [<array limit>]
     PLAN_N=0
     PLAN_SHOWN="$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION/$1"
     PLAN="$PLAN_SHOWN"
@@ -1148,6 +1204,9 @@ plan_open() {  # plan_open <job prefix>
     # the folder above it was made, and shown to be writable, before the first sbatch
     rm -rf "$PLAN"
     mkdir -p "$PLAN"
+    # the %N of the chain's retry arrays (retry.sbatch reads it): a GPU run's is
+    # REGBENCH_GPU_ARRAY_LIMIT
+    echo "${2:-$REGBENCH_ARRAY_LIMIT}" > "$PLAN/limit"
 }
 plan_step() {  # plan_step <again|climb|stage> <job name> <sbatch arguments...>
     local kind="$1" jobname="$2"; shift 2
@@ -1297,12 +1356,15 @@ if [ "$prepare" = 1 ]; then
                     if [ -n "$nuc_gb" ] && ! grantable "$nuc_gb" "$nuc_on_gpu"; then
                         die "--prepare: the nuclei array asks for REGBENCH_NUCLEI_MEM=$nuc_mem per slide, and $GRANT_SAID: it could never start. Name a partition with larger nodes (REGBENCH_SBATCH_GPU for the GPU, or -- --partition=...), or lower REGBENCH_NUCLEI_MEM. Nothing was submitted."
                     fi
+                    # on a GPU, each task holds one: the GPU limit
+                    nuc_limit="$REGBENCH_ARRAY_LIMIT"
+                    [ "$nuc_on_gpu" = 0 ] || nuc_limit="$REGBENCH_GPU_ARRAY_LIMIT"
                     submit "rb-nuclei" "${COMMON[@]}" "$LOG_ARRAY" --mem="$nuc_mem" "${nuc_alloc[@]}" \
-                        --array="$pending%$REGBENCH_ARRAY_LIMIT" "$HERE/nuclei.sbatch"
+                        --array="$pending%$nuc_limit" "$HERE/nuclei.sbatch"
                     nuc_first="$JOB_ID"
                     mkdir -p "$REGBENCH_OUT/logs/retry/$REGBENCH_SUBMISSION" 2>/dev/null \
                         || die "cannot write the retry plans under $REGBENCH_OUT/logs/retry. Nothing more was submitted."
-                    plan_open rb-nuclei
+                    plan_open rb-nuclei "$nuc_limit"
                     if [ -z "$nuc_gb" ]; then
                         echo "# nuclei: REGBENCH_NUCLEI_MEM=$nuc_mem is not <N>G: no memory ladder above it"
                     else
@@ -1385,8 +1447,8 @@ fi
 sized=""
 for ds in $datasets; do
     ds_cases="$(regbench_cases_of "$ds")"
-    read -r n_cases n_groups max_rounds < <(regbench_py "$REGBENCH_HEAD_IMAGE" list \
-        --cases "$ds_cases" --dataset "$ds" --sizes) || die "cannot list the $ds cases under $ds_cases"
+    read -r n_cases n_groups max_rounds < <(case_sizes "$ds" "$ds_cases") \
+        || die "cannot list the $ds cases under $ds_cases"
     if [ "${n_cases:-0}" -eq 0 ]; then
         echo "# $ds: no prepared cases under $ds_cases, left out (submit_cohort.sh --prepare)"
         continue
@@ -1644,6 +1706,47 @@ while IFS=$'\t' read -r name _ _ _ _ _ _ after _; do
     [ "$after" = - ] || has "$needed" "$after" || needed="$needed $after"
 done < "$union"
 
+# THE PEAK, before the first sbatch (REGBENCH_PEAK=1: launch.sbatch --all at its launch
+# stage). What can run at once, from the settings and the run list as selected: the
+# REGBENCH_RUN_LANES runs in flight (all of them at 0) are taken as the ones whose arrays
+# hold the most, each holding its first-rung array at its limit (REGBENCH_GPU_ARRAY_LIMIT
+# for a run that asks for a GPU, else REGBENCH_ARRAY_LIMIT; one task more for a run with
+# a realcheck, whose own ladder is one unit); every selfcheck (one job each, outside
+# the lanes); the tile tasks (the lanes' shares of REGBENCH_STAGE_QUEUE_MAX). A bound,
+# never an estimate: an array of fewer units holds fewer.
+if [ "${REGBENCH_PEAK:-0}" = 1 ] && [ -n "${selected// /}" ]; then
+    caps="" n_sel=0
+    while IFS=$'\t' read -r name _ _ _ _ gpu _ _ _ _ _ _ _ _ realcheck _; do
+        has "$selected" "$name" || continue
+        n_sel=$((n_sel + 1))
+        cap="$REGBENCH_ARRAY_LIMIT"
+        [ "$gpu" != 1 ] || cap="$REGBENCH_GPU_ARRAY_LIMIT"
+        [ "${realcheck:--}" = - ] || cap=$((cap + 1))
+        caps="$caps$cap $gpu"$'\n'
+    done < "$union"
+    in_flight="$n_sel"
+    [ "$REGBENCH_RUN_LANES" -gt 0 ] && [ "$REGBENCH_RUN_LANES" -lt "$n_sel" ] && in_flight="$REGBENCH_RUN_LANES"
+    # (awk reads to the end: no head, whose early exit would fail the pipe under pipefail)
+    p_ladder="$(sort -k1,1nr <<< "$caps" | awk -v n="$in_flight" 'NF && ++k <= n { t += $1 } END { print t + 0 }')"
+    # the GPUs: when the runs in flight are GPU runs (at most the lanes of them)
+    p_gpu="$(awk '$2 == 1' <<< "$caps" | sort -k1,1nr | awk -v n="$in_flight" 'NF && ++k <= n { t += $1 } END { print t + 0 }')"
+    p_gpu_runs="$(awk '$2 == 1 { k++ } END { print k + 0 }' <<< "$caps")"
+    p_sc=0 p_sc_gpu=0
+    while IFS=$'\t' read -r name _ _ _ _ gpu _; do
+        has "$needed" "$name" || continue
+        p_sc=$((p_sc + 1))
+        [ "$gpu" != 1 ] || p_sc_gpu=$((p_sc_gpu + 1))
+    done < "$union"
+    p_tiles=0 p_tile_cpus=0 p_tile_gb=0
+    if [ "$N_FEEDING" -gt 0 ] && [ -n "${ALLOC_tile_1:-}" ]; then
+        p_tiles=$((N_FEEDING * STAGE_QUEUE_RUN))
+        read -r p_tile_cpus p_tile_gb _ <<< "$ALLOC_tile_1"
+    fi
+    p_tasks=$((p_ladder + p_sc + p_tiles))
+    p_cpus=$((p_ladder * LADDER_CPUS + p_sc * CPUS + p_tiles * p_tile_cpus))
+    p_gb=$((p_ladder * ${RUNGS_GB%% *} + p_sc * ${SELFCHECK_RUNGS_GB%% *} + p_tiles * p_tile_gb))
+    echo "# peak: at most $p_tasks task(s) at once = $p_ladder ladder task(s) ($in_flight of $n_sel run(s) in flight, REGBENCH_RUN_LANES=$REGBENCH_RUN_LANES, at most REGBENCH_ARRAY_LIMIT=$REGBENCH_ARRAY_LIMIT each, a GPU run's at most REGBENCH_GPU_ARRAY_LIMIT=$REGBENCH_GPU_ARRAY_LIMIT, one more with a realcheck) + $p_sc selfcheck(s) (outside the lanes) + $p_tiles tile task(s) (REGBENCH_STAGE_QUEUE_MAX=$REGBENCH_STAGE_QUEUE_MAX over $N_FEEDING submitter(s)): $p_cpus CPUs, at most $((p_gpu + p_sc_gpu)) GPU(s) ($p_gpu ladder task(s) when the runs in flight are GPU runs, of $p_gpu_runs, + $p_sc_gpu GPU selfcheck(s)), $p_gb GB at the first rung (${RUNGS_GB%% *} GB a ladder task, ${SELFCHECK_RUNGS_GB%% *} GB a selfcheck, ${p_tile_gb} GB a tile task); plus the small jobs (each chain's watcher link and each tile submitter: 1 CPU and 1 GB)"
+fi
 
 # The chains' retry plans (plan_open, above) are written while the jobs are submitted.
 # Their folder is made HERE, where one that cannot be written still stops the launch
@@ -1724,10 +1827,13 @@ deps_and() {
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
     local attempt=0 gb task jobname cpus="$LADDER_CPUS" rungs="$RUNGS_GB" first_id="" first_name=""
+    # a run that asks for a GPU: every task holds one, so its arrays have the GPU limit
+    local limit="$REGBENCH_ARRAY_LIMIT"
+    [ "$gpu" != 1 ] || limit="$REGBENCH_GPU_ARRAY_LIMIT"
     # STITCH_S: the writer's four attempts, summed before the first sbatch (a `local`
     # run is a plain round: its stages are inside the job, its time a round's)
     [ "$staged" != jobs ] || time="$(limit $((round_s + STITCH_S)))"
-    plan_open "$prefix"
+    plan_open "$prefix" "$limit"
     # the row this ladder is of, for the harness that reads the chain back (chains.py)
     printf '%s\n' "$name" "$method" "$label" "$opts" "$ds" > "$PLAN/run"
     for gb in $rungs; do
@@ -1753,7 +1859,7 @@ ladder() {
             if [ "$task" = first ]; then
                 # the one array of the chain that is submitted here
                 submit "$jobname" "${COMMON[@]}" "$LOG_ARRAY" ${base:+--dependency="$base"} \
-                    --array="$range%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$cpus" --mem="${gb}G" \
+                    --array="$range%$limit" --cpus-per-task="$cpus" --mem="${gb}G" \
                     --time="$time" ${gres[@]+"${gres[@]}"} \
                     "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
                     "$ds" "$attempt" "$gb" "$real" - "$task" "$time" "$staged"

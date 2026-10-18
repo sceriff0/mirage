@@ -94,6 +94,14 @@ ends="$REGBENCH_OUT/logs/end"
 ids_file="${REGBENCH_IDS_FILE:-$REGBENCH_OUT/logs/submitted/${REGBENCH_SUBMISSION:-none}.ids}"
 mkdir -p "$(dirname "$ids_file")"
 state="$plan/state" done_file="$plan/done" submitting="$plan/submitting"
+# the %N of this chain's arrays: the one its plan names (<plan folder>/limit, written by
+# submit_cohort.sh: REGBENCH_GPU_ARRAY_LIMIT for a run that asks for a GPU), else, for a
+# plan written before that file existed, REGBENCH_ARRAY_LIMIT
+array_limit="$REGBENCH_ARRAY_LIMIT"
+if [ -s "$plan/limit" ]; then
+    read -r array_limit < "$plan/limit"
+    case "$array_limit" in ''|*[!0-9]*|0) echo "the plan's array limit ($plan/limit) is '$array_limit', not a whole number of at least 1: REGBENCH_ARRAY_LIMIT=$REGBENCH_ARRAY_LIMIT is used"; array_limit="$REGBENCH_ARRAY_LIMIT" ;; esac
+fi
 
 end() {  # end <status> <cause|-> : the last line of the log
     local cause="" whose=launcher
@@ -345,7 +353,7 @@ while [ -s "$plan/step-$k" ]; do
     args=() array="-"
     if [ "$single" != 1 ]; then
         array="$(spec <<< "$due")"
-        args+=(--array="$array%$REGBENCH_ARRAY_LIMIT")
+        args+=(--array="$array%$array_limit")
     fi
     for item in "${items[@]:2}"; do
         [ "$item" = "@EARLIER@" ] && item="$earlier"
