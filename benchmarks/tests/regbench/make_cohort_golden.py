@@ -91,6 +91,10 @@ _EXCLUDED = re.compile(
     r"|^(host|cpu_model|gpu_model|device_name|blas|threads_env|cpus_node|cpus_affinity)$"
     r"|^(workers_seen|cpus_requested|cpus_asked)$"
     r"|^(launch_id|submission|log_path|written_file)$"
+    # T31: the node's telemetry, the count of jobs sacct held and the stage jobs' host
+    # figures (what the machine running the test is, not what the code computed)
+    r"|^(load|other_jobs)_(start|end)$|^telemetry$|^reservation_jobs$"
+    r"|^stage_(jobs_known|jobs_confined|cpu_model|load_max)$|^cpu_read_failures$"
 )
 GOLDEN = Path(__file__).parent / "fixtures" / "cohort_golden.json"
 

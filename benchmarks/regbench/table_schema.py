@@ -35,7 +35,9 @@ _WHAT = {
     "arm_stage": "the arm's registration stage the number was read at",
     "coarse_max_dim": "longest side of the coarse (low-resolution) registration image",
     "coarse_peak_gb": "peak memory of the coarse-stage job",
-    "cpu_h_used": "CPU-hours actually used (trace cpu time)",
+    "cpu_h_used": "CPU-hours actually used: the job cgroup's CPU counter for a "
+    "one-process registration, os.wait4 of each stage job's command for STARE's stage "
+    "jobs (resources.csv: cpu_instrument)",
     "cpu_h_used_med": "median over patients of the CPU-hours used",
     "cpu_model": "CPU model string as the run recorded it",
     "cpus": "CPUs the run was given",
@@ -146,6 +148,23 @@ _ID = (
     ("panel", "", "the moving slide's channel set, joined by '_' (e.g. DAPI_CD8_CD3)"),
     ("case_id", "", "the case: one moving panel against its patient's reference"),
 )
+def _cost_summary_cols():
+    """method_summary's paper.costs columns (``costs.summary_column_specs``)."""
+    from .paper import costs
+
+    return tuple(costs.summary_column_specs())
+
+
+def _point_stem_cols():
+    from .paper import costs
+
+    return tuple(
+        (stem, unit, what) for stem, (_, unit, what) in costs.STEMS.items()
+    )
+
+
+_COST_SUMMARY = _cost_summary_cols()
+_POINT_STEMS = _point_stem_cols()
 _TABLE_LIST = [
     _t("per_pair", ("dataset", "patient_id", "panel", "row", "set"),
        "one row per (case, result, polygon set): the tidy per-pair numbers",
@@ -180,7 +199,7 @@ _TABLE_LIST = [
         "where no candidate has a matched pair"),
        ("n_dice_zeroed", "count", "the chosen row's common cases with no matched pair, whose "
         "missing dice_matched counted as 0"),
-       ("tie_break", "", "lower cpu_h_used median over patients, then the name"),
+       ("tie_break", "", "the name (device-blind: no cost decides a tie)"),
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
        ("common_block", "", "strict (the headline) or per_method (B2)")),
@@ -194,14 +213,19 @@ _TABLE_LIST = [
         "where no candidate has a matched pair"),
        ("n_dice_zeroed", "count", "the chosen row's common cases with no matched pair, whose "
         "missing dice_matched counted as 0"),
-       ("tie_break", "", "lower cpu_h_used median over patients, then the name"),
+       ("tie_break", "", "the name (device-blind: no cost decides a tie)"),
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
        ("common_block", "", "strict (the headline) or per_method (B2)")),
     _t("method_summary", ("dataset", "family", "row", "which"),
-       "per method: accuracy over panel pairs, the paired difference against STARE, cost",
+       "per method: accuracy over panel pairs, the paired difference against STARE, cost "
+       "(paper.costs: per patient, the common patients first, clock and unit named)",
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
-       ("which", "", "best or primary"), ("tool_version", "", ""),
+       ("which", "", "DEPRECATED (one release): the old name of row_kind"),
+       ("row_kind", "", "primary (drawn filled), best (the best-Dice row: drawn hollow, "
+        "'best (ceiling)'), local_4cpu (STARE in one 4-CPU job) or cpu_twin (a GPU row's "
+        "CPU twin)"),
+       ("tool_version", "", ""),
        ("n_patients", "count", ""), ("n_pairs", "count", "panel pairs (cases)"),
        ("n_ok", "count", "cases registered"),
        ("n_dice_zeroed", "count", "cases with no matched pair, whose missing dice_matched "
@@ -213,15 +237,49 @@ _TABLE_LIST = [
        ("d_dice_vs_stare_q25", "1", ""), ("d_dice_vs_stare_q75", "1", ""),
        ("n_pairs_vs_stare", "count", "cases both have"),
        ("n_pairs_stare_ge", "count", "cases where STARE's Dice >= this row's"),
-       ("n_patients_complete", "count", "patients whose every round registered: the cost "
-        "columns read these only"),
-       ("peak_rss_gb_med", "GB", "median over complete patients"), ("peak_rss_gb_max", "GB", ""),
+       ("n_patients_complete", "count", "patients whose every round registered (the "
+        "deprecated *_med columns read these: the survivors)"),
+       ("peak_rss_gb_med", "GB", "DEPRECATED: median over this row's complete patients "
+        "(peak_rss_gb_common_med is the headline)"), ("peak_rss_gb_max", "GB", ""),
        ("peak_rss_unit", "", "per task (largest job), per patient launch, or per round"),
-       ("fold_peak_vs_stare", "1", "peak_rss_gb_med over STARE's"),
-       ("cpu_h_used_med", "CPU-h", "per patient, median"), ("wall_s_med", "s", ""),
-       ("wall_kind", "", "register_s, or time_unlimited_parallel_tiles_s for STARE jobs"),
-       ("gpu_h_med", "GPU-h", ""), ("device", "", "cpu or gpu"), ("gpu_model", "", ""),
-       ("cpu_model", "", "the node's CPU model as the runs recorded it")),
+       ("cpu_h_used_med", "CPU-h", "DEPRECATED: per patient, median over this row's complete "
+        "patients (cpu_h_used_common_med is the headline)"),
+       ("wall_s_med", "s", "DEPRECATED: wall_s_survivors_med, on the clock in `clock`"),
+       ("wall_kind", "", "DEPRECATED: register_s, or time_unlimited_parallel_tiles_s for "
+        "STARE jobs; `clock` generalises it"),
+       ("gpu_h_med", "GPU-h", "DEPRECATED: gpu_h_survivors_med"),
+       ("device", "", "cpu or gpu"), ("gpu_model", "", ""),
+       ("cpu_model", "", "the node's CPU model as the runs recorded it"),
+       *_COST_SUMMARY,
+       ("total_cpu_h_used_med", "CPU-h", "good + wasted attempts' CPU time, median over the "
+        "COMMON patients (R10)"),
+       ("cpu_h_reserved_med", "CPU-h", "allocated CPUs x duration of the good attempts, "
+        "median over the common patients"),
+       ("total_cpu_h_reserved_med", "CPU-h", "good + wasted reserved, median over the common "
+        "patients (fig. 3f's total marker)"),
+       ("rung_gb_med", "GB", "the memory rung the patient ended on, median over the common "
+        "patients"),
+       ("wasted_attempts", "count", "failed attempts over the common patients (rungs, retried "
+        "stage jobs)"),
+       ("fold_peak_vs_stare_local4", "1", "peak_rss_gb_common_med over stare_local4's: both "
+        "read by the same resources.Monitor in one 4-CPU job (fold_peak_vs_stare is gone)"),
+       ("peak_largest_job_gb", "GB", "STARE's stage jobs: the largest single attempt's peak, "
+        "what a node must give ONE job (median over the common patients)"),
+       ("peak_concurrent_gb", "GB", "STARE's stage jobs: the most the jobs of one round held "
+        "at once, the sum of the peaks of overlapping attempts (median, common patients)"),
+       ("gpu_peak_gb", "GB", "torch's peak allocated CUDA memory, median over the common patients"),
+       ("convert_s_med", "s", "the method's own conversion outside its clock, median over the "
+        "common patients"),
+       ("convert_inside_clock", "", "yes (the conversion is inside the registration clock), "
+        "no (timed apart: convert_s_med), none (the method converts nothing)"),
+       ("working_px", "", "the size the method registers at (cost.WORK)"),
+       ("channels_read", "", "the channels the method reads (cost.WORK)"),
+       ("jvm_max_heap_gb", "GB", "a JVM method: the heap the JVM reported (Runtime.maxMemory); "
+        "its RSS follows it and grows with the rung"),
+       ("jvm_peak_heap_gb", "GB", "the JVM's own peak heap use: NA, not measured (the reason)"),
+       ("prior_cpu_h", "CPU-h", "an affine-anchored ASHLAR row: what the row it reads cost up "
+        "to that stage (STARE's COARSE, or the valis_mirage _rigid row), median, common patients"),
+       ("with_prior_cpu_h", "CPU-h", "cpu_h_used_common_med + prior_cpu_h")),
     _t("valis_stages", ("dataset", "row", "stage"),
        "Dice by VALIS stage, per VALIS run (tier x micro)",
        ("dataset", "", ""), ("row", "", "the run's final result name"),
@@ -243,7 +301,13 @@ _TABLE_LIST = [
        ("n_tiles", "count", ""), ("solve_peak_gb", "GB", ""), ("stitch_peak_gb", "GB", ""),
        ("read_box_px", "px", "STARE's read box side for an interior tile: core + 2 x 3 x stride"),
        ("read_box_mpx", "Mpx", "read_box_px squared / 1e6"),
-       ("pipeline_window_px", "px", "conf/modules.config's sizing window: tile + 2 x max(halo, 3 x stride)")),
+       ("pipeline_window_px", "px", "conf/modules.config's sizing window: tile + 2 x max(halo, 3 x stride)"),
+       ("coarse_cpu_efficiency", "1", "COARSE's cpu_s / (cpus x wall_s), the attempt it ended ok with "
+        "(above 1: its threads were not held to its CPUs)"),
+       ("tile_cpu_efficiency", "1", "the same over the round's tiles' good attempts"),
+       ("solve_cpu_efficiency", "1", "the same for SOLVE"),
+       ("coarse_cpu_h", "CPU-h", "COARSE's measured CPU time (the prior an affine=stare ASHLAR row reads)"),
+       ("coarse_s", "s", "COARSE's wall time, the attempt it ended ok with")),
     _t("ashlar_discard", ("dataset", "case_id", "row"),
        "per ASHLAR round and cell: tiles replaced by ASHLAR's stage model",
        *_ID, ("row", "", ""), ("affine", "", "none or stare"), ("noise_frac", "1", ""),
@@ -253,33 +317,81 @@ _TABLE_LIST = [
        ("discard_over_budget", "count", ""), ("cycle_fully_modelled", "bool", ""),
        ("rigid_offset_um", "um", "|M0(c) - c| x pixel size at the reference centre, STARE's anchor"),
        ("rigid_offset_from", "", "the run.json the anchor was read from"), ("ok", "bool", "")),
-    _t("cost_points", ("dataset", "row", "unit_id"),
-       "one point per unit (round for a pair method, patient for a per-patient one)",
+    _t("cost_points", ("dataset", "row", "unit_kind", "unit_id"),
+       "one point per PATIENT of every row (whatever became of it: `status`), and fig. 2c's "
+       "per-round points (unit_kind round), by paper.costs's rules",
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
-       ("unit_kind", "", "round or patient"), ("unit_id", "", ""),
+       ("row_kind", "", "primary, best, local_4cpu, cpu_twin or other"),
+       ("is_primary", "bool", "the family's primary row (drawn filled)"),
+       ("is_best", "bool", "the family's best-Dice row (drawn hollow: best (ceiling))"),
+       ("unit_kind", "", "patient, or round (fig. 2c's per-round facet)"),
+       ("unit", "", "the unit of every number of the point: patient or round"),
+       ("unit_id", "", "the patient, or the case"),
+       ("status", "", "complete, capped, failed, excluded or not_run: only complete points "
+        "enter a median or a fit"),
+       ("in_common", "bool", "the patient is in the dataset's common set"),
+       ("clock", "", "whole_process, local_4cpu, critical_path_unlimited or with_queue"),
        ("input_gb", "GB", "bytes of the slide files the unit read, 2^30"),
-       ("input_gpx", "Gpx", "moving gigapixels"), ("wall_s", "s", ""), ("peak_rss_gb", "GB", ""),
-       ("cpu_h_used", "CPU-h", ""), ("device", "", "")),
+       ("input_gpx", "Gpx", "moving gigapixels"),
+       ("lower_bound", "", "why the times and CPU-hours are lower bounds ('|'-joined), or NA"),
+       ("peak_instrument", "", "rss_method of the unit's rounds"),
+       ("peak_rss_comparable", "bool", "False for a rusage peak: in no peak comparison"),
+       ("n_imputed_costed", "count", "rounds that registered, were scored as imputed failures "
+        "and are costed"),
+       ("wasted_attempts", "count", "the patient's failed attempts (rungs, retried stage jobs)"),
+       ("device", "", ""), ("gpu_model", "", ""), ("cpu_model", "", ""),
+       *_POINT_STEMS),
     _t("cost_fits", ("dataset", "row", "target", "predictor"),
-       "target ~ predictor, least squares, per row; flat below 3 points or 2 distinct x",
-       ("dataset", "", ""), ("family", "", ""), ("row", "", ""), ("target", "", "wall_s or peak_rss_gb"),
-       ("predictor", "", "input_gb or input_gpx"), ("slope", "", ""), ("intercept", "", ""),
-       ("r2", "1", ""), ("sigma", "", "residual s.d."), ("n", "count", ""),
-       ("n_distinct_x", "count", ""), ("fit_ok", "bool", ""),
-       ("n_dropped", "count", "points left out: no finite target or predictor")),
+       "log10(target) ~ log10(predictor), least squares, per row over its complete patients; "
+       "no fit below 5 points or 2 distinct x",
+       ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
+       ("target", "", "wall_s, peak_rss_gb or cpu_h_used"),
+       ("predictor", "", "input_gb or input_gpx"),
+       ("unit", "", "patient"), ("patient_set", "", "survivors: the row's complete patients"),
+       ("scale", "", "log-log"), ("min_n", "count", "points a fit needs (5)"),
+       ("slope", "", "the exponent: target grows as predictor^slope"),
+       ("slope_ci_low", "", "95% interval of the slope (Student's t, n - 2 d.f.), low"),
+       ("slope_ci_high", "", "95% interval of the slope, high"),
+       ("intercept", "", "log10 of the target at predictor 1"),
+       ("r2", "1", ""), ("sigma", "", "residual s.d. in log10 units (ddof = 1)"),
+       ("n", "count", ""), ("n_distinct_x", "count", ""), ("fit_ok", "bool", ""),
+       ("n_dropped", "count", "points left out: no finite target or predictor, or <= 0")),
     _t("pipeline_cost_fits", ("backend", "process", "target"),
        "compute-all: per process, target ~ input_gb over its traced tasks",
        ("backend", "", "valis or tiled"), ("process", "", ""), ("target", "", "realtime_s or peak_rss_gb"),
        ("predictor", "", "input_gb"), ("slope", "", ""), ("intercept", "", ""), ("r2", "1", ""),
        ("sigma", "", ""), ("n", "count", ""), ("n_distinct_x", "count", ""), ("fit_ok", "bool", ""),
        ("n_dropped", "count", "completed tasks left out: no input size or no finite target")),
-    _t("cpu_scaling", ("row", "cpus", "patient_id", "execution"),
-       "time and memory against CPUs, primary rows, a few patients",
+    _t("cpu_scaling", ("row", "cpus", "patient_id", "execution", "repeat"),
+       "the CPU cross: each family's best-Dice CPU row at 4 and 8 CPUs, per patient and repeat",
        ("family", "", ""), ("row", "", ""), ("cpus", "count", ""), ("patient_id", "", ""),
        ("execution", "", "one process, or local for STARE's stages in one job"),
-       ("wall_s", "s", ""), ("cpu_h_used", "CPU-h", ""), ("peak_rss_gb", "GB", ""),
-       ("speedup_vs_4", "1", "wall at 4 CPUs over wall at this count"),
-       ("efficiency", "1", "speedup_vs_4 / (cpus / 4)"), ("out_root", "", "")),
+       ("repeat", "count", "the launcher's rep<k> (REGBENCH_REPEAT); 1 without"),
+       ("wall_s", "s", "on the clock in wall_clock (shared nodes)"),
+       ("wall_clock", "", "whole_process, local_4cpu or critical_path_unlimited"),
+       ("cpu_h_used", "CPU-h", ""), ("peak_rss_gb", "GB", ""),
+       ("speedup_vs_4", "1", "wall at 4 CPUs over wall at this count, the same repeat"),
+       ("efficiency", "1", "speedup_vs_4 / (cpus / 4)"),
+       ("cpus_checked", "", "yes when every record asked for this count (cpus_requested), "
+        "else no: <what they asked>"),
+       ("cpu_model", "", "the CPU model(s) of the point's records"),
+       ("cpu_model_matches", "", "yes when every point of the patient ran on one CPU model"),
+       ("n_patients_incomplete", "count", "patients of the row not complete at every count: "
+        "left out of it"),
+       ("out_root", "", "")),
+    _t("end_to_end", ("dataset", "family", "row", "row_kind"),
+       "per method_summary row: conversion, registration, writer and the prior, median over "
+       "the common patients (figS_end_to_end)",
+       ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
+       ("row_kind", "", "as in method_summary"),
+       ("clock", "", "the registration's clock"),
+       ("n_patients", "count", "common patients with a line in cost_end_to_end.csv"),
+       ("convert_s_med", "s", "the method's own conversion, timed apart"),
+       ("estimate_s_med", "s", "the registration (estimate_s of cost_end_to_end.csv)"),
+       ("write_s_med", "s", "the method's own writer"),
+       ("prior_cpu_h", "CPU-h", "an affine-anchored ASHLAR row's prior (method_summary)"),
+       ("prior_s_med", "s", "that prior's wall time"),
+       ("convert_inside_clock", "", "yes, no or none")),
     _t("laptop", ("case_id", "row"), "STARE on one cohort slide on a laptop",
        *_ID, ("row", "", ""), ("wall_s", "s", ""), ("peak_rss_gb", "GB", ""),
        ("cpu_h_used", "CPU-h", ""), ("cpu_model", "", ""), ("n_cores_logical", "count", ""),

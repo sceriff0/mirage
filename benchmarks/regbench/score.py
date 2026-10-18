@@ -107,6 +107,7 @@ from . import (
     public_of,
     stage_peaks,
     table_schema,
+    telemetry,
     tissue,
 )
 from .cases import (
@@ -448,6 +449,7 @@ def jvm_heap_lines(res_rows):
 
 
 NOT_RECORDED = "not recorded"
+NA_JVM_PEAK = "NA: not measured (no call into the JVM from outside the method's code)"
 
 
 def panel_of(case):
@@ -552,6 +554,7 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
             wall_p,
             cpu_p,
             p.get("launch_id"),
+            _f(p.get("peak_rss_mb")) / 1024.0,
         )
         for p, (wall_p, cpu_p), kind in zip(previous, earlier, kinds)
     ]
@@ -607,6 +610,14 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
                 notes.append(billing.RECORDS_CHANGED)
         else:
             notes.append(billing.NOT_IN_RECORDS)
+        if recs is not None:
+            settled = sum(bool(a.get("from_scheduler")) for a in recs)
+            # R6: a stage attempt the scheduler killed, billed by its accounting
+            from_scheduler += sum(
+                bool(a.get("from_scheduler")) and a["kind"] == billing.WASTED
+                for a in recs
+            )
+            unmeasured = max(0, unmeasured - settled)
         if recs is not None and registered:
             attempts += recs
             good_jobs = [a["job"] for a in recs if a["kind"] == billing.GOOD]
@@ -641,7 +652,15 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
                 )
     elif registered:
         attempts.append(
-            billing.attempt(billing.GOOD, cpus, mem, wall, cpu, run.get("launch_id"))
+            billing.attempt(
+                billing.GOOD,
+                cpus,
+                mem,
+                wall,
+                cpu,
+                run.get("launch_id"),
+                gb("peak_rss_mb"),
+            )
         )
         good_jobs = [run.get("launch_id") or ""]
     elif run.get("cause") != "not_run" and wall == wall and not (stage and stage[0]):
@@ -649,7 +668,9 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # stage records below is not also billed its last job's clock, as a round that
         # holds their summary is not)
         attempts.append(
-            billing.attempt(own_kind, cpus, mem, wall, cpu, run.get("launch_id"))
+            billing.attempt(
+                own_kind, cpus, mem, wall, cpu, run.get("launch_id"), gb("peak_rss_mb")
+            )
         )
     if not staged and stage is not None and not registered:
         # a round of a registration in several jobs whose record holds no summary of
@@ -771,9 +792,31 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         if staged and stitch
         else "",
         "peak_rss_gb": gb("peak_rss_mb"),
+        # R16: the same figure under the name of how it was read (the driver's sampler
+        # of the process tree); `peak_hwm_gb` beside it is the kernel's high-water mark
+        "peak_rss_sampled_gb": gb("peak_rss_mb"),
+        # R19: a peak read by `rusage` alone is a lower bound, in no peak comparison
+        "peak_rss_comparable": not str(r.get("rss_method") or "").startswith("rusage")
+        if r
+        else "",
         # for a method whose writer cannot be paused, the peak it read after registering
         "peak_rss_after_register_gb": after if after == after else gb("peak_rss_mb"),
-        "cgroup_peak_gb": gb("cgroup_peak_mb"),  # whole job, writers included
+        # whole job, writers included. R5: blank for a registration in several jobs,
+        # whose own registration ran in none of THIS job's cgroup (`driver_job_peak_gb`
+        # is that job's, `stage_cgroup_peak_gb` the stage jobs')
+        "cgroup_peak_gb": "" if staged else gb("cgroup_peak_mb"),
+        "driver_job_peak_gb": gb("cgroup_peak_mb") if staged else "",
+        **{k: "" for k in billing.FOOTPRINT},
+        # R11: torch's peak allocated CUDA memory, on a GPU only
+        "gpu_peak_gb": gb("gpu_peak_mb") if on_gpu else "",
+        # R1: where `register_s_per_round` is from: the round's own clock (a pair), the
+        # launch's per-round timing (`info.register_s_round`), or the launch split
+        # evenly over its rounds (no per-round figure)
+        "register_s_per_round_from": "own"
+        if not patient
+        else "info"
+        if info.get("register_s_round") is not None
+        else "split",
         "gpu_h": wall / 3600.0 * (run.get("gpus") or 1) if on_gpu else 0.0,
         "gpu_model": run.get("gpu_model", "") if on_gpu else "",
         "write_s": write_s,
@@ -818,6 +861,8 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         "oom_watch": "" if watch is None else ("yes" if watch.get("started") else "no"),
         "reused": bool(run.get("reused_by")),
         "rss_method": r.get("rss_method", ""),
+        # R19: the CPU counter reads that failed during the run (resources.Monitor)
+        "cpu_read_failures": _blank(r.get("cpu_read_failures")),
         # the counter `cpu_h` was read from (regbench.resources): the same in kind for
         # every row unless this says "polled (may undercount)"
         "cpu_instrument": r.get("cpu_instrument", ""),
@@ -832,6 +877,16 @@ def resource_row(run, moving_px=None, stage=None, accounting=None):
         # a method without one
         "jvm_heap_asked_gb": _blank(info.get("jvm_heap_gb")),
         "jvm_max_heap_gb": _blank(info.get("jvm_max_heap_gb")),
+        # R16: the JVM's own peak heap use is not measured (it needs a call into the
+        # JVM from the method's process, whose code is in every result's key)
+        "jvm_peak_heap_gb": "" if info.get("jvm_max_heap_gb") is None else NA_JVM_PEAK,
+        # filled at table time (bill_from_disk): the scheduler's reservation (R7), the
+        # node's telemetry (R14), and why a row's cost is blank (R21)
+        "cpu_h_reserved_scheduler": "",
+        "gb_h_reserved_scheduler": "",
+        "reservation_jobs": "",
+        **{k: "" for k in telemetry.COLUMNS},
+        "cost_blank_reason": "",
         # extra cost columns a private method plug-in declares (none without one)
         **{
             column: info.get(key, "")
@@ -912,7 +967,43 @@ def _bill_unsettled(row, accounting):
     row["wasted_from_scheduler"] = int(row.get("wasted_from_scheduler") or 0) + 1
 
 
-def bill_from_disk(res_rows, out, cases, accounting=None):
+STAGE_ACCOUNTING = "accounting_stages.psv"
+BILLED_WITH = "billed with {}"
+# R21: the columns of a row whose cost is its parent row's (a rigid result of the same
+# STARE launch): blank, never counted twice
+BILLED_ELSEWHERE = (
+    *(c for c in billing.COLUMNS if c not in ("device", "device_name", "billing_note")),
+    "cpu_h",
+    "cpu_efficiency",
+    "gpu_h",
+    "wasted_cpu_h",
+    "cpu_h_allocated",
+    "cpu_h_reserved_scheduler",
+    "gb_h_reserved_scheduler",
+)
+
+
+def _billed_with(row, res_rows):
+    """The row whose launch bills ``row`` (R21): a STARE ``<name>_rigid`` result is
+    written by the same launch as ``<name>``, from the same stage jobs, and is no cost
+    of its own. None for every other row."""
+    name = str(row.get("method") or "")
+    if not name.endswith("_rigid") or row.get("adapter") != "stare":
+        return None
+    parent = name[: -len("_rigid")]
+    for r in res_rows:
+        if (
+            r.get("method") == parent
+            and r.get("dataset") == row.get("dataset")
+            and str(r.get("case_id")) == str(row.get("case_id"))
+        ):
+            return parent
+    return None
+
+
+def bill_from_disk(
+    res_rows, out, cases, accounting=None, reservations=None, node_telemetry=None
+):
     """Complete the billing columns of the resource rows with what is not in a
     ``run.json``, in place:
 
@@ -923,44 +1014,100 @@ def bill_from_disk(res_rows, out, cases, accounting=None):
       refused before it read them): the stage jobs ran, and their cost is its wasted
       (or lost) cost;
     * every row that registered gets ``cpu_h_scheduler`` from ``accounting``
-      (``ladder.read_accounting`` of ``<out>/logs/accounting.psv``), when there is one.
+      (``ladder.read_accounting`` of ``<out>/logs/accounting.psv``, and of the stage
+      jobs' ``logs/accounting_stages.psv``), when there is one; a stage attempt the
+      scheduler killed is settled from it (R6, ``billing.stage_attempts``);
+    * ``cpu_h_reserved_scheduler`` and ``gb_h_reserved_scheduler`` (R7) from
+      ``reservations`` (``billing.read_reservations``): the good stage jobs and the
+      round's driver job of a row in several jobs, the launch of every other row;
+      blank without them;
+    * the stage jobs' footprint (``billing.stage_footprint``: R4, R5, R9);
+    * the node's telemetry of the row's own job (``regbench.telemetry``, R14, R16);
+    * a STARE ``_rigid`` result's cost columns are blanked: its launch is its parent
+      row's and is billed there (R21, ``cost_blank_reason``).
 
     Done at table time and kept in no record: the stage records and the accounting
     are not in a case's key, so nothing read from them may be stored under it."""
     by_id = {(c.dataset, str(c.case_id)): c for c in cases}
+    if node_telemetry is not None:  # the scorer reads `<out>/logs/telemetry`
+        for row in res_rows:
+            row.update(telemetry.columns(node_telemetry, row.get("launch_id")))
     for row in res_rows:
         case = by_id.get((row["dataset"], str(row["case_id"])))
         if case is None:
             continue
-        if row.get("n_jobs") in ("", None) and row.get("cost_bound") == "upper":
-            _bill_unsettled(row, accounting)
-        if row.get("n_jobs") in ("", None):  # one job: its own launch
-            if accounting is not None and (row["ok"] or row.get("registered")):
-                h, n = billing.scheduler_hours([row.get("launch_id")], accounting)
-                if h == h:
-                    row["cpu_h_scheduler"], row["scheduler_jobs"] = h, n
-                    row["cpu_h_used_vs_scheduler"] = billing.ratio(row["cpu_h_used"], h)
-            # ... unless it is a failed round of a registration in several jobs whose
-            # record never got their summary: its stage records are read below
-            if row["ok"] or row.get("registered") or not _in_stages(row):
-                continue
-        folder = billing.find_stage_dir(
-            out, row["dataset"], row["case_id"], row["method"], row.get("launch_id")
-        )
-        if folder is not None:
-            row["unmeasured_records"] = billing.unreadable_stage_records(folder)
-        stage = billing.stage_attempts(folder) if folder is not None else None
-        if stage is None:
-            continue
-        try:
-            run = json.loads(
-                (result_dir(out, row["method"], case) / "run.json").read_text()
-            )
-        except (OSError, ValueError):
-            continue
-        again = resource_row(run, moving_pixels(case), stage, accounting)
-        row.update({k: again[k] for k in billing.COLUMNS})
+        _bill_one(row, out, case, accounting, reservations, node_telemetry)
+    for row in res_rows:
+        parent = _billed_with(row, res_rows)
+        if parent is not None:
+            for col in BILLED_ELSEWHERE:
+                if col in row:
+                    row[col] = ""
+            row["cost_blank_reason"] = BILLED_WITH.format(parent)
     return res_rows
+
+
+def _reserve(row, jobs, reservations):
+    if not reservations:
+        return
+    cpu_h, gb_h, n = billing.reserved_hours(jobs, reservations)
+    row["cpu_h_reserved_scheduler"] = cpu_h if cpu_h == cpu_h else ""
+    row["gb_h_reserved_scheduler"] = gb_h if gb_h == gb_h else ""
+    row["reservation_jobs"] = n
+
+
+def _bill_one(row, out, case, accounting, reservations, node_telemetry):
+    """``bill_from_disk`` of one row whose case is known."""
+    if row.get("n_jobs") in ("", None) and row.get("cost_bound") == "upper":
+        _bill_unsettled(row, accounting)
+    if row.get("n_jobs") in ("", None):  # one job: its own launch
+        if accounting is not None and (row["ok"] or row.get("registered")):
+            h, n = billing.scheduler_hours([row.get("launch_id")], accounting)
+            if h == h:
+                row["cpu_h_scheduler"], row["scheduler_jobs"] = h, n
+                row["cpu_h_used_vs_scheduler"] = billing.ratio(row["cpu_h_used"], h)
+        if row["ok"] or row.get("registered"):
+            _reserve(row, [row.get("launch_id")], reservations)
+        # ... unless it is a failed round of a registration in several jobs whose
+        # record never got their summary: its stage records are read below
+        if row["ok"] or row.get("registered") or not _in_stages(row):
+            return
+    folder = billing.find_stage_dir(
+        out, row["dataset"], row["case_id"], row["method"], row.get("launch_id")
+    )
+    if folder is not None:
+        row["unmeasured_records"] = billing.unreadable_stage_records(folder)
+        foot = billing.stage_footprint(folder, node_telemetry)
+        if foot is not None:
+            row.update(
+                {
+                    k: ("" if v != v else v) if isinstance(v, float) else v
+                    for k, v in foot.items()
+                }
+            )
+    stage = billing.stage_attempts(folder, accounting) if folder is not None else None
+    if stage is None:
+        return
+    try:
+        run = json.loads(
+            (result_dir(out, row["method"], case) / "run.json").read_text()
+        )
+    except (OSError, ValueError):
+        return
+    again = resource_row(run, moving_pixels(case), stage, accounting)
+    row.update(
+        {
+            k: again[k]
+            for k in (
+                *billing.COLUMNS,
+                "wasted_from_scheduler",
+                "unmeasured_attempts",
+            )
+        }
+    )
+    if row["ok"] or row.get("registered"):
+        good = [a["job"] for a in stage[0] if a["kind"] == billing.GOOD]
+        _reserve(row, [*good, row.get("launch_id")], reservations)
 
 
 def find_variants(out, dataset, expected=None):
@@ -2730,8 +2877,10 @@ def summarise_resources(res_rows):
             "mem_requested_gb": _stat(_values(mine, "mem_requested_gb"), np.max),
             "cpus_requested": _stat(_values(mine, "cpus_requested"), np.max),
         }
+        # R20: blank when one round lacks the figure, as every billing column is: a sum
+        # without it would be over fewer rounds than the patient has
         for key in ("register_s", "cpu_h", "gpu_h"):
-            rec[key] = _stat(_values(ok, key), total)
+            rec[key] = _whole(_values(ok, key), total)
         # regbench.billing, per patient. Good: over the rounds that registered (a
         # round whose writer failed registered: its registration is a cost like any
         # other), and blank when one of them lacks the figure, so that every column
@@ -2804,10 +2953,53 @@ def summarise_resources(res_rows):
         rec["cpu_efficiency"] = billing.ratio(rec["cpu_h_used"], rec["cpu_h_reserved"])
         if rec["cpu_efficiency"] != rec["cpu_efficiency"]:
             rec["cpu_efficiency"] = _stat(_values(ok, "cpu_efficiency"), np.median)
-        for key in ("peak_rss_gb", "peak_rss_after_register_gb", "cgroup_peak_gb"):
-            rec[key] = _stat(_values(ok, key), np.max)
+        for key in (
+            "peak_rss_gb",
+            "peak_rss_after_register_gb",
+            "cgroup_peak_gb",
+            "peak_rss_sampled_gb",
+            "peak_hwm_gb",
+            "driver_job_peak_gb",
+            "gpu_peak_gb",
+            *(k for k in billing.FOOTPRINT if k.endswith("_gb")),
+            "stage_cpu_efficiency_max",
+            "stage_load_max",
+            "load_start",
+            "load_end",
+            "other_jobs_start",
+            "other_jobs_end",
+        ):
+            rec[key] = _blank(_stat(_values(ok, key), np.max))
+        # R19: a peak read by `rusage` alone is no peak to compare (a lower bound)
+        rec["peak_rss_comparable"] = (
+            all(r.get("peak_rss_comparable") is not False for r in ok) if ok else ""
+        )
+        rec["rss_method"] = "; ".join(
+            sorted({str(r.get("rss_method") or "") for r in ok} - {""})
+        )
+        rec["cpu_read_failures"] = _blank(_stat(_values(ok, "cpu_read_failures"), np.sum))
+        rec["register_s_per_round_from"] = "; ".join(
+            sorted({str(r.get("register_s_per_round_from") or "") for r in ok} - {""})
+        )
+        rec["stage_cpu_model"] = "; ".join(
+            sorted({str(r.get("stage_cpu_model") or "") for r in ok} - {""})
+        )
+        rec["telemetry"] = (
+            "yes" if ok and all(r.get("telemetry") == "yes" for r in ok)
+            else "partly" if any(r.get("telemetry") == "yes" for r in ok)
+            else "no"
+        )
+        for key in ("stage_jobs_known", "stage_jobs_confined"):
+            rec[key] = _blank(_stat(_values(ok, key), np.sum))
+        # R7: what the cluster held; blank when one round lacks it (the accounting)
+        for key in ("cpu_h_reserved_scheduler", "gb_h_reserved_scheduler"):
+            rec[key] = _blank(_whole(_values(reg, key), total))
+        rec["cost_blank_reason"] = "; ".join(
+            sorted({str(r.get("cost_blank_reason") or "") for r in mine} - {""})
+        )
         for key in ("jvm_heap_asked_gb", "jvm_max_heap_gb"):  # blank without a JVM
             rec[key] = _blank(_stat(_values(ok, key), np.max))
+        rec["jvm_peak_heap_gb"] = NA_JVM_PEAK if rec["jvm_max_heap_gb"] != "" else ""
         rec["gpu_model"] = "; ".join(sorted({r["gpu_model"] for r in ok} - {""}))
         # the counter(s) the patient's CPU time was read from (regbench.resources)
         rec["cpu_instrument"] = "; ".join(
@@ -4589,11 +4781,20 @@ def _score_cells(
     from . import ladder
 
     booked = Path(accounting or Path(out) / "logs" / "accounting.psv")
+    # the stage jobs' own accounting (score_cohort.sbatch's settle: `sacct -X` of the
+    # COARSE, tile and SOLVE jobs), for the stage attempts the scheduler killed (R6)
+    # and what the cluster held for them (R7)
+    staged_booked = Path(out) / "logs" / STAGE_ACCOUNTING
+    acct = ladder.read_accounting(booked) if booked.is_file() else None
+    if staged_booked.is_file():
+        acct = {**ladder.read_accounting(staged_booked), **(acct or {})}
     bill_from_disk(
         res,
         out,
         [job[1] for job in jobs],
-        ladder.read_accounting(booked) if booked.is_file() else None,
+        acct,
+        billing.read_reservations(booked, staged_booked),
+        telemetry.read(out),
     )
     res_summary = summarise_resources(res)
     # STARE's peak memory per stage per round (score side: reads the stage records)

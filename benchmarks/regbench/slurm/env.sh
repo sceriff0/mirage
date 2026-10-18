@@ -245,6 +245,7 @@ regbench_start() {
     line="$line$more"
     echo "$line out=${REGBENCH_OUT:--} commit=${REGBENCH_COMMIT:-unknown} host=$(hostname 2>/dev/null || echo -) at=$(date +%FT%T)"
     trap 'regbench_exit_said $?' EXIT
+    regbench_telemetry_start "$REGBENCH_JOB_KIND"
 }
 # the peak memory of this job's cgroup in MB (cgroup v2 memory.peak, v1
 # memory.max_usage_in_bytes), or `-` when it cannot be read here
@@ -257,6 +258,104 @@ _regbench_peak_mb() {
         fi
     done
     echo -
+}
+# ── what the node was doing: one file per run task and stage job (R14, R16) ────────
+# <out>/logs/telemetry/<launch id>.tsv, key<TAB>value lines (benchmarks/regbench/
+# telemetry.py reads them at table time; they are in no result's key): the load and the
+# node's other running jobs at the start and the end, the CPU model, the CPUs the shell
+# may use, the job cgroup's memory peak at the end, and the largest sum of the cgroup's
+# processes' VmHWM, sampled every REGBENCH_HWM_POLL_S (1) seconds by a loop of this
+# shell. Only for a scheduler job (SLURM_JOB_ID) of kind run or stage, and never a
+# reason to fail: REGBENCH_TELEMETRY=0 turns it off. REGBENCH_PROC (/proc) is where
+# the load, the CPU and the cgroup are read (a test points it at a folder of its own).
+REGBENCH_TEL_FILE="" REGBENCH_HWM_PID=""
+_regbench_launch_id() {
+    if [ -n "${SLURM_ARRAY_JOB_ID:-}" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+        echo "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+    else
+        echo "${SLURM_JOB_ID:-}"
+    fi
+}
+# the job cgroup's folder, or nothing
+_regbench_cgroup_dir() {
+    local path
+    path="$(awk -F: '$1 == "0" { print $3; exit }' "${REGBENCH_PROC:-/proc}"/self/cgroup 2>/dev/null)" || path=""
+    [ -n "$path" ] && [ -d "/sys/fs/cgroup$path" ] && echo "/sys/fs/cgroup$path"
+}
+# the jobs RUNNING on this node, this one left out (`-` when squeue cannot say)
+_regbench_other_jobs() {
+    local mine got
+    command -v squeue >/dev/null 2>&1 || { echo -; return 0; }
+    mine="$(_regbench_launch_id)"
+    local wait=()
+    command -v timeout >/dev/null 2>&1 && wait=(timeout 20)  # never a hung job's end
+    got="$(${wait[@]+"${wait[@]}"} squeue -h -w "$(hostname -s 2>/dev/null || hostname)" -t RUNNING -o '%i' 2>/dev/null)" \
+        || { echo -; return 0; }
+    awk -v a="$mine" -v b="${SLURM_JOB_ID:-}" 'NF && $1 != a && $1 != b { n++ } END { print n + 0 }' <<< "$got"
+}
+_regbench_tel() { [ -n "$REGBENCH_TEL_FILE" ] && printf '%s\t%s\n' "$1" "$2" >> "$REGBENCH_TEL_FILE" 2>/dev/null; return 0; }
+# the sampling loop: the largest sum of VmHWM (kB) over the cgroup's processes, in MB
+_regbench_hwm_loop() {
+    local procs="$1" into="$2" peak=0 now n=0
+    while :; do
+        # a process that ended between the listing and the read is skipped (cat's error),
+        # never the reason the whole sample is lost
+        # shellcheck disable=SC2016  # $2 is awk's field, not the shell's
+        now="$(sed 's|^|/proc/|; s|$|/status|' "$procs" 2>/dev/null \
+            | xargs cat 2>/dev/null | awk '/^VmHWM:/ { s += $2 } END { print s + 0 }')" || now=0
+        n=$((n + 1))
+        case "$now" in ''|*[!0-9]*) now=0 ;; esac
+        [ "$now" -gt "$peak" ] && peak="$now"
+        printf '%s\t%s\n' "$((peak / 1024))" "$n" > "$into.new" 2>/dev/null && mv "$into.new" "$into" 2>/dev/null
+        sleep "${REGBENCH_HWM_POLL_S:-1}"
+    done
+}
+regbench_telemetry_start() {
+    local kind="$1" id dir cg
+    REGBENCH_TEL_FILE=""
+    [ "${REGBENCH_TELEMETRY:-1}" != 0 ] || return 0
+    case "$kind" in run|stage) ;; *) return 0 ;; esac
+    [ -n "${REGBENCH_OUT:-}" ] && [ -n "${SLURM_JOB_ID:-}" ] && [ -r "${REGBENCH_PROC:-/proc}"/loadavg ] || return 0
+    id="$(_regbench_launch_id)"
+    dir="$REGBENCH_OUT/logs/telemetry"
+    mkdir -p "$dir" 2>/dev/null || return 0
+    REGBENCH_TEL_FILE="$dir/$id.tsv"
+    : > "$REGBENCH_TEL_FILE" 2>/dev/null || { REGBENCH_TEL_FILE=""; return 0; }
+    _regbench_tel kind "$kind"
+    _regbench_tel host "$(hostname 2>/dev/null)"
+    _regbench_tel loadavg_start "$(cat "${REGBENCH_PROC:-/proc}"/loadavg 2>/dev/null)"
+    _regbench_tel other_jobs_start "$(_regbench_other_jobs)"
+    _regbench_tel cpu_model "$(awk -F': ' '/^model name/ { print $2; exit }' "${REGBENCH_PROC:-/proc}"/cpuinfo 2>/dev/null)"
+    _regbench_tel nproc "$(nproc 2>/dev/null)"
+    _regbench_tel nproc_all "$(nproc --all 2>/dev/null)"
+    _regbench_tel cpus_per_task "${SLURM_CPUS_PER_TASK:-}"
+    cg="$(_regbench_cgroup_dir)"
+    if [ -n "$cg" ] && [ -r "$cg/cgroup.procs" ]; then
+        # its output goes nowhere: a caller reading this job's output must not wait on it
+        _regbench_hwm_loop "$cg/cgroup.procs" "$REGBENCH_TEL_FILE.hwm" > /dev/null 2>&1 < /dev/null &
+        REGBENCH_HWM_PID=$!
+    fi
+    return 0
+}
+regbench_telemetry_end() {
+    [ -n "$REGBENCH_TEL_FILE" ] || return 0
+    local peak
+    if [ -n "$REGBENCH_HWM_PID" ]; then
+        kill "$REGBENCH_HWM_PID" 2>/dev/null
+        wait "$REGBENCH_HWM_PID" 2>/dev/null
+        REGBENCH_HWM_PID=""
+    fi
+    if [ -s "$REGBENCH_TEL_FILE.hwm" ]; then
+        _regbench_tel hwm_peak_mb "$(cut -f1 "$REGBENCH_TEL_FILE.hwm")"
+        _regbench_tel hwm_samples "$(cut -f2 "$REGBENCH_TEL_FILE.hwm")"
+    fi
+    rm -f "$REGBENCH_TEL_FILE.hwm" "$REGBENCH_TEL_FILE.hwm.new" 2>/dev/null
+    peak="$(_regbench_peak_mb)"
+    [ "$peak" = - ] || _regbench_tel cgroup_peak_mb "$peak"
+    _regbench_tel loadavg_end "$(cat "${REGBENCH_PROC:-/proc}"/loadavg 2>/dev/null)"
+    _regbench_tel other_jobs_end "$(_regbench_other_jobs)"
+    REGBENCH_TEL_FILE=""
+    return 0
 }
 # regbench_say_end <REGBENCH_END line>: the `[regbench] end` line read off it, then it
 regbench_say_end() {
@@ -273,6 +372,7 @@ regbench_say_end() {
     [ "$outcome" = ok ] || [ -z "$cause" ] || [ "$cause" = - ] || outcome="$outcome/$cause"
     echo "[regbench] end kind=${REGBENCH_JOB_KIND:-?} job=$(_regbench_job) outcome=$outcome wall=$wall peak_rss=$peak record=${record:-${REGBENCH_RECORD:--}} exit=${code:--}"
     REGBENCH_SAID_END=1
+    regbench_telemetry_end
     echo "$line"
 }
 # the EXIT trap: a job that ended without its end line (a refusal under `set -e`, a
@@ -280,6 +380,7 @@ regbench_say_end() {
 regbench_exit_said() {
     [ "$REGBENCH_SAID_END" = 1 ] && return 0
     [ -n "$REGBENCH_JOB_KIND" ] || return 0
+    regbench_telemetry_end
     local wall="-"
     [ -n "$REGBENCH_T0" ] && wall="$(( $(date +%s) - REGBENCH_T0 ))s"
     echo "[regbench] end kind=$REGBENCH_JOB_KIND job=$(_regbench_job) outcome=$([ "$1" = 0 ] && echo ok || echo "exit_$1") wall=$wall peak_rss=$(_regbench_peak_mb | sed -E 's/^([0-9]+)$/\1MB/') record=${REGBENCH_RECORD:--} exit=$1"

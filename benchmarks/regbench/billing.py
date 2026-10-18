@@ -19,14 +19,21 @@ attempt that was retried, the last attempt of a registration that failed).
 ``cpu_h_used``              user + system CPU time of the good attempts' processes
 ``cpu_h_reserved``          allocated CPUs x duration, summed over the good attempts
 ``cpu_efficiency``          ``cpu_h_used / cpu_h_reserved``
-``gb_h_reserved``           requested memory (GB) x duration, over the same attempts
+``gb_h_reserved``           requested memory (GB) x duration, over the same attempts:
+                            what the REQUEST policy reserved (STARE's stage jobs at
+                            the pipeline's per-process requests, every other method
+                            at the ladder's rung)
+``gb_h_used``               the attempt's own peak (GB) x duration, over the same
+                            attempts: the memory the registration held, at its peak
 ``wasted_cpu_h_used``,
 ``wasted_cpu_h_reserved``,
-``wasted_gb_h_reserved``    the same three over the wasted attempts
+``wasted_gb_h_reserved``,
+``wasted_gb_h_used``        the same four over the wasted attempts
 ``total_*``                 good + wasted: what the registration cost the cluster
 ``lost_cpu_h_used``,
 ``lost_cpu_h_reserved``,
-``lost_gb_h_reserved``      the same three over the attempts lost to causes that are
+``lost_gb_h_reserved``,
+``lost_gb_h_used``          the same four over the attempts lost to causes that are
                             not the method's: in NO ``wasted_*`` and NO ``total_*``
 ``write_cpu_h_used``,
 ``write_cpu_h_reserved``    the method's own writer, the attempt that wrote the image
@@ -34,6 +41,11 @@ attempt that was retried, the last attempt of a registration that failed).
 ``cpu_h_scheduler``         the scheduler's own CPU time of the jobs that ran the good
                             attempts: a cross-check (below)
 ``cpu_h_used_vs_scheduler`` ``cpu_h_used / cpu_h_scheduler``
+``cpu_h_reserved_scheduler``,
+``gb_h_reserved_scheduler`` what the CLUSTER held for the good attempts' jobs, from the
+                            scheduler: ``AllocCPUS x ElapsedRaw`` and ``ReqMem x
+                            ElapsedRaw`` of ``sacct`` (:func:`reserved_hours`); NaN,
+                            and counted, without the accounting
 ``cpu_h_used_per_gpx``      ``cpu_h_used`` per gigapixel of moving image registered
 ``device``                  ``gpu`` when the registration had a GPU, else ``cpu``
 ==========================  ========================================================
@@ -87,6 +99,7 @@ SUMS = (
     ("cpu_h_used", "used_h"),
     ("cpu_h_reserved", "reserved_h"),
     ("gb_h_reserved", "gb_h"),
+    ("gb_h_used", "gb_used_h"),
 )
 COLUMNS = (
     "device",
@@ -137,21 +150,22 @@ def _n(value):
     return v
 
 
-def attempt(kind, cpus, mem_gb, wall_s, cpu_s, job=""):
+def attempt(kind, cpus, mem_gb, wall_s, cpu_s, job="", peak_gb=math.nan):
     """One attempt, as hours: ``used_h`` (measured CPU time), ``reserved_h`` (allocated
-    CPUs x duration), ``gb_h`` (requested memory x duration). A figure nobody recorded
-    is NaN, never zero."""
+    CPUs x duration), ``gb_h`` (requested memory x duration), ``gb_used_h`` (the
+    attempt's own peak x duration). A figure nobody recorded is NaN, never zero."""
     wall = _n(wall_s)
     return {
         "kind": kind,
         "used_h": _n(cpu_s) / 3600.0,
         "reserved_h": _n(cpus) * wall / 3600.0,
         "gb_h": _n(mem_gb) * wall / 3600.0,
+        "gb_used_h": _n(peak_gb) * wall / 3600.0,
         "job": str(job or ""),
     }
 
 
-def hours(kind, used_h, reserved_h, gb_h=math.nan):
+def hours(kind, used_h, reserved_h, gb_h=math.nan, gb_used_h=math.nan):
     """Attempts that are known only as sums (a round's stage jobs, as its run recorded
     them)."""
     return {
@@ -159,6 +173,7 @@ def hours(kind, used_h, reserved_h, gb_h=math.nan):
         "used_h": _n(used_h),
         "reserved_h": _n(reserved_h),
         "gb_h": _n(gb_h),
+        "gb_used_h": _n(gb_used_h),
         "job": "",
     }
 
@@ -208,12 +223,19 @@ def sums(attempts):
 
 
 # ── a registration in several scheduler jobs: its attempts, from its records ──────
-def stage_attempts(stage_dir):
+def stage_attempts(stage_dir, accounting=None):
     """Every attempt of COARSE, each tile and SOLVE of one round, from the records its
     stage jobs left (``<stage dir>/jobs/*.json``, ``regbench.stages``): ``(attempts,
     unmeasured)``. An attempt is good when it is the one its job ended ok with, and
-    lost when it failed for a cause that is not the method's (:func:`kind_of`). One
-    without a recorded duration is counted in ``unmeasured`` and is in no sum. None
+    lost when it failed for a cause that is not the method's (:func:`kind_of`). Each
+    carries its own peak (``peak_rss_mb``: ``gb_h_used``).
+
+    One without a recorded duration (the scheduler killed it) is settled from
+    ``accounting`` (``ladder.read_accounting`` of the stage jobs' accounting,
+    ``logs/accounting_stages.psv``) by its ``launch_id`` when the scheduler has its
+    elapsed time: billed WASTED (or lost) at the allocated CPUs and memory x that time,
+    flagged ``from_scheduler`` (R6, the rule a one-process row's killed rung has). One
+    the accounting does not have is counted in ``unmeasured`` and is in no sum. None
     when the folder holds no record."""
     from . import stages
 
@@ -232,10 +254,23 @@ def stage_attempts(stage_dir):
         found = True
         runs = stages.attempts_of(rec)
         for i, a in enumerate(runs):
-            if _n(a.get("wall_s")) != _n(a.get("wall_s")):
-                unmeasured += 1
-                continue
             ok = i == len(runs) - 1 and bool(a.get("ok"))
+            if _n(a.get("wall_s")) != _n(a.get("wall_s")):
+                ent = (accounting or {}).get(str(a.get("launch_id") or "")) or {}
+                elapsed = _n(ent.get("elapsed_s"))
+                if ok or elapsed != elapsed:
+                    unmeasured += 1
+                    continue
+                got = attempt(
+                    kind_of(a.get("cause")),
+                    a.get("cpus"),
+                    a.get("mem_gb"),
+                    elapsed,
+                    ent.get("cpu_s"),
+                    a.get("launch_id"),
+                )
+                out.append({**got, "from_scheduler": True})
+                continue
             out.append(
                 attempt(
                     GOOD if ok else kind_of(a.get("cause")),
@@ -244,9 +279,133 @@ def stage_attempts(stage_dir):
                     a.get("wall_s"),
                     a.get("cpu_s"),
                     a.get("launch_id"),
+                    _n(a.get("peak_rss_mb")) / 1024.0,
                 )
             )
     return (out, unmeasured) if found else None
+
+
+def _stage_records(stage_dir):
+    """``[(stage, record)]`` of a round's registration stage jobs that could be read."""
+    from . import stages
+
+    got = []
+    for path in sorted((Path(stage_dir) / "jobs").glob("*.json")):
+        name = path.stem.split("_")[0]
+        if name not in stages.TO_TRANSFORM:
+            continue
+        try:
+            rec = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict):
+            got.append((name, rec))
+    return got
+
+
+FOOTPRINT = (
+    "peak_largest_job_gb",
+    "peak_concurrent_gb",
+    "stage_cgroup_peak_gb",
+    "stage_jobs_known",
+    "stage_jobs_confined",
+    "stage_cpu_efficiency_max",
+    "stage_cpu_model",
+    "stage_load_max",
+)
+
+
+def stage_footprint(stage_dir, telemetry=None):
+    """What the stage jobs of one round needed of the cluster, from their records
+    (R4, R5, R9, R14), every figure over the attempts that ended their job ok unless
+    said:
+
+    * ``peak_largest_job_gb``: the largest peak (``peak_rss_mb``) of one attempt, what
+      a node must give ONE job;
+    * ``peak_concurrent_gb``: the most the round's attempts (every one with a start and
+      an end, failed ones too) held AT ONCE: at every moment the sum of the peaks of
+      the attempts running then, as ``stages.summarise`` computes
+      ``peak_cpus_at_once``; an upper bound of the true concurrent use, since each
+      attempt is held at its own peak for all of its life;
+    * ``stage_cgroup_peak_gb``: the largest job cgroup peak (``memory.peak``) of an
+      attempt, from its record (``cgroup_peak_mb``) else from the job's telemetry file
+      (``regbench.telemetry``);
+    * ``stage_jobs_known`` / ``stage_jobs_confined``: the attempts that recorded both
+      the CPUs they asked for and the cores they could use, and those of them held to
+      their CPUs (``cost.cores_confined``);
+    * ``stage_cpu_efficiency_max``: the largest ``cpu_s / (cpus x wall_s)`` of one
+      attempt (above 1: its threads were not held to its CPUs);
+    * ``stage_cpu_model``: the CPU models the attempts ran on, ``|``-separated;
+    * ``stage_load_max``: the largest 1-minute load an attempt saw at its start or end.
+
+    Every figure is NaN (or "") when no record has it; None when there is no record."""
+    from . import stages
+    from . import telemetry as tel_mod
+
+    recs = _stage_records(stage_dir)
+    if not recs:
+        return None
+    good, every = [], []
+    for _, rec in recs:
+        runs = stages.attempts_of(rec)
+        for i, a in enumerate(runs):
+            every.append(a)
+            if i == len(runs) - 1 and bool(a.get("ok")):
+                good.append({**rec, **a})
+
+    def mb(a, key):
+        return _n(a.get(key)) / 1024.0
+
+    def top(values):
+        values = [v for v in values if v == v]
+        return max(values) if values else math.nan
+
+    edges = []
+    for a in every:
+        b, e, pk = _n(a.get("started")), _n(a.get("ended")), mb(a, "peak_rss_mb")
+        if b == b and e == e and pk == pk:
+            edges += [(b, 1, pk), (e, 0, -pk)]
+    now, most = 0.0, math.nan if not edges else 0.0
+    for _, _, step in sorted(edges):
+        now += step
+        most = max(most, now)
+    cgroup = []
+    for a in good:
+        own = mb(a, "cgroup_peak_mb")
+        if own != own:
+            own = (
+                _n(tel_mod.of(telemetry, a.get("launch_id")).get("cgroup_peak_mb"))
+                / 1024.0
+            )
+        cgroup.append(own)
+    known = [
+        a
+        for a in good
+        if _n(a.get("cpus_requested")) == _n(a.get("cpus_requested"))
+        and _n(a.get("cpus_affinity")) == _n(a.get("cpus_affinity"))
+    ]
+    eff = [
+        _n(a.get("cpu_s")) / (_n(a.get("cpus")) * _n(a.get("wall_s")))
+        for a in good
+        if _n(a.get("cpus")) > 0 and _n(a.get("wall_s")) > 0
+    ]
+    loads = [
+        tel_mod.load(a.get(k)) for a in good for k in ("loadavg_start", "loadavg_end")
+    ]
+    return {
+        "peak_largest_job_gb": top(mb(a, "peak_rss_mb") for a in good),
+        "peak_concurrent_gb": most,
+        "stage_cgroup_peak_gb": top(cgroup),
+        "stage_jobs_known": len(known),
+        "stage_jobs_confined": sum(
+            _n(a["cpus_affinity"]) <= _n(a["cpus_requested"]) for a in known
+        ),
+        "stage_cpu_efficiency_max": top(eff),
+        "stage_cpu_model": "|".join(
+            sorted({str(a.get("cpu_model")) for a in good if a.get("cpu_model")})
+        ),
+        "stage_load_max": top(loads),
+    }
 
 
 def unreadable_stage_records(stage_dir):
@@ -306,3 +465,78 @@ def scheduler_hours(jobs, accounting):
 def ratio(a, b):
     a, b = _n(a), _n(b)
     return a / b if a == a and b > 0 else math.nan
+
+
+# ── what the cluster held: the scheduler's reservation (R7) ─────────────────────
+def _mem_gb(text, cpus):
+    """``ReqMem`` of sacct as GB: ``<n><K|M|G|T>`` with an optional ``n`` (per node)
+    or ``c`` (per CPU: times the allocated CPUs) suffix; NaN when it does not parse."""
+    text = str(text or "").strip()
+    per_cpu = text.endswith("c")
+    text = text.rstrip("nc")
+    scale = {"K": 1 / 1024**2, "M": 1 / 1024, "G": 1.0, "T": 1024.0}
+    unit = text[-1:].upper()
+    value = _n(text[:-1]) if unit in scale else _n(text) / 1024.0  # bare: MB
+    gb = value * scale.get(unit, 1.0)
+    return gb * _n(cpus) if per_cpu else gb
+
+
+def parse_reservations(text):
+    """``{job id: {"alloc_cpus", "req_mem_gb", "elapsed_s", "max_rss_gb"}}`` from
+    ``sacct -n -P -o JobID,State,ElapsedRaw,TotalCPU,AllocCPUS,ReqMem,MaxRSS`` (the
+    settle's and the stage jobs' accounting, ``score_cohort.sbatch``): the job's own
+    line gives the allocation and the elapsed time, its steps' lines the largest
+    ``MaxRSS``. Lines with fewer than seven fields (an accounting asked before
+    2026-10-18) give nothing."""
+    out, rss = {}, {}
+    for line in str(text or "").splitlines():
+        f = [x.strip() for x in line.split("|")]
+        if len(f) < 7 or not f[0]:
+            continue
+        job, _, step = f[0].partition(".")
+        r = _mem_gb(f[6], 1) if f[6] else math.nan
+        if r == r:
+            rss[job] = max(rss.get(job, 0.0), r)
+        if step:
+            continue
+        cpus = _n(f[4])
+        out[job] = {
+            "alloc_cpus": cpus,
+            "req_mem_gb": _mem_gb(f[5], cpus),
+            "elapsed_s": _n(f[2]),
+            "max_rss_gb": math.nan,
+        }
+    for job, rec in out.items():
+        rec["max_rss_gb"] = rss.get(job, math.nan)
+    return out
+
+
+def read_reservations(*paths):
+    """:func:`parse_reservations` of every file that exists, merged (later wins)."""
+    got = {}
+    for path in paths:
+        try:
+            got.update(parse_reservations(Path(path).read_text()))
+        except (OSError, TypeError):
+            continue
+    return got
+
+
+def reserved_hours(jobs, reservations):
+    """``(CPU-hours, GB-hours, jobs)`` the cluster HELD for the distinct ``jobs``:
+    ``AllocCPUS x ElapsedRaw`` and ``ReqMem x ElapsedRaw``; ``(NaN, NaN, n)`` when
+    the accounting lacks one of them (never a partial sum)."""
+    jobs = sorted({str(j) for j in jobs if j})
+    if not jobs or not reservations:
+        return math.nan, math.nan, len(jobs)
+    cpu = gb = 0.0
+    for job in jobs:
+        rec = reservations.get(job)
+        if not rec:
+            return math.nan, math.nan, len(jobs)
+        h = rec["elapsed_s"] / 3600.0
+        cpu += rec["alloc_cpus"] * h
+        gb += rec["req_mem_gb"] * h
+    if cpu != cpu or gb != gb:
+        return math.nan, math.nan, len(jobs)
+    return cpu, gb, len(jobs)

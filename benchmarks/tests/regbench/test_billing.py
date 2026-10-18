@@ -704,12 +704,13 @@ def test_the_tables_read_the_stage_records_and_name_the_parallel_time(tmp_path):
     assert all(math.isnan(r["gb_h_reserved"]) for r in rows[:2])
     booked = {j: {"cpu_s": 100.0} for j in ("c1", "t0b", "t1", "s1", "20_3")}
     score.bill_from_disk(rows, out, [case], booked)
-    # both results of the round share its stage records, found through the launch
-    for r in rows[:2]:
-        assert r["gb_h_reserved"] == pytest.approx(GOOD_GB)
-        assert (
-            r["cpu_h_scheduler"] == pytest.approx(400 / H) and r["billing_note"] == ""
-        )
+    # both results of the round share its stage records, found through the launch;
+    # the rigid one is billed with its parent (T31 R21), never twice
+    r = rows[0]
+    assert r["gb_h_reserved"] == pytest.approx(GOOD_GB)
+    assert r["cpu_h_scheduler"] == pytest.approx(400 / H) and r["billing_note"] == ""
+    assert rows[1]["gb_h_reserved"] == rows[1]["cpu_h_scheduler"] == ""
+    assert rows[1]["cost_blank_reason"] == "billed with stare"
     assert rows[0]["moving_gpx"] == 1.0
     assert rows[2]["cpu_h_scheduler"] == pytest.approx(100 / H)
     per = score.summarise_resources(rows)

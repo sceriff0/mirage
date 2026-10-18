@@ -124,11 +124,16 @@ SUMMARY_COLUMNS = (
     # a retry), ``cached`` (a task Nextflow reused, whose cost is another run's) or
     # ``no_ok_end`` (no ok end line); ``|``-joined, blank when complete
     "reason",
-    # tasks whose ``%cpu`` the trace left blank: their CPU-hours are in no sum, so where
-    # it is not 0 the row's ``cpu_h_used`` is a LOWER BOUND
+    # tasks whose ``%cpu`` the trace left blank: the row's ``cpu_h_used`` is then BLANK
+    # (T31 R18, ``score._whole``'s rule: a sum one of whose figures is missing is no
+    # figure) and ``cpu_h_used_lower_bound`` is the sum of the measured tasks
     "n_tasks_unmeasured",
+    # tasks whose peak the trace left blank (T31 R18): ``peak_rss_gb`` is the largest of
+    # the others, so where it is not 0 it is a lower bound
+    "n_tasks_peak_unmeasured",
     "wall_s",
     "cpu_h_used",
+    "cpu_h_used_lower_bound",
     "cpu_h_reserved",
     "gb_h_reserved",
     "peak_rss_gb",
@@ -411,6 +416,14 @@ def _sum(values):
     return float(sum(got)) if got else math.nan
 
 
+def _whole(values):
+    """The sum, or NaN when one figure is missing (``score._whole``'s rule, T31 R18)."""
+    got = list(values)
+    if not got or any(_num(v) is None for v in got):
+        return math.nan
+    return float(sum(got))
+
+
 def _max(values):
     got = [x for x in (_num(v) for v in values) if x is not None]
     return float(max(got)) if got else math.nan
@@ -465,8 +478,8 @@ def _patient_row(backend, patient, task_rows, run, names):
     n_failed = sum(r["status"] in FAILED for r in task_rows)
     n_retried = _retried(task_rows, names)
     n_cached = sum(r["status"] == "CACHED" for r in task_rows)
-    used = _sum(r["cpu_h_used"] for r in task_rows)
-    reg_used = _sum(r["cpu_h_used"] for r in reg)
+    used = _whole(r["cpu_h_used"] for r in task_rows)
+    reg_used = _whole(r["cpu_h_used"] for r in reg)
     reason = [
         why
         for why, said in (
@@ -492,8 +505,10 @@ def _patient_row(backend, patient, task_rows, run, names):
         "complete_run": int(not reason),
         "reason": "|".join(reason),
         "n_tasks_unmeasured": sum(_num(r["pcpu"]) is None for r in task_rows),
+        "n_tasks_peak_unmeasured": sum(_num(r["peak_rss_gb"]) is None for r in task_rows),
         "wall_s": _wall(task_rows),
         "cpu_h_used": used,
+        "cpu_h_used_lower_bound": _sum(r["cpu_h_used"] for r in task_rows),
         "cpu_h_reserved": _sum(r["cpu_h_reserved"] for r in task_rows),
         "gb_h_reserved": _sum(r["gb_h_reserved"] for r in task_rows),
         "peak_rss_gb": _max(r["peak_rss_gb"] for r in task_rows),
@@ -512,8 +527,10 @@ SUMMED = (
     "n_retried",
     "n_cached",
     "n_tasks_unmeasured",
+    "n_tasks_peak_unmeasured",
     "wall_s",
     "cpu_h_used",
+    "cpu_h_used_lower_bound",
     "cpu_h_reserved",
     "gb_h_reserved",
     "registration_wall_s",
@@ -521,6 +538,10 @@ SUMMED = (
     "registration_cpu_h_reserved",
     "input_gb",
 )
+
+
+# the sums that are no figure when one of their figures is missing (T31 R18)
+WHOLE_SUMS = ("cpu_h_used", "registration_cpu_h_used")
 
 
 def summarise(task_rows, runs=None) -> list[dict]:
@@ -532,9 +553,10 @@ def summarise(task_rows, runs=None) -> list[dict]:
     What the ``all`` row is (S6): ``n_patients`` counts only the complete patients and
     every sum is over them alone, so a backend whose run lost a patient (``reason`` on
     that patient's own row, ``no_trace`` among them) is summed over fewer patients and
-    says so with ``complete_run = 0``. A sum skips a NaN figure (``_sum``; unlike
-    ``score._whole``, which blanks a sum one of whose figures is missing), so where
-    ``n_tasks_unmeasured`` is not 0 the CPU-hours are lower bounds."""
+    says so with ``complete_run = 0``. CPU-hours used are ``score._whole``'s sums (T31
+    R18): a task whose ``%cpu`` the trace left blank blanks its patient's
+    ``cpu_h_used`` (and the ``all`` row's), and ``cpu_h_used_lower_bound`` beside it is
+    the sum of what was measured; the other sums skip a NaN figure (``_sum``)."""
     runs = getattr(task_rows, "runs", {}) if runs is None else runs
     names = getattr(task_rows, "names", {})
     out = []
@@ -555,6 +577,8 @@ def summarise(task_rows, runs=None) -> list[dict]:
         total = {"backend": backend, "patient": "all", "n_patients": len(whole)}
         for col in SUMMED:
             total[col] = _sum(p[col] for p in whole) if whole else math.nan
+        for col in WHOLE_SUMS:  # T31 R18: a patient without the figure blanks the total
+            total[col] = _whole(p[col] for p in whole) if whole else math.nan
         total["reason"] = ""
         for col in (
             "n_tasks",
@@ -563,6 +587,7 @@ def summarise(task_rows, runs=None) -> list[dict]:
             "n_retried",
             "n_cached",
             "n_tasks_unmeasured",
+            "n_tasks_peak_unmeasured",
         ):
             total[col] = int(total[col]) if whole else 0
         total["complete_run"] = int(len(whole) == len(per))

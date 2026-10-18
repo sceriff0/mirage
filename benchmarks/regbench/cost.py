@@ -150,6 +150,50 @@ CLOCK = {
 }
 
 
+# The same work, stated per adapter (P11, R15): whether the method's own conversion is
+# inside its registration clock (`yes`), timed apart and outside it (`no`), or there is
+# none (`none`); the size it registers at; and the channels it reads. Read from each
+# adapter's docstring and options (benchmarks/regbench/methods/<name>.py) `[FULL: the
+# adapters' module docstrings and the lines cited there]`.
+WORK = {
+    "stare": {
+        "convert_inside_clock": "none",
+        "working_px": "full resolution, tile by tile (a STARE_PREP row reads the "
+        "reduced nuclear slide, f x f blocks)",
+        "channels_read": "the nuclear channel (--nuclear-index)",
+    },
+    "valis_mirage": {
+        "convert_inside_clock": "yes",
+        "working_px": "max_image_dim_px 4000 for the rigid step; the tier's "
+        "max_processed_image_dim_px for the non-rigid and micro steps",
+        "channels_read": "the DAPI channel (get_channel_index('dapi'), else channel 0)",
+    },
+    "valis": {
+        "convert_inside_clock": "yes",
+        "working_px": "VALIS's defaults (the _hires rows: upstream's high-resolution "
+        "example)",
+        "channels_read": "the DAPI channel (a fuzzy match on 'dapi')",
+    },
+    "deeperhistreg": {
+        "convert_inside_clock": "no",
+        "working_px": "4096 px on the short side (default_initial_nonrigid), 8192 px "
+        "for the _hr rows",
+        "channels_read": "the nuclear channel, written as one single-page TIFF per slide",
+    },
+    "ashlar": {
+        "convert_inside_clock": "no",
+        "working_px": "full resolution, the tiles the benchmark cut (retile_s, timed "
+        "apart)",
+        "channels_read": "the nuclear channel (-c), the same index in every cycle",
+    },
+    "palom": {
+        "convert_inside_clock": "none",
+        "working_px": "an affine from 2000 px thumbnails, then block shifts at level 0",
+        "channels_read": "the nuclear channel of each slide (read_level_channels)",
+    },
+}
+
+
 def _nan(value):
     try:
         v = float(value)
@@ -212,6 +256,33 @@ def complete_image(written):
 
 
 # ── the lines above every cost table ──────────────────────────────────────────
+STARE_LADDER = (
+    "STARE's memory: its stage jobs climb the PIPELINE's own per-process ladder "
+    "(COARSE, every tile, SOLVE at their requests x attempt), not the benchmark's "
+    "16/64/240 GB rungs every other method climbs, and one tile job needs at most "
+    "16 GB; its `mem_requested_gb` and `attempt` are those of the round's last job "
+    "(the benchmark's own), not of the registration."
+)
+INSTRUMENTS_DIFFER = (
+    "instruments differ by path: a registration in one process is read by its job "
+    "cgroup's CPU counter, a stage job by `os.wait4` of its command, and the driver's "
+    "sampler of the process tree costs a few percent of a core [MEMORY: the overhead "
+    "is the sampler's design figure, unverified on this cluster]; the CPU-hours of the two "
+    "paths are of the same kind, the peaks are not (`rss_method`)."
+)
+GB_H_POLICY = (
+    "`gb_h_reserved` measures the REQUEST policy, not the method: STARE's stage jobs "
+    "at the pipeline's per-process requests, every other method at the ladder's "
+    "rung (16 GB first). `gb_h_used` (each attempt's own peak x its duration) is the "
+    "memory the method held; `gb_h_reserved_scheduler` is what the cluster held "
+    "(sacct's ReqMem x ElapsedRaw)."
+)
+JVM_RSS = (
+    "JVM methods (VALIS): a JVM's resident memory follows its maximum heap (-Xmx, "
+    "`jvm_max_heap_gb`), which the adapter sets from the rung, so its peak grows with "
+    "the rung it ran at and is not the method's need; `jvm_peak_heap_gb` (the heap "
+    "the JVM used) is NA: it is not measured."
+)
 def header_lines(res_rows):
     """What a reader of any cost table must know first, from what the runs recorded:
     how many had no out-of-memory watcher, which thread variables a method's image
@@ -286,6 +357,28 @@ def header_lines(res_rows):
             "figure of that row is a lower bound"
             + (f"; {int(_median(tiles))} tiles per round (median)." if tiles else ".")
         )
+    if split:
+        lines.append(STARE_LADDER)  # R22
+    lines.append(INSTRUMENTS_DIFFER)  # R23
+    lines.append(GB_H_POLICY)  # R8
+    if any(r.get("jvm_max_heap_gb") not in ("", None) for r in ran):
+        lines.append(JVM_RSS)  # R16
+    rusage = [r for r in ran if str(r.get("rss_method") or "").startswith("rusage")]
+    failures = [
+        r for r in ran if _is_number(r.get("cpu_read_failures")) and r["cpu_read_failures"]
+    ]
+    methods = sorted({str(r.get("rss_method")) for r in ran if r.get("rss_method")})
+    lines.append(  # R19
+        "memory instrument (`rss_method`): "
+        + (", ".join(f"`{m}`" for m in methods) if methods else "none recorded")
+        + f"; {len(rusage)} result(s) read their peak by `rusage` alone (a LOWER bound: "
+        "`peak_rss_comparable = False`, in no peak comparison and counted where a peak is "
+        f"compared); {len(failures)} result(s) had CPU counter reads that failed "
+        "(`cpu_read_failures`)."
+    )
+    from . import telemetry
+
+    lines.append(telemetry.contention_line(ran))  # R14
     reused = sum(bool(r.get("reused")) for r in ran)
     lines.append(
         f"reused: {reused} of {len(ran)} results were already ok for the same "
@@ -312,6 +405,7 @@ def header_lines(res_rows):
 
 
 # ── cores ─────────────────────────────────────────────────────────────────────
+EFFICIENCY_ABOVE = 1.05
 def cores_confined(res_rows):
     """One line for the head of every cost table: was each run held to its CPUs?
 
@@ -325,11 +419,40 @@ def cores_confined(res_rows):
         (r.get("cpus_asked"), r.get("cpus_affinity"), r.get("cpus_node")) for r in ran
     ]
     known = [(q, a, n) for q, a, n in seen if _is_number(q) and _is_number(a)]
+    # R9: the stage jobs of a registration in several jobs, from their own records
+    s_known = sum(int(r["stage_jobs_known"]) for r in ran if _is_number(r.get("stage_jobs_known")))
+    s_yes = sum(
+        int(r["stage_jobs_confined"]) for r in ran if _is_number(r.get("stage_jobs_confined"))
+    )
+    eff = {}
+    for r in ran:
+        for key in ("cpu_efficiency", "stage_cpu_efficiency_max"):
+            if _is_number(r.get(key)):
+                a = r.get("adapter") or "?"
+                eff[a] = max(eff.get(a, -math.inf), float(r[key]))
+    above = sum(
+        _is_number(r.get("cpu_efficiency")) and r["cpu_efficiency"] > EFFICIENCY_ABOVE
+        for r in ran
+    )
+    tail = (
+        (
+            f" Stage jobs: {s_yes} of {s_known} attempts held to their CPUs."
+            if s_known
+            else ""
+        )
+        + (
+            " Largest cpu_efficiency per method: "
+            + ", ".join(f"{a} {v:.2f}" for a, v in sorted(eff.items()))
+            + f"; {above} row(s) above {EFFICIENCY_ABOVE:g} (more CPU than allocated)."
+            if eff
+            else ""
+        )
+    )
     if not known:
         return (
             "cores confined: unknown (no run recorded both the CPUs it asked for and "
             "the cores it could run on; outside a scheduler nothing is asked for)"
-        )
+        ) + tail
     yes = sum(a <= q for q, a, _ in known)
     asked = sorted({int(q) for q, _, _ in known})
     saw = sorted({int(a) for _, a, _ in known})
@@ -348,6 +471,7 @@ def cores_confined(res_rows):
         + "). Where a run is not confined, a method that starts one thread per "
         "visible core used more than its allocation: read `cpu_efficiency`."
         + (f" Workers each method's own pool had: {held}." if held else "")
+        + tail
     )
 
 

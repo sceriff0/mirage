@@ -710,6 +710,12 @@ def test_a_patient_with_no_trace_is_a_row_and_a_blank_cpu_is_counted(tmp_path):
     assert by["P1"]["n_tasks_unmeasured"] == 1
     assert by["all"]["n_patients"] == 1 and by["all"]["complete_run"] == 0
     assert by["all"]["n_tasks_unmeasured"] == 1
+    # T31 R18: the patient's CPU-hours are no figure (score._whole's rule), the
+    # measured tasks' sum is beside them as a lower bound, and the total is blank too
+    import math as _m
+
+    assert _m.isnan(by["P1"]["cpu_h_used"]) and by["P1"]["cpu_h_used_lower_bound"] > 0
+    assert _m.isnan(by["all"]["cpu_h_used"])
     assert [list(s) for s in summary] == [list(compute_all.SUMMARY_COLUMNS)] * len(
         summary
     )
@@ -742,3 +748,16 @@ def test_a_planned_patient_that_left_no_folder_is_a_row(tmp_path):
     assert by[("valis", "P2")]["reason"] == "no_trace"
     assert by[("tiled", "P3")]["reason"] == "no_trace"
     assert by[("valis", "P1")]["complete_run"] == 1
+
+
+def test_a_task_without_a_peak_is_counted(tmp_path):
+    """T31 R18: a task whose peak the trace left blank is counted
+    (``n_tasks_peak_unmeasured``): the patient's peak is a lower bound."""
+    out = tmp_path / "out"
+    cols = _row(2, "MIRAGE:POSTPROCESS:SEGMENT").split("\t")
+    cols[14] = "-"  # peak_rss: the trace's blank
+    rows = [VALIS_ROWS[0], "\t".join(cols)]
+    _trace(out, "valis", "P1", rows, end="ok")
+    by = {s["patient"]: s for s in compute_all.summarise(compute_all.rows(out))}
+    assert by["P1"]["n_tasks_peak_unmeasured"] == 1
+    assert by["all"]["n_tasks_peak_unmeasured"] == 1

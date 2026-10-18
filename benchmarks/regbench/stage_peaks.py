@@ -42,6 +42,27 @@ def _peak_gb(rec):
     return None
 
 
+def _ok_attempt(rec):
+    """The attempt a job ended ok with, or None."""
+    if not rec:
+        return None
+    last = stages.attempts_of(rec)[-1]
+    return last if last.get("ok") is True else None
+
+
+def _efficiency(attempts):
+    """``sum cpu_s / sum (cpus x wall_s)`` of the attempts (R9): above 1 where a stage's
+    threads were not held to its CPUs; None without a figure."""
+    used = held = 0.0
+    for a in attempts:
+        c, n, w = a.get("cpu_s"), a.get("cpus"), a.get("wall_s")
+        if not all(isinstance(v, (int, float)) for v in (c, n, w)):
+            return None
+        used += c
+        held += n * w
+    return used / held if held > 0 else None
+
+
 def _tile_rows(stage_dir):
     jobs = Path(stage_dir) / "jobs"
     prefix = "tile_"  # stages.record_path(stage_dir, "tile", row)
@@ -79,6 +100,13 @@ def round_row(run_json, stage_dir, case):
         for i in _tile_rows(stage_dir)
         if (p := _peak_gb(stages.read_record(stage_dir, "tile", i))) is not None
     ]
+    coarse = _ok_attempt(stages.read_record(stage_dir, "coarse"))
+    solve = _ok_attempt(stages.read_record(stage_dir, "solve"))
+    tiles = [
+        a
+        for i in range(len(_tile_rows(stage_dir)))
+        if (a := _ok_attempt(stages.read_record(stage_dir, "tile", i))) is not None
+    ]
     stitch = ((run_json or {}).get("native") or {}).get("stitch_job") or {}
     stitch_mb = stitch.get("peak_rss_mb")
     box = None if tile is None or stride is None else tile + 2 * 3 * stride
@@ -95,6 +123,15 @@ def round_row(run_json, stage_dir, case):
         "tile_peak_gb_max": max(peaks) if peaks else None,
         "n_tiles": len(peaks),
         "solve_peak_gb": _peak_gb(stages.read_record(stage_dir, "solve")),
+        # R9: each stage's CPU efficiency (its good attempts); R15: what COARSE cost,
+        # the prior an affine-anchored ASHLAR row reads
+        "coarse_cpu_efficiency": _efficiency([coarse] if coarse else []),
+        "tile_cpu_efficiency": _efficiency(tiles) if tiles else None,
+        "solve_cpu_efficiency": _efficiency([solve] if solve else []),
+        "coarse_cpu_h": coarse["cpu_s"] / 3600.0
+        if coarse and isinstance(coarse.get("cpu_s"), (int, float))
+        else None,
+        "coarse_s": coarse.get("wall_s") if coarse else None,
         "stitch_peak_gb": (
             stitch_mb / MB_PER_GB if isinstance(stitch_mb, (int, float)) else None
         ),

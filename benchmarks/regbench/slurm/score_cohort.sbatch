@@ -85,6 +85,31 @@ settle_ids() {
         $2 ~ /-[0-9]+g(-again)?$/ && $2 !~ /^rb-sc-/ && (!own || ($3 in want)) && !seen[$3]++ { print $3 }
     ' "$1" | paste -sd, -
 }
+SETTLE_FIELDS=JobID,State,ElapsedRaw,TotalCPU,AllocCPUS,ReqMem,MaxRSS
+# the stage jobs of a registration in several jobs (COARSE, every tile, SOLVE: their
+# names end in -<stage>-a<attempt>[-o<offset>]), as the launcher and the tile feeder
+# name them in jobs.tsv: their ids, comma-separated
+stage_ids() {
+    awk -F'\t' '$2 ~ /-(coarse|tile|solve)-a[0-9]+(-o[0-9]+)?$/ && !seen[$3]++ { print $3 }' "$1" \
+        | paste -sd, -
+}
+# their accounting, one line per job or array task (-X: no steps, so the hundreds of
+# tile tasks stay one short query): a stage attempt the scheduler killed before it
+# recorded its end is settled from it at table time, and what the cluster held for the
+# stage jobs is read from it (score.bill_from_disk: R6, R7). Never a reason to fail.
+settle_stages() {
+    local jobs="$REGBENCH_OUT/logs/jobs.tsv" into="$REGBENCH_OUT/logs/accounting_stages.psv" ids
+    [ -s "$jobs" ] && command -v sacct >/dev/null || return 0
+    ids="$(stage_ids "$jobs")"
+    [ -n "$ids" ] || return 0
+    if sacct -X -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$into.new" 2>/dev/null && [ -s "$into.new" ]; then
+        mv "$into.new" "$into"
+        echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') stage job(s) -> $into"
+    else
+        rm -f "$into.new"
+        echo "settle: sacct gave no accounting of the stage jobs (their killed attempts stay unmeasured)"
+    fi
+}
 settle_killed() {
     local jobs="$REGBENCH_OUT/logs/jobs.tsv" acct="$REGBENCH_OUT/logs/accounting.psv" ids
     if [ ! -s "$jobs" ]; then
@@ -108,7 +133,9 @@ settle_killed() {
     echo "settle: the accounting of $(tr ',' '\n' <<< "$ids" | wc -l | tr -d ' ') run job(s) of submission ${REGBENCH_SUBMISSION:-?}"
     # with the jobs' steps (no -X): a job's line alone reports no CPU time, its steps
     # do (`regbench ... settle` adds them up: ladder.parse_accounting)
-    if ! sacct -n -P -j "$ids" -o JobID,State,ElapsedRaw,TotalCPU > "$acct" 2>/dev/null \
+    # AllocCPUS, ReqMem and MaxRSS after the four the settle reads: what the cluster
+    # held for each job (billing.parse_reservations, R7); the settle reads fields 1-4
+    if ! sacct -n -P -j "$ids" -o "$SETTLE_FIELDS" > "$acct" 2>/dev/null \
         || [ ! -s "$acct" ]; then
         echo "settle: sacct gave no accounting of the jobs in $jobs"
         return 1
@@ -123,6 +150,7 @@ already_settled() {
 
 if [ "$kind" = settle ]; then
     rm -f "$settled"
+    settle_stages
     if settle_killed; then
         regbench_say_end "REGBENCH_END kind=settle status=ok cause=- whose=- exit=0 log=${REGBENCH_LOG:--}"
     else
