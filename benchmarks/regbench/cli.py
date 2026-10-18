@@ -72,12 +72,15 @@ import contextlib
 import os
 import sys
 
-from . import DATASETS, compute_all, plugins
+from . import DATASETS, PUBLIC, compute_all, plugins, public_of
 from . import METHODS as PUBLIC_METHODS
 from .resources import n_cpus
 
 # the public methods, and those of a private method plug-in when one is enabled
 METHODS = PUBLIC_METHODS + plugins.method_names()
+# what `--dataset` takes where a public dataset can be named: the cohort, then the public
+# datasets (regbench.PUBLIC), each scored into tables of its own and never pooled
+ALL_DATASETS = DATASETS + tuple(PUBLIC)
 
 
 def build_parser():
@@ -199,7 +202,7 @@ def build_parser():
 
     lst = sub.add_parser("list")
     lst.add_argument("--cases", required=True)
-    lst.add_argument("--dataset", required=True, choices=DATASETS)
+    lst.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     what = lst.add_mutually_exclusive_group()
     what.add_argument("--ids", action="store_true", help="print the case ids")
     what.add_argument(
@@ -233,7 +236,7 @@ def build_parser():
     r = sub.add_parser("run")
     r.add_argument("--cases", required=True)
     r.add_argument("--out", required=True)
-    r.add_argument("--dataset", required=True, choices=DATASETS)
+    r.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     r.add_argument("--method", required=True, choices=METHODS)
     which = r.add_mutually_exclusive_group(required=True)
     which.add_argument("--case-id", default=None, help="one case (a pair method)")
@@ -402,7 +405,7 @@ def build_parser():
     )
     cm.add_argument("--cases", required=True)
     cm.add_argument("--out", required=True)
-    cm.add_argument("--dataset", required=True, choices=DATASETS)
+    cm.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     cm.add_argument("--method", required=True, choices=METHODS)
     cm.add_argument("--label", default=None)
     cm.add_argument("--index", type=int, action="append", required=True)
@@ -418,7 +421,7 @@ def build_parser():
     )
     st.add_argument("--out", required=True)
     st.add_argument("--cases", default=None, help="default: REGBENCH_CASES")
-    st.add_argument("--dataset", default=None, choices=DATASETS)
+    st.add_argument("--dataset", default=None, choices=ALL_DATASETS)
     st.add_argument("--submission", default=None, help="default: <out>/logs/submission")
     st.add_argument("--runs", default=None, help="only these runs (space-separated)")
     st.add_argument("--csv", action="store_true", help="the table as CSV")
@@ -445,8 +448,9 @@ def build_parser():
         "--dataset",
         nargs="*",
         default=None,
-        choices=DATASETS,
-        help="default: the cohort's datasets",
+        choices=ALL_DATASETS,
+        help="default: the cohort's datasets. A public dataset is scored alone into "
+        "<out>/tables/<dataset>/, never pooled with the cohort",
     )
     sc.add_argument("--workers", type=int, default=n_cpus())
     sc.add_argument(
@@ -517,7 +521,7 @@ def build_parser():
     )
     so.add_argument("--cases", required=True)
     so.add_argument("--out", required=True)
-    so.add_argument("--dataset", required=True, choices=DATASETS)
+    so.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     which = so.add_mutually_exclusive_group(required=True)
     which.add_argument(
         "--index",
@@ -549,7 +553,7 @@ def build_parser():
     )
     ts.add_argument("--cases", required=True)
     ts.add_argument("--out", required=True)
-    ts.add_argument("--dataset", nargs="*", default=None, choices=DATASETS)
+    ts.add_argument("--dataset", nargs="*", default=None, choices=ALL_DATASETS)
     ts.add_argument(
         "--index",
         type=int,
@@ -588,7 +592,7 @@ def build_parser():
     )
     sg.add_argument("--cases", required=True)
     sg.add_argument("--out", required=True)
-    sg.add_argument("--dataset", required=True, choices=DATASETS)
+    sg.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     sg.add_argument("--method", required=True, choices=METHODS)
     sg.add_argument("--label", default=None)
     sg.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
@@ -619,7 +623,7 @@ def build_parser():
         "<tiles>`",
     )
     sl.add_argument("--cases", required=True)
-    sl.add_argument("--dataset", required=True, choices=DATASETS)
+    sl.add_argument("--dataset", required=True, choices=ALL_DATASETS)
     sl.add_argument("--method", required=True, choices=METHODS)
     sl.add_argument("--label", default=None)
     sl.add_argument("--opt", action="append", default=[], metavar="KEY=VALUE")
@@ -653,7 +657,7 @@ def build_parser():
         help="with --dataset: the slides of one prepared case of each dataset must be "
         "readable from inside the image",
     )
-    pf.add_argument("--dataset", action="append", default=[], choices=DATASETS)
+    pf.add_argument("--dataset", action="append", default=[], choices=ALL_DATASETS)
 
     pk = sub.add_parser(
         "pick-patients",
@@ -685,7 +689,7 @@ def build_parser():
         "tables: <out>/paper/<table>.csv for the cohort, <out>/paper/<dataset>/ otherwise",
     )
     pa.add_argument("--out", required=True, help="the results folder `score` wrote to")
-    pa.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    pa.add_argument("--dataset", default="multiplex", choices=ALL_DATASETS)
     pa.add_argument(
         "--cases",
         default=None,
@@ -700,7 +704,7 @@ def build_parser():
         "whose input table is absent is written as a placeholder naming it",
     )
     pl.add_argument("--out", default=None, help="the results folder `paper` wrote to")
-    pl.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    pl.add_argument("--dataset", default="multiplex", choices=ALL_DATASETS)
     pl.add_argument("--only", default=None, help="figure names, comma-separated")
     pl.add_argument(
         "--tables",
@@ -797,7 +801,7 @@ def build_parser():
     rn.add_argument(
         "--dataset",
         default=None,
-        choices=DATASETS,
+        choices=ALL_DATASETS,
         help="the runs of this dataset",
     )
     rn.add_argument(
@@ -1426,7 +1430,11 @@ def _score_one(a):
         case_id=a.case_id,
         workers=a.workers,
         dev=a.dev,
-        expected=None if a.only_run else variants.expected_variants(),
+        expected=None
+        if a.only_run
+        else variants.expected_variants(
+            a.dataset if public_of(a.dataset) is not None else None
+        ),
         row_checks=variants.row_checks(
             os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
         ),
@@ -1449,9 +1457,13 @@ def _tissue(a):
             "tissue: OpenCV (cv2) is not importable in this environment; the pieces "
             "are the released ACCREDIT code's and need it"
         )
-    expected = None if a.only_run else variants.expected_variants()
     jobs = []
     for ds in a.dataset or DATASETS:
+        expected = (
+            None
+            if a.only_run
+            else variants.expected_variants(ds if public_of(ds) is not None else None)
+        )
         cases = [
             c for c in list_cases(a.cases, ds) if c.case_id.startswith("dev_") == a.dev
         ]
@@ -1714,32 +1726,43 @@ def _main(a):
     if getattr(a, "submission", None):
         os.environ[score.SUBMISSION_ENV] = a.submission
 
-    cohort = a.dataset or None
-    expected = None if a.only_run else variants.expected_variants()
-    primary = None if a.only_run else list(variants.PRIMARY)
-    score.score(
-        a.cases,
-        a.out,
-        cohort,
-        a.workers,
-        dev=a.dev,
-        expected=expected,
-        primary=primary,
-        with_tissue=not a.no_tissue,
-        verdicts=a.verdicts,
-        run_variants=variants.run_variants(),
-        row_checks=variants.row_checks(
-            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
-        ),
-        mask_flags=variants.mask_flags(
-            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
-        ),
-        selfcheck_masks=variants.selfcheck_mask_rows(
-            os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
-        ),
-        fresh=a.fresh,
-        manifest=a.manifest,
-    )
+    named = list(a.dataset or [])
+    public = [d for d in named if public_of(d) is not None]
+    cohort = [d for d in named if public_of(d) is None] or None
+    # the cohort, then each public dataset in a call of its own, with its own run list
+    # (variants.expected_variants / primary_for): never pooled (score.tables_dir)
+    for ds in ([cohort] if cohort or not public else []) + [[d] for d in public]:
+        one = None if ds is None or public_of(ds[0]) is None else ds[0]
+        expected = None if a.only_run else variants.expected_variants(one)
+        if a.only_run:
+            primary = None
+        elif one is None:
+            primary = list(variants.PRIMARY)
+        else:
+            primary = variants.primary_for(one)
+        score.score(
+            a.cases,
+            a.out,
+            ds,
+            a.workers,
+            dev=a.dev,
+            expected=expected,
+            primary=primary,
+            with_tissue=not a.no_tissue,
+            verdicts=a.verdicts,
+            run_variants=variants.run_variants(),
+            row_checks=variants.row_checks(
+                os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+            ),
+            mask_flags=variants.mask_flags(
+                os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+            ),
+            selfcheck_masks=variants.selfcheck_mask_rows(
+                os.path.join(a.out, "logs", "selfcheck"), score.of_this_submission
+            ),
+            fresh=a.fresh,
+            manifest=a.manifest if one is None else None,
+        )
     from . import failure_log
 
     failure_log.emit_end("score", "ok")

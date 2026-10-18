@@ -3,6 +3,10 @@
 #
 #   REGBENCH_REPO    the mirage repository (default: where this file is)
 #   REGBENCH_CASES   the prepared cases (`python -m benchmarks.regbench prepare ...`)
+#   REGBENCH_CASES_<NAME>  the prepared cases of the public dataset <name>
+#                    (regbench.PUBLIC; the name in capitals, e.g. REGBENCH_CASES_IBEX):
+#                    read only when `submit_cohort.sh --datasets` names it
+#                    (regbench_cases_of), and bound into the images when set
 #   REGBENCH_OUT     results: one folder per result name, plus tables/, logs/ and cache/
 #   REGBENCH_WORK    scratch for a method's intermediates (default: $TMPDIR, node-local)
 #   REGBENCH_BIND    more paths to bind into the images, comma-separated: wherever the
@@ -101,6 +105,29 @@ REGBENCH_RESULTS_HOME="${HOME:-}/regbench_results"
 : "${REGBENCH_STARE_SRC_IMAGES:=ASHLAR VALIS_MIRAGE}"
 export REGBENCH_REPO REGBENCH_CASES REGBENCH_OUT REGBENCH_CPUS REGBENCH_MEM
 export REGBENCH_STARE_SRC_IMAGES
+
+# regbench_cases_of <dataset>: the folder the dataset's cases are prepared under. The
+# cohort's are REGBENCH_CASES; a public dataset's (regbench.PUBLIC) REGBENCH_CASES_<NAME>,
+# by the dataset's base name (`mcmicro@raw` is MCMICRO). Empty, with exit 1, when that is
+# not set: the caller says so.
+regbench_cases_of() {
+    local base="${1%%@*}" var
+    if [ "$1" = multiplex ]; then
+        printf '%s\n' "$REGBENCH_CASES"
+        return 0
+    fi
+    var="REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$base")"
+    [ -n "${!var:-}" ] || return 1
+    printf '%s\n' "${!var}"
+}
+# the public datasets' case folders that are set, comma-separated (bound into the images)
+_regbench_public_cases() {
+    local v out=""
+    for v in $(compgen -v REGBENCH_CASES_); do
+        [ -n "${!v:-}" ] && out="${out:+$out,}${!v}"
+    done
+    printf '%s' "$out"
+}
 
 # The harness is imported from the checkout as `benchmarks.regbench`. STARE itself is the
 # pinned release installed in the method's environment (requirements/stare.txt).
@@ -288,6 +315,9 @@ regbench_exec() (
             ${REGBENCH_NUCLEI:+"$REGBENCH_NUCLEI"} ${REGBENCH_INPUTS:+"$REGBENCH_INPUTS"} 2>/dev/null \
             || echo "regbench: could not create every folder to bind; the runtime names the one that is missing." >&2
         bind="$REGBENCH_REPO,$REGBENCH_CASES,$REGBENCH_OUT${REGBENCH_WORK:+,$REGBENCH_WORK}${REGBENCH_BIND:+,$REGBENCH_BIND}"
+        # the public datasets' cases, those that are named (REGBENCH_CASES_<NAME>)
+        v="$(_regbench_public_cases)"
+        [ -z "$v" ] || bind="$bind,$v"
         # the input folder: the preprocessed slides, rounds.csv and the outlines the
         # nuclei step traces (launch.sbatch --inputs / --prepare). Not twice: under a
         # folder that is bound already (launch.sbatch binds REGBENCH_ROOT) it is there

@@ -594,7 +594,10 @@ def pause(monkeypatch, *names):
 
 def test_no_run_is_paused_today():
     assert variants.Run._fields[-2:] == ("active", "regimes")
-    assert variants.Run._field_defaults == {"active": True, "regimes": ("cyclic_if",)}
+    assert variants.Run._field_defaults == {
+        "active": True,
+        "regimes": tuple(rg.REGIMES),
+    }
     assert [r for r in variants.RUNS if not r.active] == []
     assert variants.paused_names() == []
     assert variants.active_runs() == variants.RUNS
@@ -949,10 +952,15 @@ def test_each_regime_has_its_strides_times_levels_and_the_baseline_is_shared():
     assert by["stare_s256_grey_smooth_none"] == ("bf_consecutive",)
 
 
-def test_every_run_but_stare_is_the_cohorts_only():
+def test_every_run_but_stare_takes_every_regime_and_the_tiers_are_the_cohorts():
+    """Every method but STARE runs as shipped on every dataset (R2): its run takes every
+    regime, and a public dataset leaves it out only with a reason (``excluded_for``).
+    STARE's two tier runs are the cohort's alone."""
     for r in variants.RUNS:
-        if r.method != "stare" or "tier" in r.opts:
+        if r.method == "stare" and "tier" in r.opts:
             assert r.regimes == (rg.COHORT_REGIME,), variants.run_name(r)
+        elif r.method != "stare":
+            assert r.regimes == tuple(rg.REGIMES), variants.run_name(r)
 
 
 def test_the_regime_has_the_baseline_at_every_stride():
@@ -1061,11 +1069,19 @@ def test_runs_for_takes_a_dataset_by_its_regime():
     assert "stare_clahe" in names and "stare_percentile" in names
     assert not any("grey" in n or "haem" in n for n in names)
     anhir = [variants.run_name(r) for r in variants.runs_for("anhir")]
-    assert anhir == [
+    assert [n for n in anhir if variants.run_of(n).method == "stare"] == [
         variants.run_name(r)
         for r in variants.RUNS
         if r.method == "stare" and "bf_consecutive" in r.regimes
     ]
+    # the other methods' runs, less those left out with a reason (no input rule)
+    left_out = dict(variants.excluded_for("anhir"))
+    assert [n for n in anhir if variants.run_of(n).method != "stare"] == [
+        variants.run_name(r)
+        for r in variants.active_runs()
+        if r.method != "stare" and variants.run_name(r) not in left_out
+    ]
+    assert "valis120_hires" in anhir and "deeperhistreg_hr_gpu" in anhir
     assert (
         "stare" in anhir and "stare_grey_clahe" in anhir and "stare_clahe" not in anhir
     )

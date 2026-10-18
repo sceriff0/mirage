@@ -59,12 +59,12 @@ PREFIXES = (
     "rb-compute",
     "rb-score-compute",
 )
-# removed with the other harnesses: the figure draws the cohort harness alone
+# removed with the other harnesses; the public datasets (regbench.PUBLIC) are back
+# beside the cohort and may be named
 FORBIDDEN = (
     r"synthetic",
     r"semisynth",
-    r"hyreco",
-    r"anhir",
+    r"anhir_tune",
     r"stare_prep",
     r"gate\.sbatch",
     r"(?<![A-Za-z0-9_])arms(?![A-Za-z0-9_])",

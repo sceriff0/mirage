@@ -246,7 +246,7 @@ refused() {  # refused <attempt> <what> <the scheduler's words>
 the_due() {
     local attempt="$1" file="$state.due.a$1" args items o dropped rc
     [ -e "$file" ] && return 0
-    args=(stages --cases "$REGBENCH_CASES" --dataset "$dataset" --method "$method"
+    args=(stages --cases "$(regbench_cases_of "$dataset")" --dataset "$dataset" --method "$method"
           --layout "$layout" --out "$REGBENCH_OUT" --due "$attempt")
     [ "$label" != - ] && args+=(--label "$label")
     if [ "$opts" != - ]; then

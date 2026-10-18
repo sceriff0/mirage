@@ -16,7 +16,11 @@
 #   benchmarks/regbench/slurm/submit_cohort.sh --score-only [--dry-run] \
 #       [--datasets "multiplex"] [-- extra sbatch args]
 #
-# THE ONLY DATASET is `multiplex`, the cohort; --datasets names anything else and is refused.
+# THE DEFAULT DATASET is `multiplex`, the cohort, and the default submission is the cohort
+# alone. --datasets may also name a public dataset (regbench.PUBLIC: PUBLIC_DATASETS below),
+# whose prepared cases are under REGBENCH_CASES_<NAME> (env.sh: regbench_cases_of); it is
+# run with its own run list (`runs --dataset <name>`) and scored into tables of its own,
+# never pooled with the cohort. Any other name is refused.
 #
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
@@ -336,8 +340,10 @@ MAX_SECONDS=$((7 * 24 * 3600))
 export REGBENCH_STAGE_ARRAY_MAX REGBENCH_STAGE_FEED_MIN REGBENCH_STAGE_POLL_S
 : "${REGBENCH_HEAD_IMAGE:=STARE_REGBENCH}"
 DRY="${REGBENCH_DRY:-0}"
-# The cohort (multiplex) is the only dataset.
+# The cohort (multiplex) is the default dataset; the public datasets are named on request
+# (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
+PUBLIC_DATASETS="anhir hyreco_a hyreco_b acrobat ibex mcmicro phenocycler rashid"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0
 while [ $# -gt 0 ]; do
@@ -410,11 +416,15 @@ trap 'on_signal HUP 129' HUP
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
-# --datasets is checked up front, before anything is read or submitted: the cohort is
-# the only dataset there is (the external landmark sets were removed).
-[ -n "${datasets// /}" ] || die "--datasets is empty: the only dataset is multiplex. Nothing was submitted."
+# --datasets is checked up front, before anything is read or submitted: the cohort, or a
+# public dataset whose cases folder is named (REGBENCH_CASES_<NAME>)
+DATASETS_SAID="the cohort is multiplex; the public datasets are ${PUBLIC_DATASETS// /, }"
+[ -n "${datasets// /}" ] || die "--datasets is empty: $DATASETS_SAID. Nothing was submitted."
 for ds in $datasets; do
-    [ "$ds" = multiplex ] || die "--datasets '$ds': the only dataset is multiplex. Nothing was submitted."
+    [ "$ds" = multiplex ] && continue
+    has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
+    [ "$prepare" != 1 ] || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) only. Nothing was submitted."
+    regbench_cases_of "$ds" > /dev/null || die "--datasets '$ds': REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds") is not set: export the folder its cases were prepared under. Nothing was submitted."
 done
 
 # whole numbers of at least <least>: a zero here is an array of no task, or a loop
@@ -753,8 +763,40 @@ if [ "$STARE_EXECUTION" = local ]; then
     echo "# STARE: stages run inside one job of $LADDER_CPUS CPUs (local)${LOCAL_RUNS:+:$LOCAL_RUNS}"
 fi
 
+# a public dataset's own run list (`runs --dataset <name>`: its regime's runs, less those
+# without an input rule for it), in the same order and with the same reading of the stages
+# column; the cohort's is $table (table_of)
+table_of() {
+    if [ "$1" = multiplex ]; then echo "$table"; else echo "$scratch/runs-$1.tsv"; fi
+}
+for ds in $datasets; do
+    [ "$ds" = multiplex ] && continue
+    t="$(table_of "$ds")"
+    order=()
+    [ -n "${REGBENCH_RUN_ORDER:-}" ] && order=(--order "$REGBENCH_RUN_ORDER")
+    regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$ds" ${order[@]+"${order[@]}"} > "$t" \
+        || die "cannot read the run list of $ds (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
+    [ -s "$t" ] || die "the run list of $ds is empty (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
+    if [ "$STARE_EXECUTION" = local ]; then
+        while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do
+            [ "${stages:--}" = - ] || has "$LOCAL_RUNS" "$name" || LOCAL_RUNS="$LOCAL_RUNS $name"
+        done < "$t"
+        if ! awk -F'\t' -v OFS='\t' 'NF >= 16 { $16 = "-" } { print }' "$t" > "$t.local" \
+            || ! mv "$t.local" "$t"; then
+            die "cannot read the run list's stages column as local ($t). Nothing was submitted."
+        fi
+    fi
+    echo "# $ds: $(wc -l < "$t" | tr -d ' ') run(s) of its own list (runs --dataset $ds); the scorer writes $REGBENCH_OUT/tables/$ds/"
+done
+
 all_names="" selected=""
 while IFS=$'\t' read -r name _; do all_names="$all_names $name"; done < "$table"
+for ds in $datasets; do
+    [ "$ds" = multiplex ] && continue
+    while IFS=$'\t' read -r name _; do
+        has "$all_names" "$name" || all_names="$all_names $name"
+    done < "$(table_of "$ds")"
+done
 for r in $only_runs; do has "$all_names" "$r" || die "--runs: no run named '$r' (see: python -m benchmarks.regbench runs)"; done
 for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
@@ -1126,7 +1168,7 @@ if [ "$prepare" = 1 ]; then
                 what+=(--nuclei-dir "$REGBENCH_NUCLEI")
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
-            *) die "--datasets: '$ds' is not multiplex" ;;
+            *) die "--prepare: '$ds' is not multiplex (this launcher prepares the cohort only)" ;;
         esac
         submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
             ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
@@ -1162,10 +1204,11 @@ fi
 # ── the cases: every array is sized from what is prepared ─────────────────────────────
 sized=""
 for ds in $datasets; do
+    ds_cases="$(regbench_cases_of "$ds")"
     read -r n_cases n_groups max_rounds < <(regbench_py "$REGBENCH_HEAD_IMAGE" list \
-        --cases "$REGBENCH_CASES" --dataset "$ds" --sizes) || die "cannot list the $ds cases under $REGBENCH_CASES"
+        --cases "$ds_cases" --dataset "$ds" --sizes) || die "cannot list the $ds cases under $ds_cases"
     if [ "${n_cases:-0}" -eq 0 ]; then
-        echo "# $ds: no prepared cases under $REGBENCH_CASES, left out (submit_cohort.sh --prepare)"
+        echo "# $ds: no prepared cases under $ds_cases, left out (submit_cohort.sh --prepare)"
         continue
     fi
     sized="$sized $ds"
@@ -1212,7 +1255,13 @@ preflight() {
     fi
     # one prepared case of each dataset: its slides must be readable inside the image
     slides=(--cases "$REGBENCH_CASES")
-    for ds in $sized; do slides+=(--dataset "$ds"); done
+    for ds in $sized; do
+        if [ "$ds" = multiplex ]; then
+            slides+=(--dataset "$ds")
+        else
+            echo "# preflight: the slides of $ds are not checked (its cases are under $(regbench_cases_of "$ds"), the check reads REGBENCH_CASES)"
+        fi
+    done
     while IFS=$'\t' read -r name method _ _ image _; do
         has "$selected" "$name" || continue
         key="$image:$method"
@@ -1304,7 +1353,7 @@ for ds in $sized; do
             made="$scratch/stages/$name-$ds.tsv"
             layout="$REGBENCH_OUT/logs/stages/<submission>/$name-$ds.tsv"
         fi
-        what=(stages --cases "$REGBENCH_CASES" --dataset "$ds" --method "$method" --layout "$made")
+        what=(stages --cases "$(regbench_cases_of "$ds")" --dataset "$ds" --method "$method" --layout "$made")
         [ "$label" != - ] && what+=(--label "$label")
         if [ "$opts" != - ]; then
             IFS=, read -ra items <<< "$opts"
@@ -1322,7 +1371,7 @@ for ds in $sized; do
         printf -v "LAYOUT_${ds}_$name" '%s' "$layout"
         printf -v "ROUNDS_OF_${ds}_$name" '%s' "$n_rounds"
         printf -v "TILES_OF_${ds}_$name" '%s' "$n_tiles"
-    done < "$table"
+    done < "$(table_of "$ds")"
 done
 # THE TILE QUEUE CEILING IS A TOTAL: REGBENCH_STAGE_QUEUE_MAX is divided by the number of
 # runs with a tile submitter that can feed AT ONCE (floor, at least 1) and each submitter
@@ -1649,7 +1698,7 @@ for ds in $sized; do
             lane="LANE_OF_$name"
             printf -v "LANE_LAST_${!lane}" '%s' "${!last}"
         fi
-    done < "$table"
+    done < "$(table_of "$ds")"
     prev_ds="$ds"
 done
 
@@ -1688,10 +1737,19 @@ done
 # each case task also made the tissue pieces of its case: this job makes those of a
 # case whose task did not, after them (never beside them: two jobs would be writing
 # the same pieces)
+# a submission that names a public dataset gives the tissue job and the scorer every
+# dataset it sized: each public one is scored alone into tables/<dataset>/ (never
+# pooled). The default submission (the cohort alone) names none: the cohort is theirs
+scored_sets=()
+for ds in $sized; do
+    [ "$ds" = multiplex ] || { read -r -a scored_sets <<< "$sized"; break; }
+done
 submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
-    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue
+    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue \
+    ${scored_sets[@]+"${scored_sets[@]}"}
 submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
-    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score
+    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score \
+    ${scored_sets[@]+"${scored_sets[@]}"}
 SCORER_JOB="$JOB_ID"
 fi
 

@@ -1,7 +1,7 @@
 """The paper tables, built from the tables the scorer has already written.
 
 Reads ``<out>/tables/{cells,cells_nuclei,summary_resources,resources,stare_stage_peaks,
-ashlar_discard}.csv`` and every ``<out>/<row>/<dataset>/<case>/run.json``; computes nothing
+ashlar_discard}.csv`` (``<out>/tables/<dataset>/`` for a public dataset) and every ``<out>/<row>/<dataset>/<case>/run.json``; computes nothing
 the scorer computes. Writes ``<out>/paper/<table>.csv`` for the cohort (``multiplex``) and
 ``<out>/paper/<dataset>/<table>.csv`` for any other dataset, in the columns of
 ``paper.schema`` (``schema.columns``), one table per name of ``WRITTEN``. Every row has
@@ -184,8 +184,11 @@ def _csv(path):
         return list(csv.DictReader(fh))
 
 
-def _tables(out):
-    return Path(out) / "tables"
+def _tables(out, dataset=COHORT):
+    """The scorer's tables of ``dataset``: ``<out>/tables`` for the cohort,
+    ``<out>/tables/<dataset>`` for a public dataset (``score.tables_dir``: never pooled)."""
+    base = Path(out) / "tables"
+    return base if dataset == COHORT else base / dataset
 
 
 def _paper_dir(out, dataset):
@@ -283,7 +286,7 @@ def per_pair(out, dataset):
     typed; off-seam rows (``<row>:non_<owner>``) are not in it."""
     rows = []
     for name in ("cells.csv", "cells_nuclei.csv"):
-        for r in _csv(_tables(out) / name):
+        for r in _csv(_tables(out, dataset) / name):
             if r.get("dataset") != dataset or ":" in r.get("method", ""):
                 continue
             num = {k: _num(r.get(k)) for k in NUMERIC}
@@ -435,11 +438,11 @@ def _families(dataset):
 
 # ── cost ─────────────────────────────────────────────────────────────────────
 def _cost_rows(out, dataset):
-    return [r for r in _csv(_tables(out) / "summary_resources.csv") if r.get("dataset") == dataset]
+    return [r for r in _csv(_tables(out, dataset) / "summary_resources.csv") if r.get("dataset") == dataset]
 
 
 def _res_rows(out, dataset):
-    return [r for r in _csv(_tables(out) / "resources.csv") if r.get("dataset") == dataset]
+    return [r for r in _csv(_tables(out, dataset) / "resources.csv") if r.get("dataset") == dataset]
 
 
 def _complete(cost_rows):
@@ -681,7 +684,7 @@ def _copied(out, dataset, name):
     the first."""
     cols = schema.columns(name)
     rows = []
-    for r in _csv(_tables(out) / f"{name}.csv"):
+    for r in _csv(_tables(out, dataset) / f"{name}.csv"):
         if r.get("dataset") != dataset:
             continue
         rows.append(

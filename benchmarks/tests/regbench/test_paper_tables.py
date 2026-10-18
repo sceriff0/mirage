@@ -368,5 +368,8 @@ def test_primary_of_reads_the_dataset():
     public = next(d for d, reg in regimes.DATASET_REGIME.items()
                   if reg != regimes.COHORT_REGIME)
     assert tables.primary_of("valis_mirage", "multiplex") == "valis_mirage"
-    assert tables.primary_of("valis_mirage", public) is None  # never run there
+    assert tables.primary_of("valis_mirage", public) == "valis_mirage"  # runs as shipped
+    # ASHLAR has no input rule for a brightfield case: never run there (excluded_for)
+    assert tables.primary_of("ashlar", "multiplex") == "ashlar"
+    assert tables.primary_of("ashlar", public) is None
     assert tables.primary_of("stare", public) == "stare"

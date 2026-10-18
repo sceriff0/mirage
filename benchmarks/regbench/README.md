@@ -37,8 +37,12 @@ each method's section give them in full. In short:
 ## State
 
 `regbench` is the official, and the only, benchmarking harness of Mirage. It scores
-registration methods on ONE dataset, the user's cyclic-IF cohort (`multiplex`); there is no
-other dataset, no synthetic rung and no external landmark set. **Nothing here has run on the
+registration methods on the user's cyclic-IF cohort (`multiplex`), which is what every
+command takes by default. The public datasets of the paper (`regbench.PUBLIC`: ANHIR,
+HyReCo, ACROBAT, IBEX, MCMICRO, PhenoCycler, Rashid) are named only on request and are
+scored BESIDE the cohort, each into tables of its own, never pooled with it (see "Public
+datasets"); their download and preparation, and the landmark scorer, are not here yet. The
+generated rungs of the earlier harnesses are gone. **Nothing here has run on the
 cluster**: every part is tested against stand-ins (small trees laid out like the pipeline's
 published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for each
 method's package) and through the launcher's dry run. The earlier harnesses (arms, sweep,
@@ -198,8 +202,9 @@ literal `N_RUNS`, which a change to the list must update). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the two brightfield
 regimes (`bf_same`: one section re-stained; `bf_consecutive`: consecutive sections) and
 the regime of every dataset of the paper; a run carries the regimes that take it
-(`Run.regimes`, the cohort's by default), so the brightfield regimes' 15 STARE runs are in
-`RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
+(`Run.regimes`: every regime by default, a generated STARE cell the regimes whose levels
+make it, and the two STARE tier runs the cohort's alone), so the brightfield regimes' 15
+STARE runs are in `RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
 exactly the cohort's result names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu`, `ashlar`, `palom`.
@@ -1305,7 +1310,25 @@ it is scoring.
 | `pipeline_cost_summary.csv` | backend x patient, and backend (`patient = all`) | counts, completeness, wall time, CPU-h, GB-h, peak, registration share, input size; see the same section |
 | `pipeline_cost_by_process.csv` | backend x process | the tasks of the patients in the backend's `all` row, per process; see the same section |
 | `launch.csv` | run | written only with `score --verdicts`: what each run's selfcheck and realcheck said, from `logs/verdicts.tsv` (`run, selfcheck, realcheck, reference, log`). Reported, never a gate: no run and no row is left out because of it |
+| `excluded_runs.csv` | run left out of the dataset | `run, reason` (`variants.excluded_for`): a run whose method has no input rule for the dataset's modality, or one the dataset does not take. Always written; on the cohort a header alone (nothing is left out of it). On a public dataset the summary lists them too |
 | `summary.md` | | the summary: the unit of each dataset and the line "descriptive; no ranking is claimed" (always), the compared rows and who is not among them, the paired differences with their interval, the failure log's section, cost on survivors and on the common patients |
+
+### Public datasets (`<out>/tables/<dataset>/`)
+
+A public dataset (`regbench.PUBLIC`) is scored on its own, never pooled with the cohort:
+`score --dataset ibex` (or `--dataset multiplex ibex`) writes the cohort's tables into
+`<out>/tables/` as always and IBEX's into `<out>/tables/ibex/`; a table of the cohort never
+holds a row of a public dataset. `paper --dataset <name>` reads `<out>/tables/<name>/` and
+writes `<out>/paper/<name>/`. Each public dataset is scored with its own run list
+(`variants.expected_variants(<name>)`, `variants.primary_for(<name>)`), and goes to the
+scorer of its `kind`: `nuclei` (IBEX, MCMICRO, PhenoCycler, Rashid) to the matched cells,
+every table above; `tissue` (ACROBAT) to the tissue-level block alone; `landmarks` (ANHIR,
+HyReCo) is refused with a message naming the dataset, because its scorer is not here yet,
+and nothing is written. HyReCo's core set is `hyreco_a`; `hyreco_b` is reported only on
+request. A set of unstitched tiles is named `<name>@<front end>` and is looked up by its
+base name (`regbench.base_name`). On a brightfield dataset ASHLAR and PALOM have no input
+rule and are left out, and so are the `fluo=1` DeeperHistReg rows (their adapter refuses a
+brightfield case); `excluded_runs.csv` and the summary say so, run by run.
 
 ### Off the seams
 
@@ -2383,8 +2406,12 @@ script names no method.
 benchmark is done: the heads start at once (on their lanes) and the scorer scores the LAST
 submission into `REGBENCH_OUT`, as `--score-only` does.
 
-**The only dataset is `multiplex`**, the cohort; `--datasets` naming anything else is
-refused.
+**The cohort (`multiplex`) is the default**, and the default submission is the cohort
+alone. `--datasets` may also name a public dataset (`regbench.PUBLIC`), whose prepared
+cases are under `REGBENCH_CASES_<NAME>` (the name in capitals, e.g. `REGBENCH_CASES_IBEX`;
+refused up front when it is not set). Such a dataset gets its own run list (`runs --dataset
+<name>`), and the scorer scores it into `<out>/tables/<name>/`. `--prepare` prepares the
+cohort only; any other name is refused.
 
 **One submission, one id, and no stale record.** Each call of the script has an id
 (`REGBENCH_SUBMISSION`, default the time and the process id) that every job carries into

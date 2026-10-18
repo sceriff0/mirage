@@ -666,19 +666,78 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     assert 'DEFAULT_DATASETS="multiplex"' in code
 
 
-@pytest.mark.parametrize(
-    "named", ["anhir", "anhir_tune", "hyreco_a", "hyreco_b", "synthetic", "multiplex x"]
-)
-def test_a_dataset_other_than_multiplex_is_refused_up_front_in_one_line(site, named):
-    """The cohort is the only dataset: a removed one is refused before anything is read
-    or submitted, in one line naming the allowed value, with no argparse usage and no
+@pytest.mark.parametrize("named", ["anhir_tune", "synthetic", "multiplex x", "ibex@raw"])
+def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
+    """Neither the cohort nor a public dataset: refused before anything is read or
+    submitted, in one line naming the allowed values, with no argparse usage and no
     "cannot list" from a later step."""
     done, _, _ = launch(site, "--datasets", named, log="ds-bad")
     assert done.returncode == 2
     lines = [x for x in done.stderr.splitlines() if x.strip()]
-    assert len(lines) == 1 and "the only dataset is multiplex" in lines[0]
+    assert len(lines) == 1 and "the cohort is multiplex" in lines[0], lines
+    assert "the public datasets are anhir, hyreco_a" in lines[0]
     assert "usage" not in done.stderr.lower() and "cannot list" not in done.stderr
     assert not _sbatch_lines(done.stdout)
+
+
+def test_the_launchers_public_datasets_are_regbench_public():
+    from benchmarks.regbench import PUBLIC
+
+    (line,) = [x for x in code_of(SCRIPT).splitlines() if x.startswith("PUBLIC_DATASETS=")]
+    assert line.split("=", 1)[1].strip('"').split() == list(PUBLIC)
+
+
+def test_a_public_dataset_needs_its_cases_folder(site):
+    done, _, _ = launch(site, "--datasets", "multiplex ibex", log="ds-nocases")
+    assert done.returncode == 2
+    assert "REGBENCH_CASES_IBEX is not set" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+
+
+def test_a_public_dataset_is_refused_by_prepare(site, tmp_path):
+    done, _, _ = launch(
+        site, "--prepare", "--datasets", "ibex",
+        env={"REGBENCH_CASES_IBEX": str(tmp_path)}, log="ds-prep",
+    )  # fmt: skip
+    assert done.returncode == 2
+    assert "prepares the cohort (multiplex) only" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+
+
+def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, tmp_path):
+    """``--datasets "multiplex anhir"``: ANHIR's runs are its own list (no ASHLAR, no
+    PALOM: no input rule for a brightfield case), read from REGBENCH_CASES_ANHIR, and the
+    scorer is told both datasets (each public one is scored alone)."""
+    cases = tmp_path / "anhir_cases"
+    _case(cases, "anhir", "A1", "A1")
+    _case(cases, "anhir", "A2", "A2")
+    done, _, _ = launch(
+        site, "--datasets", "multiplex anhir",
+        env={"REGBENCH_CASES_ANHIR": str(cases)}, log="ds-anhir",
+    )  # fmt: skip
+    jobs = jobs_of(done)
+    on = {}
+    for j in [*jobs.values(), *jobs.later.values()]:
+        if j.script == "run_rung.sbatch":
+            on.setdefault(j.args[6], set()).add(j.args[0])
+    want = {variants.run_name(r) for r in variants.runs_for("anhir")}
+    assert set(on) == {"multiplex", "anhir"}
+    assert on["anhir"] <= want and not any(
+        n.startswith(("ashlar", "affine_ashlar", "palom")) for n in on["anhir"]
+    )
+    # a run of ANHIR's regime alone, never the cohort's: its own list, not the cohort's
+    assert "stare_grey_clahe" in on["anhir"] and "stare_grey_clahe" not in on["multiplex"]
+    assert "stare_clahe" in on["multiplex"] and "stare_clahe" not in on["anhir"]
+    assert jobs["rb-score"].args == ["score", "multiplex", "anhir"]
+    assert jobs["rb-tissue"].args == ["tissue", "multiplex", "anhir"]
+    assert "rb-score-case-anhir" in jobs
+    assert "# anhir: 2 case(s)" in done.stdout
+
+
+def test_the_default_launch_tells_the_scorer_no_dataset(dry):
+    jobs, _, _ = dry
+    assert jobs["rb-score"].args == ["score"]
+    assert jobs["rb-tissue"].args == ["tissue"]
 
 
 def test_no_job_asks_for_more_than_seven_days(site):
@@ -1062,8 +1121,10 @@ def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     }
     assert tissue.deps == {("afterany", "<rb-score-case-multiplex>")}
     code = code_of(SLURM / "score_cohort.sbatch")
-    # settle, tissue x2, score-case, the verdict, score and the chain summary (status)
-    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 7
+    # settle, tissue x3 (the case's; the cohort's; each named dataset's), score-case,
+    # the verdict, score x2 (the cohort's; each public dataset's alone) and the chain
+    # summary (status)
+    assert code.count('regbench_py "$REGBENCH_SCORER_IMAGE"') == 9
     # only what this submission ran or reused is scored, and nothing is dropped
     assert 'shared+=(--submission "$REGBENCH_SUBMISSION")' in code
     assert "--drop" not in code and "--gates" not in code
@@ -1171,7 +1232,7 @@ def test_the_case_task_and_the_scorer_are_told_the_same_things():
     assert "cause=score_case_unfinished whose=benchmark" in case
     assert 'exit "$code"' in case
     # the case's tissue pieces first, and a failure there never stops its scoring
-    tissue = case.index('tissue --cases "$REGBENCH_CASES"')
+    tissue = case.index('tissue --cases "$(regbench_cases_of "$dataset")"')
     assert tissue < case.index("|| echo") < case.index("score-case")
     assert '--index "$SLURM_ARRAY_TASK_ID"' in case[tissue : case.index("|| echo")]
 
@@ -2897,7 +2958,7 @@ def test_prepare_is_a_step_of_its_own(site, tmp_path):
     gone, _, _ = launch(
         site, "--prepare", "--datasets", "synthetic", env=env, log="gone"
     )
-    assert gone.returncode == 2 and "the only dataset is multiplex" in gone.stderr
+    assert gone.returncode == 2 and "the cohort is multiplex" in gone.stderr
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
     assert none.returncode == 2 and "REGBENCH_INPUTS" in none.stderr
     assert "REGBENCH_MANIFEST" in none.stderr
@@ -3856,3 +3917,24 @@ def test_staged_and_local_launches_over_results_that_do_not_clash_go_on(site):
     (out / "stare" / "multiplex" / "P2_a" / "run.json").write_text("not json")
     done, _, _ = launch(site, env={"REGBENCH_STARE_EXECUTION": "local"}, log="local-over-local")
     assert done.returncode == 0, done.stderr
+
+
+def test_a_datasets_cases_folder_is_the_cohorts_or_its_own(tmp_path):
+    """env.sh's regbench_cases_of: REGBENCH_CASES for the cohort, REGBENCH_CASES_<NAME>
+    for a public dataset by its base name, exit 1 when that is not set."""
+    script = (
+        f'source "{SLURM / "env.sh"}"; '
+        'regbench_cases_of multiplex; regbench_cases_of mcmicro@raw; '
+        'regbench_cases_of ibex || echo "ibex: none"'
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
+    env.update(
+        REGBENCH_CASES=str(tmp_path / "c"), REGBENCH_CASES_MCMICRO=str(tmp_path / "m"),
+        REGBENCH_OUT=str(tmp_path / "o"),
+    )  # fmt: skip
+    done = subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True, check=True
+    )
+    assert done.stdout.split("\n")[:3] == [
+        str(tmp_path / "c"), str(tmp_path / "m"), "ibex: none"
+    ]  # fmt: skip

@@ -1,5 +1,6 @@
 """Registration benchmark: each method run natively and judged with the transform it
-estimated, on the multiplex-IF cohort."""
+estimated, on the multiplex-IF cohort, and beside it on public datasets that are never
+pooled with it."""
 
 # The cohort's datasets: what `score`, `tissue` and the launcher take when none is named.
 DATASETS = ("multiplex",)
@@ -12,3 +13,38 @@ METHODS = (
     "ashlar",
     "palom",
 )
+
+# The public datasets of plan F: scored BESIDE the cohort, each into tables of its own
+# (``<out>/tables/<dataset>/``, ``<out>/paper/<dataset>/``), never pooled with it and
+# never read by default (``DATASETS`` stays the cohort). ``kind`` is what a case of the
+# set is scored on, and so which scorer ``score.score`` hands it to: ``landmarks`` (the
+# challenge's landmark pairs), ``tissue`` (the tissue-level block of the written images)
+# or ``nuclei`` (the matched cells, as the cohort). ``modality`` is the case's
+# (``methods.input_rule``). ``raw_tiles``: the set also has its unstitched tiles, run as
+# ``<name>@raw`` (a front end; ``base_name``). HyReCo: ``hyreco_a`` is the core set;
+# ``hyreco_b`` is reported only on request (ruling R14).
+_BF_LANDMARKS = {"kind": "landmarks", "modality": "brightfield"}
+_NUCLEI = {"kind": "nuclei", "modality": "fluorescence"}
+PUBLIC = {
+    "anhir": dict(_BF_LANDMARKS),
+    "hyreco_a": dict(_BF_LANDMARKS),
+    "hyreco_b": dict(_BF_LANDMARKS),
+    "acrobat": {"kind": "tissue", "modality": "brightfield"},
+    "ibex": dict(_NUCLEI),
+    "mcmicro": {**_NUCLEI, "raw_tiles": True},
+    "phenocycler": {**_NUCLEI, "raw_tiles": True},
+    "rashid": {**_NUCLEI, "raw_tiles": True},
+}
+KINDS = ("landmarks", "tissue", "nuclei")
+
+
+def base_name(dataset):
+    """The dataset a case set belongs to: ``mcmicro@raw`` (a front end of ``mcmicro``)
+    is ``mcmicro``; any other name is itself."""
+    return str(dataset).split("@", 1)[0]
+
+
+def public_of(dataset):
+    """``PUBLIC``'s entry of a dataset, looked up by its base name (``base_name``), or
+    None for a dataset that is not public (the cohort)."""
+    return PUBLIC.get(base_name(dataset)) if dataset is not None else None

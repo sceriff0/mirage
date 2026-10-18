@@ -1,11 +1,12 @@
-"""The regbench documents describe the cohort harness, and nothing that was removed.
+"""The regbench documents describe the harness as it is, and nothing that was removed.
 
 ``benchmarks/regbench/README.md``, ``benchmarks/README.md`` and ``docs/benchmarks.md`` do
-not name the removed harnesses (the synthetic rung, the external landmark sets, the arms
-and the sweep) or the removed gate switches. The one place that may is the
-``## Removed harnesses`` section of ``benchmarks/README.md``, the record of the removal
-and of the archive tag. ``ANHIR`` alone is also allowed in a sentence that says it was
-removed (the record, and the caveat that no landmark set is used).
+not name the removed harnesses (the generated rungs, ANHIR's tuning side, the
+preprocessing row and its known-truth spec, the arms and the sweep) or the removed gate
+switches. The one place that may is the ``## Removed harnesses`` section of
+``benchmarks/README.md``, the record of the removal and of the archive tag. The public
+datasets of plan F (``regbench.PUBLIC``: ANHIR, HyReCo, ACROBAT, IBEX, ...) are back,
+beside the cohort and never pooled with it, so their names are allowed.
 
 The text is read comment-free (HTML comments out), and every ``submit_cohort.sh`` flag the
 README names must be one the script accepts. The script has no ``--help``: its accepted
@@ -30,8 +31,10 @@ LAUNCHER = REPO / "benchmarks" / "regbench" / "slurm" / "submit_cohort.sh"
 DOCS = (README, ENTRY, OVERVIEW)
 
 FORBIDDEN = (
+    "synthetic",
     "semisynth",
-    "HyReCo",
+    "anhir_tune",
+    "truth_spec",
     "run_arms",
     "arms.yaml",
     "sweep.yaml",
@@ -45,8 +48,6 @@ FORBIDDEN = (
     "NO_BRIGHTFIELD",
     "logs/gates",
 )
-# only in a sentence that says it was removed
-REMOVED_ONLY = ("ANHIR",)
 # only in a sentence that records a rename or the back-compatible variable
 RENAMED_ONLY = ("arms_manifest",)
 RENAME_MARKERS = ("REGBENCH_MANIFEST", "renamed")
@@ -88,17 +89,6 @@ def test_the_docs_do_not_name_what_was_removed(path, term):
         f"{path.relative_to(REPO)} names {term!r}, which was removed; it may only be "
         f"named inside the {REMOVED_SECTION!r} section of benchmarks/README.md"
     )
-
-
-@pytest.mark.parametrize("path", DOCS, ids=lambda p: p.name)
-@pytest.mark.parametrize("term", REMOVED_ONLY)
-def test_a_removed_name_is_only_in_a_sentence_that_says_so(path, term):
-    for sentence in _sentences(_visible(path)):
-        if term in sentence:
-            assert "removed" in sentence.lower(), (
-                f"{path.relative_to(REPO)}: {term!r} outside a sentence that says it was "
-                f"removed: {sentence[:160]!r}"
-            )
 
 
 @pytest.mark.parametrize("path", DOCS, ids=lambda p: p.name)

@@ -93,6 +93,7 @@ import numpy as np
 
 from . import (
     DATASETS,
+    PUBLIC,
     ashlar_discard,
     billing,
     compute_all,
@@ -100,6 +101,7 @@ from . import (
     failure_log,
     pairs,
     plugins,
+    public_of,
     stage_peaks,
     table_schema,
     tissue,
@@ -177,6 +179,7 @@ TABLES = (
     "failure_log",
     "nuclei_missing",
     "attrition",
+    "excluded_runs",
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
 )
@@ -3693,10 +3696,11 @@ def summary_markdown(
     return "\n".join(parts)
 
 
-def score(
+def _score_cells(
+    tables,
     cases_root,
     out,
-    datasets=None,
+    datasets,
     workers=1,
     dev=False,
     expected=None,
@@ -3752,12 +3756,14 @@ def score(
 
     A results folder slimmed to ``csv`` (``refuse_slimmed``) is refused here, before
     anything is read.
+
+    This is the cells scorer of ``score``: every table of ``TABLES`` for ``datasets``,
+    pooled, into the folder ``tables``.
     """
-    refuse_slimmed(out, "score")
     owners = tuple(SEAM_OWNERS if seam_owners is None else seam_owners)
     variants_of = {}
     jobs = []
-    for ds in datasets or DATASETS:
+    for ds in datasets:
         made = case_jobs(cases_root, out, ds, dev, expected, owners, row_checks)
         if made:
             variants_of[ds] = made[0][2]
@@ -3842,10 +3848,11 @@ def score(
     pipe_summary = compute_all.summarise(pipe)
     pipe_by_process = compute_all.by_process(pipe, pipe_summary)
 
-    tables = Path(out) / ("tables_dev" if dev else "tables")
+    tables = Path(tables)
     tables.mkdir(parents=True, exist_ok=True)
     for name in (*TABLES, *REMOVED_TABLES):
         (tables / f"{name}.csv").unlink(missing_ok=True)
+    left_out = write_excluded_runs(tables, datasets)
     # what the selfcheck's mask hid for each row's run, on every row of every table
     for rows in (
         cells,
@@ -3952,6 +3959,7 @@ def score(
         run_fails=run_fails,
         pipeline=(pipe, pipe_summary),
     )
+    text += excluded_markdown(left_out)
     (tables / "summary.md").write_text(text)
     print(text)
     print(f"tables -> {tables}")
@@ -3983,5 +3991,174 @@ def score(
         **{f"{name}{NUCLEI_SUFFIX}": rows for name, rows in nuc.items()},
         "nuclei_missing": nuclei_missing,
         "attrition": lost_rounds,
+        "excluded_runs": left_out,
         **tis,
     }
+
+
+# ── public datasets: beside the cohort, each into tables of its own, never pooled ─────
+EXCLUDED_COLUMNS = ("run", "reason")
+NO_SCORER_YET = (
+    "{ds} is a public {kind} dataset (regbench.PUBLIC): its scorer ({scorer}) is not part "
+    "of this harness yet and comes in a later task. Nothing was scored or written"
+)
+KIND_SCORER = {
+    "landmarks": "the challenge's landmark scoring",
+    "tissue": "the tissue-level block (regbench.tissue)",
+    "nuclei": "the matched cells, as the cohort",
+}
+# the kinds whose scorer exists: a dataset of any other kind is refused (``score``)
+SCORED_KINDS = ("tissue", "nuclei")
+
+
+def tables_dir(out, dataset=None, dev=False):
+    """Where the tables of a dataset go: ``<out>/tables`` for the cohort, and
+    ``<out>/tables/<dataset>`` for a public one (``regbench.PUBLIC``), so that no table of
+    the cohort ever holds a row of a public dataset. ``dev`` is ``tables_dev``."""
+    base = Path(out) / ("tables_dev" if dev else "tables")
+    return base if public_of(dataset) is None else base / str(dataset)
+
+
+def excluded_rows(datasets):
+    """The rows of ``excluded_runs.csv``: every run left out of one of ``datasets`` and
+    why (``variants.excluded_for``); none for the cohort."""
+    from . import variants
+
+    return [
+        {"run": name, "reason": why}
+        for ds in datasets
+        for name, why in variants.excluded_for(ds)
+    ]
+
+
+def write_excluded_runs(tables, datasets):
+    """Write ``excluded_runs.csv`` (a header alone when nothing is left out: an absent
+    table is not "none") and return its rows."""
+    rows = excluded_rows(datasets)
+    with open(Path(tables) / "excluded_runs.csv", "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(EXCLUDED_COLUMNS))
+        w.writeheader()
+        w.writerows(rows)
+    return rows
+
+
+def excluded_markdown(rows):
+    """The summary's section on the runs left out of the dataset, or ``""``."""
+    if not rows:
+        return ""
+    lines = [
+        "",
+        "## Runs left out of this dataset",
+        "",
+        "Not run here, with the reason (`excluded_runs.csv`); no row of theirs is in "
+        "these tables:",
+        "",
+    ]
+    lines += [f"- `{r['run']}`: {r['reason']}" for r in rows]
+    return "\n".join(lines) + "\n"
+
+
+def kind_of(dataset):
+    """``PUBLIC``'s ``kind`` of a dataset (by its base name), None for the cohort."""
+    spec = public_of(dataset)
+    return None if spec is None else spec["kind"]
+
+
+def _score_tissue(
+    tables, cases_root, out, dataset, workers=1, dev=False, expected=None
+):
+    """The tissue scorer of a public ``tissue`` dataset: the tissue-level block of the
+    written images (``tissue.TABLES``) and ``excluded_runs.csv``, into ``tables``."""
+    cs = [
+        c
+        for c in list_cases(cases_root, dataset)
+        if c.case_id.startswith("dev_") == dev
+    ]
+    if not cs:
+        raise SystemExit(f"no prepared {dataset} cases under {cases_root}")
+    found = find_variants(out, dataset, expected)
+    tis = tissue.score_all([(str(out), c, found) for c in cs], workers)
+    tables = Path(tables)
+    tables.mkdir(parents=True, exist_ok=True)
+    for name in (*TABLES, *REMOVED_TABLES):
+        (tables / f"{name}.csv").unlink(missing_ok=True)
+    left_out = write_excluded_runs(tables, [dataset])
+    for name, rows in tis.items():
+        write_csv(tables / f"{name}.csv", rows)
+    text = (
+        f"# {dataset}: the tissue-level block\n\nA public dataset, scored on its own "
+        "(never pooled with the cohort): `tissue.csv`, `tissue_summary.csv`, "
+        f"`tissue_missing.csv` ({len(tis['tissue'])} row(s), "
+        f"{len(tis['tissue_missing'])} without one).\n"
+    ) + excluded_markdown(left_out)
+    (tables / "summary.md").write_text(text)
+    print(text)
+    print(f"tables -> {tables}")
+    return {**tis, "excluded_runs": left_out}
+
+
+def score(
+    cases_root,
+    out,
+    datasets=None,
+    workers=1,
+    dev=False,
+    expected=None,
+    primary=None,
+    **kw,
+):
+    """Score everything under ``out``; writes ``<out>/tables`` and returns the rows.
+
+    ``datasets`` (default ``DATASETS``, the cohort) may name public datasets
+    (``regbench.PUBLIC``) too. The cohort's datasets are scored together into
+    ``<out>/tables``, exactly as before; each public dataset ALONE into
+    ``<out>/tables/<dataset>/`` (``tables_dir``), so no row of a public dataset ever
+    reaches a table of the cohort. A public dataset goes to the scorer of its ``kind``
+    (``PUBLIC[base_name]["kind"]``): ``nuclei`` to the cells (every table of ``TABLES``),
+    ``tissue`` to the tissue-level block; a kind whose scorer this harness does not have
+    yet (``landmarks``) is refused with ``SystemExit`` before anything is read or
+    written. ``expected`` and ``primary`` apply to every dataset of the call (the
+    command line scores each public dataset in a call of its own, with its own lists:
+    ``variants.expected_variants(dataset)``, ``variants.primary_for(dataset)``).
+    Every public table folder has ``excluded_runs.csv``: the runs left out of it and why
+    (``variants.excluded_for``).
+
+    Returns the cohort's tables (``_score_cells``), with ``"public": {dataset: tables}``
+    when a public dataset was named. The other keywords are ``_score_cells``'s.
+    """
+    refuse_slimmed(out, "score")
+    named = list(datasets or DATASETS)
+    unknown = [d for d in named if public_of(d) is None and d not in DATASETS]
+    if unknown:
+        raise SystemExit(
+            f"score: no dataset named {', '.join(unknown)}: the cohort is "
+            f"{', '.join(DATASETS)}, the public datasets are {', '.join(PUBLIC)}"
+        )
+    public = [d for d in named if public_of(d) is not None]
+    cohort = [d for d in named if public_of(d) is None]
+    for ds in public:
+        if kind_of(ds) not in SCORED_KINDS:
+            raise SystemExit(
+                NO_SCORER_YET.format(
+                    ds=ds, kind=kind_of(ds), scorer=KIND_SCORER[kind_of(ds)]
+                )
+            )
+    done = {}
+    if cohort:
+        done = _score_cells(
+            tables_dir(out, None, dev), cases_root, out, cohort, workers, dev,
+            expected, primary, **kw,
+        )  # fmt: skip
+    if public:
+        done["public"] = {}
+    for ds in public:
+        where = tables_dir(out, ds, dev)
+        if kind_of(ds) == "tissue":
+            done["public"][ds] = _score_tissue(
+                where, cases_root, out, ds, workers, dev, expected
+            )
+        else:
+            done["public"][ds] = _score_cells(
+                where, cases_root, out, [ds], workers, dev, expected, primary, **kw
+            )
+    return done

@@ -9,7 +9,8 @@
 #                                results' run.json, so it runs before the case tasks read
 #                                them; it leaves $REGBENCH_OUT/logs/settled naming the
 #                                submission when it has done so
-#   score_cohort.sbatch tissue   the tissue-level pieces of every written image (OpenCV)
+#   score_cohort.sbatch tissue [<dataset>...]
+#                                the tissue-level pieces of every written image (OpenCV)
 #   score_cohort.sbatch case <dataset>
 #                                ONE case of a cohort dataset, the SLURM_ARRAY_TASK_ID-th
 #                                (`tissue --index`, then `score-case`): the tissue
@@ -33,12 +34,19 @@
 #                                again here, never read from a record made before it
 #
 #
+# `tissue` and `score` take the datasets of the submission when it named a public one
+# (regbench.PUBLIC): each public dataset is read from its own cases folder
+# (REGBENCH_CASES_<NAME>, env.sh: regbench_cases_of) and scored ALONE into
+# $REGBENCH_OUT/tables/<dataset>/, never pooled with the cohort. Without them, the cohort.
+#
 # `case` and `score` are given the same submission: a case's record is reused only by
 # a scorer that was (benchmarks/regbench/score.py: case_key). The checks' verdicts do
 # not enter a case's record: `score` sets them on the rows after reading the records.
 set -uo pipefail
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"
-kind="$1" dataset="${2:-}"  # `case` is the only kind that takes a dataset
+kind="$1" dataset="${2:-}"  # `case` takes ONE dataset; `tissue` and `score` any number
+sets=("${@:2}")
+n_sets=$(( $# > 1 ? $# - 1 : 0 ))
 workers="${SLURM_CPUS_PER_TASK:-1}"
 verdicts="$REGBENCH_OUT/logs/verdicts.tsv"
 case "$kind" in
@@ -124,11 +132,11 @@ if [ "$kind" = case ]; then
     # the tissue-level pieces of this case's written images first (kept beside each
     # image; the tissue job and the scorer read them and compute only what is missing).
     # A failure here costs the case nothing: its rows are scored all the same
-    regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
+    regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$(regbench_cases_of "$dataset")" \
         --out "$REGBENCH_OUT" --dataset "$dataset" --index "$SLURM_ARRAY_TASK_ID" \
         --workers "$workers" \
         || echo "tissue $dataset index $SLURM_ARRAY_TASK_ID: not computed here (the tissue job and the scorer compute whatever is missing)"
-    regbench_py "$REGBENCH_SCORER_IMAGE" score-case --cases "$REGBENCH_CASES" \
+    regbench_py "$REGBENCH_SCORER_IMAGE" score-case --cases "$(regbench_cases_of "$dataset")" \
         --out "$REGBENCH_OUT" --dataset "$dataset" --index "$SLURM_ARRAY_TASK_ID" \
         --workers "$workers" ${shared[@]+"${shared[@]}"}
     code=$?
@@ -142,9 +150,16 @@ if [ "$kind" = case ]; then
     exit "$code"
 fi
 if [ "$kind" = tissue ]; then
-    regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
-        --out "$REGBENCH_OUT" --workers "$workers"
-    code=$?
+    code=0
+    if [ "$n_sets" -eq 0 ]; then
+        regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$REGBENCH_CASES" \
+            --out "$REGBENCH_OUT" --workers "$workers" || code=$?
+    else
+        for ds in ${sets[@]+"${sets[@]}"}; do
+            regbench_py "$REGBENCH_SCORER_IMAGE" tissue --cases "$(regbench_cases_of "$ds")" \
+                --out "$REGBENCH_OUT" --dataset "$ds" --workers "$workers" || code=$?
+        done
+    fi
     echo "tissue: python exited $code (the scorer computes whatever is missing)"
     regbench_say_end "REGBENCH_END kind=tissue status=$([ "$code" = 0 ] && echo ok || echo failed) cause=$([ "$code" = 0 ] && echo - || echo tissue_missing) whose=$([ "$code" = 0 ] && echo - || echo benchmark) exit=$code log=${REGBENCH_LOG:--}"
     exit 0
@@ -188,8 +203,19 @@ if [ -r "$manifest" ]; then
     cp "$manifest" "$REGBENCH_OUT/logs/manifest.csv" \
         && args+=(--manifest "$REGBENCH_OUT/logs/manifest.csv")
 fi
-regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}"
-code=$?
+code=0
+cohort=()
+for ds in ${sets[@]+"${sets[@]}"}; do [ "$ds" = multiplex ] && cohort=(--dataset multiplex); done
+if [ "$n_sets" -eq 0 ] || [ "${#cohort[@]}" -gt 0 ]; then
+    regbench_py "$REGBENCH_SCORER_IMAGE" "${args[@]}" ${cohort[@]+"${cohort[@]}"} || code=$?
+fi
+# each public dataset alone, from its own cases folder, into tables/<dataset>/
+for ds in ${sets[@]+"${sets[@]}"}; do
+    [ "$ds" = multiplex ] && continue
+    regbench_py "$REGBENCH_SCORER_IMAGE" score --cases "$(regbench_cases_of "$ds")" \
+        --dataset "$ds" --out "$REGBENCH_OUT" --workers "$workers" \
+        ${shared[@]+"${shared[@]}"} --verdicts "$verdicts" || code=$?
+done
 # the chains no link of whose watcher finished (fleet wave 2, F1): named in the summary,
 # never left to be inferred from rows that say `infrastructure`
 if [ -s "$REGBENCH_OUT/tables/summary.md" ]; then

@@ -10,10 +10,21 @@ Totals are ``counts()`` and ``expected_variants()``; nothing here is a second co
 step. The STARE and ASHLAR runs are GENERATED from tables (``regimes.REGIMES`` x
 ``STARE_STRIDES``; ``methods.ashlar.ASHLAR_CELLS``), so a total moves with a table. A run
 takes a dataset argument (``runs_for(dataset)``). A run carries ``Run.regimes``, the
-regimes (``regimes.REGIMES``) whose datasets take it: by default the cohort's only
-(``regimes.COHORT_REGIME``), so ``runs_for(dataset)`` keeps it only on a dataset of one of
-those regimes (``regimes.DATASET_REGIME``). The STARE runs of a brightfield regime are in
-``RUNS`` beside the cohort's and never in the cohort's list (as at commit 5a46f778).
+regimes (``regimes.REGIMES``) whose datasets take it: every regime by default, the
+generated STARE cells the regimes whose levels make them, and STARE's two tier runs the
+cohort's alone (``regimes.COHORT_REGIME``); ``runs_for(dataset)`` keeps a run only on a
+dataset of one of its regimes (``regimes.DATASET_REGIME``). The STARE runs of a
+brightfield regime are in ``RUNS`` beside the cohort's and never in the cohort's list (as
+at commit 5a46f778).
+
+**A public dataset** (``regbench.PUBLIC``) has a list of its own, never pooled with the
+cohort's: the runs of its regime, less every run left out of it with a reason
+(``excluded_for(dataset)``): a method without an input rule for the dataset's modality
+(``methods.input_rule``, whose words the adapter refuses such a case in), or a run the
+dataset does not take although its method has one (``NOT_ON``). Ported from commit
+5a46f778 (``_not_on``, ``excluded_for``, ``NOT_ON``) without its tuning side and its
+preprocessing row. ``runs --dataset <name>`` prints the list in the same columns;
+``expected_variants(dataset)`` and ``primary_for(dataset)`` are what its scorer is told.
 
 **Paused runs.** A run carries a flag, ``Run.active``. A paused run (``active=False`` on
 its entry) stays implemented and tested, and its names still resolve, but it is not
@@ -87,7 +98,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import methods, plugins, regimes
+from . import PUBLIC, base_name, methods, plugins, public_of, regimes
 from .methods import ashlar as _ashlar
 from .methods import valis_mirage as _valis_mirage
 
@@ -106,8 +117,8 @@ class Run(NamedTuple):
     active: bool = (
         True  # False pauses the run: kept and tested, not launched or expected
     )
-    # the regimes (regimes.REGIMES) whose datasets take the run: the cohort's by default
-    regimes: tuple[str, ...] = (regimes.COHORT_REGIME,)
+    # the regimes (regimes.REGIMES) whose datasets take the run: every regime by default
+    regimes: tuple[str, ...] = tuple(regimes.REGIMES)
 
 
 STARE_STRIDES = (64, 128, 256)
@@ -180,7 +191,16 @@ def _stare_tier_runs():
     ``lib/RegPresets.groovy``) at stride 64 with no preprocessing: the high tier is the
     ``stare`` row itself."""
     return tuple(
-        Run("stare", f"stare_{t}", {"tier": t}, "STARE_REGBENCH", False, None)
+        Run(
+            "stare",
+            f"stare_{t}",
+            {"tier": t},
+            "STARE_REGBENCH",
+            False,
+            None,
+            True,
+            (regimes.COHORT_REGIME,),  # the cohort's alone (ruling 2026-10-16)
+        )
         for t in STARE_TIERS
     )
 
@@ -363,6 +383,32 @@ CHECKED_BY = {
 
 # the private plug-in's key keeps its older name
 CHECKED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
+
+# Runs a public dataset does not take although their method has an input rule for its
+# modality: ``{dataset: ((which runs, why), ...)}``, keyed by base name
+# (``regbench.base_name``; a key ``<name>@<front end>`` holds that front end's own rules).
+# Ported from 5a46f778, where the rule below was ANHIR's; it holds on every brightfield
+# set, because the adapter refuses ``fluo=1`` on any brightfield case
+# (``methods/deeperhistreg.py``). 5a46f778's HyReCo rule (no DeeperHistReg at all, its RGB
+# rule being for JPEG / PNG only) is not ported: the adapter now reads an RGB TIFF too.
+_FLUO_ON_RGB = (
+    (
+        lambda r: r.method == "deeperhistreg" and r.opts.get("fluo") == "1",
+        "`fluo=1` is the benchmark's configuration of DeeperHistReg for a "
+        "fluorescence channel (a black pad, no intensity flip); on an RGB "
+        "brightfield image the shipped parameters are the ones to run",
+    ),
+)
+NOT_ON = {
+    name: _FLUO_ON_RGB
+    for name, spec in PUBLIC.items()
+    if spec["modality"] == "brightfield"
+}
+for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
+    NOT_ON[_dataset] = tuple(NOT_ON.get(_dataset, ())) + tuple(
+        (lambda r, n=_name: (r.label or r.method) == n, _why)
+        for _name, _why in _left_out.items()
+    )
 
 # The methods whose realcheck is run and REPORTED (never a gate): the two VALIS adapters.
 # Their point path is derived by the benchmark, not handed over by the package, so it is
@@ -597,14 +643,72 @@ def check():
     names = {run_name(r) for r in RUNS}
     if len(names) != len(RUNS):
         raise ValueError("two runs share a name")
+    for dataset, rules in NOT_ON.items():
+        if public_of(dataset) is None:
+            raise ValueError(f"NOT_ON names no public dataset: {dataset!r}")
+        for pick, _ in rules:
+            if not any(pick(r) for r in RUNS):
+                raise ValueError(f"a rule of NOT_ON[{dataset!r}] matches no run")
+    for dataset in PUBLIC:
+        kept = {run_name(r) for r in runs_for(dataset)}
+        for run in runs_for(dataset):
+            name = run_name(run)
+            for needs in (checked_by(name), run.after):
+                if needs is not None and needs not in kept:
+                    raise ValueError(
+                        f"on {dataset} the run {name!r} needs {needs!r}, which is left "
+                        "out of it"
+                    )
+
+
+def _in_regime(dataset, run):
+    """Whether the run's ``regimes`` take this dataset's regime; the cohort (``dataset``
+    None) is ``regimes.COHORT_REGIME``. A dataset with no regime
+    (``regimes.DATASET_REGIME``) is a KeyError."""
+    reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
+    return reg in run.regimes
+
+
+def _not_on(dataset, run):
+    """Why an active run is left out of a public dataset, or None: no input rule for the
+    dataset's modality (``methods.input_rule``), or a rule of ``NOT_ON``."""
+    spec = public_of(dataset)
+    if spec is None:
+        return None
+    why = methods.input_rule(run.method, spec["modality"])
+    if why is not None:
+        return why
+    keys = dict.fromkeys((base_name(dataset), str(dataset)))
+    for key in keys:
+        for pick, why in NOT_ON.get(key, ()):
+            if pick(run):
+                return why
+    return None
 
 
 def runs_for(dataset=None):
     """The active runs of a dataset: those whose ``regimes`` take its regime
-    (``Run.regimes``); the cohort (None) is ``regimes.COHORT_REGIME``. A dataset with no
-    regime (``regimes.DATASET_REGIME``) is a KeyError."""
-    reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
-    return tuple(r for r in active_runs() if reg in r.regimes)
+    (``Run.regimes``), the cohort's (``regimes.COHORT_REGIME``) for None; on a public
+    dataset (``regbench.PUBLIC``), less those left out of it (``excluded_for``). A
+    dataset with no regime (``regimes.DATASET_REGIME``) is a KeyError."""
+    return tuple(
+        r
+        for r in active_runs()
+        if _in_regime(dataset, r) and _not_on(dataset, r) is None
+    )
+
+
+def excluded_for(dataset):
+    """``[(run name, reason)]`` of the active runs of the dataset's regime that are left
+    out of it (``_not_on``), in the order of ``RUNS``; ``[]`` for the cohort. Written
+    to the dataset's ``excluded_runs.csv`` and its summary."""
+    if public_of(dataset) is None:
+        return []
+    return [
+        (run_name(r), _not_on(dataset, r))
+        for r in active_runs()
+        if _in_regime(dataset, r) and _not_on(dataset, r) is not None
+    ]
 
 
 def primary_for(dataset=None):
@@ -615,7 +719,7 @@ def primary_for(dataset=None):
 
 def expected_variants(dataset=None):
     """Every result name the cohort must have, in the order of ``RUNS``: the names of
-    the active runs."""
+    the active runs. For a public dataset, the names of ``runs_for(dataset)``."""
     check()
     return [v for run in runs_for(dataset) for v in variants_of(run)]
 

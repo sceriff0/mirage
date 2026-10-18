@@ -100,6 +100,21 @@ def multiplex_case(root, case_id, group, seed, nuclei=True, parents=False):
     return load_case(Path(root) / "multiplex" / case_id)
 
 
+def polysets_of(points):
+    """The polygon sets of a loaded ``points.npz`` (``cases.load_points``) as the keyword
+    arguments ``write_case`` takes: ``cells_ref``, ``cells_mov``, ``nuclei_ref``,
+    ``nuclei_mov`` (``cases.polys``; a set the case has not is left out)."""
+    from benchmarks.regbench.cases import NUCLEI, OUTLINES, polys
+
+    got = {}
+    for key, which in (("cells", OUTLINES), ("nuclei", NUCLEI)):
+        for side in ("ref", "mov"):
+            ps = polys(points, side, which)
+            if ps is not None:
+                got[f"{key}_{side}"] = ps
+    return got
+
+
 def fake(name, register):
     return types.SimpleNamespace(
         NAME=name, SCOPE="pair", VARIANTS=(name,), register=register

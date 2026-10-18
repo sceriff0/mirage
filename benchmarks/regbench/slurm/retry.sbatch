@@ -228,7 +228,7 @@ mark_cut() {
     fi
     run=("${items[@]:$((at + 1)):9}")
     while read -r i; do marks+=(--index "$i"); done < "$plan/due-$k"
-    local args=(chain-mark --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "${run[6]}"
+    local args=(chain-mark --cases "$(regbench_cases_of "${run[6]}")" --out "$REGBENCH_OUT" --dataset "${run[6]}"
                 --method "${run[1]}" --rung-gb "${run[8]}" --cause "$cause" --why "$why"
                 "${marks[@]}")
     [ "${run[2]}" != - ] && args+=(--label "${run[2]}")

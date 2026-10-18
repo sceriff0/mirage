@@ -28,7 +28,7 @@ export REGBENCH_TIME_LIMIT="$limit"
 task="${SLURM_ARRAY_TASK_ID:-0}"
 regbench_start stage "run=$name" "label=$label" "dataset=$dataset" "unit=task_$task" \
     "rung_gb=$mem_gb" "attempt=$attempt" "stage=$stage"
-args=(stage --cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --dataset "$dataset"
+args=(stage --cases "$(regbench_cases_of "$dataset")" --out "$REGBENCH_OUT" --dataset "$dataset"
       --method "$method" --stage "$stage" --attempt "$attempt")
 [ "$label" != - ] && args+=(--label "$label")
 if [ "$opts" != - ]; then
