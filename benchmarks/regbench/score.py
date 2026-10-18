@@ -99,6 +99,8 @@ from . import (
     failure_log,
     pairs,
     plugins,
+    stage_peaks,
+    table_schema,
     tissue,
 )
 from .cases import (
@@ -156,6 +158,7 @@ TABLES = (
     "failures",
     "resources",
     "summary_resources",
+    "stare_stage_peaks",
     "nonband_cells",
     "nonband_summary",
     "nonband_missing",
@@ -3776,6 +3779,12 @@ def score(
         ladder.read_accounting(booked) if booked.is_file() else None,
     )
     res_summary = summarise_resources(res)
+    # STARE's peak memory per stage per round (score side: reads the stage records)
+    peaks = [
+        {k: table_schema.NA if v is None else v for k, v in r.items()}
+        for _, case, names, *_ in jobs
+        for r in stage_peaks.rows(out, [case], names)
+    ]
     cost_summary = summarise_cost(res_summary, primary)
     confined = cost.cores_confined(res)
     cost_header = cost.header_lines(res)
@@ -3821,6 +3830,11 @@ def score(
     write_csv(tables / "failures.csv", fails)
     write_csv(tables / "resources.csv", res)
     write_csv(tables / "summary_resources.csv", res_summary)
+    write_csv(
+        tables / "stare_stage_peaks.csv",
+        peaks,
+        table_schema.columns("stare_stage_peaks")[1:],
+    )
     write_csv(tables / "cost_summary.csv", cost_summary)
     write_csv(tables / "common_block.csv", common)
     write_csv(tables / "paired_summary.csv", paired_summary)
@@ -3905,6 +3919,7 @@ def score(
         "failures": fails,
         "resources": res,
         "summary_resources": res_summary,
+        "stare_stage_peaks": peaks,
         "nonband_cells": non_cells,
         "nonband_summary": non_summary,
         "nonband_missing": non_lost,
