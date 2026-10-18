@@ -26,6 +26,8 @@
 ``cpu-scaling``        the CPU-scaling table: the named rows at 4, 8 and 16 CPUs
                        (``paper/cpu_scaling.py``)
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``)
+``overlays``           the overlay zooms (before, after rigid, after the whole transform) of
+                       one field of a cohort case, per method's best row (``paper/overlays.py``)
 
 ``submissions``        the submission ids the selfcheck records of a results folder carry
 ``verdict``            what every run's selfcheck and realcheck said, one line each per
@@ -670,6 +672,19 @@ def build_parser():
     pl.add_argument("--out", required=True, help="the results folder `paper` wrote to")
     pl.add_argument("--dataset", default="multiplex", choices=DATASETS)
     pl.add_argument("--only", default=None, help="figure names, comma-separated")
+
+    ov = sub.add_parser(
+        "overlays",
+        help="the overlay zooms (benchmarks/regbench/paper/overlays.py): one field of one "
+        "case before registration, after the rigid stage and after the whole transform, for "
+        "each method's best row (paper/method_best.csv); writes <out>/paper/figures/ and "
+        "<out>/paper/overlay_rois.csv",
+    )
+    ov.add_argument("--cases", required=True, help="the folder the cases were prepared under")
+    ov.add_argument("--out", required=True, help="the results folder `paper` wrote to")
+    ov.add_argument("--case-id", default=None, help="draw this case (default: chosen by rule)")
+    ov.add_argument("--roi-um", type=float, default=300.0, help="side of the field, in um")
+    ov.add_argument("--dataset", default="multiplex", choices=DATASETS)
 
     cs = sub.add_parser(
         "cpu-scaling",
@@ -1484,6 +1499,10 @@ def _main(a):
         from .paper import plots
 
         return plots.main(a)
+    if a.cmd == "overlays":
+        from .paper import overlays
+
+        return overlays.main(a)
     if a.cmd == "cpu-scaling":
         from .paper import cpu_scaling
 
