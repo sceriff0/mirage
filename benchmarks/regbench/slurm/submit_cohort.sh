@@ -565,7 +565,15 @@ DATASETS_SAID="the cohort is multiplex; the public datasets are ${PUBLIC_DATASET
 for ds in $datasets; do
     [ "$ds" = multiplex ] && continue
     has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
-    [ "$prepare" != 1 ] || has "$COST_ONLY_SETS" "$ds" || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) and the synthetic set only. Nothing was submitted."
+    [ "$prepare" != 1 ] || has "$COST_ONLY_SETS $LANDMARK_SETS" "$ds" || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex), the synthetic set and the landmark set (hyreco) only. Nothing was submitted."
+    # hyreco is prepared from the folder download/hyreco.sh unpacked into, read INSIDE the
+    # image: named in REGBENCH_HYRECO_DATA, checked here, bound below (REGBENCH_BIND)
+    if [ "$prepare" = 1 ] && [ "$ds" = hyreco ]; then
+        [ -n "${REGBENCH_HYRECO_DATA:-}" ] || die "--prepare --datasets hyreco needs REGBENCH_HYRECO_DATA: the folder download/hyreco.sh unpacked into (HyReCo/{HE,PHH3}, and HyReCo-Additional/{HE,PHH3} when downloaded). Nothing was submitted."
+        for hy_s in HE PHH3; do
+            [ -d "$REGBENCH_HYRECO_DATA/HyReCo/$hy_s" ] || die "--prepare --datasets hyreco: REGBENCH_HYRECO_DATA=$REGBENCH_HYRECO_DATA has no HyReCo/$hy_s (download/hyreco.sh leaves HyReCo/HE and HyReCo/PHH3 there). Nothing was submitted."
+        done
+    fi
     kind=""
     for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
     has "$SCORED_KINDS" "$kind" \
@@ -1496,7 +1504,16 @@ if [ "$prepare" = 1 ]; then
                     "$HERE/synth.sbatch" finish "$syn_to"
                 continue
                 ;;
-            *) die "--prepare: '$ds' is not multiplex or synthetic (this launcher prepares the cohort and the synthetic set only)" ;;
+            hyreco)
+                # ONE job: subset A and, when it was downloaded, subset B into
+                # REGBENCH_CASES_HYRECO (prepare.sbatch binds that folder); the data root
+                # is read inside the image, so it is bound through REGBENCH_BIND, which
+                # --export=ALL carries to the job
+                what=(hyreco --data-root "$REGBENCH_HYRECO_DATA")
+                export REGBENCH_BIND="${REGBENCH_BIND:+$REGBENCH_BIND,}$REGBENCH_HYRECO_DATA"
+                echo "# hyreco: prepared from REGBENCH_HYRECO_DATA=$REGBENCH_HYRECO_DATA (bound into the job's image through REGBENCH_BIND) into $(regbench_cases_of hyreco)"
+                ;;
+            *) die "--prepare: '$ds' is not multiplex, synthetic or hyreco (this launcher prepares the cohort, the synthetic set and the landmark set only)" ;;
         esac
         submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
             ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}

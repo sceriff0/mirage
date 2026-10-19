@@ -284,6 +284,11 @@ mkdir -p "$REGBENCH_ROOT" "$REGBENCH_INPUTS" "$REGBENCH_CASES" "$REGBENCH_OUT" |
 # --inputs needs none of them: Nextflow pulls the pipeline's own images.
 inputs_only=0
 case " $* " in *" --inputs "*) inputs_only=1 ;; esac
+# the datasets a --prepare names (the launcher's default, the cohort, when none): only
+# the cohort's prepare runs StarDist, so a prepare of public sets alone (hyreco) never
+# resolves its image (a node without network would stop on an image it never uses)
+prep_sets=multiplex prev=""
+for a in "$@"; do [ "$prev" = --datasets ] && prep_sets="$a"; prev="$a"; done
 if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ] && [ "$inputs_only" = 0 ]; then
     runtime="$(command -v apptainer || command -v singularity)" || runtime=""
     if [ -z "$runtime" ]; then
@@ -297,6 +302,7 @@ if [ "${REGBENCH_ALLOW_PATH_PYTHON:-0}" != 1 ] && [ "$inputs_only" = 0 ]; then
         # only --prepare runs StarDist (and --all, whose chain has the prepare stage)
         if [ "$image" = STARDIST ] && [ "$ALL" = 0 ]; then
             case " $* " in *" --prepare "*) ;; *) continue ;; esac
+            case " $prep_sets " in *" multiplex "*) ;; *) continue ;; esac
         fi
         name="${ref#docker://}"; name="${name//\//-}"; name="${name//:/-}.img"
         file=""

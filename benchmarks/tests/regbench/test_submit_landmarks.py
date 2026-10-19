@@ -161,3 +161,171 @@ def test_score_case_and_tissue_return_early_on_the_landmark_set(site, monkeypatc
     assert cli.main(["tissue", *argv]) == 0
     said = capsys.readouterr().out
     assert "tissue: hyreco is a landmark set" in said
+
+
+# ---- HyReCo's prepare as an sbatch job (final review) -------------------------------------
+
+
+def _hyreco_data(root):
+    for s in ("HE", "PHH3"):
+        (root / "HyReCo" / s).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_prepare_hyreco_is_one_prepare_job_with_its_data_root(site, tmp_path):
+    data = _hyreco_data(tmp_path / "hyreco_data")
+    env = {"REGBENCH_CASES_HYRECO": str(tmp_path / "hy"), "REGBENCH_HYRECO_DATA": str(data)}
+    done, _, _ = launch(site, "--prepare", "--datasets", "hyreco", env=env, log="hy-prep")
+    jobs = jobs_of(done)
+    assert set(jobs) == {"rb-prepare-hyreco"}
+    job = jobs["rb-prepare-hyreco"]
+    assert job.script == "prepare.sbatch"
+    assert job.args == ["hyreco", "--data-root", str(data)]
+    assert job.opt("--export") == "ALL"
+    # the data root is bound into the job's image: said, with the variable that carries it
+    (said,) = [x for x in done.stdout.splitlines() if x.startswith("# hyreco: prepared from")]
+    assert str(data) in said and "REGBENCH_BIND" in said
+    # a dry run makes no folder
+    assert not (tmp_path / "hy").exists()
+
+
+def test_prepare_hyreco_needs_its_data_root(site, tmp_path):
+    env = {"REGBENCH_CASES_HYRECO": str(tmp_path / "hy")}
+    done, _, _ = launch(site, "--prepare", "--datasets", "hyreco", env=env, log="hy-nodata")
+    assert done.returncode == 2 and "REGBENCH_HYRECO_DATA" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    done, _, _ = launch(site, "--prepare", "--datasets", "hyreco",
+                        env={**env, "REGBENCH_HYRECO_DATA": str(empty)}, log="hy-empty")  # fmt: skip
+    assert done.returncode == 2 and "HyReCo/HE" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+
+
+def test_prepare_sbatch_writes_hyreco_under_its_own_cases_and_binds_them(tmp_path):
+    """The job by hand, as the README writes it: `prepare hyreco` writes into
+    REGBENCH_CASES_HYRECO (never REGBENCH_CASES), which is bound with the data root
+    (REGBENCH_BIND), and the completion record is written beside its cases."""
+    import os
+    import subprocess
+
+    from .test_submit_cohort import REPO, SLURM
+
+    data = _hyreco_data(tmp_path / "data")
+    hy = tmp_path / "hy_cases"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    runtime = fake / "apptainer"
+    runtime.write_text(
+        '#!/bin/bash\necho "ARGS $*" >> "$RUNTIME_LOG"\n'
+        'env | grep "^APPTAINERENV_" | sort >> "$RUNTIME_LOG"\n'
+    )
+    runtime.chmod(0o755)
+    log = tmp_path / "runtime.log"
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith(("REGBENCH_", "SLURM_", "APPTAINERENV_", "SINGULARITYENV_"))
+    }
+    env.update(
+        PATH=f"{fake}:{env['PATH']}",
+        RUNTIME_LOG=str(log),
+        REGBENCH_REPO=str(REPO),
+        REGBENCH_CASES=str(tmp_path / "cohort_cases"),
+        REGBENCH_OUT=str(tmp_path / "out"),
+        REGBENCH_CASES_HYRECO=str(hy),
+        REGBENCH_BIND=str(data),
+        REGBENCH_PREPARE_IMAGE="STARE_REGBENCH",
+        REGBENCH_SIF_STARE_REGBENCH="/images/stare_regbench.sif",
+        SLURM_CPUS_PER_TASK="8",
+    )
+    done = subprocess.run(
+        ["bash", str(SLURM / "prepare.sbatch"), "hyreco", "--data-root", str(data)],
+        env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 0, done.stderr
+    (args,) = [x for x in log.read_text().splitlines() if x.startswith("ARGS ")]
+    bind = args.split("--bind ", 1)[1].split()[0].split(",")
+    assert str(data) in bind and str(hy) in bind
+    tail = args.split("benchmarks.regbench ", 1)[1].split()
+    assert tail == ["prepare", "hyreco", "--cases", str(hy), "--workers", "8",
+                    "--data-root", str(data)]  # fmt: skip
+    assert (hy / "prepared-hyreco.ok").is_file()
+    assert not (tmp_path / "cohort_cases" / "prepared-hyreco.ok").exists()
+    assert "REGBENCH_END kind=prepare dataset=hyreco status=ok" in done.stdout + done.stderr
+
+
+def test_prepare_sbatch_names_the_unset_cases_folder_of_a_public_set(tmp_path):
+    import os
+    import subprocess
+
+    from .test_submit_cohort import REPO, SLURM
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("REGBENCH_", "SLURM_"))}
+    env.update(REGBENCH_REPO=str(REPO), REGBENCH_CASES=str(tmp_path / "c"),
+               REGBENCH_OUT=str(tmp_path / "o"))  # fmt: skip
+    done = subprocess.run(
+        ["bash", str(SLURM / "prepare.sbatch"), "hyreco", "--data-root", "/x"],
+        env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    assert done.returncode == 2 and "REGBENCH_CASES_HYRECO" in done.stderr
+
+
+def _head_images(site, tmp_path, *args, **env):
+    """launch.sbatch as a head job with its images resolved (not REGBENCH_ALLOW_PATH_PYTHON):
+    a stand-in runtime whose `pull` logs the image and makes the file, and whose `exec`
+    runs the command on this machine."""
+    import subprocess
+
+    from .test_submit_cohort import SLURM, _launch_command
+
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(parents=True)
+    rt = bin_ / "apptainer"
+    rt.write_text(
+        "#!/bin/bash\n"
+        'case $1 in\n'
+        '  pull) echo "$3" >> "$PULL_LOG"; : > "$2"; exit 0 ;;\n'
+        "  exec) shift\n"
+        "    while [ $# -gt 0 ]; do case $1 in --bind) shift 2 ;; --*) shift ;; *) shift; break ;; esac; done\n"
+        '    exec "$@" ;;\n'
+        "esac\nexit 1\n"
+    )
+    rt.chmod(0o755)
+    pulls = tmp_path / "pulls.log"
+    more = {
+        "REGBENCH_CASES": None,
+        "REGBENCH_OUT": None,
+        "REGBENCH_ROOT": str(tmp_path / "root"),
+        "REGBENCH_IMAGES": str(tmp_path / "images"),
+        "PULL_LOG": str(pulls),
+        "SLURM_SUBMIT_DIR": str(tmp_path),
+        **env,
+    }
+    argv, base, _ = _launch_command(site, args, more, True, f"img-{tmp_path.name}")
+    argv[1] = str(SLURM / "launch.sbatch")
+    argv.remove("--dry-run")
+    argv.insert(2, "--dry-run")
+    base["PATH"] = f"{bin_}:{base['PATH']}"
+    base = {k: v for k, v in base.items() if not k.startswith("REGBENCH_SIF_")}
+    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=tmp_path)
+    got = pulls.read_text().split() if pulls.exists() else []
+    return done, got
+
+
+def test_a_head_that_prepares_hyreco_alone_never_resolves_stardist(site, tmp_path):
+    """launch.sbatch --prepare resolves (pulls when missing) StarDist's image only for a
+    prepare that has the cohort: a hyreco-only prepare runs no StarDist, and a node
+    without network must not stop it on an image it never uses."""
+    data = _hyreco_data(tmp_path / "data")
+    env = {"REGBENCH_CASES_HYRECO": str(tmp_path / "hy"), "REGBENCH_HYRECO_DATA": str(data)}
+    done, pulled = _head_images(
+        site, tmp_path / "a", "--prepare", "--datasets", "hyreco", **env
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert "docker://bolt3x/mirage-stare-regbench:1.0.0" in pulled
+    assert not any("stardist" in p for p in pulled)
+    assert "rb-prepare-hyreco" in done.stdout
+    # the cohort's prepare (the default dataset) still has it resolved
+    _, pulled = _head_images(site, tmp_path / "b", "--prepare")
+    assert "docker://bolt3x/mirage-stardist:1.0.0" in pulled

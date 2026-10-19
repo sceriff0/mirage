@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Download and unpack HyReCo into <dest>, the folder `regbench prepare hyreco
-# --data-root <dest>` reads:
+# --data-root <dest>` reads (as one sbatch job: submit_cohort.sh --prepare --datasets
+# hyreco with REGBENCH_HYRECO_DATA=<dest>):
 #
 #   <dest>/HyReCo/{HE,PHH3}/<id>.tif|.csv              subset A (HyReCo.zip, 233.36 GB)
 #   <dest>/HyReCo-Additional/{HE,PHH3}/<id>.tif|.csv   subset B (two zips, 273.73 and
@@ -100,4 +101,4 @@ if [ "${HYRECO_ADDITIONAL:-1}" != 0 ]; then
 		exit 1
 	fi
 fi
-echo "hyreco.sh: done; next: python -m benchmarks.regbench prepare hyreco --data-root $dest --cases <cases>"
+echo "hyreco.sh: done; next, one sbatch job: REGBENCH_HYRECO_DATA=$dest REGBENCH_CASES_HYRECO=<cases> submit_cohort.sh --prepare --datasets hyreco (README, Landmark set)"

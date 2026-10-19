@@ -720,7 +720,7 @@ def test_a_public_dataset_is_refused_by_prepare(site, public_launcher, tmp_path)
         env={"REGBENCH_CASES_NUCSET": str(tmp_path)}, log="ds-prep",
     )  # fmt: skip
     assert done.returncode == 2
-    assert "prepares the cohort (multiplex) and the synthetic set only" in done.stderr
+    assert "prepares the cohort (multiplex), the synthetic set and the landmark set (hyreco) only" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
@@ -4717,3 +4717,4 @@ def test_a_synthetic_launch_prints_its_results_estimate_and_the_free_space(site,
     # the cohort's launch says nothing of it
     cohort, _, _ = launch(site, log="syn-disk-cohort")
     assert "# synthetic:" not in cohort.stdout
+

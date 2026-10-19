@@ -1737,10 +1737,44 @@ Getting the data (nothing in the repository downloads it for you):
 # HYRECO_ADDITIONAL=0 fetches HyReCo.zip alone (a quick core-only download, 466.7 GB).
 # prepare takes subset B whenever it is there
 HYRECO_URLS=hyreco_urls.tsv benchmarks/regbench/download/hyreco.sh /data/hyreco
-python -m benchmarks.regbench prepare hyreco --data-root /data/hyreco --cases /data/cases_hyreco
 
 REGBENCH_CASES_HYRECO=/data/cases_hyreco benchmarks/regbench/slurm/submit_cohort.sh --datasets hyreco
 ```
+
+With the full set, the script checks after the unzip that subset B landed in
+`HyReCo-Additional/HE` and `HyReCo-Additional/PHH3` (the folders `prepare hyreco` reads),
+each non-empty; if not, it fails and names the top-level folders the two Additional zips
+really hold, so they can be moved there by hand.
+
+**Preparing HyReCo is ONE sbatch job** (`slurm/prepare.sbatch`, in the scorer's image
+`STARE_REGBENCH`): subset A and, when it is there, subset B, into `REGBENCH_CASES_HYRECO`
+(the folder `submit_cohort.sh --datasets hyreco` reads; never `REGBENCH_CASES`, which is
+the cohort's). The data root is read INSIDE the image, so it must be bound. The launcher
+does both for you: `--prepare --datasets hyreco` needs `REGBENCH_HYRECO_DATA` (the
+folder `hyreco.sh` unpacked into; refused before any sbatch when it is not set or has no
+`HyReCo/HE` and `HyReCo/PHH3`), adds it to `REGBENCH_BIND` and submits the one job
+`rb-prepare-hyreco` (`--export=ALL`; its size `REGBENCH_PREPARE_MEM`, 64G, and
+`REGBENCH_PREPARE_TIME`, 24 h). Through the head job, from the folder the benchmark lives
+in (`REGBENCH_ROOT` is `regbench/` under it; the head finds the images):
+
+```bash
+cd /beegfs/scratch/ieo7660
+sbatch --export=ALL,REGBENCH_CASES_HYRECO=/beegfs/scratch/ieo7660/regbench/cases_hyreco,REGBENCH_HYRECO_DATA=/beegfs/scratch/ieo7660/hyreco \
+    ~/pipelines/mirage/benchmarks/regbench/slurm/launch.sbatch --prepare --datasets hyreco
+```
+
+Or the same prepare job by hand, with nothing in between (name the image's path, the
+cases folder and the data root yourself; `REGBENCH_BIND` binds the data root):
+
+```bash
+sbatch -c 8 --mem=32G -t 1-00:00:00 \
+    --export=ALL,REGBENCH_REPO=$HOME/pipelines/mirage,REGBENCH_CASES_HYRECO=/beegfs/scratch/ieo7660/regbench/cases_hyreco,REGBENCH_BIND=/beegfs/scratch/ieo7660/hyreco,REGBENCH_PREPARE_IMAGE=STARE_REGBENCH,REGBENCH_SIF_STARE_REGBENCH=<the stare-regbench .sif> \
+    ~/pipelines/mirage/benchmarks/regbench/slurm/prepare.sbatch hyreco --data-root /beegfs/scratch/ieo7660/hyreco
+```
+
+Either way the job writes `prepared-hyreco.ok` beside the cases when the whole prepare
+ended ok. Then launch the set by name (`--datasets hyreco`, with the same
+`REGBENCH_CASES_HYRECO`).
 
 The download is resumable (`curl -C -` into `<name>.part`; an md5 given on the line must
 match before the file takes its name), and a failure stops the script, never swallowed.
