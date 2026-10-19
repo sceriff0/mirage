@@ -610,7 +610,11 @@ def public_landmarks_best(paper_dir, fig_dir):
     if not rows:
         return _placeholder(fig_dir, "public_landmarks_best",
                             [("public_landmarks", base / "public_landmarks.csv")])
-    rows = [r for r in rows if _fin(r.get("rtre_median_med"))]
+    # every pair of each set (ANHIR `all`, HyReCo `all_pairs`), not a subset's rows
+    # and only a method's rows: `initial` (no registration) has no family
+    rows = [r for r in rows if _fin(r.get("rtre_median_med")) and r.get("family")
+            and r["family"] != "NA"
+            and r.get("set", "all") in ("all", "all_pairs", "", None)]
     datasets = sorted({r["dataset"] for r in rows})
     _style()
     colors = _colors(fig_dir, extra=sorted({r["family"] for r in rows if r.get("family")}))
@@ -621,7 +625,7 @@ def public_landmarks_best(paper_dir, fig_dir):
         for r in rows:
             if r["dataset"] != ds:
                 continue
-            f = r.get("family") or r["row"]
+            f = r["family"]
             if f not in best or _num(r["rtre_median_med"]) < _num(best[f]["rtre_median_med"]):
                 best[f] = r
         fams = sorted(best, key=lambda f: _num(best[f]["rtre_median_med"]))

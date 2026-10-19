@@ -247,8 +247,23 @@ CAUSES = {
     ),
     # the inputs
     "manifest_dropped": (INPUT, "manifest", "the manifest could not list the round"),
-    "prepare_dropped": (INPUT, "prepare", "prepare multiplex dropped the round"),
-    "prepare_failed": (INPUT, "prepare", "prepare multiplex failed on the round"),
+    "prepare_dropped": (
+        INPUT,
+        "prepare",
+        "prepare dropped the round (multiplex) or the pair (anhir, hyreco)",
+    ),
+    "prepare_failed": (
+        INPUT,
+        "prepare",
+        "prepare failed on the round (multiplex) or the pair (anhir, hyreco)",
+    ),
+    "landmark_flagged": (
+        INPUT,
+        "prepare",
+        "a landmark sanity check of a public landmark set failed (a landmark outside "
+        "the image, a diagonal the table disagrees with, unequal landmark files, a "
+        "pixel size off the published one): the pair is kept, scored and flagged",
+    ),
     "frame_check_failed": (
         INPUT,
         "run",

@@ -62,6 +62,25 @@ def _brightfield_stare_names():
     return out
 
 
+def _landmark_tier_names():
+    """The medium and low tier of STARE's cross on the landmark sets' regimes (ruling
+    2026-10-19): ``stare_<tier>`` in the place of ``stare`` in every stride x level name,
+    less ``stare_<tier>`` itself (a cohort tier run) and names already listed. In
+    ``RUNS``, never in the cohort's list."""
+    from benchmarks.regbench import regimes as rg_
+
+    out = []
+    for reg in ("bf_consecutive", "bf_same"):
+        for k, lv in rg_.stare_levels(reg):
+            for s_ in variants.STARE_STRIDES:
+                high = variants.stare_cell(s_, k, lv)[0]
+                for tier in ("medium", "low"):
+                    name = f"stare_{tier}" + high[len("stare"):]
+                    if name != f"stare_{tier}" and name not in out:
+                        out.append(name)
+    return out
+
+
 def _stare_variants(name):
     """The result names of one STARE run: the label replaces the method's name in both."""
     return [f"{name}_rigid", name]
@@ -149,8 +168,11 @@ def test_counts():
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
     cohort = variants.runs_for(None)
     assert n_runs == len(cohort) == N_RUNS
-    # RUNS also holds the brightfield regimes' STARE runs, which the cohort never takes
-    assert len(variants.RUNS) == N_RUNS + len(_brightfield_stare_names()) == N_RUNS + 15
+    # RUNS also holds the brightfield regimes' STARE runs, which the cohort never takes,
+    # and their medium and low tiers (ruling 2026-10-19: STARE's whole cross on ANHIR
+    # and HyReCo)
+    assert len(_brightfield_stare_names()) == 15 and len(_landmark_tier_names()) == 34
+    assert len(variants.RUNS) == N_RUNS + 15 + 34 == 105
     assert {variants.run_name(r) for r in cohort if r.gpu} == GPU
     per_patient = {
         variants.run_name(r) for r in cohort if variants.scope(r.method) == "group"
@@ -162,7 +184,9 @@ def test_run_names_are_unique_and_the_stride_runs_are_exactly_the_generated_set(
     names = [variants.run_name(r) for r in variants.RUNS]
     assert len(names) == len(set(names)) == len(variants.RUNS)
     stare = [variants.run_name(r) for r in _stare_runs()]
-    assert sorted(stare) == sorted(_stare_names() + _brightfield_stare_names())
+    assert sorted(stare) == sorted(
+        _stare_names() + _brightfield_stare_names() + _landmark_tier_names()
+    )
     stride = {n for n in names if n.startswith("stare_s")}
     # stare_s<stride>_<level>: one per non-default stride and level, no more
     levels = {n.split("_", 2)[2] for n in stride}
@@ -391,7 +415,7 @@ def test_stare_runs_in_the_benchmarks_own_image_and_so_does_the_scorer():
 
     both = [r for r in variants.RUNS if r.method == "stare"]
     assert {variants.run_name(r) for r in both} == set(
-        _stare_names() + _brightfield_stare_names() + LOCAL_4CPU
+        _stare_names() + _brightfield_stare_names() + _landmark_tier_names() + LOCAL_4CPU
     )
     for stare in both:
         assert stare.image == "STARE_REGBENCH" == variants.SCORER_IMAGE
@@ -641,7 +665,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert flags["valis120"] == "0" and flags["deeperhistreg_fluo_gpu"] == "0"
     # --all is every run, the brightfield regimes' STARE runs too
     assert sum(v == "1" for v in flags.values()) == (
-        n_runs - 2 + len(_brightfield_stare_names())
+        n_runs - 2 + len(_brightfield_stare_names()) + len(_landmark_tier_names())
     )
     # the same line, flag apart, as when it ran
     (line,) = [r for r in everything if r[0] == "valis120"]
@@ -717,7 +741,8 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
     # every STARE cell is checked by `stare`, so they are paused with it (the
     # brightfield regimes' cells too, which the cohort's counts never held)
-    stare_cells = [*_stare_names(), *_brightfield_stare_names(), *LOCAL_4CPU]
+    stare_cells = [*_stare_names(), *_brightfield_stare_names(), *_landmark_tier_names(),
+                   *LOCAL_4CPU]
     pause(monkeypatch, *stare_cells)
     monkeypatch.setattr(
         variants, "PRIMARY", tuple(v for v in variants.PRIMARY if v != "stare")
@@ -924,13 +949,14 @@ def _stare_runs():
 
 
 def _generated_stare():
-    """The STARE runs generated from the stride x level cross: every STARE run but the
-    two tier runs (``STARE_TIER_RUNS``), which are listed beside it."""
+    """The STARE runs generated from the stride x level cross at the high tier: every
+    STARE run but the two tier runs (``STARE_TIER_RUNS``) and the landmark sets' medium
+    and low tiers (``_landmark_tier_names``), which are listed beside it."""
     got = [r for r in _stare_runs() if "tier" not in r.opts]
     tiers = [variants.run_name(r) for r in _stare_runs()]
-    assert [n for n in tiers if n not in {variants.run_name(r) for r in got}] == (
-        STARE_TIER_RUNS
-    )
+    others = [n for n in tiers if n not in {variants.run_name(r) for r in got}]
+    assert others[:2] == STARE_TIER_RUNS
+    assert sorted(others[2:]) == sorted(_landmark_tier_names())
     return got
 
 
@@ -966,10 +992,17 @@ def test_each_regime_has_its_strides_times_levels_and_the_baseline_is_shared():
 def test_every_run_but_stare_takes_every_regime_and_the_tiers_are_the_cohorts():
     """Every method but STARE runs as shipped on every dataset (R2): its run takes every
     regime, and a public dataset leaves it out only with a reason (``excluded_for``).
-    STARE's two tier runs are the cohort's alone."""
+    STARE's tier runs are the cohort's and, since ruling 2026-10-19 (STARE's whole
+    tier x stride x level cross on ANHIR and HyReCo), the landmark sets' regimes'."""
+    landmark = tuple(variants.LANDMARK_REGIMES)
+    assert set(landmark) == {"bf_consecutive", "bf_same"}
     for r in variants.RUNS:
         if r.method == "stare" and "tier" in r.opts:
-            assert r.regimes == (rg.COHORT_REGIME,), variants.run_name(r)
+            name = variants.run_name(r)
+            if name in STARE_TIER_RUNS:  # the baseline cell: one run of every regime
+                assert r.regimes == (rg.COHORT_REGIME, *landmark), name
+            else:
+                assert r.regimes and set(r.regimes) <= set(landmark), name
         elif r.method != "stare":
             assert r.regimes == tuple(rg.REGIMES), variants.run_name(r)
 
@@ -1096,8 +1129,8 @@ def test_runs_for_takes_a_dataset_by_its_regime():
     assert (
         "stare" in anhir and "stare_grey_clahe" in anhir and "stare_clahe" not in anhir
     )
-    assert {variants.run_name(r) for r in variants.runs_for("hyreco_a@raw")} == {
-        variants.run_name(r) for r in variants.runs_for("hyreco_b")
+    assert {variants.run_name(r) for r in variants.runs_for("hyreco@raw")} == {
+        variants.run_name(r) for r in variants.runs_for("hyreco")
     }
     with pytest.raises(KeyError, match="no_such"):
         variants.runs_for("no_such")
@@ -1122,7 +1155,9 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
     )
     # --all still lists every run, paused or not, of every regime
     assert len(variants.runs_table(paused=True)) == len(variants.RUNS)
-    assert len(variants.RUNS) == N_RUNS + len(_brightfield_stare_names())
+    assert len(variants.RUNS) == (
+        N_RUNS + len(_brightfield_stare_names()) + len(_landmark_tier_names())
+    )
 
 
 # the cohort's run list, as `python -m benchmarks.regbench runs` printed it at c532c1ba
@@ -1181,9 +1216,11 @@ def test_the_stare_tiers_are_runs_checked_by_stare():
         assert variants.stages_of(run) == ("coarse", "tile", "solve", "stitch")
     # the tiers beside high, and nothing else: high is the `stare` row itself
     assert variants.STARE_TIERS == ("medium", "low")
-    assert [variants.run_name(r) for r in variants.RUNS if "tier" in r.opts] == (
-        STARE_TIER_RUNS
-    )
+    tiered = [variants.run_name(r) for r in variants.RUNS if "tier" in r.opts]
+    assert tiered[:2] == STARE_TIER_RUNS
+    assert sorted(tiered[2:]) == sorted(_landmark_tier_names())  # ruling 2026-10-19
+    for name in tiered[2:]:
+        assert variants.checked_by(name) == "stare" and variants.family(name) == "stare"
     # neither is a primary row: `stare` stays STARE's primary
     assert variants.primary_of("stare") == "stare"
 
@@ -1233,3 +1270,45 @@ def test_stare_local4_is_a_4_cpu_cost_row_of_stare():
     assert row[15] == "local"  # the launcher's own-local column
     assert variants.cpu_twin("deeperhistreg_hr_gpu") == "deeperhistreg_hr_cpu"
     assert variants.cpu_twin("deeperhistreg_hr_cpu") is None
+
+
+# ── the run list of each dataset (ruling 2026-10-19) ─────────────────────────
+LANDMARK_SETS = ("anhir", "hyreco")
+LANDMARK_OTHERS = (
+    "valis_mirage", "valis120", "valis120_hires", "deeperhistreg_gpu", "deeperhistreg_hr_gpu",
+)  # fmt: skip
+
+
+@pytest.mark.parametrize("ds", LANDMARK_SETS)
+def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(ds):
+    names = [variants.run_name(r) for r in variants.runs_for(ds)]
+    stare = [n for n in names if variants.run_of(n).method == "stare"]
+    assert len(names) == 41 and len(stare) == 36
+    # tier {high, medium, low} x stride {64, 128, 256} x every level of the set's regime
+    levels = rg.stare_levels(rg.regime_of(ds))
+    assert len(stare) == 3 * len(variants.STARE_STRIDES) * len(levels)
+    tiers = {variants.run_of(n).opts.get("tier", "high") for n in stare}
+    assert tiers == {"high", "medium", "low"}
+    assert [n for n in names if n not in stare] == list(LANDMARK_OTHERS)
+    # the rest are named with the ruling as their reason, never silently dropped
+    why = dict(variants.excluded_for(ds))
+    assert "valis120" not in why and "deeperhistreg_cpu" in why
+    assert "2026-10-19" in why["deeperhistreg_cpu"]
+
+
+@pytest.mark.parametrize("ds", ["mcmicro", "phenocycler", "rashid", None])
+def test_the_cohort_and_the_fluorescence_sets_keep_their_56(ds):
+    assert len(variants.runs_for(ds)) == N_RUNS == 56
+
+
+def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
+    assert variants.default_order(None) == list(variants.DEFAULT_ORDER)
+    assert variants.default_order("multiplex") == list(variants.DEFAULT_ORDER)
+    for ds in LANDMARK_SETS:
+        order = variants.default_order(ds)
+        assert order[0] == "stare" and "ashlar" not in order
+        listed = [r for r in variants.runs_table(dataset=ds, order=order)]
+        assert variants.family(listed[0][0]) == "stare"
+        first_other = next(i for i, r in enumerate(listed) if variants.family(r[0]) != "stare")
+        assert first_other == 36
+    assert variants.default_order("mcmicro")[0] == "stare"

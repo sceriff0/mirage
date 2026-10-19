@@ -77,6 +77,9 @@ The STARE runs of a set are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``; a baseline cell, STARE unchanged, is one run in every regime),
 and for the cohort two tier runs, ``stare_medium`` and ``stare_low``
 (``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
+On a landmark set (``LANDMARK_REGIMES``) STARE runs the FULL cross, tier x stride x level
+(36 runs; ``stare_<tier>[_s<stride>]_<level>``, ``stare_tier_cell``), and every other
+method its defaults only (41 runs per set; ruling 2026-10-19).
 The pipeline's VALIS runs at its three tiers x micro-registration depth 0, 1, 2
 (``_valis_mirage_runs``): ``valis_mirage`` is (``high``, 2), the shipped call, and the
 other eight are ``valis_mirage_<tier>_m<depth>``, checked by ``valis_mirage``'s selfcheck,
@@ -191,7 +194,9 @@ STARE_TIERS = ("medium", "low")  # beside high (the `stare` row): ruling 2026-10
 def _stare_tier_runs():
     """STARE's medium and low tiers (``methods.stare.TIERS``, the rows of
     ``lib/RegPresets.groovy``) at stride 64 with no preprocessing: the high tier is the
-    ``stare`` row itself."""
+    ``stare`` row itself. On the cohort and on the landmark sets' regimes
+    (``LANDMARK_REGIMES``), where they are the stride-64 baseline cells of the full
+    tier cross (``_stare_landmark_tier_runs``; ruling 2026-10-19)."""
     return tuple(
         Run(
             "stare",
@@ -201,9 +206,57 @@ def _stare_tier_runs():
             False,
             None,
             True,
-            (regimes.COHORT_REGIME,),  # the cohort's alone (ruling 2026-10-16)
+            # the cohort's (ruling 2026-10-16) and the landmark sets' (ruling 2026-10-19)
+            (regimes.COHORT_REGIME, *LANDMARK_REGIMES),
         )
         for t in STARE_TIERS
+    )
+
+
+# The regimes of the public landmark sets (``regimes.DATASET_REGIME``: HyReCo's
+# ``bf_same``, ANHIR's ``bf_consecutive``). On them STARE runs its FULL cross (ruling
+# 2026-10-19): tier {high, medium, low} x stride ``STARE_STRIDES`` x every level of the
+# regime, 36 runs per set; every other method its defaults only (``_LANDMARK_DEFAULTS``).
+LANDMARK_REGIMES = tuple(
+    dict.fromkeys(
+        regimes.DATASET_REGIME[name]
+        for name, spec in PUBLIC.items()
+        if spec["kind"] == "landmarks"
+    )
+)
+
+
+def stare_tier_cell(tier, stride, key, level):
+    """``(run name, opts)`` of one cell of the tier cross: ``stare_cell``'s with the tier
+    after ``stare_`` (``stare_medium_s128_grey_clahe``); the high tier is ``stare_cell``
+    itself, and the stride-64 baseline of a tier is ``stare_<tier>`` (``_stare_tier_runs``)."""
+    name, opts = stare_cell(stride, key, level)
+    if tier == "high":
+        return name, opts
+    rest = name[len("stare") :]
+    return f"stare_{tier}{rest}", {"tier": tier, **opts}
+
+
+def _stare_landmark_tier_runs():
+    """The medium and low cells of the tier cross on the landmark sets' regimes, less the
+    two that ``_stare_tier_runs`` already lists (``stare_medium``, ``stare_low``); the
+    high cells are ``_stare_regime_runs``'. A run lists the regimes whose levels make it."""
+    found = {}
+    for tier in STARE_TIERS:
+        for reg in LANDMARK_REGIMES:
+            for key, level in regimes.stare_levels(reg):
+                for s in STARE_STRIDES:
+                    name, opts = stare_tier_cell(tier, s, key, level)
+                    if name == f"stare_{tier}":
+                        continue
+                    seen_opts, seen_regs = found.setdefault(name, (opts, []))
+                    if seen_opts != opts:
+                        raise ValueError(f"{name}: {seen_opts} and {opts}")
+                    if reg not in seen_regs:
+                        seen_regs.append(reg)
+    return tuple(
+        Run("stare", name, opts, "STARE_REGBENCH", False, None, True, tuple(regs))
+        for name, (opts, regs) in found.items()
     )
 
 
@@ -287,6 +340,7 @@ def _ashlar_runs():
 RUNS = (
     *_stare_regime_runs(),
     *_stare_tier_runs(),
+    *_stare_landmark_tier_runs(),
     *_stare_local4_runs(),
     *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
@@ -408,6 +462,8 @@ CHECKED_BY = {
     **{r.label: "stare" for r in _stare_regime_runs() if r.label is not None},
     # the tier runs too: the same adapter and pointing path at other tile sizes
     **{r.label: "stare" for r in _stare_tier_runs()},
+    # and the tier cross of the landmark sets (ruling 2026-10-19)
+    **{r.label: "stare" for r in _stare_landmark_tier_runs()},
     # STARE at 4 CPUs in one job: `stare` itself, another execution
     **{r.label: "stare" for r in _stare_local4_runs()},
     # the pipeline's VALIS at its other tier x depth cells: the same adapter and point path
@@ -432,8 +488,28 @@ _FLUO_ON_RGB = (
         "brightfield image the shipped parameters are the ones to run",
     ),
 )
+# Ruling 2026-10-19: on a landmark set every method but STARE runs its defaults only:
+# the pipeline's VALIS as shipped, VALIS 1.2.0 at both of upstream's settings, and
+# DeeperHistReg's two shipped configurations on the GPU. Its other rows (the pipeline
+# VALIS's tier x micro-registration cells, DeeperHistReg's CPU twins) are left out.
+_LANDMARK_DEFAULTS = (
+    "valis_mirage",
+    "valis120",
+    "valis120_hires",
+    "deeperhistreg_gpu",
+    "deeperhistreg_hr_gpu",
+)
+_DEFAULTS_ONLY = (
+    (
+        lambda r: r.method != "stare" and (r.label or r.method) not in _LANDMARK_DEFAULTS,
+        "on a landmark set every method but STARE runs its defaults only (ruling "
+        "2026-10-19: " + ", ".join(_LANDMARK_DEFAULTS) + "); STARE runs its full tier x "
+        "stride x level cross",
+    ),
+)
 NOT_ON = {
     name: _FLUO_ON_RGB
+    + (_DEFAULTS_ONLY if spec["kind"] == "landmarks" else ())
     for name, spec in PUBLIC.items()
     if spec["modality"] == "brightfield"
 }
@@ -996,6 +1072,21 @@ def opt_args(run):
 # What a cohort launch submits first when no order is asked for (`runs --order default`):
 # ASHLAR, then the affine ASHLAR runs, which are moved behind the run they read.
 DEFAULT_ORDER = ("ashlar", "affine_ashlar")
+# On a public set, STARE's runs first (plan F addendum 4): the method the benchmark is
+# about, then the cohort's default order, each family only where the set has it.
+PUBLIC_DEFAULT_ORDER = ("stare", *DEFAULT_ORDER)
+
+
+def default_order(dataset=None):
+    """The family names ``runs --order default`` puts first: ``DEFAULT_ORDER`` on the
+    cohort (unchanged), ``PUBLIC_DEFAULT_ORDER`` on a public set, without a family the
+    set does not run (ASHLAR on brightfield)."""
+    from . import public_of
+
+    if dataset is None or public_of(dataset) is None:
+        return list(DEFAULT_ORDER)
+    present = {family(run_name(r)) for r in runs_for(dataset)}
+    return [f for f in PUBLIC_DEFAULT_ORDER if f in present]
 
 
 def submission_order(order, runs=None):

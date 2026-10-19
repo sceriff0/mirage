@@ -216,7 +216,8 @@
 #                                     results is never put before it (a `#` line says
 #                                     when it was moved). Default: `default`, the run
 #                                     list's own first runs (`runs --order default`
-#                                     prints the order), on the cohort;
+#                                     prints the order): ASHLAR on the cohort, STARE
+#                                     first on a public set;
 #                                     set EMPTY, the run list's order.
 #                                     Nothing but the order of submission changes: not
 #                                     the run list, not a table, not a result
@@ -374,12 +375,12 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the default dataset; the public datasets are named on request
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
-PUBLIC_DATASETS="anhir hyreco_a hyreco_b mcmicro phenocycler rashid"
+PUBLIC_DATASETS="anhir hyreco mcmicro phenocycler rashid"
 # each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
 # (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
-# scorer: a dataset of a kind not scored yet is refused up front (landmarks: Task 21)
-PUBLIC_KINDS="anhir=landmarks hyreco_a=landmarks hyreco_b=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
-SCORED_KINDS="tissue nuclei"
+# scorer: a dataset of a kind not scored is refused up front (every kind is, since Task 21)
+PUBLIC_KINDS="anhir=landmarks hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
+SCORED_KINDS="tissue nuclei landmarks"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0 cases_there=0
 ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
@@ -500,8 +501,6 @@ if [ "$cases_there" = 1 ]; then
             for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
             if ! has "$SCORED_KINDS" "$kind"; then
                 why="a $kind dataset, and score() scores ${SCORED_KINDS// / and } only"
-            elif [ "$ds" = hyreco_b ] && [ "${HYRECO_ADDITIONAL:-0}" != 1 ]; then
-                why="HyReCo's additional set runs only with HYRECO_ADDITIONAL=1"
             elif ! ds_cases="$(regbench_cases_of "$ds")"; then
                 why="REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds") is not set"
             elif [ ! -d "$ds_cases" ]; then
@@ -535,9 +534,6 @@ for ds in $datasets; do
     [ "$ds" = multiplex ] && continue
     has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
     [ "$prepare" != 1 ] || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) only. Nothing was submitted."
-    # ruling R14: HyReCo's core set is hyreco_a; its second set only on request
-    [ "$ds" != hyreco_b ] || [ "${HYRECO_ADDITIONAL:-0}" = 1 ] \
-        || die "--datasets 'hyreco_b': HyReCo's additional set runs only with HYRECO_ADDITIONAL=1 (ruling R14; its core set is hyreco_a). Nothing was submitted."
     kind=""
     for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
     has "$SCORED_KINDS" "$kind" \
@@ -969,6 +965,8 @@ for ds in $datasets; do
     regbench_py "$REGBENCH_HEAD_IMAGE" runs --dataset "$ds" ${order[@]+"${order[@]}"} > "$t" \
         || die "cannot read the run list of $ds (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
     [ -s "$t" ] || die "the run list of $ds is empty (python -m benchmarks.regbench runs --dataset $ds). Nothing was submitted."
+    # its own order (a public set's default: STARE first), not the cohort's line above
+    [ -z "${REGBENCH_RUN_ORDER:-}" ] || echo "# run order ($ds): $(cut -f1 "$t" | paste -sd' ' -)"
     own_local "$t"
     if [ "$STARE_EXECUTION" = local ]; then
         while IFS=$'\t' read -r name _ _ _ _ _ _ _ _ _ _ _ _ _ _ stages; do

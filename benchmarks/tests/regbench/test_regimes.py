@@ -68,8 +68,8 @@ def test_every_dataset_of_the_plan_has_its_regime_now():
     want = {
         "multiplex": "cyclic_if",
         "anhir": "bf_consecutive",
-        "hyreco_a": "bf_same",
-        "hyreco_b": "bf_same",
+        # one HyReCo dataset (ruling 2026-10-19 (hyreco)), in hyreco_a's and hyreco_b's place
+        "hyreco": "bf_same",
         "mcmicro": "cyclic_if",
         "phenocycler": "cyclic_if",
         "rashid": "cyclic_if",
@@ -130,13 +130,19 @@ _LEVELS_AT_E898D763 = {
 }
 
 
+# ruling 2026-10-19 (hyreco): HyReCo's two subsets are one dataset, in the same regime
+_MERGED = {"hyreco_a": "hyreco", "hyreco_b": "hyreco"}
+
+
 def test_the_remaining_datasets_regimes_are_those_of_e898d763():
     from benchmarks.regbench import PUBLIC
 
-    assert set(_AT_E898D763) == set(PUBLIC) | {"multiplex"}
-    for dataset, regime in _AT_E898D763.items():
+    now = {_MERGED.get(d, d) for d in _AT_E898D763}
+    assert now == set(PUBLIC) | {"multiplex"}
+    for old, regime in _AT_E898D763.items():
+        dataset = _MERGED.get(old, old)
         assert rg.regime_of(dataset) == regime, dataset
         assert rg.regime_of(f"{dataset}@raw") == regime, dataset
         got = tuple((k, tuple(lv)) for k, lv in rg.stare_levels(regime))
         assert got == _LEVELS_AT_E898D763[regime], dataset
-    assert set(rg.DATASET_REGIME) == set(_AT_E898D763)
+    assert set(rg.DATASET_REGIME) == now

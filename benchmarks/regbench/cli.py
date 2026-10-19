@@ -1,6 +1,7 @@
 """``python -m benchmarks.regbench``: prepare cases, run a method, score everything.
 
-``prepare <dataset>``  write the cases of ``multiplex`` (idempotent)
+``prepare <dataset>``  write the cases of ``multiplex``, ``anhir`` or ``hyreco`` (subset A
+                       and, when it is there, subset B, in one set), idempotent
 ``list``               the number of prepared cases of a dataset (sizes a SLURM array), their
                        ids (``--ids``) or their patients (``--groups``)
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
@@ -144,6 +145,73 @@ def build_parser():
         help="`shrink`: for a slide with no bare nuclei, use its outline with the "
         "10 px rim taken off (labelled shrunk_outlines, exact: false; too small "
         "where cells touch). Never used unless given",
+    )
+
+    an = prepare_sub.add_parser(
+        "anhir",
+        help="ANHIR's training pairs (a public landmark set, scored apart: "
+        "regbench.challenge)",
+    )
+    common(an)
+    an.add_argument(
+        "--source",
+        default=None,
+        help="a folder holding dataset_medium.csv, images/ and landmarks/ (as "
+        "download/anhir.sh leaves it)",
+    )
+    an.add_argument(
+        "--table", default=None, help="the cover table (dataset_medium.csv)"
+    )
+    an.add_argument("--images", default=None, help="the unpacked image archive")
+    an.add_argument("--landmarks", default=None, help="the unpacked landmark archive")
+    an.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="prepare the pairs whose images are there and mark every case so",
+    )
+    an.add_argument(
+        "--count", action="store_true", help="print the number of training pairs"
+    )
+    hy = prepare_sub.add_parser(
+        "hyreco",
+        help="HyReCo's re-stained pairs (a public landmark set, scored apart: "
+        "regbench.landmarks)",
+    )
+    common(hy)
+    hy.add_argument(
+        "--data-root",
+        required=True,
+        help="a folder holding HyReCo/{HE,PHH3} (subset A) and, when downloaded, "
+        "HyReCo-Additional/{HE,PHH3} (subset B), as download/hyreco.sh leaves it",
+    )
+    hy.add_argument(
+        "--pixel-size-um",
+        type=float,
+        default=None,
+        help="a measured pixel size (default: the file's, else the paper's 0.24)",
+    )
+    hy.add_argument(
+        "--proxy",
+        default=None,
+        choices=("luminance", "haematoxylin"),
+        help="STARE's one-channel proxy (default luminance)",
+    )
+    hy.add_argument(
+        "--reduce",
+        type=int,
+        default=None,
+        choices=(1, 2),
+        help="block-average the proxy (default 1, native)",
+    )
+    hy.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="prepare the pairs that are there and mark every case so",
+    )
+    hy.add_argument(
+        "--count",
+        action="store_true",
+        help="print the number of pairs of the subsets that are there",
     )
 
     nu = sub.add_parser(
@@ -833,7 +901,9 @@ def build_parser():
         metavar="NAMES",
         help="print the runs in the order a launcher is to SUBMIT them: these family "
         "or run names first (space-separated), the rest after, and a run that reads "
-        "another's results never before it; `default` is the cohort's default order. Nothing else reads this order",
+        "another's results never before it; `default` is the default order "
+        "(variants.default_order: the cohort's, STARE first on a public set). Nothing "
+        "else reads this order",
     )
     rn.add_argument(
         "--order-notes",
@@ -1338,7 +1408,7 @@ def _runs(a):
         print("\t".join(variants.RUNS_COLUMNS))
     order = None if a.order is None else a.order.split()
     if order == ["default"]:
-        order = list(variants.DEFAULT_ORDER)
+        order = variants.default_order(a.dataset)
     if a.order_notes:
         listed = [variants.run_of(r[0]) for r in variants.runs_table(a.all, a.dataset)]
         for note in variants.submission_order(order, listed)[1]:

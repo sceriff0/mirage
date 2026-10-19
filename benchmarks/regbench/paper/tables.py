@@ -1414,7 +1414,12 @@ def write_all(out, dataset=COHORT, cases_root=None):
     """Write every table of ``WRITTEN`` and ``losses.csv`` (the paper stage's losses,
     ALWAYS written); ``{table name: path}``."""
     from .. import losses
+    from . import landmarks
 
+    if landmarks.is_landmark_set(dataset):
+        # a public landmark set has its own tables (paper.landmarks): its scorer wrote
+        # no cells, so the cohort's tables would be empty
+        return landmarks.write_all(out, dataset)
     built = build(out, dataset, cases_root)
     target = _paper_dir(out, dataset)
     target.mkdir(parents=True, exist_ok=True)

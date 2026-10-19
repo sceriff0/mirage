@@ -10,7 +10,8 @@ EXPECTED = {
     "stare_stage_peaks", "ashlar_discard", "cost_points", "cost_fits",
     "pipeline_cost_fits", "cpu_scaling", "laptop", "versions", "run_parameters",
     "hosts", "stare_tier_table", "pipeline_params", "cohort_counts",
-    "crosscheck_arms", "overlay_rois", "public_landmarks", "public_tissue",
+    "crosscheck_arms", "overlay_rois", "public_landmarks", "public_landmark_pairs",
+    "public_tissue",
     "end_to_end",
 }
 

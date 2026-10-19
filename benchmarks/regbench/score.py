@@ -157,6 +157,27 @@ NUCLEI_TABLES = (
     "nonband_cells",
     "nonband_summary",
 )
+# The landmark sets' own tables (``tables/<dataset>/``): ANHIR's (``regbench.challenge``)
+# and HyReCo's (``regbench.landmarks``), named here so that ``TABLES`` holds every one.
+ANHIR_TABLES = (
+    "anhir_pairs",
+    "anhir_summary",
+    "anhir_by_set",
+    "anhir_failures",
+    "anhir_resources",
+    "anhir_summary_resources",
+    "anhir_not_run",
+)
+HYRECO_TABLES = (
+    "hyreco_pairs",
+    "hyreco_points",
+    "hyreco_summary",
+    "hyreco_published",
+    "hyreco_failures",
+    "hyreco_resources",
+    "hyreco_summary_resources",
+    "hyreco_not_run",
+)
 # Every table the scorer writes (the file is ``<name>.csv`` under ``tables/``), in one list:
 # the loop that clears them before a write iterates it, and the harness figure's test
 # reads it. ``selfcheck_masks`` is written and cleared apart, with the selfcheck records.
@@ -196,6 +217,8 @@ TABLES = (
     "nuclei_checks",
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
+    *ANHIR_TABLES,
+    *HYRECO_TABLES,
 )
 # tables of earlier versions, still cleared from a folder that holds them
 REMOVED_TABLES = (
@@ -5097,7 +5120,7 @@ KIND_SCORER = {
     "nuclei": "the matched cells, as the cohort",
 }
 # the kinds whose scorer exists: a dataset of any other kind is refused (``score``)
-SCORED_KINDS = ("tissue", "nuclei")
+SCORED_KINDS = ("tissue", "nuclei", "landmarks")
 
 
 def tables_dir(out, dataset=None, dev=False):
@@ -5197,6 +5220,25 @@ def _score_tissue(
     return {**tis, "excluded_runs": left_out, "losses": block["losses"]}
 
 
+def _score_landmarks(tables, cases_root, out, dataset, workers=1, expected=None,
+                     primary=None):  # fmt: skip
+    """The landmark scorer of a public ``landmarks`` dataset: ANHIR's
+    (``regbench.challenge``) or HyReCo's (``regbench.landmarks``), into ``tables``."""
+    from . import base_name
+
+    if base_name(dataset) == "anhir":
+        from . import challenge
+
+        return challenge.score(
+            cases_root, out, dataset, workers, expected, primary, tables=tables
+        )
+    from . import landmarks
+
+    return landmarks.score(
+        cases_root, out, dataset, workers, expected, primary, tables=tables
+    )
+
+
 def score(
     cases_root,
     out,
@@ -5215,9 +5257,10 @@ def score(
     ``<out>/tables/<dataset>/`` (``tables_dir``), so no row of a public dataset ever
     reaches a table of the cohort. A public dataset goes to the scorer of its ``kind``
     (``PUBLIC[base_name]["kind"]``): ``nuclei`` to the cells (every table of ``TABLES``),
-    ``tissue`` to the tissue-level block; a kind whose scorer this harness does not have
-    yet (``landmarks``) is refused with ``SystemExit`` before anything is read or
-    written. ``expected`` and ``primary`` apply to every dataset of the call (the
+    ``tissue`` to the tissue-level block, ``landmarks`` to the landmark scorers (ANHIR's
+    ``regbench.challenge``, HyReCo's ``regbench.landmarks``); a kind whose scorer this
+    harness does not have (none since Task 21 of plan F) would be refused with
+    ``SystemExit`` before anything is read or written. ``expected`` and ``primary`` apply to every dataset of the call (the
     command line scores each public dataset in a call of its own, with its own lists:
     ``variants.expected_variants(dataset)``, ``variants.primary_for(dataset)``).
     Every public table folder has ``excluded_runs.csv``: the runs left out of it and why
@@ -5256,6 +5299,10 @@ def score(
         if kind_of(ds) == "tissue":
             done["public"][ds] = _score_tissue(
                 where, cases_root, out, ds, workers, dev, expected
+            )
+        elif kind_of(ds) == "landmarks":
+            done["public"][ds] = _score_landmarks(
+                where, cases_root, out, ds, workers, expected, primary
             )
         else:
             done["public"][ds] = _score_cells(

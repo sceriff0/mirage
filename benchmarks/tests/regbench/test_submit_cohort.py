@@ -695,7 +695,7 @@ def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     assert done.returncode == 2
     lines = [x for x in done.stderr.splitlines() if x.strip()]
     assert len(lines) == 1 and "the cohort is multiplex" in lines[0], lines
-    assert "the public datasets are anhir, hyreco_a" in lines[0]
+    assert "the public datasets are anhir, hyreco, mcmicro" in lines[0]
     assert "usage" not in done.stderr.lower() and "cannot list" not in done.stderr
     assert not _sbatch_lines(done.stdout)
 
@@ -775,31 +775,7 @@ def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher
     assert not ran & {"ashlar", "palom", "stare_clahe"}, ran
 
 
-def test_hyreco_b_needs_hyreco_additional(site, tmp_path):
-    """Ruling R14: HyReCo's core set is hyreco_a; hyreco_b only with HYRECO_ADDITIONAL=1."""
-    env = {"REGBENCH_CASES_HYRECO_B": str(tmp_path)}
-    done, _, _ = launch(site, "--datasets", "hyreco_b", env=env, log="ds-hyb")
-    assert done.returncode == 2
-    assert "R14" in done.stderr and "HYRECO_ADDITIONAL=1" in done.stderr
-    assert not _sbatch_lines(done.stdout)
-    # with it, still refused here: a landmark set, whose scorer is not here yet
-    done, _, _ = launch(
-        site, "--datasets", "hyreco_b", env={**env, "HYRECO_ADDITIONAL": "1"},
-        log="ds-hyb2",
-    )  # fmt: skip
-    assert done.returncode == 2 and "R14" not in done.stderr
-    assert "landmarks" in done.stderr and not _sbatch_lines(done.stdout)
-
-
-@pytest.mark.parametrize("named", ["anhir", "hyreco_a"])
-def test_a_dataset_whose_kind_has_no_scorer_is_refused_up_front(site, tmp_path, named):
-    """Methods never run ahead of their scorer: a landmark set is refused until Task 21."""
-    env = {f"REGBENCH_CASES_{named.upper()}": str(tmp_path)}
-    done, _, _ = launch(site, "--datasets", f"multiplex {named}", env=env, log=f"k-{named}")
-    assert done.returncode == 2
-    lines = [x for x in done.stderr.splitlines() if x.strip()]
-    assert len(lines) == 1 and named in lines[0] and "landmarks" in lines[0], lines
-    assert not _sbatch_lines(done.stdout)
+# the landmark sets (anhir, hyreco) launch: test_submit_landmarks.py (ruling 2026-10-19)
 
 
 def test_the_launchers_kinds_are_regbench_public_and_scored_kinds():

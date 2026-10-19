@@ -122,6 +122,7 @@ WHOSE = {
     "plot_placeholder": BENCHMARK,
     "stare_local4_differs": BENCHMARK,
     "low_agreement": BENCHMARK,
+    "landmark_flagged": BENCHMARK,  # a landmark set's sanity flag: kept, scored (Task 21)
     "frame_check_failed": BENCHMARK,
     "pixel_size_fallback": BENCHMARK,
 }
