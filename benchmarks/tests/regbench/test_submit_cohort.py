@@ -4525,7 +4525,8 @@ def _syn_source(tmp_path):
 def test_prepare_synthetic_submits_plan_then_array_then_finish(site, tmp_path):
     to = tmp_path / "syn"
     src = _syn_source(tmp_path)
-    env = {"REGBENCH_CASES_SYNTHETIC": str(to), "REGBENCH_SYNTH_SOURCE": str(src)}
+    env = {"REGBENCH_CASES_SYNTHETIC": str(to), "REGBENCH_SYNTH_SOURCE": str(src),
+           "REGBENCH_BIND": str(tmp_path)}
     done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-prep")
     jobs = jobs_of(done)
     assert set(jobs) == {"rb-synth-plan", "rb-synth", "rb-synth-finish"}
@@ -4535,8 +4536,10 @@ def test_prepare_synthetic_submits_plan_then_array_then_finish(site, tmp_path):
     # one task per (patient, panel): 5 sizes x 11 panels
     assert array.opt("--array").startswith("0-54%") and array.args == ["unit", str(to)]
     assert finish.args == ["finish", str(to)]
-    assert "<rb-synth-plan>" in array.opt("--dependency")
-    assert "<rb-synth>" in finish.opt("--dependency")
+    # the array only after a plan that ended ok; the finish after the array, whatever
+    # became of it (it names the slides that are missing)
+    assert array.opt("--dependency") == "afterok:<rb-synth-plan>"
+    assert finish.opt("--dependency") == "afterany:<rb-synth>"
     # the cohort's rounds are never read for the synthetic set alone
     assert "rb-prepare-multiplex" not in jobs and "rb-nuclei" not in jobs
     small, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
@@ -4641,3 +4644,45 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_synthet
 
     now = norm(dry[1].stdout)
     assert now and norm(done.stdout) == now
+
+
+def test_prepare_synthetic_refuses_a_source_the_images_cannot_read(site, tmp_path):
+    """REGBENCH_SYNTH_SOURCE must lie (its realpath) under REGBENCH_INPUTS, REGBENCH_CASES
+    or a folder of REGBENCH_BIND: the plan job reads it inside the image."""
+    src = _syn_source(tmp_path)
+    to = tmp_path / "syn"
+    base = {"REGBENCH_CASES_SYNTHETIC": str(to), "REGBENCH_SYNTH_SOURCE": str(src)}
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=base, log="syn-unbound")
+    assert done.returncode == 2 and "REGBENCH_SYNTH_SOURCE" in done.stderr
+    assert "REGBENCH_BIND" in done.stderr and not _sbatch_lines(done.stdout)
+    # under one folder of a comma-separated REGBENCH_BIND
+    ok, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
+                      env={**base, "REGBENCH_BIND": f"/nowhere,{tmp_path}"}, log="syn-bind")  # fmt: skip
+    assert "rb-synth-plan" in jobs_of(ok)
+    # under REGBENCH_INPUTS
+    ok2, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
+                       env={**base, "REGBENCH_INPUTS": str(tmp_path)}, log="syn-inputs")  # fmt: skip
+    assert "rb-synth-plan" in jobs_of(ok2)
+    # a symlink under a bound folder to a file outside every one is refused (its realpath)
+    bound = tmp_path / "bound"
+    bound.mkdir()
+    (bound / "link.ome.tif").symlink_to(src)
+    link, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
+                        env={**base, "REGBENCH_SYNTH_SOURCE": str(bound / "link.ome.tif"),
+                             "REGBENCH_BIND": str(bound)}, log="syn-link")  # fmt: skip
+    assert link.returncode == 2 and "REGBENCH_SYNTH_SOURCE" in link.stderr
+
+
+def test_the_synthetic_plan_jobs_time_is_its_own_setting(site, tmp_path):
+    src = _syn_source(tmp_path)
+    env = {"REGBENCH_CASES_SYNTHETIC": str(tmp_path / "syn"), "REGBENCH_SYNTH_SOURCE": str(src),
+           "REGBENCH_BIND": str(tmp_path)}
+    default, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-pt0")
+    assert jobs_of(default)["rb-synth-plan"].opt("--time") == "0-04:00:00"
+    longer, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
+                          env={**env, "REGBENCH_SYNTH_PLAN_TIME": "10:30:00"}, log="syn-pt1")  # fmt: skip
+    jobs = jobs_of(longer)
+    assert jobs["rb-synth-plan"].opt("--time") == "0-10:30:00"
+    # the array's and the finish's limits are not that one
+    assert jobs["rb-synth"].opt("--time") == "0-04:00:00"
+    assert jobs["rb-synth-finish"].opt("--time") == "0-01:00:00"

@@ -471,6 +471,16 @@ trap 'on_signal HUP 129' HUP
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
 has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
+# real_file <path>: the file's path with every symlink resolved (no `realpath -m` on macOS)
+real_file() {
+    local p="$1" n=0 t
+    while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+        t="$(readlink "$p")"
+        case "$t" in /*) p="$t" ;; *) p="$(dirname "$p")/$t" ;; esac
+        n=$((n + 1))
+    done
+    printf '%s/%s\n' "$(cd "$(dirname "$p")" && pwd -P)" "$(basename "$p")"
+}
 # drop_run <run> <reason> <detail>: the run is left out of this submission (removed from
 # `selected`) and is a row of submit_dropped.csv (B3/B4); the others go on
 DROPPED_ROWS="" DROPPED_RUNS=""
@@ -805,7 +815,7 @@ score_s="$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")"
 nuclei_s="$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")"
 settle_s="$(seconds "$REGBENCH_SETTLE_TIME")"
 # the synthetic set's steps (--prepare --datasets synthetic): plan, each array task, finish
-synth_plan_s="$(seconds 04:00:00)"
+synth_plan_s="$(seconds "${REGBENCH_SYNTH_PLAN_TIME:-04:00:00}")"
 synth_s="$(seconds "${REGBENCH_SYNTH_TIME:-04:00:00}")"
 synth_finish_s="$(seconds 01:00:00)"
 # shellcheck disable=SC2206  # the site's GPU request is several words on purpose
@@ -1444,21 +1454,35 @@ if [ "$prepare" = 1 ]; then
                         ;;
                     absent)
                         [ -n "${REGBENCH_SYNTH_SOURCE:-}" ] || die "--prepare --datasets synthetic needs REGBENCH_SYNTH_SOURCE: a cohort slide (OME-TIFF) whose nuclear channel is the texture, under a folder the images bind (REGBENCH_INPUTS, REGBENCH_CASES or REGBENCH_BIND). Nothing more was submitted."
-                        [ "$DRY" = 1 ] || [ -f "$REGBENCH_SYNTH_SOURCE" ] || die "--prepare --datasets synthetic: REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE is not a file. Nothing more was submitted."
+                        [ -f "$REGBENCH_SYNTH_SOURCE" ] || die "--prepare --datasets synthetic: REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE is not a file. Nothing more was submitted."
+                        # the plan job reads it INSIDE the image: its realpath must lie under
+                        # a folder regbench_exec binds (env.sh)
+                        syn_real="$(real_file "$REGBENCH_SYNTH_SOURCE")" \
+                            || die "--prepare --datasets synthetic: cannot resolve REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE. Nothing more was submitted."
+                        syn_bound=0
+                        IFS=, read -r -a syn_dirs <<< "${REGBENCH_INPUTS:-},${REGBENCH_CASES:-},${REGBENCH_BIND:-}"
+                        for syn_dir in "${syn_dirs[@]}"; do
+                            syn_dir="${syn_dir%%:*}"
+                            [ -n "$syn_dir" ] && [ -d "$syn_dir" ] || continue
+                            syn_dir="$(cd "$syn_dir" && pwd -P)"
+                            case "$syn_real" in "${syn_dir%/}/"*) syn_bound=1 ;; esac
+                        done
+                        [ "$syn_bound" = 1 ] || die "--prepare --datasets synthetic: REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE (really $syn_real) is under none of the folders the images bind (REGBENCH_INPUTS, REGBENCH_CASES, REGBENCH_BIND): the plan job could not read it. Put it under one, or name its folder in REGBENCH_BIND. Nothing more was submitted."
                         syn_plan=(--source "$REGBENCH_SYNTH_SOURCE" --grid "$syn_grid" --seed "${REGBENCH_SYNTH_SEED:-0}")
                         [ -z "${REGBENCH_SYNTH_CHANNEL:-}" ] || syn_plan+=(--channel "$REGBENCH_SYNTH_CHANNEL")
                         submit "rb-synth-plan" "${COMMON[@]}" "$LOG_ONE" --cpus-per-task=1 --mem=16G \
                             --time="$(limit "$synth_plan_s")" "$HERE/synth.sbatch" plan "$syn_to" "${syn_plan[@]}"
-                        syn_after=(--dependency="afterany:$JOB_ID")
+                        # afterok: an array over a plan that failed would only fail 55 times
+                        syn_after=(--dependency="afterok:$JOB_ID")
                         ;;
                     *) die "--prepare --datasets synthetic: synth --status said '$syn_state'. Nothing more was submitted." ;;
                 esac
                 syn_n="$(regbench_py "$REGBENCH_HEAD_IMAGE" synth --to "$syn_to" --grid "$syn_grid" --units)" \
                     || die "--prepare --datasets synthetic: cannot size its array (synth --units). Nothing more was submitted."
                 syn_n="$(awk 'NF { last = $0 } END { print last }' <<< "$syn_n")"
-                # one task per (patient, panel): a 65536 px panel is ~25 min on one CPU
-                # (measured at 4096 px: ~6 s per moving panel), its memory the texture
-                # and a few tiles
+                # one task per (patient, panel): a 65536 px panel is ~45 min on one CPU
+                # (measured: ~2.7 min and a 1.6 GB peak per 16384 px moving panel), its
+                # memory the memory-mapped texture and a few tiles
                 submit "rb-synth" "${COMMON[@]}" "$LOG_ARRAY" ${syn_after[@]+"${syn_after[@]}"} \
                     --array="0-$((syn_n - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task=1 \
                     --mem="${REGBENCH_SYNTH_MEM:-8G}" --time="$(limit "$synth_s")" \

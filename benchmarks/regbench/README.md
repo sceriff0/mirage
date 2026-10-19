@@ -1577,8 +1577,17 @@ reproducibility only. It is a public entry (`regbench.PUBLIC["synthetic"]`, kind
   4096, 8192, 16384, 32768 and 65536 px (`--grid small` is 4096 alone); 11 panels per
   patient as the cohort has (panel 0 the reference, 1..10 moving), each ONE image of 3
   channels `DAPI`, `S1`, `S2`, uint16 at 0.325 µm. The texture is a cohort slide's
-  nuclear channel, a centred crop of up to 4096 px mirror-tiled to the size, so nuclei
-  keep their size at every size. Moving panel k is the reference moved by a rotation of
+  nuclear channel, a centred crop of up to 16384 px (the source's extent when smaller; the
+  plan records which), QUILTED to the size: 2048 px blocks taken at offsets seeded by the
+  block's position, blended over a 256 px feathered seam. The quilt is aperiodic and has
+  no 180-degree symmetry (a mirror tiling, which an earlier draft used, made the reference
+  symmetric and periodic as it grew and sent STARE's coarse step to its fallback from 8192
+  px up: the code path would have changed along the size axis), and nuclei keep their size
+  at every size. A seeded irregular TISSUE MASK leaves half of every slide inside it
+  (`foreground_fraction` 0.5, the same shape scaled to the size; a column of
+  `synthetic_cost` and `synthetic_extrapolation`, and each case's measured value in its
+  `synth_transform.json`); outside it is the source's background level (1st percentile)
+  plus the noise. Moving panel k is the reference, mask included, moved by a rotation of
   up to 1 degree, a translation of up to 2 % of the side and a smooth deformation of 5 µm,
   seeded by (seed, size, k). The slides are single-level tiled OME-TIFFs, like the cohort's
   inputs; the same seed gives byte-identical files.
@@ -1606,8 +1615,9 @@ name:
 
 ```bash
 export REGBENCH_CASES_SYNTHETIC=$ROOT/cases_synthetic
-# a cohort slide whose nuclear channel is the texture, under a folder the images bind
-# (REGBENCH_INPUTS, REGBENCH_CASES or REGBENCH_BIND)
+# a cohort slide whose nuclear channel is the texture; its realpath must lie under a
+# folder the images bind (REGBENCH_INPUTS, REGBENCH_CASES or REGBENCH_BIND), or the launch
+# is refused before any sbatch
 export REGBENCH_SYNTH_SOURCE=$REGBENCH_INPUTS/<a preprocessed slide>.ome.tif
 # the plan job, an array of one task per (patient, panel), then the finish job; a
 # complete set is reused, a planned one continued (REGBENCH_SYNTH_GRID=small: 4096 alone)
@@ -1615,6 +1625,14 @@ benchmarks/regbench/slurm/submit_cohort.sh --prepare --datasets synthetic -- <si
 # when those are done: its own run list, scored for cost alone (no per-case scoring)
 benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic -- <site options>
 ```
+
+The array starts only after a plan job that ended ok (`afterok`); the finish job waits
+for the array whatever became of it (`afterany`) and names any slide that is missing.
+Limits: the plan job `REGBENCH_SYNTH_PLAN_TIME` (4 h), each array task
+`REGBENCH_SYNTH_TIME` (4 h, 1 CPU) and `REGBENCH_SYNTH_MEM` (8G). Measured on a
+laptop (Apple silicon, one process, 2026-10-19): one 16384 px moving panel takes about
+2.7 min (155.7 and 166.7 s, two panels) at a peak of 1.6 GB, so a 65536 px panel (16x the
+pixels) is about 45 min: inside the 4 h limit with room for a slower node.
 
 By hand, the same three steps are `regbench synth --source S --to D --plan`, `--unit I`
 for every `I` below `--units`, and `--finish` (`--status` says `absent`, `planned` or
