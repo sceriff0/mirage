@@ -314,6 +314,13 @@ CAUSES = {
         "manifest",
         "the checkpoint has no pixel size for the round: 0.325 um is used",
     ),
+    # T32: the synthetic scaling set's slides grow to 65536 px a side
+    "refused_size": (
+        INPUT,
+        "run",
+        "the run's method declares a largest slide side (MAX_SIDE_PX) under this "
+        "slide's: it refused the size by its own limit (not run; the synthetic set)",
+    ),
 }
 # the causes added to `score.NOT_THE_METHOD` by Task 28 (billed as lost, except
 # BILLED_AS_WASTED, R26); `capped` is the method's (ruling 2026-10-18) and is not here

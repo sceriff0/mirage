@@ -77,7 +77,7 @@ import contextlib
 import os
 import sys
 
-from . import DATASETS, PUBLIC, compute_all, plugins, public_of
+from . import COST_ONLY_KINDS, DATASETS, PUBLIC, compute_all, plugins, public_of
 from . import METHODS as PUBLIC_METHODS
 from .resources import n_cpus
 
@@ -86,6 +86,8 @@ METHODS = PUBLIC_METHODS + plugins.method_names()
 # what `--dataset` takes where a public dataset can be named: the cohort, then the public
 # datasets (regbench.PUBLIC), each scored into tables of its own and never pooled
 ALL_DATASETS = DATASETS + tuple(PUBLIC)
+# the sets scored for cost alone (T32): the CPU cross and its subset take them too
+COST_ONLY_SETS = tuple(d for d, s in PUBLIC.items() if s["kind"] in COST_ONLY_KINDS)
 
 
 def build_parser():
@@ -730,7 +732,7 @@ def build_parser():
     ss.add_argument("--cases", required=True)
     ss.add_argument("--groups", required=True, help="patients, comma-separated")
     ss.add_argument("--to", required=True, help="a new (or empty) folder")
-    ss.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    ss.add_argument("--dataset", default="multiplex", choices=DATASETS + COST_ONLY_SETS)
     sx = sub.add_parser(
         "staged-results",
         help="the STARE result folders under --out that its stage jobs made, one per "
@@ -841,7 +843,7 @@ def build_parser():
     cs.add_argument("--main", default=None,
                     help="the scored MAIN run the rows are chosen from (cross-runs)")
     cs.add_argument("--to", required=True)
-    cs.add_argument("--dataset", default="multiplex", choices=DATASETS)
+    cs.add_argument("--dataset", default="multiplex", choices=DATASETS + COST_ONLY_SETS)
 
     co = sub.add_parser(
         "collect",
@@ -1514,6 +1516,10 @@ def _score_one(a):
     """One case's record (``score.score_case``), made exactly as ``score`` would."""
     from . import failure_log, score, variants
 
+    if variants.is_cost_only_set(a.dataset):
+        # T32: a cost-only set has no per-case record: `score` reads its resources
+        print(f"score-case: {a.dataset} is scored for cost alone (no per-case record)")
+        return 0
     if a.submission:
         os.environ[score.SUBMISSION_ENV] = a.submission
     status = score.score_case(
@@ -1553,6 +1559,9 @@ def _tissue(a):
         )
     jobs = []
     for ds in a.dataset or DATASETS:
+        if variants.is_cost_only_set(ds):
+            print(f"tissue: {ds} is scored for cost alone (no tissue block)")
+            continue
         expected = (
             None
             if a.only_run
@@ -1575,6 +1584,8 @@ def _tissue(a):
                 print(f"tissue: {ds}/{one}: a dev_* case, not computed here")
                 return 0
         jobs += [(a.out, c, found) for c in cases]
+    if not jobs and all(variants.is_cost_only_set(d) for d in a.dataset or DATASETS):
+        return 0
     if not jobs:
         raise SystemExit(f"no prepared cases under {a.cases}")
     got = tissue.score_all(jobs, a.workers)

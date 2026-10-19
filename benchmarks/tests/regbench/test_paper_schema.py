@@ -13,6 +13,8 @@ EXPECTED = {
     "crosscheck_arms", "overlay_rois", "public_landmarks", "public_landmark_pairs",
     "public_tissue",
     "end_to_end",
+    # T32: the synthetic scaling set (cost only)
+    "synthetic_cost", "synthetic_scaling", "synthetic_extrapolation",
 }
 
 

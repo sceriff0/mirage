@@ -129,6 +129,7 @@ WHOSE = {
     "full_lsa_killed": BENCHMARK,
     "frame_check_failed": BENCHMARK,
     "pixel_size_fallback": BENCHMARK,
+    "refused_size": BENCHMARK,  # T32: a size the method's own limit refuses (synthetic)
 }
 STAGES = (
     "selfcheck",

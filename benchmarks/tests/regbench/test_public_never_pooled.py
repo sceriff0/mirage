@@ -30,7 +30,9 @@ pytestmark = pytest.mark.usefixtures("public_datasets")  # conftest: nucset, tis
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 RB = ROOT / "benchmarks" / "regbench"
-REMOVED = ("synthetic", "semisynth", "anhir_tune")
+# "synthetic" came back on 2026-10-19 (T32, user ruling) as the COST-only scaling set
+# (regbench.PUBLIC["synthetic"], regbench.synth): not the removed synthetic rungs
+REMOVED = ("semisynth", "anhir_tune")
 REMOVED += ("anhir",)  # user ruling 2026-10-19; the rest of it: test_no_anhir.py
 REMOVED += ("stare_prep",)
 
@@ -64,6 +66,7 @@ def test_the_public_lookup_reads_the_base_name():
         "landmarks",
         "tissue",
         "nuclei",
+        "synthetic",  # T32: the cost-only scaling set
     }
 
 
@@ -138,6 +141,36 @@ def test_public_rows_never_reach_cohort_tables(tmp_path):
             assert {r["dataset"] for r in csv.DictReader(fh)} <= {"multiplex"}, name
     with open(out / "tables" / "nucset" / "cells.csv") as fh:
         assert {r["dataset"] for r in csv.DictReader(fh)} == {"nucset"}
+
+
+def test_the_synthetic_set_is_never_pooled_with_the_cohort(tmp_path):
+    """T32: named in ONE call with the cohort, the synthetic scaling set is scored for
+    cost alone into ``tables/synthetic/``; no cohort table holds a row of it, and the
+    cohort's paper tables read none of it."""
+    from benchmarks.regbench import synth
+    from benchmarks.regbench.cases import list_cases
+    from benchmarks.regbench.paper import tables as T
+    from benchmarks.tests.regbench import test_synth as ts
+
+    root, out, made = scored_cohort.build(tmp_path)
+    synth.generate(ts._source(tmp_path), root, sizes=(64,), tile=32, texture_side=64)
+    from benchmarks.regbench import methods
+
+    for case in list_cases(root, "synthetic"):
+        methods.run_case(scored_cohort.forward("stare", 0.0), case, out)
+    score.score(root, out, datasets=["multiplex", "synthetic"], **scored_cohort.SCORE_KW)
+    for path in sorted((out / "tables").glob("*.csv")):
+        with open(path) as fh:
+            ds = {r.get("dataset") for r in csv.DictReader(fh)} - {None, "", "NA"}
+        assert ds <= {"multiplex"}, (path.name, ds)
+    where = out / "tables" / "synthetic"
+    for name in score.SYNTHETIC_TABLES + ("resources", "summary_resources"):
+        with open(where / f"{name}.csv") as fh:
+            assert {r["dataset"] for r in csv.DictReader(fh)} == {"synthetic"}, name
+    assert not (where / "cells.csv").exists()
+    # the cohort's paper tables: no synthetic row, whatever the folder holds
+    for name, path in T.write_all(out).items():
+        assert "synthetic" not in path.read_text(), name
 
 
 def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):

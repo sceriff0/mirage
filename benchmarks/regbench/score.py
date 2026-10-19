@@ -174,6 +174,13 @@ HYRECO_TABLES = (
     "hyreco_summary_resources",
     "hyreco_not_run",
 )
+# The synthetic scaling set's own tables (``tables/synthetic/``, T32): its cost alone
+# (``paper.synthetic``), named here so that ``TABLES`` holds every one.
+SYNTHETIC_TABLES = (
+    "synthetic_cost",
+    "synthetic_scaling",
+    "synthetic_extrapolation",
+)
 # Every table the scorer writes (the file is ``<name>.csv`` under ``tables/``), in one list:
 # the loop that clears them before a write iterates it, and the harness figure's test
 # reads it. ``selfcheck_masks`` is written and cleared apart, with the selfcheck records.
@@ -216,6 +223,7 @@ TABLES = (
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
     *HYRECO_TABLES,
+    *SYNTHETIC_TABLES,
 )
 # tables of earlier versions, still cleared from a folder that holds them
 REMOVED_TABLES = (
@@ -5439,9 +5447,10 @@ KIND_SCORER = {
     "landmarks": "the landmark scoring (regbench.landmarks)",
     "tissue": "the tissue-level block (regbench.tissue)",
     "nuclei": "the matched cells, as the cohort",
+    "synthetic": "the cost alone (resources and paper.synthetic's tables)",
 }
 # the kinds whose scorer exists: a dataset of any other kind is refused (``score``)
-SCORED_KINDS = ("tissue", "nuclei", "landmarks")
+SCORED_KINDS = ("tissue", "nuclei", "landmarks", "synthetic")
 
 
 def tables_dir(out, dataset=None, dev=False):
@@ -5552,6 +5561,177 @@ def _score_landmarks(tables, cases_root, out, dataset, workers=1, expected=None,
     )
 
 
+# T32: the synthetic scaling set (regbench.PUBLIC["synthetic"]) is scored for COST only:
+# its resources and these tables (paper.synthetic), never pairs, nuclei or landmarks
+SIZE_LIMIT_ATTR = "MAX_SIDE_PX"  # a method module's declared largest slide side, px
+REFUSED_SIZE = "refused_size"
+
+
+def declared_limit(method):
+    """The largest slide side (px) a method declares it takes (``MAX_SIDE_PX`` of its
+    module), or None when it declares none (no method of plan F does today)."""
+    from . import methods
+
+    try:
+        mod = methods.load(method)
+    except SystemExit:
+        return None
+    limit = getattr(mod, SIZE_LIMIT_ATTR, None)
+    return int(limit) if limit else None
+
+
+def _side_of(case):
+    return max([*(case.ref_hw or []), *(case.mov_hw or [])] or [0])
+
+
+def refused_size_rows(res, cases, run_variants):
+    """``(loss rows, the (method, case_id) they cover)``: every round of a run whose
+    method declares a largest side (``declared_limit``) under the case's slide and that
+    has no registered result: the run refused the size by its own limit (cause
+    ``refused_size``, blame input, effect ``not_run``), never silently absent."""
+    from . import variants
+
+    side = {(c.dataset, str(c.case_id)): _side_of(c) for c in cases}
+    of_run = {v: run for run, vs in (run_variants or {}).items() for v in vs}
+    rows, covered = [], set()
+    for r in res:
+        if r.get("ok"):
+            continue
+        name = of_run.get(r["method"], r["method"])
+        try:
+            run = variants.run_of(name)
+        except KeyError:
+            continue
+        limit = declared_limit(run.method)
+        px = side.get((r["dataset"], str(r["case_id"])), 0)
+        if limit is None or px <= limit:
+            continue
+        r["cause"] = REFUSED_SIZE
+        covered.add((r["method"], str(r["case_id"])))
+        rows.append(
+            losses.row(
+                dataset=r["dataset"],
+                patient_id=r.get("group", ""),
+                case_id=str(r["case_id"]),
+                run=name,
+                method=r["method"],
+                cause=REFUSED_SIZE,
+                effect="not_run",
+                detail=f"{run.method} declares {SIZE_LIMIT_ATTR} = {limit} px; this "
+                f"case's slides are {px} px",
+                source=f"methods/{run.method}.py:{SIZE_LIMIT_ATTR}",
+            )
+        )
+    return rows, covered
+
+
+def _score_synthetic(tables, cases_root, out, dataset, expected=None, accounting=None,
+                     run_variants=None):  # fmt: skip
+    """The COST-only scorer of the synthetic scaling set (T32): ``resources.csv``,
+    ``summary_resources.csv``, ``stare_stage_peaks.csv``, ``excluded_runs.csv``,
+    ``losses.csv`` and ``paper.synthetic``'s three tables, into ``tables``. Nothing of a
+    case's points is read: no pair, nucleus or landmark is scored on this set."""
+    from . import ladder
+    from .paper import synthetic as synth_tables
+
+    cs = list_cases(cases_root, dataset)
+    if not cs:
+        early = loss_rows(
+            out, cases_root, [dataset], None, [], [], [], [], [], run_level=False
+        )
+        return nothing_scored(
+            tables, early, f"no prepared {dataset} cases under {cases_root}"
+        )
+    if run_variants is None:
+        from . import variants
+
+        run_variants = variants.run_variants()
+    found = [v for v in find_variants(out, dataset, expected) if v != INITIAL]
+    res = []
+    for case in cs:
+        base = {
+            "dataset": case.dataset,
+            "tier": tier_of(case),
+            "case_id": case.case_id,
+            "group": case.group,
+            "patient_id": case.group,
+            "panel": panel_of(case),
+            "unit": unit_of(case),
+            "family": case.family,
+            "pose": case.pose,
+        }
+        for v in found:
+            run, _warped, problem, _cause = _load_result(out, v, case)
+            res.append(
+                {
+                    **base,
+                    "method": v,
+                    "tool_version": version_of(run),
+                    "problem": problem,
+                    **resource_row(run or {"cause": "not_run"}, moving_pixels(case)),
+                }
+            )
+    refused, covered = refused_size_rows(res, cs, run_variants)
+    booked = Path(accounting or Path(out) / "logs" / "accounting.psv")
+    staged_booked = Path(out) / "logs" / STAGE_ACCOUNTING
+    acct = ladder.read_accounting(booked) if booked.is_file() else None
+    if staged_booked.is_file():
+        acct = {**ladder.read_accounting(staged_booked), **(acct or {})}
+    bill_from_disk(
+        res, out, cs, acct, billing.read_reservations(booked, staged_booked),
+        telemetry.read(out),
+    )  # fmt: skip
+    res_summary = summarise_resources(res)
+    names = {c.case_id: found for c in cs}
+    peaks = [
+        {k: table_schema.NA if v is None else v for k, v in r.items()}
+        for case in cs
+        for r in stage_peaks.rows(out, [case], names[case.case_id])
+    ]
+    tables = Path(tables)
+    tables.mkdir(parents=True, exist_ok=True)
+    for name in (*TABLES, *REMOVED_TABLES):
+        (tables / f"{name}.csv").unlink(missing_ok=True)
+    for name in NUCLEI_TABLES:
+        (tables / f"{name}{NUCLEI_SUFFIX}.csv").unlink(missing_ok=True)
+    left_out = write_excluded_runs(tables, [dataset])
+    write_csv(tables / "resources.csv", res)
+    write_csv(tables / "summary_resources.csv", res_summary)
+    write_csv(
+        tables / "stare_stage_peaks.csv",
+        peaks,
+        table_schema.columns("stare_stage_peaks")[1:],
+    )
+    written = synth_tables.write(out, tables, dataset)
+    lost = loss_rows(
+        out, cases_root, [dataset], None, [], [],
+        [r for r in res if (r["method"], str(r["case_id"])) not in covered],
+        [], [], run_variants, run_level=False,
+    )  # fmt: skip
+    lost += refused
+    n_ok = len({r["case_id"] for r in res if r.get("ok")})
+    block = _write_losses_block(tables, lost, len(cs), n_ok)
+    text = (
+        f"# {dataset}: the synthetic scaling set (COST only)\n\n"
+        "Scored for cost alone: no pair, nucleus or landmark is scored on this set, and "
+        "it is never pooled with the cohort. "
+        f"{len(cs)} case(s), {len(found)} result name(s); `resources.csv`, "
+        "`summary_resources.csv`, `stare_stage_peaks.csv` and "
+        + ", ".join(f"`{p.name}`" for p in written.values())
+        + f".\n\nCaveat: {synth_tables.synth.CAVEAT}\n"
+    ) + excluded_markdown(left_out)
+    (tables / "summary.md").write_text(text + "\n" + losses.summary_text(lost))
+    print(text)
+    print(f"tables -> {tables}")
+    return {
+        "resources": res,
+        "summary_resources": res_summary,
+        "excluded_runs": left_out,
+        "losses": block["losses"],
+        **{name: written[name] for name in written},
+    }
+
+
 def score(
     cases_root,
     out,
@@ -5617,6 +5797,11 @@ def score(
             done["public"][ds] = _score_landmarks(
                 where, cases_root, out, ds, workers, expected, primary
             )
+        elif kind_of(ds) == "synthetic":
+            done["public"][ds] = _score_synthetic(
+                where, cases_root, out, ds, expected, kw.get("accounting"),
+                kw.get("run_variants"),
+            )  # fmt: skip
         else:
             done["public"][ds] = _score_cells(
                 where, cases_root, out, [ds], workers, dev, expected, primary, **kw

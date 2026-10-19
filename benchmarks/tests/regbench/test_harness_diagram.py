@@ -62,8 +62,8 @@ PREFIXES = (
 )
 # removed with the other harnesses; the public datasets (regbench.PUBLIC) are back
 # beside the cohort and may be named
+# "synthetic" is back (T32, user 2026-10-19): the cost-only scaling set, its own tables
 FORBIDDEN = (
-    r"synthetic",
     r"semisynth",
     r"stare_prep",
     r"gate\.sbatch",

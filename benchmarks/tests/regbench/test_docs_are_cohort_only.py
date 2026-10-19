@@ -30,8 +30,8 @@ OVERVIEW = REPO / "docs" / "benchmarks.md"
 LAUNCHER = REPO / "benchmarks" / "regbench" / "slurm" / "submit_cohort.sh"
 DOCS = (README, ENTRY, OVERVIEW)
 
+# "synthetic" is back (T32, user 2026-10-19): the cost-only scaling set, a README section
 FORBIDDEN = (
-    "synthetic",
     "semisynth",
     "anhir_tune",
     "truth_spec",

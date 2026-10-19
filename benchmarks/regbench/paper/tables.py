@@ -1921,6 +1921,11 @@ def write_all(out, dataset=COHORT, cases_root=None):
     from .. import losses
     from . import landmarks
 
+    if variants.is_cost_only_set(dataset):
+        # the synthetic scaling set (T32): its cost tables alone (paper.synthetic)
+        from . import synthetic
+
+        return synthetic.write_all(out, dataset)
     if landmarks.is_landmark_set(dataset):
         # a public landmark set has its own tables (paper.landmarks): its scorer wrote
         # no cells, so the cohort's tables would be empty

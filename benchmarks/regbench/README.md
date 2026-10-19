@@ -1840,6 +1840,7 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `frame_check_failed` | input | run | a STARE proxy moved image content in prep's frame check: written, run and flagged (`stages/prep/record.json` `frame_check=failed`; B10, user ruling "no blocking") |
 | `low_agreement` | input | nuclei | the slide's nuclei agree with its outlines under the threshold: kept, scored and flagged (nuclei_checks.csv) |
 | `pixel_size_fallback` | input | manifest | the checkpoint has no pixel size for the round: 0.325 um is used |
+| `refused_size` | input | run | the run's method declares a largest slide side (`MAX_SIDE_PX`) under this slide's: it refused the size by its own limit (effect `not_run`; the synthetic scaling set) |
 
 `killed_unsettled`, `watcher_gave_up`, `result_unreadable`, `submit_refused`, `held` and
 `score_error` are not the method's (`score.NOT_THE_METHOD`): those rounds are in no
