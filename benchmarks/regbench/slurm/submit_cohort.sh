@@ -1575,6 +1575,26 @@ has "$sized" multiplex && ordered="multiplex"
 for ds in $sized; do [ "$ds" = multiplex ] || ordered="$ordered $ds"; done
 sized="$ordered"
 first_dataset="${sized# }"; first_dataset="${first_dataset%% *}"
+# THE SYNTHETIC SET'S RESULTS DISK (final review I1), said before the first sbatch and
+# never a refusal: STARE writes every moving panel as an uncompressed single-level round,
+# about 343 GB per STARE run on the default grid (synth.results_estimate, from the sizes
+# in code), beside the free space of REGBENCH_OUT (its nearest folder that exists)
+if has "$sized" synthetic && [ -n "${selected// /}" ] && [ "$scoring_earlier" != 1 ]; then
+    if syn_res="$(regbench_py "$REGBENCH_HEAD_IMAGE" synth --to "$(regbench_cases_of synthetic)" \
+            --results-estimate --runs "${selected# }")"; then
+        syn_res="$(awk 'NF { last = $0 } END { print last }' <<< "$syn_res")"
+        echo "# synthetic: ${syn_res#synth: }"
+    else
+        echo "# synthetic: results estimate: cannot be read (synth --results-estimate failed above)"
+    fi
+    syn_df="$REGBENCH_OUT"
+    while [ ! -d "$syn_df" ] && [ "$syn_df" != / ] && [ "$syn_df" != . ]; do syn_df="$(dirname "$syn_df")"; done
+    if syn_kb="$(df -Pk "$syn_df" 2>/dev/null | awk 'NR == 2 { print $4 }')" && [ -n "$syn_kb" ]; then
+        echo "# synthetic: free space of REGBENCH_OUT ($REGBENCH_OUT, on $syn_df): $((syn_kb * 1024)) bytes ($(awk -v k="$syn_kb" 'BEGIN { printf "%.1f", k * 1024 / 1e9 }') GB)"
+    else
+        echo "# synthetic: free space of REGBENCH_OUT ($REGBENCH_OUT): cannot be read (df $syn_df)"
+    fi
+fi
 
 # ── the preflight: every image, started as a job starts it, before the first sbatch ───
 # The pinned STARE source, for the images of this call that have none inside (and are

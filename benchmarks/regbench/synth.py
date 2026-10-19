@@ -197,6 +197,27 @@ def estimate_lines(sizes):
     return lines
 
 
+def results_estimate(sizes, stare_runs):
+    """The bytes the set's RESULTS take (final review I1): STARE writes each moving panel
+    as an uncompressed, single-level round TIFF of the panel's size and channels, so one
+    STARE run is ``N_MOVING`` x every size's image. ``{"bytes_per_stare_run",
+    "stare_runs", "total_bytes"}``; VALIS's results come on top and are not estimated."""
+    per_run = N_MOVING * sum(r["bytes_per_image"] for r in estimate(sizes)["sizes"])
+    n = int(stare_runs)
+    return {"bytes_per_stare_run": per_run, "stare_runs": n, "total_bytes": per_run * n}
+
+
+def results_lines(sizes, stare_runs):
+    est = results_estimate(sizes, stare_runs)
+    return [
+        f"synth: results of {est['stare_runs']} STARE run(s) on {len(tuple(sizes))} "
+        f"size(s), {N_MOVING} uncompressed single-level moving rounds each: "
+        f"{est['bytes_per_stare_run']} bytes ({est['bytes_per_stare_run'] / 1e9:.1f} GB) "
+        f"per run, {est['total_bytes']} bytes ({est['total_bytes'] / 1e9:.1f} GB) in all; "
+        "VALIS's results on top (not estimated)"
+    ]
+
+
 def patient_of(size):
     return f"s{int(size):05d}"
 
@@ -742,6 +763,22 @@ def main(a):
     sizes = GRIDS[a.grid]
     if a.estimate:
         for line in estimate_lines(sizes):
+            print(line)
+        return 0
+    if getattr(a, "results_estimate", False):
+        # the plan's sizes once there is one; the STARE runs of the set among --runs
+        # (default: every run of the set's list)
+        from . import variants
+
+        if (_root(a.to) / PLAN).exists():
+            sizes = tuple(_read_plan(a.to)["sizes"])
+        wanted = set((getattr(a, "runs", None) or "").replace(",", " ").split())
+        stare = [
+            r
+            for r in variants.runs_for(DATASET)
+            if r.method == "stare" and (not wanted or variants.run_name(r) in wanted)
+        ]
+        for line in results_lines(sizes, len(stare)):
             print(line)
         return 0
     if a.status:

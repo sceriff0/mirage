@@ -4686,3 +4686,34 @@ def test_the_synthetic_plan_jobs_time_is_its_own_setting(site, tmp_path):
     # the array's and the finish's limits are not that one
     assert jobs["rb-synth"].opt("--time") == "0-04:00:00"
     assert jobs["rb-synth-finish"].opt("--time") == "0-01:00:00"
+
+
+def test_a_synthetic_launch_prints_its_results_estimate_and_the_free_space(site, tmp_path):
+    """Final review I1: before the first sbatch, the bytes STARE's uncompressed rounds
+    will take (synth.results_estimate, over the selected STARE runs of the set) and the
+    free space of REGBENCH_OUT. Printed only: nothing is refused."""
+    from benchmarks.regbench import synth
+
+    cases = tmp_path / "syn_cases"
+    _case(cases, "synthetic", "s04096_r01", "s04096")
+    env = {"REGBENCH_CASES_SYNTHETIC": str(cases)}
+    done, _, out = launch(site, "--datasets", "synthetic", env=env, log="syn-disk")
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    est = synth.results_estimate(synth.GRIDS["default"], 9)
+    (said,) = [i for i, x in enumerate(lines) if x.startswith("# synthetic: results")]
+    assert str(est["total_bytes"]) in lines[said] and "9 STARE run(s)" in lines[said]
+    (free,) = [i for i, x in enumerate(lines) if x.startswith("# synthetic: free space of REGBENCH_OUT")]
+    assert str(out) in lines[free] and "bytes" in lines[free]
+    first = next(i for i, x in enumerate(lines) if x.startswith("sbatch "))
+    assert said < first and free < first
+    one, _, _ = launch(site, "--datasets", "synthetic", "--runs", "stare valis_mirage",
+                       env=env, log="syn-disk1")  # fmt: skip
+    one_est = synth.results_estimate(synth.GRIDS["default"], 1)
+    assert any(
+        x.startswith("# synthetic: results") and str(one_est["total_bytes"]) in x
+        for x in one.stdout.splitlines()
+    )
+    # the cohort's launch says nothing of it
+    cohort, _, _ = launch(site, log="syn-disk-cohort")
+    assert "# synthetic:" not in cohort.stdout

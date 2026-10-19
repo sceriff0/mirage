@@ -774,6 +774,16 @@ def build_parser():
     syw.add_argument("--finish", action="store_true", help="write the cases, case.json last")
     syw.add_argument("--units", action="store_true", help="print the number of units")
     syw.add_argument("--status", action="store_true", help="complete / planned / partial / absent")
+    syw.add_argument(
+        "--results-estimate", action="store_true",
+        help="print the bytes STARE's uncompressed rounds of the set will take (the plan's "
+        "sizes once planned; the STARE runs among --runs)",
+    )
+    sy.add_argument(
+        "--runs", default=None,
+        help="with --results-estimate: the runs of the launch, by space or comma (default: "
+        "every run of the set)",
+    )
 
     pl = sub.add_parser(
         "plots",

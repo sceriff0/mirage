@@ -1604,9 +1604,16 @@ reproducibility only. It is a public entry (`regbench.PUBLIC["synthetic"]`, kind
   figures are `figS_synth_cost_scaling`, `figS_synth_cross_scaling` and
   `figS_synth_vs_cohort`; `fig2c_cost_vs_input` adds the synthetic peaks as hollow markers
   when the set is there.
-- **Disk**: about 378 GB uncompressed for the default grid, 284 GB of it the 65536 px
-  patient (`regbench synth --estimate --to D` prints it; `plan` prints it again before it
-  writes anything). On disk the slides are zlib-compressed.
+- **Disk**: the INPUTS are about 378 GB uncompressed for the default grid, 284 GB of it
+  the 65536 px patient (`regbench synth --estimate --to D` prints it; `plan` prints it
+  again before it writes anything). On disk the slides are zlib-compressed.
+  The RESULTS are far larger: STARE writes every moving panel as an uncompressed,
+  single-level round TIFF, 10 per size, so ONE STARE run is 343.3 GB on the default grid
+  and the set's nine STARE runs 3089.4 GB (about 3.1 TB), VALIS's results on top. These
+  numbers are computed from the sizes in code (`synth.results_estimate`; `regbench synth
+  --to D --results-estimate [--runs ...]` prints them), and `submit_cohort.sh --datasets
+  synthetic` prints the estimate for the runs it selected beside the free space of
+  `REGBENCH_OUT` before its first sbatch (printed only, never a refusal).
 - **Caveat**: moving panels carry a cohort-like rigid offset and a mild deformation so
   methods do real work; accuracy is not measured on this set; one repeat.
 

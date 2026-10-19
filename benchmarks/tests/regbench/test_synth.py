@@ -496,3 +496,41 @@ def test_stare_coarse_takes_the_same_path_at_two_sizes(tmp_path):
         got.append((a.trusted, a.method))
     assert got[0] == got[1], got
     assert got[0] == (True, "ncc_sweep"), got
+
+
+# ---- the results disk (final review I1) ----------------------------------------------------
+
+
+def test_the_results_estimate_is_stares_uncompressed_moving_rounds():
+    """STARE writes each moving panel as an uncompressed, single-level round TIFF: per
+    STARE run that is N_MOVING x every size's image, about 343 GB on the default grid,
+    and 3.1 TB for the set's nine STARE runs (VALIS on top, not estimated)."""
+    sizes = synth.GRIDS["default"]
+    per_image = [r["bytes_per_image"] for r in synth.estimate(sizes)["sizes"]]
+    est = synth.results_estimate(sizes, 9)
+    assert est["bytes_per_stare_run"] == synth.N_MOVING * sum(per_image)
+    assert round(est["bytes_per_stare_run"] / 1e9) == 343
+    assert est["stare_runs"] == 9 and est["total_bytes"] == 9 * est["bytes_per_stare_run"]
+    assert round(est["total_bytes"] / 1e12, 1) == 3.1
+
+
+def test_the_cli_prints_the_results_estimate_of_the_selected_stare_runs(tmp_path, capsys):
+    from benchmarks.regbench import cli
+
+    to = tmp_path / "cases"
+    default = synth.GRIDS["default"]
+    assert cli.main(["synth", "--to", str(to), "--results-estimate"]) == 0
+    out = capsys.readouterr().out
+    assert str(synth.results_estimate(default, 9)["total_bytes"]) in out
+    assert "9 STARE run(s)" in out and "VALIS" in out
+    # the runs a launch selected: only its STARE runs of the set count
+    argv = ["synth", "--to", str(to), "--results-estimate", "--runs", "stare valis_mirage x"]
+    assert cli.main(argv) == 0
+    out = capsys.readouterr().out
+    assert str(synth.results_estimate(default, 1)["total_bytes"]) in out
+    # once planned, the plan's sizes
+    _plan(tmp_path, _source(tmp_path), sizes=(64, 128), to=to)
+    capsys.readouterr()
+    assert cli.main(["synth", "--to", str(to), "--results-estimate"]) == 0
+    out = capsys.readouterr().out
+    assert str(synth.results_estimate((64, 128), 9)["total_bytes"]) in out
