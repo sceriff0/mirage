@@ -422,7 +422,8 @@ def test_the_paper_tables_carry_them_from_the_schema(scored_out, monkeypatch):
     monkeypatch.setattr(paper_tables, "family_of", lambda v: fam.get(v))
     monkeypatch.setattr(paper_tables, "terminal_rows", lambda ds: {k: k for k in fam})
     built = paper_tables.build(out, "multiplex")
-    rows = {(r["family"], r["which"]): r for r in built["method_summary"]}
+    rows = {(r["family"], r["which"]): r for r in built["method_summary"]
+            if paper_tables.is_headline(r)}
     best = rows[("stare", "best")]
     assert best["n_full_lsa"] == best["n_pairs"]
     assert best["fallback_frac_max"] == 0.0 and best["fallback_frac_med"] == 0.0

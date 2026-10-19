@@ -187,19 +187,19 @@ def _need(paper_dir, **names):
 
 
 # ── per-case dice ────────────────────────────────────────────────────────────
-def _outlines(per_pair):
+def _outlines(per_pair, set_=tables.OUTLINES):
     # a cost-only row (stare_local4) is in no accuracy figure, even in a per_pair.csv
     # written before T31's fix C1 or collected from a draft
-    return [r for r in per_pair if r.get("set") == tables.OUTLINES
+    return [r for r in per_pair if r.get("set") == set_
             and not _flag(r.get("excluded_from_summaries"))
             and not tables.is_cost_only(r.get("row"))]
 
 
-def _cases(per_pair, row):
-    """``{case_id: record}`` of one result name: kept outline rows, dice read as the
-    tables read it."""
+def _cases(per_pair, row, set_=tables.OUTLINES):
+    """``{case_id: record}`` of one result name: kept rows of one object set (the
+    outlines unless said), dice read as the tables read it."""
     out = {}
-    for r in _outlines(per_pair):
+    for r in _outlines(per_pair, set_):
         if r["row"] != row:
             continue
         out[r["case_id"]] = {
@@ -315,22 +315,31 @@ def _distribution(fig_dir, name, groups, ylabel, value_key, ylim=None, log=False
 
 
 # ── Fig. 3b ──────────────────────────────────────────────────────────────────
-def _best_rows(best):
-    """``[(family, best_row or None)]`` in the table's order, plus every canonical family
-    the table does not list (no row: n of 0)."""
+def _of_set(r, set_):
+    """A method_best row of the object set ``set_``; a row with no ``set`` (a table
+    written before T29) is the outlines'."""
+    have = r.get("set")
+    return have == set_ or (set_ == tables.OUTLINES and have in (None, "", schema.NA))
+
+
+def _best_rows(best, set_=tables.OUTLINES):
+    """``[(family, best_row or None)]`` of one object set (T29: method_best has a row per
+    family per set; the outlines' unless said) in the table's order, plus every canonical
+    family the table does not list (no row: n of 0)."""
     seen = []
     for r in best:
-        seen.append((r["family"], r.get("best_row")))
+        if _of_set(r, set_):
+            seen.append((r["family"], r.get("best_row")))
     have = {f for f, _ in seen}
     return seen + [(f, None) for f in FAMILIES if f not in have]
 
 
-def _best_cases(per_pair, best):
-    picks = [(f, row) for f, row in _best_rows(best) if row]
-    by_row = {row: _cases(per_pair, row) for _, row in picks}
+def _best_cases(per_pair, best, set_=tables.OUTLINES):
+    picks = [(f, row) for f, row in _best_rows(best, set_) if row]
+    by_row = {row: _cases(per_pair, row, set_) for _, row in picks}
     by_row = _drop_empty_cases(by_row)
     groups, n = [], {}
-    for f, row in _best_rows(best):
+    for f, row in _best_rows(best, set_):
         cs = list(by_row.get(row, {}).values()) if row else []
         for c in cs:
             c["row_name"] = row
@@ -347,6 +356,24 @@ def fig3b_dice_best(paper_dir, fig_dir):
     groups, n = _best_cases(got["pp"], got["best"])
     files = _distribution(fig_dir, "fig3b_dice_best", [g[:3] for g in groups],
                           "Matched-pair Dice (outlines, unitless)", "dice", ylim=(-0.03, 1.03))
+    return _result(files, n)
+
+
+def fig3b_dice_best_nuclei(paper_dir, fig_dir):
+    """Fig. 3b's nuclei panel (T29): each family's best row on the bare nuclei (its
+    ``method_best`` row of ``set = nuclei``, chosen on the nuclei), over the nuclei's
+    matched-pair Dice; a placeholder when no nuclei row is there."""
+    got, missing = _need(paper_dir, pp="per_pair.csv", best="method_best.csv")
+    if not missing and not any(_of_set(r, tables.NUCLEI) and r.get("best_row")
+                               for r in got["best"]):
+        missing = [("method_best: no best row of set nuclei",
+                    Path(paper_dir) / "method_best.csv")]
+    if missing:
+        return _placeholder(fig_dir, "fig3b_dice_best_nuclei", missing)
+    groups, n = _best_cases(got["pp"], got["best"], tables.NUCLEI)
+    files = _distribution(fig_dir, "fig3b_dice_best_nuclei", [g[:3] for g in groups],
+                          "Matched-pair Dice (bare nuclei, unitless)", "dice",
+                          ylim=(-0.03, 1.03))
     return _result(files, n)
 
 
@@ -441,7 +468,8 @@ def fig3d_valis_stages(paper_dir, fig_dir):
     colors = _colors(fig_dir)
     runs = {}
     for r in got["vs"]:
-        runs.setdefault(r["row"], {})[r["stage"]] = r
+        if tables.is_headline(r):  # T29: the outlines on the common cases
+            runs.setdefault(r["row"], {})[r["stage"]] = r
     styles = {"high": "-", "medium": "--", "low": ":"}
     marks = {"0": "o", "1": "s", "2": "^"}
     fig, (ax,) = ps.figure(width="onehalf", aspect=0.75)
@@ -475,7 +503,7 @@ def fig3d_stare_tiers(paper_dir, fig_dir):
         return _placeholder(fig_dir, "fig3d_stare_tiers", missing)
     picks = {}
     for r in got["st"]:
-        if tables.is_cost_only(r.get("row")):
+        if not tables.is_headline(r) or tables.is_cost_only(r.get("row")):
             continue  # a cost row is no tier of STARE's (T31 fix C1)
         if _num(r.get("stride")) == 64 and (r.get("sprep") or "none") == "none":
             picks[r["tier"]] = r["row"]
@@ -649,6 +677,7 @@ def public_landmarks_best(paper_dir, fig_dir):
 
 PLOTS = {
     "fig3b_dice_best": fig3b_dice_best,
+    "fig3b_dice_best_nuclei": fig3b_dice_best_nuclei,
     "fig3b_dice_all": fig3b_dice_all,
     "fig3c_displacement_best": fig3c_displacement_best,
     "fig3d_valis_stages": fig3d_valis_stages,
@@ -670,6 +699,8 @@ PLOTS = {
 # them (never an empty axis).
 NEEDS = {
     "fig3b_dice_best": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
+    "fig3b_dice_best_nuclei": {"per_pair.csv": ("dice_matched",),
+                               "method_best.csv": ("best_row",)},
     "fig3b_dice_all": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
     "fig3c_displacement_best": {"per_pair.csv": ("displacement_um_p50",),
                                 "method_best.csv": ("best_row",)},

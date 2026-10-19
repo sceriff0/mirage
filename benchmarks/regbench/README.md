@@ -2036,6 +2036,32 @@ registration, their ratio, GPU-hours with the device, memory-hours, then the tim
 (registration, writer, to the registered image) and the peak memory. No single column
 is "the" cost.
 
+### The paper's accuracy: poolings, sets, Dice rules (`paper/tables.py`, T29)
+
+Every paper accuracy table (`method_summary`, `valis_stages`, `stare_tiers`) carries a
+`set` column (`outlines`, the headline, and `nuclei`, the bare nuclei) and a `pooling`
+column, one row per (set, pooling):
+
+| `pooling` | the median of | over |
+|---|---|---|
+| `common` (**headline**) | the per-patient medians | the cases every compared row of the dataset has (and, for the displacement, has readable) |
+| `patient` | the per-patient medians | every case of the row |
+| `case` | the cases | every case of the row |
+
+`n_units` counts what the pooling is over. Dice is printed both ways: `dice_zero_med`
+(no matched pair counts as 0: the headline `dice_med`) and `dice_skip_med` (finite
+values only), with `n_dice_zeroed` beside. The three pair fractions
+(`pair_fraction_med`, `pair_fraction_max_med`, `pair_fraction_sym_med`) are side by side.
+`disp_um_common_*` is the displacement on the common readable cases (WD11), beside
+`disp_um_*` on the row's own. `method_best` has one row per family per set, with
+`unit = patient`, `n_candidates` and `in_sample_selection`: **the best row is an
+in-sample ceiling over `n_candidates` rows**, chosen on this cohort with this metric.
+Every other table and figure reads the outlines' best row; Fig. 3b's nuclei panel
+(`fig3b_dice_best_nuclei`) reads the nuclei's. The paired differences against STARE are
+per patient (`paired_unit`), a tie counted as STARE at least as good. DeeperHistReg's
+primary is its best row ("primary = best", user 2026-10-18; flagged in-sample);
+ASHLAR's primary is unchanged.
+
 ### The paper's cost: the rules every number obeys (`paper/costs.py`)
 
 The paper tables (`method_summary`, `cost_points`, `cost_fits`, `end_to_end`) and the

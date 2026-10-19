@@ -33,7 +33,7 @@ import numpy as np
 
 from .. import losses as losses_mod
 from .. import variants
-from . import costs
+from . import costs, tables
 from . import plots as P
 from . import plotstyle as ps
 
@@ -56,6 +56,7 @@ def _rows_to_draw(cost, best):
     another), from the points' own flags; for a table without them (a draft) the best
     rows of ``method_best``."""
     out, seen = [], set()
+    best = tables.headline_best(best or [])  # T29: the outlines' rows, not the nuclei's
     flagged = any(_b(p.get("is_primary")) is not None for p in cost)
     fams = []
     for p in cost:

@@ -989,7 +989,7 @@ def build(cases_root, out, roi_um=ROI_UM, case_id=None, dataset=COHORT, best_pat
     best = plots._read(best_path)
     if best is None:
         return _placeholders(fig_dir, [("method_best", best_path), *extra], rois_path)
-    best_rows = {r["family"]: r.get("best_row") for r in best
+    best_rows = {r["family"]: r.get("best_row") for r in tables.headline_best(best)
                  if (r.get("dataset") or dataset) == dataset}
     stare_row = best_rows.get(STARE_FAMILY)
     if not stare_row:

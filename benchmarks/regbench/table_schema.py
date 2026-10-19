@@ -166,6 +166,31 @@ _FULL = (
 )
 
 
+# T29 (the fair comparison): every accuracy table of the paper has rows per polygon set
+# (outlines: the headline; nuclei beside) and per pooling (user 2026-10-18 "pool various
+# ways"; ruling: patient pooling = the median of the per-patient medians)
+_SET = ("set", "", "outlines (the headline: each nucleus grown by 10 px) or nuclei (the "
+        "bare nuclei, beside)")
+_POOLING = ("pooling", "", "how the cases are pooled: case (every case one value), patient "
+            "(per-patient median first, then the median over patients) or common (patient "
+            "pooling on the cross-method common cases: every compared row, the primary and "
+            "best rows, has a kept row there; the headline)")
+_N_UNITS = ("n_units", "count", "values the medians are over: cases (pooling=case) or patients")
+_DICE_RULES = (
+    ("dice_zero_med", "1", "dice_med said explicitly: a case with no matched pair counts "
+     "as 0 (a failure scores 0; the headline rule)"),
+    ("dice_skip_med", "1", "the same median with a case with no matched pair left out "
+     "(finite values only; the scorer's rule before T29)"),
+)
+_PAIR_FRACTIONS = (
+    ("pair_fraction_med", "1", "pairs over the smaller native count (the headline pair "
+     "fraction), pooled as `pooling` says"),
+    ("pair_fraction_max_med", "1", "pairs over the LARGER native count: a loss on the larger "
+     "side lowers it"),
+    ("pair_fraction_sym_med", "1", "2 x pairs over (n_ref + n_mov)"),
+)
+
+
 def _cost_summary_cols():
     """method_summary's paper.costs columns (``costs.summary_column_specs``)."""
     from .paper import costs
@@ -198,6 +223,10 @@ _TABLE_LIST = [
        ("iou_p50", "1", "median IoU of the pairs"),
        ("pair_fraction", "1", "pairs over the smaller native count"),
        ("pair_fraction_null_max", "1", "the null's largest pair fraction"),
+       ("pair_fraction_max", "1", "pairs over the larger native count (score.add_pair_fractions)"),
+       ("pair_fraction_max_null_max", "1", "the null's largest pair_fraction_max"),
+       ("pair_fraction_sym", "1", "2 x pairs over (n_ref + n_mov)"),
+       ("pair_fraction_sym_null_max", "1", "the null's largest pair_fraction_sym"),
        ("displacement_um_p50", "um", "median centroid displacement of the pairs"),
        ("displacement_um_p90", "um", "90th percentile centroid displacement"),
        ("displacement_readable", "bool", "pair fraction exceeds the null max by 0.10"),
@@ -218,12 +247,17 @@ _TABLE_LIST = [
         "left to mutual nearest neighbour"),
        ("full_lsa_status", "", "full_lsa_from_exact (the record's *_exact, no solve), "
         "full_lsa_solved, not_certified or failed (both: NA numbers, a losses.csv row)")),
-    _t("method_best", ("dataset", "family"),
+    _t("method_best", ("dataset", "family", "set"),
        "the best variant of each method (family), by the rule in `rule`",
        ("dataset", "", ""), ("family", "", ""), ("best_row", "", "the chosen result name"),
        ("n_candidates", "count", "terminal rows of the family considered"),
        ("criterion", "", "median over patients of the patient-median dice_matched (outlines)"),
        ("criterion_value", "1", "the chosen row's value"),
+       ("criterion_value_skip", "1", "the chosen row's value with a case with no matched pair "
+        "left out (finite values only), beside the zero-filled criterion"),
+       _SET,
+       ("unit", "", "patient: the criterion is the median over patients of the patient "
+        "medians (best_of and the paired tables pool on patients)"),
        ("n_cases_common", "count", "cases every candidate has a non-excluded row on, less those "
         "where no candidate has a matched pair"),
        ("n_dice_zeroed", "count", "the chosen row's common cases with no matched pair, whose "
@@ -232,12 +266,17 @@ _TABLE_LIST = [
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
        ("common_block", "", "strict (the headline) or per_method (B2)")),
-    _t("method_best_per_method", ("dataset", "family"),
+    _t("method_best_per_method", ("dataset", "family", "set"),
        "method_best on the per-method common set (B2): beside the strict one, never the headline",
        ("dataset", "", ""), ("family", "", ""), ("best_row", "", "the chosen result name"),
        ("n_candidates", "count", "terminal rows of the family considered"),
        ("criterion", "", "median over patients of the patient-median dice_matched (outlines)"),
        ("criterion_value", "1", "the chosen row's value"),
+       ("criterion_value_skip", "1", "the chosen row's value with a case with no matched pair "
+        "left out (finite values only), beside the zero-filled criterion"),
+       _SET,
+       ("unit", "", "patient: the criterion is the median over patients of the patient "
+        "medians (best_of and the paired tables pool on patients)"),
        ("n_cases_common", "count", "cases every candidate has a non-excluded row on, less those "
         "where no candidate has a matched pair"),
        ("n_dice_zeroed", "count", "the chosen row's common cases with no matched pair, whose "
@@ -246,7 +285,7 @@ _TABLE_LIST = [
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
        ("common_block", "", "strict (the headline) or per_method (B2)")),
-    _t("method_summary", ("dataset", "family", "row", "which"),
+    _t("method_summary", ("dataset", "family", "row", "which", "set", "pooling"),
        "per method: accuracy over panel pairs, the paired difference against STARE, cost "
        "(paper.costs: per patient, the common patients first, clock and unit named)",
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
@@ -254,19 +293,45 @@ _TABLE_LIST = [
        ("row_kind", "", "primary (drawn filled), best (the best-Dice row: drawn hollow, "
         "'best (ceiling)'), local_4cpu (STARE in one 4-CPU job) or cpu_twin (a GPU row's "
         "CPU twin)"),
+       _SET, _POOLING, _N_UNITS,
+       ("selection", "", "how the row was chosen: a best row is the best of n_candidates "
+        "by Dice on this dataset (an in-sample ceiling); a primary row is fixed before "
+        "scoring (variants.PRIMARY), except DeeperHistReg's (primary = best, user "
+        "2026-10-18: in-sample)"),
+       ("n_candidates", "count", "a best row: the family's terminal rows that competed "
+        "(method_best); NA on a row that was not selected"),
+       ("in_sample_selection", "bool", "the row was chosen on this dataset with this metric"),
        ("tool_version", "", ""),
        ("n_patients", "count", ""), ("n_pairs", "count", "panel pairs (cases)"),
        ("n_ok", "count", "cases registered"),
        ("n_dice_zeroed", "count", "cases with no matched pair, whose missing dice_matched "
         "counted as 0 in the Dice statistics"),
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""), ("dice_mean", "1", ""),
+       *_DICE_RULES,
+       ("dice_skip_q25", "1", "25th percentile of the units' Dice, a missing one left out"),
+       ("dice_skip_q75", "1", "75th percentile of the units' Dice, a missing one left out"),
+       ("dice_skip_mean", "1", "mean of the units' Dice, a missing one left out"),
+       *_PAIR_FRACTIONS,
        ("disp_um_med", "um", "median over readable cases of displacement_um_p50"),
        ("disp_um_q25", "um", ""), ("disp_um_q75", "um", ""), ("n_readable", "count", ""),
+       ("disp_um_common_med", "um", "the same on the cross-method common READABLE cases "
+        "(displacement_readable for every compared row): the displacement that may be set "
+        "beside another row's (WD11)"),
+       ("disp_um_common_q25", "um", "25th percentile of disp_um_common's units"),
+       ("disp_um_common_q75", "um", "75th percentile of disp_um_common's units"),
+       ("n_readable_common", "count", "this row's cases among the common readable ones"),
        *_FULL,
-       ("d_dice_vs_stare_med", "1", "row minus STARE's best, per case, median"),
+       ("d_dice_vs_stare_med", "1", "row minus STARE's best, per unit (paired_unit: a case, "
+        "or a patient's median over the cases both have), median over units"),
        ("d_dice_vs_stare_q25", "1", ""), ("d_dice_vs_stare_q75", "1", ""),
+       ("d_dice_skip_vs_stare_med", "1", "the same with a missing Dice left out, not 0"),
+       ("paired_unit", "", "case (pooling=case) or patient"),
        ("n_pairs_vs_stare", "count", "cases both have"),
-       ("n_pairs_stare_ge", "count", "cases where STARE's Dice >= this row's"),
+       ("n_pairs_stare_ge", "count", "DEPRECATED (= n_units_stare_ge on pooling=case): cases "
+        "where STARE's Dice >= this row's"),
+       ("n_units_vs_stare", "count", "units (paired_unit) both have"),
+       ("n_units_stare_ge", "count", "units where STARE's Dice >= this row's (a tie counts "
+        "for STARE)"),
        ("n_patients_complete", "count", "patients whose every round registered (the "
         "deprecated *_med columns read these: the survivors)"),
        ("peak_rss_gb_med", "GB", "DEPRECATED: median over this row's complete patients "
@@ -318,18 +383,27 @@ _TABLE_LIST = [
         "common patient, then the median (never a median plus a median)"),
        ("n_prior_rounds_missing", "count", "rounds of the common patients with no "
         "stare_stage_peaks line: their prior is a lower bound")),
-    _t("valis_stages", ("dataset", "row", "stage"),
+    _t("valis_stages", ("dataset", "row", "stage", "set", "pooling"),
        "Dice by VALIS stage, per VALIS run (tier x micro)",
        ("dataset", "", ""), ("row", "", "the run's final result name"),
        ("memory_mode", "", "high, medium or low"), ("micro_reg", "", "0, 1 or 2"),
        ("stage", "", "initial, rigid (depth 0), micro_rigid (the _rigid row at depth 1 and 2: "
                      "affine + micro-rigid), nonrigid, or micro (depth 2 only); R18"),
        ("stage_row", "", "result name of the stage; NA when the run has no such stage"),
+       _SET, _POOLING, _N_UNITS,
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
+       *_DICE_RULES,
+       ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
+        "dice_skip_med)"),
        ("n_pairs", "count", ""), ("disp_um_med", "um", ""), *_FULL),
-    _t("stare_tiers", ("dataset", "row"), "Dice and cost per STARE run (tier, stride, prep)",
+    _t("stare_tiers", ("dataset", "row", "set", "pooling"),
+       "Dice and cost per STARE run (tier, stride, prep)",
        ("dataset", "", ""), ("row", "", ""), ("tier", "", ""), ("stride", "px", ""),
-       ("sprep", "", ""), ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
+       ("sprep", "", ""), _SET, _POOLING, _N_UNITS,
+       ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
+       *_DICE_RULES,
+       ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
+        "dice_skip_med)"),
        ("n_pairs", "count", ""), *_FULL,
        ("n_patients_common", "count", "common patients this row completed: the cost columns "
         "are over these (rule 2, method_summary's)"),
@@ -487,8 +561,9 @@ _TABLE_LIST = [
        ("reg_tile_mem_gb", "GB", "attempt 1"), ("stitch_mem_gb", "GB", "attempt 1")),
     _t("pipeline_params", ("name",), "every pipeline parameter with its default (Table S1)",
        ("name", "", ""), ("default", "", ""), ("type", "", ""), ("description", "", "")),
-    _t("cohort_counts", ("dataset", "patient_id", "row"), "panel pairs per case, nuclei per pair",
-       ("dataset", "", ""), ("patient_id", "", ""), ("row", "", ""), ("n_panels", "count", "moving panels"),
+    _t("cohort_counts", ("dataset", "patient_id", "row", "set"),
+       "panel pairs per case, nuclei per pair",
+       ("dataset", "", ""), ("patient_id", "", ""), ("row", "", ""), _SET, ("n_panels", "count", "moving panels"),
        ("n_pairs_min", "count", "matched nuclei per pair, min"), ("n_pairs_med", "count", "matched nuclei per pair, median over the row's pairs in the patient"),
        ("n_pairs_max", "count", "matched nuclei per pair, max over the row's pairs in the patient")),
     _t("crosscheck_arms", ("patient_id", "panel", "row"),

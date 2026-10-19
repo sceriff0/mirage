@@ -62,7 +62,7 @@ def test_every_row_says_regbench(scored):
 
 def test_best_counts_imputed_rounds_and_leaves_out_excluded(scored):
     built = tables.build(scored, "multiplex")
-    best = {r["family"]: r for r in built["method_best"]}
+    best = {r["family"]: r for r in built["method_best"] if tables.is_headline(r)}
     # `crash` raised on every case: imputed at the unregistered pose, so it cannot beat `rtm`
     assert best["rtm"]["best_row"] == "rtm"
     assert best["stare"]["in_sample_selection"] is True
@@ -83,7 +83,10 @@ def test_an_excluded_row_is_left_out_and_an_imputed_one_kept(scored):
     # best_of compares on the cases every candidate has a NON-excluded row on
     best = tables.best_of(pp, "stare", "multiplex", {})
     assert best["n_cases_common"] == 3 and best["best_row"] == "dropme"
-    rows = {(r["family"], r["which"]): r for r in built["method_summary"]}
+    # the case pooling counts every case of the row; the headline (common) only the
+    # cases every compared row has
+    rows = {(r["family"], r["which"]): r for r in built["method_summary"]
+            if r["set"] == "outlines" and r["pooling"] == "case"}
     assert rows[("stare", "best")]["row"] == "dropme"
     assert rows[("stare", "best")]["n_pairs"] == 3  # P1_r1 left out
     assert rows[("stare", "primary")]["n_pairs"] == 4
@@ -135,7 +138,8 @@ def test_best_of_on_hand_rows_excluded_never_decides():
 
 def test_summary_has_best_and_primary_rows_and_the_paired_difference(scored):
     built = tables.build(scored, "multiplex")
-    rows = {(r["family"], r["which"]): r for r in built["method_summary"]}
+    rows = {(r["family"], r["which"]): r for r in built["method_summary"]
+            if tables.is_headline(r)}
     assert ("stare", "best") in rows and ("stare", "primary") in rows
     assert ("rtm", "primary") not in rows  # no primary row in the toy family
     me = rows[("stare", "best")]
@@ -340,12 +344,21 @@ def test_cpu_by_row_from_the_scorers_file_skips_incomplete_patients(scored):
 
 def test_summary_zeroes_nan_dice_and_counts_complete_patients(scored):
     built = tables.build(scored, "multiplex")
-    rows = {(r["family"], r["which"]): r for r in built["method_summary"]}
-    rtm = rows[("rtm", "best")]
+    rows = {(r["family"], r["which"]): r for r in built["method_summary"]
+            if tables.is_headline(r)}
+    by_case = {(r["family"], r["which"]): r for r in built["method_summary"]
+               if r["set"] == "outlines" and r["pooling"] == "case"}
+    rtm = by_case[("rtm", "best")]
     pp = {r["case_id"]: r["dice_matched"] for r in built["per_pair"]
           if r["row"] == "rtm" and r["set"] == "outlines"}
     want = sorted([pp["P1_r1"], pp["P1_r2"], pp["P3_r1"], 0.0])
     assert rtm["n_dice_zeroed"] == 1 and rtm["dice_med"] == pytest.approx((want[1] + want[2]) / 2)
+    # per patient first (the headline pools so, on the common cases): P1's median, P2's 0
+    # (its one round has no pair), P3's
+    head = rows[("rtm", "best")]
+    per = sorted([(pp["P1_r1"] + pp["P1_r2"]) / 2, 0.0, pp["P3_r1"]])
+    assert head["pooling"] == "common" and head["dice_med"] == pytest.approx(per[1])
+    rtm = head
     assert rtm["n_patients_complete"] == 2 and rows[("stare", "best")]["n_patients_complete"] == 3
     cost = [r for r in tables._cost_rows(scored, "multiplex")
             if r["method"] == "rtm" and r["complete"] == "True"]
@@ -450,7 +463,8 @@ def test_stare_tiers_cost_is_over_the_common_patients_with_its_interval_clock_an
               _pt("stare_medium", "P2", "complete", 3.0, 4.0),
               _pt("stare_medium", "P3", "complete", 100.0, 200.0)]  # not common: left out
     cost = [{"method": "stare_medium", "n_jobs": "5", "group": p} for p in ("P1", "P2", "P3")]
-    (r,) = tables.stare_tiers([], cost, "multiplex", points, {"P1", "P2"})
+    (r,) = [r for r in tables.stare_tiers([], cost, "multiplex", points, {"P1", "P2"})
+            if tables.is_headline(r)]
     assert r["cpu_h_used_common_med"] == 2.0 and r["peak_rss_gb_common_med"] == 3.0
     assert r["cpu_h_used_common_ci_low"] <= 2.0 <= r["cpu_h_used_common_ci_high"]
     assert (r["n_patients_common"], r["n_patients_survivors"]) == (2, 3)
@@ -526,3 +540,136 @@ def test_the_tables_keep_the_figures_loss_rows_in_paper_losses_csv(scored):
     again = list(csv.DictReader(open(paths["losses"])))
     assert [r for r in again if r["cause"] == "plot_placeholder"] == [plot]
     assert len(again) == len(old) + 1
+
+
+# ── T29: the fair comparison (accuracy side) ─────────────────────────────────
+def _row(row, case, patient, dice, set_="outlines", readable=False, disp=float("nan"),
+         **kw):
+    r = _hand(row, case, patient, dice, **kw)
+    r.update(set=set_, displacement_readable=readable, displacement_um_p50=disp)
+    return r
+
+
+def _pool_fixture():
+    """a: P1 0.9, 0.8, 0.7 and P2 0.1 (four cases); b misses c3. By case the median is
+    0.75; per patient first median(0.8, 0.1) = 0.45; on the common cases (c3 out)
+    median(0.85, 0.1) = 0.475."""
+    return [_row("a", "c1", "p1", 0.9), _row("a", "c2", "p1", 0.8),
+            _row("a", "c3", "p1", 0.7), _row("a", "c4", "p2", 0.1),
+            _row("b", "c1", "p1", 0.5), _row("b", "c2", "p1", 0.5),
+            _row("b", "c4", "p2", 0.5)]
+
+
+def test_the_three_poolings_differ_where_cases_and_patients_differ():
+    pp = _pool_fixture()
+    common = tables.common_sets(pp, "multiplex", ["a", "b"])["outlines"]
+    assert common["cases"] == {"c1", "c2", "c4"}
+    got = {p: tables._accuracy(pp, "a", "multiplex", "outlines", p, common)[1]
+           for p in tables.POOLINGS}
+    assert got["case"]["dice_med"] == pytest.approx(0.75)
+    assert got["patient"]["dice_med"] == pytest.approx(0.45)
+    assert got["common"]["dice_med"] == pytest.approx(0.475)
+    assert (got["case"]["n_units"], got["patient"]["n_units"]) == (4, 2)
+    assert got["common"]["n_pairs"] == 3 and got["case"]["n_pairs"] == 4
+    assert tables.POOLINGS[0] == tables.HEADLINE_POOLING == "common"
+
+
+def test_dice_is_reported_zero_filled_and_skipped_with_the_count():
+    nan = float("nan")
+    pp = [_row("a", "c1", "p1", 0.8), _row("a", "c2", "p2", nan, imputed=True),
+          _row("a", "c3", "p3", 0.6)]
+    acc = tables._accuracy(pp, "a", "multiplex", "outlines", "patient",
+                           tables.common_sets(pp, "multiplex", ["a"])["outlines"])[1]
+    assert acc["dice_med"] == pytest.approx(0.6) == acc["dice_zero_med"]  # 0.8, 0, 0.6
+    assert acc["dice_skip_med"] == pytest.approx(0.7)  # 0.8, 0.6
+    assert acc["n_dice_zeroed"] == 1
+
+
+def test_displacement_has_a_common_readable_version_beside_the_per_row_one():
+    pp = [_row("a", "c1", "p1", 0.9, readable=True, disp=1.0),
+          _row("a", "c2", "p2", 0.9, readable=True, disp=3.0),
+          _row("b", "c1", "p1", 0.9, readable=True, disp=2.0),
+          _row("b", "c2", "p2", 0.9, readable=False, disp=9.0)]
+    common = tables.common_sets(pp, "multiplex", ["a", "b"])["outlines"]
+    assert common["readable"] == {"c1"}
+    acc = tables._accuracy(pp, "a", "multiplex", "outlines", "case", common)[1]
+    assert acc["disp_um_med"] == pytest.approx(2.0) and acc["n_readable"] == 2
+    assert acc["disp_um_common_med"] == pytest.approx(1.0) and acc["n_readable_common"] == 1
+
+
+def test_the_paired_difference_is_per_patient_with_its_unit_and_tie_rule():
+    """The paired table's unit is the patient (stated in `paired_unit`), and a tie goes
+    to STARE: `n_units_stare_ge` counts b >= a (WT5)."""
+    pp = [_row("x", "c1", "p1", 0.9), _row("x", "c2", "p1", 0.7),
+          _row("s", "c1", "p1", 0.6), _row("s", "c2", "p1", 0.8),  # p1: 0.8 vs 0.7
+          _row("x", "c3", "p2", 0.5), _row("s", "c3", "p2", 0.5)]  # p2: a tie
+    common = tables.common_sets(pp, "multiplex", ["x", "s"])["outlines"]
+    got = tables._paired(pp, "x", "s", "multiplex", "outlines", "patient", common)
+    assert got["paired_unit"] == "patient" and got["n_units_vs_stare"] == 2
+    assert got["d_dice_vs_stare_med"] == pytest.approx(0.05)  # median(0.1, 0.0)
+    assert got["n_units_stare_ge"] == 1  # the tie only
+    assert got["n_pairs_vs_stare"] == 3
+    by_case = tables._paired(pp, "x", "s", "multiplex", "outlines", "case", common)
+    assert by_case["paired_unit"] == "case" and by_case["n_units_stare_ge"] == 2
+
+
+def test_every_summary_row_has_its_set_and_pooling_and_the_headline_first(scored):
+    built = tables.build(scored, "multiplex")
+    rows = [r for r in built["method_summary"] if not tables.is_cost_only(r["row"])]
+    seen = {(r["row"], r["which"], r["set"], r["pooling"]) for r in rows}
+    for row, which in {(r["row"], r["which"]) for r in rows}:
+        assert {(s, p) for rr, w, s, p in seen if (rr, w) == (row, which)} == {
+            (s, p) for s in ("outlines", "nuclei") for p in tables.POOLINGS}
+    head = [r for r in rows if tables.is_headline(r)]
+    assert head and all((r["set"], r["pooling"]) == ("outlines", "common") for r in head)
+    for name in ("valis_stages", "stare_tiers", "cohort_counts", "method_best"):
+        assert "set" in schema.columns(name), name
+    for name in ("valis_stages", "stare_tiers"):
+        assert "pooling" in schema.columns(name), name
+    assert {r["unit"] for r in built["method_best"]} == {"patient"}
+    assert {r["set"] for r in built["method_best"]} == {"outlines", "nuclei"}
+    pp = [r for r in built["per_pair"] if r["row"] == "stare" and r["n_pairs"] > 0]
+    assert pp and all(r["pair_fraction_sym"] == pytest.approx(
+        2 * r["n_pairs"] / (r["n_ref"] + r["n_mov"])) for r in pp)
+    assert "pair_fraction_sym_med" in head[0] and "pair_fraction_max_med" in head[0]
+
+
+def test_a_best_row_carries_its_candidates_and_says_it_is_a_ceiling(scored):
+    built = tables.build(scored, "multiplex")
+    best = {r["family"]: r for r in built["method_best"] if tables.is_headline(r)}
+    for r in built["method_summary"]:
+        if r["which"] == "best":
+            assert r["n_candidates"] == best[r["family"]]["n_candidates"] == 2
+            assert r["in_sample_selection"] is True and "ceiling" in r["selection"]
+        elif r["which"] == "primary":
+            assert r["n_candidates"] == schema.NA and r["in_sample_selection"] is False
+
+
+def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
+    """WT4: the real family map, not a toy one: every terminal row of a family that has
+    a row competes (the audit's counts, WD1)."""
+    want = {"ashlar": 12, "affine_ashlar": 12, "stare": 11, "valis_mirage": 9,
+            "deeperhistreg": 8, "valis120": 2, "palom": 1}
+    rows = tables.terminal_rows("multiplex").values()
+    pp = [_hand(t, "c1", "p1", 0.5) for t in rows]
+    for fam, n in want.items():
+        assert tables.best_of(pp, fam, "multiplex", {})["n_candidates"] == n, fam
+    # a candidate with no row on the dataset does not compete
+    assert tables.best_of(pp[1:], variants.family(pp[0]["row"]), "multiplex", {})[
+        "n_candidates"] == want[variants.family(pp[0]["row"])] - 1
+
+
+def test_deeperhistregs_primary_is_its_best_as_drawn_row():
+    """Ruling 193 (user 2026-10-18 'the best one as_drawn'): DeeperHistReg's primary is
+    the dataset's method_best row, said and flagged in-sample; variants.PRIMARY's
+    placeholder is not what the tables use."""
+    rows = [t for t in tables.terminal_rows("multiplex").values()
+            if variants.family(t) == "deeperhistreg"]
+    pp = [_hand(t, "c1", "p1", 0.9 if t == "deeperhistreg_fluo_cpu" else 0.5) for t in rows]
+    best = [tables.best_of(pp, "deeperhistreg", "multiplex", {})]
+    assert best[0]["best_row"] == "deeperhistreg_fluo_cpu"
+    assert tables.primary_row("deeperhistreg", "multiplex", best) == "deeperhistreg_fluo_cpu"
+    assert tables.primary_row("stare", "multiplex", best) == "stare"
+    assert "user 2026-10-18" in tables.BEST_IS_PRIMARY["deeperhistreg"]
+    # without a best row it falls back to variants' placeholder, never to nothing
+    assert tables.primary_row("deeperhistreg", "multiplex", []) == variants.PRIMARY_DEEPERHISTREG

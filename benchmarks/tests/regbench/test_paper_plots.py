@@ -43,16 +43,26 @@ def paper(tmp_path, monkeypatch):
     # a case with no matched pair on every row is left out
     for row in level:
         pp.append(_pair(row, "P0", "P0_r3", math.nan))
+    # T29: the bare nuclei beside the outlines, 0.2 lower; ashlar's nuclei best is `ashlar`
+    for row, base in level.items():
+        for i, (p, c) in enumerate(CASES):
+            pp.append(_pair(row, p, c, base - 0.2 - 0.01 * i, set="nuclei"))
     schema.write(d / "per_pair.csv", "per_pair", pp)
     best = [
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="stare",
-                         best_row="stare"),
+                         best_row="stare", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex",
-                         family="valis_mirage", best_row="valis_mirage"),
+                         family="valis_mirage", best_row="valis_mirage", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="ashlar",
-                         best_row="ashlar_clean"),
+                         best_row="ashlar_clean", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="palom",
-                         best_row=None),
+                         best_row=None, set="outlines"),
+    ] + [
+        # written AFTER the outlines' rows: a reader keyed on family alone would take these
+        schema.empty_row("method_best", source="regbench", dataset="multiplex", family=f,
+                         best_row=r, set="nuclei")
+        for f, r in (("stare", "stare_medium"), ("valis_mirage", "valis_mirage"),
+                     ("ashlar", "ashlar"), ("palom", None))
     ]
     schema.write(d / "method_best.csv", "method_best", best)
     schema.write(d / "method_summary.csv", "method_summary", [
@@ -69,7 +79,15 @@ def paper(tmp_path, monkeypatch):
             vs.append(schema.empty_row("valis_stages", source="regbench", dataset="multiplex",
                                        row=row, memory_mode=tier, micro_reg=str(depth), stage=stage,
                                        stage_row=("x" if has else None),
-                                       dice_med=0.5 if has else None, n_pairs=10))
+                                       dice_med=0.5 if has else None, n_pairs=10,
+                                       set="outlines", pooling="common"))
+            # the other slots (T29) are in the same table: never drawn over the headline
+            for set_, pooling in (("outlines", "case"), ("nuclei", "common")):
+                vs.append(schema.empty_row(
+                    "valis_stages", source="regbench", dataset="multiplex", row=row,
+                    memory_mode=tier, micro_reg=str(depth), stage=stage, set=set_,
+                    pooling=pooling, stage_row=("x" if has else None),
+                    dice_med=0.1 if has else None, n_pairs=10))
     schema.write(d / "valis_stages.csv", "valis_stages", vs)
     schema.write(d / "stare_tiers.csv", "stare_tiers", [
         schema.empty_row("stare_tiers", source="regbench", dataset="multiplex", row="stare",
@@ -187,3 +205,23 @@ def test_the_cli_writes_the_figures_folder(paper, capsys):
     assert cli.main(["plots", "--out", str(out), "--only", "fig3b_dice_best,figS_cpu_scaling"]) == 0
     assert (out / "paper" / "figures" / "fig3b_dice_best.pdf").is_file()
     assert "placeholder" in capsys.readouterr().out
+
+
+def test_fig3b_has_a_nuclei_panel_from_the_nuclei_best_rows(paper):
+    res = plots.PLOTS["fig3b_dice_best_nuclei"](paper, paper / "figures")
+    assert not res.get("placeholder", False)
+    rows = _source(res, "")
+    assert {r["row"] for r in rows} == {"stare_medium", "valis_mirage", "ashlar"}
+    # the nuclei's values, never the outlines': stare_medium's nuclei are 0.6 - 0.01 i
+    got = sorted(float(r["dice"]) for r in rows if r["row"] == "stare_medium")
+    assert got[-1] == pytest.approx(0.6)
+    assert res["n"]["palom"] == 0
+
+
+def test_the_nuclei_best_rows_never_replace_the_outlines_ones(paper):
+    # the outlines' figure reads the headline rows only, though the nuclei's come later
+    res = plots.PLOTS["fig3b_dice_best"](paper, paper / "figures")
+    assert {r["row"] for r in _source(res, "")} == {"stare", "valis_mirage", "ashlar_clean"}
+    st = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
+    drawn = {r["dice_med"] for r in _source(st, "")} - {"", "NA", "nan"}
+    assert drawn == {"0.5"}

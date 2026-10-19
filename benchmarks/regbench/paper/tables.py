@@ -43,6 +43,24 @@ stay one release beside the new ones (deprecated: ``<stem>_common_med`` /
 (ruling R4: it divided a sampled tree peak by one stage job's high-water mark). ``in_sample_selection`` is True for every family: the row is chosen on this cohort
 with this metric.
 
+**Poolings, sets and Dice rules** (T29). Every accuracy table (``method_summary``,
+``valis_stages``, ``stare_tiers``) has a row per ``set`` (``outlines``, the headline, and
+the bare ``nuclei``) and per ``pooling``: ``case`` (the median over cases), ``patient``
+(the median of the per-patient medians, every case of the row) and ``common`` (the
+patient pooling on the cases every compared row of the dataset has, ``common_sets``),
+which is the HEADLINE (``is_headline``; a reader that wants one row per family takes it).
+``n_units`` counts what the pooling is over. Dice is given both ways: ``dice_zero_med``
+(no pair counts as 0, the headline ``dice_med``) and ``dice_skip_med`` (finite values
+only), with ``n_dice_zeroed`` beside. ``disp_um_common_*`` is the displacement over the
+cases EVERY compared row has a readable displacement for (WD11), beside ``disp_um_*``
+over the row's own readable cases. ``method_best`` has a row per family per set (chosen
+on that set); every other table and figure reads the outlines' row (``headline_best``).
+Paired differences against STARE are per patient (``paired_unit``), a tie counted as
+STARE at least as good (b >= a). ``n_candidates`` and ``in_sample_selection`` are on every
+best row: the best is an in-sample CEILING over ``n_candidates`` rows, not an estimate of
+a new cohort. DeeperHistReg's primary is its best row (``BEST_IS_PRIMARY``: user ruling
+2026-10-18), so its primary is in-sample too; ASHLAR's primary is unchanged.
+
 **VALIS stages** (ruling R18, ``methods.valis_mirage.STAGES_AT_DEPTH``). At depth 0 there
 is no micro pass. At depth 1 the micro-RIGID pass runs inside ``register()``, so the
 ``_rigid`` row is affine + micro-rigid and the final row equals ``_nonrigid``. A non-rigid
@@ -119,6 +137,10 @@ NUMERIC = (
     "iou_p50",
     "pair_fraction",
     "pair_fraction_null_max",
+    "pair_fraction_max",
+    "pair_fraction_max_null_max",
+    "pair_fraction_sym",
+    "pair_fraction_sym_null_max",
     "displacement_um_p50",
     "displacement_um_p90",
     "within_1um",
@@ -365,6 +387,10 @@ def per_pair(out, dataset):
                     iou_p50=num["iou_p50"],
                     pair_fraction=num["pair_fraction"],
                     pair_fraction_null_max=num["pair_fraction_null_max"],
+                    pair_fraction_max=num["pair_fraction_max"],
+                    pair_fraction_max_null_max=num["pair_fraction_max_null_max"],
+                    pair_fraction_sym=num["pair_fraction_sym"],
+                    pair_fraction_sym_null_max=num["pair_fraction_sym_null_max"],
                     displacement_um_p50=num["displacement_um_p50"],
                     displacement_um_p90=num["displacement_um_p90"],
                     displacement_readable=flags["displacement_readable"],
@@ -383,13 +409,17 @@ def per_pair(out, dataset):
     return rows
 
 
-def full_stats(mine):
+def full_stats(mine, pooling=None):
     """The Task 21b columns of a summary row over the rows ``mine`` (schema ``_FULL``):
     the full pairings' Dice and the fallback share, each the median over patients of
     the patient medians of the FINITE values (a missing one is left out, never 0: these
-    numbers rank nothing), with ``fallback_frac_max`` and the cases with a full LSA."""
+    numbers rank nothing), with ``fallback_frac_max`` and the cases with a full LSA.
+    ``pooling`` (T29) ``case`` takes the median over the cases instead; the others (and
+    None) pool on patients, ``mine`` being already the pooled rows."""
 
     def per_patient(key):
+        if pooling == CASE_POOL:
+            return _median(r.get(key) for r in mine)
         by = {}
         for r in mine:
             v = _num(r.get(key))
@@ -407,14 +437,15 @@ def full_stats(mine):
     }
 
 
-def _rows_of(pp, row, dataset, kept=True):
-    """The outline rows of one result name on a dataset; ``kept``: without the excluded."""
+def _rows_of(pp, row, dataset, kept=True, set_=OUTLINES):
+    """The rows of one result name on a dataset and polygon set (the outlines unless
+    told); ``kept``: without the excluded."""
     return [
         r
         for r in pp
         if r["row"] == row
         and r["dataset"] == dataset
-        and r["set"] == OUTLINES
+        and r["set"] == set_
         and not (kept and r["excluded_from_summaries"] is True)
     ]
 
@@ -429,6 +460,77 @@ def _no_pair(r):
     return not math.isfinite(_num(r["dice_matched"]))
 
 
+def _dice_skip(r):
+    """A kept row's Dice with a missing one left out (NaN: no statistic reads it)."""
+    return _num(r["dice_matched"])
+
+
+# ── T29: sets and poolings (the fair comparison, accuracy side) ─────────────
+SETS = (OUTLINES, NUCLEI)
+CASE_POOL, PATIENT_POOL, COMMON_POOL = "case", "patient", "common"
+POOLINGS = (COMMON_POOL, PATIENT_POOL, CASE_POOL)  # the headline first
+HEADLINE_POOLING = COMMON_POOL
+
+
+def is_headline(r):
+    """A row of the headline slot: the outlines, pooled on the common cases. A row of a
+    table written before T29 (no ``set`` / ``pooling``) is the headline too."""
+    def blank(v):
+        return v is None or v == "" or v == schema.NA
+
+    return (blank(r.get("set")) or r.get("set") == OUTLINES) and (
+        blank(r.get("pooling")) or r.get("pooling") == HEADLINE_POOLING)
+
+
+def headline_best(best_rows):
+    """The method_best rows the other tables and figures read: the outlines'."""
+    return [r for r in best_rows if is_headline(r)]
+
+
+def compared_rows(best_rows, primary):
+    """The rows the cross-method common cases are among: the headline best rows and
+    the primary rows (the cost tables' set, ``costs.compared_rows``), no cost-only row."""
+    rows = [r.get("best_row") for r in headline_best(best_rows)] + list(primary)
+    return [r for r in dict.fromkeys(rows) if not _missing(r) and not is_cost_only(r)]
+
+
+def common_sets(pp, dataset, compared):
+    """``{set: {"cases", "readable"}}``: the cases every compared row has a kept row on,
+    and those of them where every compared row's displacement is readable (WD11). A
+    compared row with no row at all on a set does not empty it (it is not there)."""
+    out = {}
+    for set_ in SETS:
+        cases = readable = None
+        for row in compared:
+            if not _rows_of(pp, row, dataset, kept=False, set_=set_):
+                continue
+            mine = _rows_of(pp, row, dataset, set_=set_)
+            have = {r["case_id"] for r in mine}
+            ok = {r["case_id"] for r in mine if r["displacement_readable"] is True}
+            cases = have if cases is None else cases & have
+            readable = ok if readable is None else readable & ok
+        out[set_] = {"cases": cases or set(), "readable": readable or set()}
+    return out
+
+
+def _pooled(rows, pooling, common):
+    """The rows a pooling reads: on ``common`` only the common cases."""
+    if pooling == COMMON_POOL:
+        cases = (common or {}).get("cases", set())
+        return [r for r in rows if r["case_id"] in cases]
+    return rows
+
+
+def _units(rows, pooling, value):
+    """One value per unit: per case (``case``), or per patient the median of its cases'
+    finite values (``patient``, ``common``)."""
+    if pooling == CASE_POOL:
+        return [value(r) for r in rows]
+    by = {}
+    for r in rows:
+        by.setdefault(r["patient_id"], []).append(value(r))
+    return [_median(v) for v in by.values()]
+
 def _patient_median(rows):
     by = {}
     for r in rows:
@@ -440,12 +542,14 @@ def _patient_median(rows):
 STRICT, PER_METHOD = "strict", "per_method"  # score.COMMON_BLOCKS (B2)
 
 
-def best_of(per_pair, family, dataset, cost=None, rule=STRICT, candidates=None):
+def best_of(per_pair, family, dataset, cost=None, rule=STRICT, candidates=None,
+            set_=OUTLINES):
     """The ``method_best`` row of one family (the rule: module docstring, ``RULE``).
     ``cost`` is kept for the callers and decides nothing: the tie-break is the name
     (T31 R11: device-blind). ``candidates(name)`` narrows the candidates (the CPU
     cross takes DeeperHistReg's CPU rows only); a ``variants.COST_ONLY`` row is never
-    one."""
+    one. ``set_`` (T29): the polygon set it is chosen on; the outlines' is the headline
+    every other table reads (``headline_best``), the nuclei's is beside."""
     cost_only = set(getattr(variants, "COST_ONLY", ()))
     cands = [
         t
@@ -454,12 +558,12 @@ def best_of(per_pair, family, dataset, cost=None, rule=STRICT, candidates=None):
         and t not in cost_only
         and (candidates is None or candidates(t))
     ]
-    have = {c: _rows_of(per_pair, c, dataset) for c in cands}
-    cands = [c for c in cands if _rows_of(per_pair, c, dataset, kept=False)]
+    have = {c: _rows_of(per_pair, c, dataset, set_=set_) for c in cands}
+    cands = [c for c in cands if _rows_of(per_pair, c, dataset, kept=False, set_=set_)]
     # B2: STRICT (the headline) is the cases every candidate has a kept row on; on
     # PER_METHOD a round lost for a cause that is not its own (excluded) takes the
     # case out of that candidate's own set only
-    every = {c: {r["case_id"] for r in _rows_of(per_pair, c, dataset, kept=False)}
+    every = {c: {r["case_id"] for r in _rows_of(per_pair, c, dataset, kept=False, set_=set_)}
              for c in cands}  # fmt: skip
     common = None
     for c in cands:
@@ -474,10 +578,11 @@ def best_of(per_pair, family, dataset, cost=None, rule=STRICT, candidates=None):
     }
     own = {c: common & {r["case_id"] for r in have[c]} for c in cands}
     scored = []
-    zeroed = {}
+    zeroed, skipped = {}, {}
     for c in cands:
         mine = [r for r in have[c] if r["case_id"] in own[c]]
         zeroed[c] = sum(_no_pair(r) for r in mine)
+        skipped[c] = _median(_units(mine, PATIENT_POOL, _dice_skip))
         value = _median(_patient_median(mine).values())
         scored.append(
             (
@@ -498,6 +603,9 @@ def best_of(per_pair, family, dataset, cost=None, rule=STRICT, candidates=None):
         n_candidates=len(cands),
         criterion=CRITERION,
         criterion_value=best[3] if best else math.nan,
+        criterion_value_skip=skipped[best[2]] if best else math.nan,
+        set=set_,
+        unit=PATIENT_POOL,
         n_cases_common=len(own[best[2]]) if best else len(common),
         common_block=rule,
         n_dice_zeroed=zeroed[best[2]] if best else math.nan,
@@ -514,6 +622,27 @@ def primary_of(family, dataset=COHORT):
         if family_of(v) == family:
             return v
     return None
+
+
+# Ruling 193 (user 2026-10-18 "the best one as_drawn"): a family whose primary is its
+# dataset's method_best row (every DeeperHistReg row is as-drawn since 2026-10-17).
+# variants.PRIMARY keeps a placeholder (PRIMARY_DEEPERHISTREG) for the scorer's common
+# block and the realcheck; the paper resolves the primary here, at table time.
+BEST_IS_PRIMARY = {
+    "deeperhistreg": "primary = best (user 2026-10-18): the dataset's method_best row, "
+    "every DeeperHistReg row as-drawn; chosen on this dataset with this metric (in-sample)",
+}
+
+
+def primary_row(family, dataset, best_rows):
+    """The family's primary on ``dataset`` as the tables use it: its headline
+    method_best row for a family of ``BEST_IS_PRIMARY``, else ``primary_of`` (also the
+    fallback when the family has no best row)."""
+    if family in BEST_IS_PRIMARY:
+        for r in headline_best(best_rows):
+            if r.get("family") == family and not _missing(r.get("best_row")):
+                return r["best_row"]
+    return primary_of(family, dataset)
 
 
 def _families(dataset):
@@ -565,48 +694,84 @@ def _peak_unit(mine):
 
 
 # ── method_summary ───────────────────────────────────────────────────────────
-def _accuracy(pp, row, dataset):
-    mine = _rows_of(pp, row, dataset)
-    dice = [_dice0(r) for r in mine]
-    q25, q75 = _quartiles(dice)
-    readable = [r["displacement_um_p50"] for r in mine if r["displacement_readable"] is True]
-    d25, d75 = _quartiles(readable)
+def _stats(values, prefix):
+    q25, q75 = _quartiles(values)
+    return {f"{prefix}_med": _median(values), f"{prefix}_q25": q25, f"{prefix}_q75": q75}
+
+
+def _accuracy(pp, row, dataset, set_=OUTLINES, pooling=CASE_POOL, common=None):
+    """``(rows, columns)`` of one row's accuracy on one set and pooling (T29): Dice
+    zero-filled (the headline) and skipped, the three pair fractions, the displacement
+    on the row's readable cases and on the common readable ones, the full pairings."""
+    common = common or {"cases": set(), "readable": set()}
+    mine = _pooled(_rows_of(pp, row, dataset, set_=set_), pooling, common)
+    dice = _units(mine, pooling, _dice0)
+    skip = _units(mine, pooling, _dice_skip)
+    readable_rows = [r for r in mine if r["displacement_readable"] is True]
+    shared_rows = [r for r in readable_rows if r["case_id"] in common["readable"]]
+
+    def disp(rows):
+        return _units(rows, pooling, lambda r: r["displacement_um_p50"])
+
+    readable, shared = disp(readable_rows), disp(shared_rows)
     return mine, {
+        "n_units": len(dice),
         "n_dice_zeroed": sum(_no_pair(r) for r in mine),
         "tool_version": _distinct(r["tool_version"] for r in mine),
         "n_patients": len({r["patient_id"] for r in mine}),
         "n_pairs": len(mine),
         "n_ok": sum(r["imputed_initial"] is not True for r in mine),
-        "dice_med": _median(dice),
-        "dice_q25": q25,
-        "dice_q75": q75,
+        **_stats(dice, "dice"),
         "dice_mean": _mean(dice),
-        "disp_um_med": _median(readable),
-        "disp_um_q25": d25,
-        "disp_um_q75": d75,
-        "n_readable": len(_finite(readable)),
-        **full_stats(mine),
+        "dice_zero_med": _median(dice),
+        **_stats(skip, "dice_skip"),
+        "dice_skip_mean": _mean(skip),
+        **{f"{k}_med": _median(_units(mine, pooling, lambda r, k=k: r.get(k)))
+           for k in ("pair_fraction", "pair_fraction_max", "pair_fraction_sym")},
+        **_stats(readable, "disp_um"),
+        "n_readable": len(readable_rows),
+        **_stats(shared, "disp_um_common"),
+        "n_readable_common": len(shared_rows),
+        **full_stats(mine, pooling),
     }
 
 
-def _paired(pp, row, stare_row, dataset):
-    """Per case, ``row - stare_row`` on the cases both have and neither is excluded. A
-    missing Dice counts as 0, except on a case where both are missing (the case's)."""
+def _paired(pp, row, stare_row, dataset, set_=OUTLINES, pooling=CASE_POOL, common=None):
+    """``row - stare_row`` on the cases both have and neither is excluded, per unit
+    (T29: a case, or per patient the median over its cases both have, minus STARE's;
+    ``paired_unit``). A missing Dice counts as 0, except on a case where both are
+    missing (the case's); ``d_dice_skip_vs_stare_med`` leaves it out instead. A tie
+    counts for STARE (``n_units_stare_ge``: b >= a)."""
     if stare_row is None:
         return {}
-    a = {r["case_id"]: _num(r["dice_matched"]) for r in _rows_of(pp, row, dataset)}
-    b = {r["case_id"]: _num(r["dice_matched"]) for r in _rows_of(pp, stare_row, dataset)}
-    both = [c for c in a if c in b and (math.isfinite(a[c]) or math.isfinite(b[c]))]
-    a = {c: (v if math.isfinite(v) else 0.0) for c, v in a.items()}
-    b = {c: (v if math.isfinite(v) else 0.0) for c, v in b.items()}
-    diffs = [a[c] - b[c] for c in both]
+    mine = _pooled(_rows_of(pp, row, dataset, set_=set_), pooling, common)
+    theirs = _pooled(_rows_of(pp, stare_row, dataset, set_=set_), pooling, common)
+    a = {r["case_id"]: r for r in mine}
+    b = {r["case_id"]: r for r in theirs}
+    both = [c for c in a if c in b and not (_no_pair(a[c]) and _no_pair(b[c]))]
+
+    def per_unit(value):
+        if pooling == CASE_POOL:
+            return {c: (value(a[c]), value(b[c])) for c in both}
+        by = {}
+        for c in both:
+            by.setdefault(a[c]["patient_id"], []).append(c)
+        return {p: (_median(value(a[c]) for c in cs), _median(value(b[c]) for c in cs))
+                for p, cs in by.items()}
+
+    zero, skip = per_unit(_dice0), per_unit(_dice_skip)
+    diffs = [x - y for x, y in zero.values()]
     q25, q75 = _quartiles(diffs)
     return {
         "d_dice_vs_stare_med": _median(diffs),
         "d_dice_vs_stare_q25": q25,
         "d_dice_vs_stare_q75": q75,
+        "d_dice_skip_vs_stare_med": _median(x - y for x, y in skip.values()),
+        "paired_unit": CASE_POOL if pooling == CASE_POOL else PATIENT_POOL,
         "n_pairs_vs_stare": len(both),
-        "n_pairs_stare_ge": sum(b[c] >= a[c] for c in both),
+        "n_pairs_stare_ge": sum(_dice0(b[c]) >= _dice0(a[c]) for c in both),
+        "n_units_vs_stare": len(zero),
+        "n_units_stare_ge": sum(y >= x for x, y in zero.values()),
     }
 
 
@@ -709,21 +874,23 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
     """The rows of each family (``_summary_kinds``): ``best`` (the ``method_best`` row),
     ``primary`` (``primary_of``), STARE's 4-CPU row and a GPU row's CPU twin. Accuracy as
     before; cost by ``paper.costs`` (module docstring), over the common patients first."""
-    best = {r["family"]: r["best_row"] for r in best_rows}
-    primary = {fam: primary_of(fam, dataset) for fam in _families(dataset)}
+    heads = headline_best(best_rows)
+    best = {r["family"]: r["best_row"] for r in heads}
+    n_cands = {r["family"]: r.get("n_candidates") for r in heads}
+    primary = {fam: primary_row(fam, dataset, best_rows) for fam in _families(dataset)}
     stare_best = best.get(STARE_FAMILY)
     stare_best = None if _missing(stare_best) else stare_best
     excluded = _excluded_rounds(pp)
     if points is None or common is None:
         common, points = cost_points(pp, best_rows, cost_rows, res_rows, dataset)
+    sets = common_sets(pp, dataset, compared_rows(best_rows, primary.values()))
     local4 = next(iter(getattr(variants, "LOCAL_4CPU", ())), None)
     out = []
     for fam in _families(dataset):
         for which, row in _summary_kinds(fam, best, primary, cost_rows, dataset):
             # a cost-only row has no accuracy here: it is no configuration of its own
-            # (T31 fix C1); its cost columns are its own
+            # (T31 fix C1); its cost columns are its own, once, in the headline slot
             cost_row = is_cost_only(row)
-            acc = {} if cost_row else _accuracy(pp, row, dataset)[1]
             old = _cost(cost_rows, res_rows, row, excluded)
             mine = [r for r in cost_rows if r["method"] == row]
             clock = costs.clock_of(row, mine[0]) if mine else costs.WHOLE
@@ -742,42 +909,71 @@ def method_summary(pp, best_rows, cost_rows, res_rows, dataset, points=None, com
             prior = _prior_by_patient(row, cost_rows, res_rows, common, peaks)
             prior_cpu = _median(v[0] for v in prior.values())
             own = {p["unit_id"]: _num(p.get("cpu_h_used")) for p in shared}
-            out.append(
-                schema.empty_row(
-                    "method_summary",
-                    source=SOURCE,
-                    dataset=dataset,
-                    family=fam,
-                    row=row,
-                    which=which,
-                    row_kind=which,
-                    **acc,
-                    **({} if cost_row else _paired(pp, row, stare_best, dataset)),
-                    **old,
-                    **sc,
-                    total_cpu_h_used_med=sc["total_cpu_h_used_common_med"],
-                    cpu_h_reserved_med=sc["cpu_h_reserved_common_med"],
-                    total_cpu_h_reserved_med=sc["total_cpu_h_reserved_common_med"],
-                    rung_gb_med=sc["rung_gb_common_med"],
-                    wasted_attempts=int(sum(_num(p.get("wasted_attempts")) for p in shared
-                                            if math.isfinite(_num(p.get("wasted_attempts"))))),
-                    **fold_vs_local4(points, row, local4, common),
-                    peak_largest_job_gb=sc["peak_largest_job_gb_common_med"],
-                    peak_concurrent_gb=sc["peak_concurrent_gb_common_med"],
-                    gpu_peak_gb=sc["gpu_peak_gb_common_med"],
-                    convert_s_med=sc["convert_s_common_med"],
-                    convert_inside_clock=work.get("convert_inside_clock", schema.NA),
-                    working_px=work.get("working_px", schema.NA),
-                    channels_read=work.get("channels_read", schema.NA),
-                    jvm_max_heap_gb=max(heap) if heap else math.nan,
-                    jvm_peak_heap_gb=JVM_PEAK_NA if heap else schema.NA,
-                    prior_cpu_h=prior_cpu,
-                    with_prior_cpu_h=_with_prior(own, prior) if prior else math.nan,
-                    n_prior_rounds_missing=sum(v[2] for v in prior.values()) if prior
-                    else schema.NA,
-                )
+            cost_cols = dict(
+                **old,
+                **sc,
+                total_cpu_h_used_med=sc["total_cpu_h_used_common_med"],
+                cpu_h_reserved_med=sc["cpu_h_reserved_common_med"],
+                total_cpu_h_reserved_med=sc["total_cpu_h_reserved_common_med"],
+                rung_gb_med=sc["rung_gb_common_med"],
+                wasted_attempts=int(sum(_num(p.get("wasted_attempts")) for p in shared
+                                        if math.isfinite(_num(p.get("wasted_attempts"))))),
+                **fold_vs_local4(points, row, local4, common),
+                peak_largest_job_gb=sc["peak_largest_job_gb_common_med"],
+                peak_concurrent_gb=sc["peak_concurrent_gb_common_med"],
+                gpu_peak_gb=sc["gpu_peak_gb_common_med"],
+                convert_s_med=sc["convert_s_common_med"],
+                convert_inside_clock=work.get("convert_inside_clock", schema.NA),
+                working_px=work.get("working_px", schema.NA),
+                channels_read=work.get("channels_read", schema.NA),
+                jvm_max_heap_gb=max(heap) if heap else math.nan,
+                jvm_peak_heap_gb=JVM_PEAK_NA if heap else schema.NA,
+                prior_cpu_h=prior_cpu,
+                with_prior_cpu_h=_with_prior(own, prior) if prior else math.nan,
+                n_prior_rounds_missing=sum(v[2] for v in prior.values()) if prior
+                else schema.NA,
             )
+            slots = [(OUTLINES, COMMON_POOL)] if cost_row else [
+                (set_, pooling) for set_ in SETS for pooling in POOLINGS]
+            for set_, pooling in slots:
+                acc = {} if cost_row else {
+                    **_accuracy(pp, row, dataset, set_, pooling, sets[set_])[1],
+                    **_paired(pp, row, stare_best, dataset, set_, pooling, sets[set_]),
+                }
+                out.append(
+                    schema.empty_row(
+                        "method_summary",
+                        source=SOURCE,
+                        dataset=dataset,
+                        family=fam,
+                        row=row,
+                        which=which,
+                        row_kind=which,
+                        set=set_,
+                        pooling=pooling,
+                        **_selection(which, fam, n_cands),
+                        **acc,
+                        **cost_cols,
+                    )
+                )
     return out
+
+
+def _selection(which, family, n_cands):
+    """``selection``, ``n_candidates`` and ``in_sample_selection`` of a method_summary
+    row (T29, WD1: best stays Dice and is an in-sample ceiling, with how many rows
+    competed; the headline rows are the primaries)."""
+    if which == costs.BEST:
+        n = n_cands.get(family)
+        return {"selection": f"best of {n} by Dice on this dataset: an in-sample ceiling",
+                "n_candidates": n, "in_sample_selection": True}
+    if which == costs.PRIMARY and family in BEST_IS_PRIMARY:
+        return {"selection": BEST_IS_PRIMARY[family], "n_candidates": n_cands.get(family),
+                "in_sample_selection": True}
+    if which == costs.PRIMARY:
+        return {"selection": "primary: fixed before scoring (variants.PRIMARY)",
+                "in_sample_selection": False}
+    return {"selection": f"{which}: a cost row of its family", "in_sample_selection": False}
 
 
 FOLD_STAGED = ("STARE's stage jobs: a stage job's high-water mark is not the sampler's "
@@ -838,8 +1034,9 @@ def cost_points(pp, best_rows, cost_rows, res_rows, dataset, cases=None):
     row (and of STARE's 4-CPU row), whatever became of the patient, then fig. 2c's
     per-round points (``costs.round_points``). The common set is computed ONCE, over the
     primary and the best rows (``costs.common_set``)."""
+    best_rows = headline_best(best_rows)
     best = [r["best_row"] for r in best_rows if not _missing(r.get("best_row"))]
-    primary = [primary_of(f, dataset) for f in _families(dataset)]
+    primary = [primary_row(f, dataset, best_rows) for f in _families(dataset)]
     primary = [p for p in primary if p]
     compared = costs.compared_rows(best_rows, primary)
     common = costs.common_set(cost_rows, compared, dataset)
@@ -921,25 +1118,46 @@ def end_to_end(summary, cost_rows, res_rows, e2e_rows, peaks, dataset, common, p
 
 
 # ── per-method tables ────────────────────────────────────────────────────────
-def _stage_stats(pp, row, dataset):
+def _stage_stats(pp, row, dataset, set_=OUTLINES, pooling=CASE_POOL, common=None):
     if _missing(row):
         return {}
-    mine = _rows_of(pp, row, dataset)
-    dice = [_dice0(r) for r in mine]
+    mine = _pooled(_rows_of(pp, row, dataset, set_=set_), pooling, common)
+    dice = _units(mine, pooling, _dice0)
     q25, q75 = _quartiles(dice)
-    readable = [r["displacement_um_p50"] for r in mine if r["displacement_readable"] is True]
+    readable = _units([r for r in mine if r["displacement_readable"] is True], pooling,
+                      lambda r: r["displacement_um_p50"])
     return {
+        "n_units": len(dice),
         "dice_med": _median(dice),
         "dice_q25": q25,
         "dice_q75": q75,
+        "dice_zero_med": _median(dice),
+        "dice_skip_med": _median(_units(mine, pooling, _dice_skip)),
+        "n_dice_zeroed": sum(_no_pair(r) for r in mine),
         "n_pairs": len(mine),
         "disp_um_med": _median(readable),
-        **full_stats(mine),
+        **full_stats(mine, pooling),
     }
 
 
-def valis_stages(pp, dataset):
-    """Five stage slots per ``valis_mirage`` run (R18, module docstring)."""
+def accuracy_sets(pp, dataset, best_rows=None):
+    """``common_sets`` among the dataset's compared rows: its headline best rows (made
+    here by ``best_of`` when not given) and its primaries (``primary_row``)."""
+    if best_rows is None:
+        best_rows = build_best(pp, dataset, {})["method_best"]
+    primary = [primary_row(f, dataset, best_rows) for f in _families(dataset)]
+    return common_sets(pp, dataset, compared_rows(best_rows, [p for p in primary if p]))
+
+
+def _slots(sets):
+    """``[(set, pooling, that set's common cases)]``, the headline first (T29)."""
+    return [(s, p, sets.get(s)) for s in SETS for p in POOLINGS]
+
+
+def valis_stages(pp, dataset, sets=None):
+    """Five stage slots per ``valis_mirage`` run (R18, module docstring), per polygon set
+    and pooling (T29; ``sets``: ``common_sets``, empty for a table derived alone)."""
+    sets = accuracy_sets(pp, dataset) if sets is None else sets
     out = []
     for name, final in terminal_rows(dataset).items():
         run = _run(name)
@@ -954,35 +1172,38 @@ def valis_stages(pp, dataset):
             ("nonrigid", nonrigid),
             ("micro", last if depth >= 2 else None),
         )
-        for stage, row in slots:
-            out.append(
-                schema.empty_row(
-                    "valis_stages",
-                    source=SOURCE,
-                    dataset=dataset,
-                    row=final,
-                    memory_mode=_valis_tier(run),
-                    micro_reg=str(depth),
-                    stage=stage,
-                    stage_row=row if row is not None else schema.NA,
-                    **_stage_stats(pp, row, dataset),
+        for set_, pooling, common in _slots(sets):
+            for stage, row in slots:
+                out.append(
+                    schema.empty_row(
+                        "valis_stages",
+                        source=SOURCE,
+                        dataset=dataset,
+                        row=final,
+                        memory_mode=_valis_tier(run),
+                        micro_reg=str(depth),
+                        stage=stage,
+                        stage_row=row if row is not None else schema.NA,
+                        set=set_,
+                        pooling=pooling,
+                        **_stage_stats(pp, row, dataset, set_, pooling, common),
+                    )
                 )
-            )
     return out
 
 
-def stare_tiers(pp, cost_rows, dataset, points=(), common=()):
+def stare_tiers(pp, cost_rows, dataset, points=(), common=(), sets=None):
     """One row per STARE run: tier, stride and preprocessing from its options (defaults
     ``high``, 64, ``none``), accuracy and cost. The cost is ``costs.summary_columns``'
     (the cost rules: the common patients, an interval, the clock and the unit; T31 fix
-    I5), from the row's patient points."""
+    I5), from the row's patient points. Per polygon set and pooling (T29)."""
+    sets = accuracy_sets(pp, dataset) if sets is None else sets
     out = []
     for name, final in terminal_rows(dataset).items():
         if family_of(final) != STARE_FAMILY:
             continue
         run = _run(name)
         opts = run.opts if run is not None else {}
-        stats = _stage_stats(pp, final, dataset)
         mine = [r for r in cost_rows if r["method"] == final]
         clock = costs.clock_of(final, mine[0]) if mine else costs.WHOLE
         sc = costs.summary_columns(points, final, set(common), clock)
@@ -991,23 +1212,25 @@ def stare_tiers(pp, cost_rows, dataset, points=(), common=()):
             "unit", "cpu_h_used_common_med", "cpu_h_used_common_ci_low",
             "cpu_h_used_common_ci_high", "peak_rss_gb_common_med", "peak_rss_gb_common_ci_low",
             "peak_rss_gb_common_ci_high")}
-        out.append(
-            schema.empty_row(
-                "stare_tiers",
-                source=SOURCE,
-                dataset=dataset,
-                row=final,
-                tier=opts.get("tier", "high"),
-                stride=int(opts.get("stride", 64)),
-                sprep=opts.get("sprep", "none"),
-                dice_med=stats["dice_med"],
-                dice_q25=stats["dice_q25"],
-                dice_q75=stats["dice_q75"],
-                n_pairs=stats["n_pairs"],
-                **{k: stats.get(k, math.nan) for k in full_stats([])},
-                **cost,
+        keep = ("n_units", "dice_med", "dice_q25", "dice_q75", "dice_zero_med",
+                "dice_skip_med", "n_dice_zeroed", "n_pairs", *full_stats([]))
+        for set_, pooling, sets_common in _slots(sets):
+            stats = _stage_stats(pp, final, dataset, set_, pooling, sets_common)
+            out.append(
+                schema.empty_row(
+                    "stare_tiers",
+                    source=SOURCE,
+                    dataset=dataset,
+                    row=final,
+                    tier=opts.get("tier", "high"),
+                    stride=int(opts.get("stride", 64)),
+                    sprep=opts.get("sprep", "none"),
+                    set=set_,
+                    pooling=pooling,
+                    **{k: stats.get(k, math.nan) for k in keep},
+                    **cost,
+                )
             )
-        )
     return out
 
 
@@ -1200,8 +1423,8 @@ def cohort_counts(pp, rows, dataset):
     """Per patient, per primary and best row: moving panels, and matched nuclei per pair
     (min, median, max over the row's cases of the patient)."""
     out = []
-    for row in rows:
-        mine = _rows_of(pp, row, dataset)  # an excluded round is in no count
+    for set_, row in ((s, r) for s in SETS for r in rows):
+        mine = _rows_of(pp, row, dataset, set_=set_)  # an excluded round is in no count
         for patient in dict.fromkeys(r["patient_id"] for r in mine):
             of_p = [r for r in mine if r["patient_id"] == patient]
             n = _finite(r["n_pairs"] for r in of_p)
@@ -1212,6 +1435,7 @@ def cohort_counts(pp, rows, dataset):
                     dataset=dataset,
                     patient_id=patient,
                     row=row,
+                    set=set_,
                     n_panels=len({r["case_id"] for r in of_p}),
                     n_pairs_min=int(min(n)) if n else math.nan,
                     n_pairs_med=_median(n),
@@ -1278,9 +1502,9 @@ def build_best(pp, dataset, cpu):
     and ``method_best_per_method`` beside it (B2)."""
     fams = _families(dataset)
     return {
-        "method_best": [best_of(pp, f, dataset, cpu) for f in fams],
+        "method_best": [best_of(pp, f, dataset, cpu, set_=s) for s in SETS for f in fams],
         "method_best_per_method": [
-            best_of(pp, f, dataset, cpu, PER_METHOD) for f in fams
+            best_of(pp, f, dataset, cpu, PER_METHOD, set_=s) for s in SETS for f in fams
         ],
     }
 
@@ -1299,6 +1523,7 @@ def build(out, dataset=COHORT, cases_root=None):
         every, best, cost_rows, res_rows, dataset, fits._cases_by_id(cases_root, dataset)
     )
     summary = method_summary(every, best, cost_rows, res_rows, dataset, points, common, peaks)
+    sets = accuracy_sets(pp, dataset, best)
     counted = [r for r in dict.fromkeys(r["row"] for r in summary) if not is_cost_only(r)]
     e2e = _csv(_tables(out, dataset) / "cost_end_to_end.csv")
     return {
@@ -1310,8 +1535,8 @@ def build(out, dataset=COHORT, cases_root=None):
         "method_best": best,
         "method_best_per_method": got["method_best_per_method"],
         "method_summary": summary,
-        "valis_stages": valis_stages(pp, dataset),
-        "stare_tiers": stare_tiers(pp, cost_rows, dataset, points, common),
+        "valis_stages": valis_stages(pp, dataset, sets),
+        "stare_tiers": stare_tiers(pp, cost_rows, dataset, points, common, sets),
         "stare_stage_peaks": _copied(out, dataset, "stare_stage_peaks"),
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),
         "versions": versions(out, dataset),
