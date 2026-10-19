@@ -519,11 +519,19 @@ need_int REGBENCH_RETRY_WATCHERS 1
 need_int REGBENCH_REPEAT 1
 if [ "$REGBENCH_REPEAT" -gt 1 ] && [ -z "${REGBENCH_REPEAT_INDEX:-}" ]; then
     [ -n "${REGBENCH_OUT:-}" ] || die "REGBENCH_REPEAT=$REGBENCH_REPEAT needs REGBENCH_OUT (each repeat is a folder of it). Nothing was submitted."
+    # one after the other (T31 fix M3): repeat k's first jobs wait afterany for repeat
+    # k-1's last ones (its scorers), so no two repeats share the nodes' time
+    last_file="$(mktemp "${TMPDIR:-/tmp}/regbench_repeat.XXXXXX")" || die "REGBENCH_REPEAT: no temporary file. Nothing was submitted."
+    after=""
     for ((k = 1; k <= REGBENCH_REPEAT; k++)); do
-        echo "# repeat $k of $REGBENCH_REPEAT: REGBENCH_OUT=$REGBENCH_OUT/rep$k"
+        echo "# repeat $k of $REGBENCH_REPEAT: REGBENCH_OUT=$REGBENCH_OUT/rep$k${after:+ (after repeat $((k - 1)): afterany:$after)}"
+        : > "$last_file"
         REGBENCH_REPEAT_INDEX="$k" REGBENCH_OUT="$REGBENCH_OUT/rep$k" \
-            bash "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} || exit $?
+            REGBENCH_REPEAT_AFTER="$after" REGBENCH_REPEAT_LAST_FILE="$last_file" \
+            bash "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"} || { rm -f "$last_file"; exit 1; }
+        after="$(cat "$last_file")"
     done
+    rm -f "$last_file"
     exit 0
 fi
 # REGBENCH_WAVES=1 (T31 R14, a timing replicate): the runs are submitted one method at
@@ -623,9 +631,15 @@ JOBS_FILE=""
 array_size() {
     awk -F, '{ for (i = 1; i <= NF; i++) { n = split($i, r, "-"); t += (n == 2 ? r[2] - r[1] + 1 : 1) } } END { print t + 0 }' <<< "$1"
 }
+REPEAT_SINKS="" ALL_SUBMITTED=""
 submit() {
     local name="$1" arg range; shift
     N_JOBS=$((N_JOBS + 1))
+    # REGBENCH_REPEAT (T31 fix M3): a job with no dependency of its own is a first job,
+    # and waits for the repeat before (every other job waits for one of those)
+    if [ -n "${REGBENCH_REPEAT_AFTER:-}" ]; then
+        case " $* " in *" --dependency="*) ;; *) set -- --dependency="afterany:$REGBENCH_REPEAT_AFTER" "$@" ;; esac
+    fi
     range=""
     for arg in "$@"; do case "$arg" in --array=*) range="${arg#--array=}"; range="${range%%\%*}" ;; esac; done
     if [ -n "$range" ]; then
@@ -638,6 +652,7 @@ submit() {
         printf ' %s' "$@"
         printf '\n'
         JOB_ID="<$name>"
+        repeat_note "$name"
         return 0
     fi
     local got
@@ -667,7 +682,14 @@ submit() {
     fi
     printf '%s\t%s\n' "$name" "$JOB_ID"
     printf '%s\t%s\t%s\n' "$(date +%FT%T)" "$name" "$JOB_ID" >> "$JOBS_FILE"
+    repeat_note "$name"
     [ -z "$PENDING_EXIT" ] || exit "$PENDING_EXIT"
+}
+# the jobs the next repeat waits for: the scorers, which wait for everything else of
+# this one; a submission with no scorer gives every job it submitted
+repeat_note() {
+    ALL_SUBMITTED="${ALL_SUBMITTED:+$ALL_SUBMITTED:}$JOB_ID"
+    case "$1" in rb-score|rb-rescore|rb-tissue|rb-score-compute) REPEAT_SINKS="${REPEAT_SINKS:+$REPEAT_SINKS:}$JOB_ID" ;; esac
 }
 # refused <job name> <the scheduler's words>: an sbatch that did not go through. The
 # jobs before it, if any, ARE queued, and some of them wait for jobs that will never
@@ -2046,5 +2068,8 @@ fi
 echo "# case records -> $REGBENCH_OUT/cache/scores/<dataset>/<case>/ (kept; a valid one is read, never computed twice)"
 echo "# verdicts    -> $REGBENCH_OUT/logs/verdicts.tsv (written by the scorer: what every run's selfcheck and realcheck said; reported, never a gate)"
 echo "# results     -> $REGBENCH_OUT/tables/summary.md: it says what every selfcheck said, beside rows that are all scored"
+if [ -n "${REGBENCH_REPEAT_LAST_FILE:-}" ]; then
+    printf '%s' "${REPEAT_SINKS:-$ALL_SUBMITTED}" > "$REGBENCH_REPEAT_LAST_FILE"
+fi
 FINISHED=1
 exit 0

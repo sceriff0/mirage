@@ -4479,6 +4479,20 @@ def test_waves_submit_one_method_after_the_other(site, dry):
     assert bad.returncode != 0 and "REGBENCH_WAVES='2'" in bad.stderr + bad.stdout
 
 
+def test_a_submitted_repeat_waits_for_the_ids_of_the_repeat_before(site):
+    """T31 fix M3, submitted (not dry): rep2's first job names rep1's scorers' ids."""
+    env = {"REGBENCH_REPEAT": "2", "REGBENCH_ALLOW_PATH_PYTHON": "1"}
+    done, calls, out = launch(site, env=env, dry=False, log="repeat-real")
+    assert done.returncode == 0, done.stderr
+    rows = [ln.split("\t", 1) for ln in calls.read_text().splitlines()]
+    name = {i: re.search(r"--job-name=(\S+)", a).group(1) for i, a in rows}
+    rep1 = [i for i, a in rows if "/rep1/" in a]
+    sinks = [i for i in rep1 if name[i] in ("rb-tissue", "rb-score", "rb-rescore")]
+    assert len(sinks) == 3
+    rep2_first = [a for i, a in rows if "/rep2/" in a and i not in rep1][0]
+    assert f"--dependency=afterany:{':'.join(sinks)}" in rep2_first
+
+
 def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
     """T31 R13, REGBENCH_REPEAT=2: the launch twice, into rep1 and rep2 of REGBENCH_OUT
     (each repeat its own results: no repeat reuses another's)."""
@@ -4488,5 +4502,15 @@ def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
     lines = _sbatch_lines(done.stdout)
     half = [ln for ln in lines if "/rep1" in ln]
     assert half and len(lines) == 2 * len(half)
+    # T31 fix M3 (ruling): the repeats run one after the other, never beside each other:
+    # every first job of rep2 (one with no dependency of its own) waits afterany for
+    # rep1's last jobs, its scorers; nothing of rep1 waits for anything of rep2
+    first = [ln for ln in half if "--dependency=" not in ln]
+    assert first
+    after = " --dependency=afterany:<rb-tissue>:<rb-score>:<rb-rescore>"
+    rep2 = [ln for ln in lines if "/rep2" in ln]
+    assert all(after in ln for ln in rep2 if ln.replace(after, "").replace("/rep2", "/rep1")
+               in first), rep2
+    assert sum(after in ln for ln in rep2) == len(first)
     assert sorted(ln.replace("/rep1", "/rep2") for ln in half) == sorted(
-        ln for ln in lines if "/rep2" in ln)
+        ln.replace(after, "") for ln in rep2)
