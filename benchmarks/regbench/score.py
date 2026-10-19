@@ -108,6 +108,7 @@ from . import (
     pairs,
     plugins,
     public_of,
+    reg_channels,
     stage_peaks,
     table_schema,
     telemetry,
@@ -209,6 +210,8 @@ TABLES = (
     "losses",
     "score_errors",
     "nuclei_checks",
+    # T29 (WD6): which channel each run registered on, per case (reg_channels)
+    "registration_channels",
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
     *HYRECO_TABLES,
@@ -5128,6 +5131,10 @@ def _score_cells(
         for _, case, names, *_ in jobs
         for r in stage_peaks.rows(out, [case], names)
     ]
+    # the channel each run registered on, per case (score side: reads run.json; WD6)
+    channels = [
+        r for _, case, names, *_ in jobs for r in reg_channels.rows(out, case, names)
+    ]
     # ASHLAR's replaced tiles per round and cell (score side: reads run.json)
     discards = [
         {k: table_schema.NA if v is None else v for k, v in r.items()}
@@ -5202,6 +5209,9 @@ def _score_cells(
         tables / "ashlar_discard.csv",
         discards,
         table_schema.columns("ashlar_discard")[1:],
+    )
+    write_csv(
+        tables / "registration_channels.csv", channels, list(reg_channels.COLUMNS)
     )
     write_csv(tables / "cost_summary.csv", cost_summary)
     write_csv(tables / "cost_summary_per_method.csv", cost_summary_pm)
@@ -5374,6 +5384,7 @@ def _score_cells(
         "summary_resources": res_summary,
         "stare_stage_peaks": peaks,
         "ashlar_discard": discards,
+        "registration_channels": channels,
         "nonband_cells": non_cells,
         "nonband_summary": non_summary,
         "nonband_missing": non_lost,
