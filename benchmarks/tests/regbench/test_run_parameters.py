@@ -68,3 +68,20 @@ def test_the_table_carries_the_module_rows_beside_the_recorded_ones(monkeypatch,
     by = {r["key"]: r for r in rows}
     assert by["tile"]["value"] == str(stare.TIERS["medium"]["tile"])
     assert by["tier"]["from"].startswith("benchmarks.regbench.methods.stare")
+
+
+def test_valis120_sizes_are_said_not_recorded_where_nothing_holds_them():
+    """T29 fix 6: VALIS 1.2.0's processing and non-rigid sizes are upstream's Valis()
+    defaults (no constant of methods.valis; valis is not importable score-side) and the
+    hires micro size is computed per patient at run time and not recorded: they read
+    `not recorded`, with why; the hires rule is given from MICRO_REG_FRACTION."""
+    from benchmarks.regbench.methods import valis
+
+    for name in ("valis120", "valis120_hires"):
+        got = _got(name)
+        for key in ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px"):
+            assert got[key][0] == tables.NOT_RECORDED, (name, key)
+            assert "Valis()" in got[key][1]
+    hires = _got("valis120_hires")["micro_max_non_rigid_registration_dim_px"]
+    assert hires[0] == tables.NOT_RECORDED and str(valis.MICRO_REG_FRACTION) in hires[1]
+    assert _got("valis120")["micro_max_non_rigid_registration_dim_px"][0] == tables.NOT_RECORDED

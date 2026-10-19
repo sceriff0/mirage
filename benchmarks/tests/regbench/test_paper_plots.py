@@ -225,3 +225,22 @@ def test_the_nuclei_best_rows_never_replace_the_outlines_ones(paper):
     st = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
     drawn = {r["dice_med"] for r in _source(st, "")} - {"", "NA", "nan"}
     assert drawn == {"0.5"}
+
+
+def test_an_excluded_runs_na_rows_are_drawn_nowhere(paper):
+    """T29 fix 2: excluded runs are rows of NA in valis_stages and stare_tiers; Fig. 3d
+    draws none of them (an excluded medium-tier STARE run must not take the tier's slot)."""
+    vs = schema.read(paper / "valis_stages.csv")
+    vs.append(schema.empty_row("valis_stages", source="regbench", dataset="multiplex",
+                               row="valis_gone", memory_mode="medium", micro_reg="1",
+                               set="outlines", pooling="common", excluded_reason="x"))
+    schema.write(paper / "valis_stages.csv", "valis_stages", vs)
+    st = schema.read(paper / "stare_tiers.csv")
+    st.append(schema.empty_row("stare_tiers", source="regbench", dataset="multiplex",
+                               row="stare_gone", tier="medium", stride=64, sprep="none",
+                               set="outlines", pooling="common", excluded_reason="x"))
+    schema.write(paper / "stare_tiers.csv", "stare_tiers", st)
+    got = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
+    assert "valis_gone" not in {r["row"] for r in _source(got, "")}
+    tiers = plots.PLOTS["fig3d_stare_tiers"](paper, paper / "figures")
+    assert tiers["n"]["medium"] == 10  # stare_medium's cases, not the excluded row's 0

@@ -232,7 +232,8 @@ def build(out, dataset):
     }
     # T29 (M8): a run of excluded_runs.csv is a row of NA with its reason
     return T.add_excluded(built, T.excluded_runs(out, dataset), dataset,
-                          summary_keys={"public_landmarks": {"set": "all_pairs"}})
+                          summary_keys={"public_landmarks": {"set": "all_pairs"}},
+                          best_sets=(None,))
 
 
 def write_all(out, dataset):

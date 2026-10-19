@@ -700,15 +700,43 @@ def test_versions_hold_the_image_tag_digest_python_and_stardist(scored):
 def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
     """T29 (M8): a run of excluded_runs.csv is in the dataset's paper tables as a row of
     NA with the reason, never silently absent."""
-    monkeypatch.setattr(tables, "family_of",
-                        lambda v: {**FAMILY, "stare_gone": "stare", "palom_x": "palom"}.get(v))
+    monkeypatch.setattr(tables, "family_of", lambda v: {
+        **FAMILY, "stare_gone": "stare", "palom_x": "palom", "stare_medium": "stare",
+        "valis_mirage_low_m0": "valis_mirage"}.get(v))
     with open(scored / "tables" / "excluded_runs.csv", "w", newline="") as fh:
-        fh.write("run,reason\nstare_gone,not on this regime\npalom_x,defaults only\n")
+        fh.write("run,reason\nstare_gone,not on this regime\npalom_x,defaults only\n"
+                 "stare_medium,one tier only\nvalis_mirage_low_m0,defaults only\n")
     built = tables.build(scored, "multiplex")
-    s = {r["row"]: r for r in built["method_summary"] if r["which"] == "excluded"}
-    assert set(s) == {"stare_gone", "palom_x"}
+    gone = {"stare_gone", "palom_x", "stare_medium", "valis_mirage_low_m0"}
+    na = (None, schema.NA)
+    # method_summary: one NA row per (set, pooling) slot, each with the reason
+    ex = [r for r in built["method_summary"] if r["which"] == "excluded"]
+    slots = {(r["set"], r["pooling"]) for r in ex}
+    assert slots == {(st, p) for st in tables.SETS for p in tables.POOLINGS}
+    assert {r["row"] for r in ex} == gone and len(ex) == len(gone) * len(slots)
+    s = {r["row"]: r for r in ex if tables.is_headline(r)}
     assert s["stare_gone"]["excluded_reason"] == "not on this regime"
-    assert s["stare_gone"]["family"] == "stare" and s["stare_gone"]["dice_med"] in (None, schema.NA)
+    assert s["stare_gone"]["family"] == "stare" and s["stare_gone"]["dice_med"] in na
+    assert all(r["excluded_reason"] not in na for r in ex)
+    # valis_stages and stare_tiers: the family's excluded runs, a row of NA per slot,
+    # with the settings the method module gives them
+    vs = [r for r in built["valis_stages"] if r["row"] == "valis_mirage_low_m0"]
+    assert {(r["set"], r["pooling"]) for r in vs} == slots
+    assert all(r["excluded_reason"] == "defaults only" and r["dice_med"] in na for r in vs)
+    assert {(r["memory_mode"], r["micro_reg"]) for r in vs} == {("low", "0")}
+    st = [r for r in built["stare_tiers"] if r["row"] == "stare_medium"]
+    assert {(r["set"], r["pooling"]) for r in st} == slots
+    assert {(r["tier"], r["excluded_reason"]) for r in st} == {("medium", "one tier only")}
+    assert not [r for r in built["stare_tiers"] if r["row"] == "palom_x"]
+    # cohort_counts: one row per set; run_parameters: the module's settings, with reason
+    cc = [r for r in built["cohort_counts"] if r["row"] == "stare_medium"]
+    assert {r["set"] for r in cc} == set(tables.SETS)
+    assert all(r["excluded_reason"] == "one tier only" and r["n_panels"] in na for r in cc)
+    rp = [r for r in built["run_parameters"] if r["row"] == "stare_medium"]
+    assert {r["key"]: r["value"] for r in rp}["tier"] == "medium"
+    assert all(r["excluded_reason"] == "one tier only" for r in rp)
+    (toy,) = [r for r in built["run_parameters"] if r["row"] == "palom_x"]
+    assert toy["key"] in na and toy["excluded_reason"] == "defaults only"
     v = {r["row"]: r for r in built["versions"]}
     assert v["palom_x"]["excluded_reason"] == "defaults only"
     assert v["palom_x"]["image_tag"] == tables.NOT_RECORDED
@@ -716,9 +744,11 @@ def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
     # a family with other runs keeps its best row and names what was left out
     assert best[("stare", "outlines")]["best_row"] not in (None, schema.NA, "stare_gone")
     assert "stare_gone: not on this regime" in best[("stare", "outlines")]["excluded_runs"]
-    # a family with no run left is a row of NA with the reason
-    assert best[("palom", "outlines")]["best_row"] in (None, schema.NA)
-    assert best[("palom", "outlines")]["excluded_runs"] == "palom_x: defaults only"
+    # a family with no run left is a row of NA with the reason, in each set
+    for st in tables.SETS:
+        assert best[("palom", st)]["best_row"] in (None, schema.NA)
+        assert best[("palom", st)]["excluded_runs"] == "palom_x: defaults only"
+    assert "stare_gone: not on this regime" in best[("stare", "nuclei")]["excluded_runs"]
     # every table still has the schema's columns
     tables.write_all(scored, "multiplex")
 

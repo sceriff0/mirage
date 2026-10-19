@@ -1395,9 +1395,23 @@ def module_parameters(run):
         return out + [(k, sizes[k], psrc) for k in _VALIS_SIZES if k in sizes]
     if m == "valis":
         src = "benchmarks.regbench.methods.valis (MICRO_REG_FRACTION, CHANNEL; hires)"
-        return [("hires", str(opts.get("hires", 0)) in ("1", "true", "True"), src),
+        hires = str(opts.get("hires", 0)) in ("1", "true", "True")
+        # T29 fix 6: the sizes are upstream's Valis() / register_micro() defaults, in no
+        # constant of methods.valis, and valis is not importable score-side; the hires
+        # micro size is computed per patient at run time and not recorded
+        why = ("upstream's Valis() default (valis-wsi 1.2.0): no constant of "
+               "methods.valis holds it and valis is not importable score-side")
+        micro = (f"computed per patient at run time as floor({valis.MICRO_REG_FRACTION} x "
+                 "the smallest slide's longest side) (methods.valis, hires); the value is "
+                 "not recorded" if hires else
+                 "upstream's register_micro() default (valis-wsi 1.2.0): no constant of "
+                 "methods.valis holds it and valis is not importable score-side")
+        return [("hires", hires, src),
                 ("micro_reg_fraction", valis.MICRO_REG_FRACTION, src),
-                ("channel", valis.CHANNEL, src)]
+                ("channel", valis.CHANNEL, src),
+                ("max_processed_image_dim_px", NOT_RECORDED, why),
+                ("max_non_rigid_registration_dim_px", NOT_RECORDED, why),
+                ("micro_max_non_rigid_registration_dim_px", NOT_RECORDED, micro)]
     if m == "palom":
         src = "benchmarks.regbench.methods.palom (THUMBNAIL_SIZE, N_KEYPOINTS, LEVEL)"
         return [("thumbnail_size", palom.THUMBNAIL_SIZE, src),
@@ -1660,22 +1674,54 @@ def _excluded_final(name):
     return final, family_of(final) or family_of(name), run.method if run is not None else None
 
 
-def add_excluded(built, excluded, dataset, summary_keys=None):
-    """T29 (M8), in place: each run of ``excluded`` (``excluded_runs``) as a row of NA
-    with its reason in ``method_summary`` (``which = excluded``) and ``versions``, and in
-    ``method_best`` the family's ``excluded_runs`` (a family with no run left: a row of NA).
+def add_excluded(built, excluded, dataset, summary_keys=None, best_sets=SETS):
+    """T29 (M8, fix round 1), in place: each run of ``excluded`` (``excluded_runs``) as
+    rows of NA with its reason (``excluded_reason``):
+
+    - ``method_summary``: one per (set, pooling) slot, ``which = excluded``;
+    - ``valis_stages`` (a ``valis_mirage`` run) and ``stare_tiers`` (a ``stare`` run): one
+      per slot, with the settings its method module gives it (``module_parameters``);
+    - ``cohort_counts``: one per set; ``run_parameters``: the module's settings of the run,
+      or one row with no key; ``versions``: one;
+    - ``method_best``: the family's ``excluded_runs`` on its rows of each set, and a row of
+      NA in each set (``best_sets``) the family has no row in.
+
     ``summary_keys``: ``{table: extra values}`` of a landmark dataset's summary instead."""
     if not excluded:
         return built
+    slots = [(st, p) for st in SETS for p in POOLINGS]
     by_family = {}
     for name, reason in excluded:
         final, fam, method = _excluded_final(name)
         by_family.setdefault(fam, []).append(f"{name}: {reason}")
+        settings = {k: v for k, v, _ in module_parameters(_run(name))}
+        common = dict(source=SOURCE, dataset=dataset, row=final, excluded_reason=reason)
         if "method_summary" in built:
-            built["method_summary"].append(schema.empty_row(
-                "method_summary", source=SOURCE, dataset=dataset, family=fam, row=final,
-                which="excluded", row_kind="excluded", set=OUTLINES, pooling=COMMON_POOL,
-                excluded_reason=reason))
+            built["method_summary"] += [schema.empty_row(
+                "method_summary", family=fam, which="excluded", row_kind="excluded",
+                set=st, pooling=p, **common) for st, p in slots]
+        if "valis_stages" in built and fam == "valis_mirage":
+            built["valis_stages"] += [schema.empty_row(
+                "valis_stages", set=st, pooling=p,
+                memory_mode=settings.get("memory_mode"),
+                micro_reg=None if settings.get("micro_reg") is None
+                else str(settings["micro_reg"]), **common) for st, p in slots]
+        if "stare_tiers" in built and fam == "stare":
+            built["stare_tiers"] += [schema.empty_row(
+                "stare_tiers", set=st, pooling=p, tier=settings.get("tier"),
+                stride=settings.get("stride"), sprep=settings.get("sprep"), **common)
+                for st, p in slots]
+        if "cohort_counts" in built:
+            built["cohort_counts"] += [schema.empty_row("cohort_counts", set=st, **common)
+                                       for st in SETS]
+        if "run_parameters" in built:
+            mod = module_parameters(_run(name))
+            built["run_parameters"] += [schema.empty_row(
+                "run_parameters", source=SOURCE, row=final, method=method, key=k,
+                value=_value(v), excluded_reason=reason, **{"from": src})
+                for k, v, src in mod] or [schema.empty_row(
+                    "run_parameters", source=SOURCE, row=final, method=method,
+                    excluded_reason=reason)]
         for table, extra in (summary_keys or {}).items():
             built[table].append(schema.empty_row(
                 table, source=SOURCE, dataset=dataset, family=fam, row=final,
@@ -1687,16 +1733,21 @@ def add_excluded(built, excluded, dataset, summary_keys=None):
                 excluded_reason=reason))
     best = built.get("method_best")
     if best is not None:
-        have = {r["family"] for r in best}
+        def set_of(r):
+            v = r.get("set")
+            return None if v in (None, "", schema.NA) else v
+
+        have = {(r["family"], set_of(r)) for r in best}
         for fam, said in by_family.items():
             text = " | ".join(said)
             for r in best:
                 if r["family"] == fam:
                     r["excluded_runs"] = text
-            if fam not in have:
-                best.append(schema.empty_row(
-                    "method_best", source=SOURCE, dataset=dataset, family=fam, set=OUTLINES,
-                    excluded_runs=text))
+            for st in best_sets:
+                if (fam, st) not in have:
+                    best.append(schema.empty_row(
+                        "method_best", source=SOURCE, dataset=dataset, family=fam, set=st,
+                        excluded_runs=text))
     return built
 
 

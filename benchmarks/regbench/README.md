@@ -2080,13 +2080,21 @@ stride, tile/halo/out_tile/max_dim and `sprep`; VALIS's `ARGS` at the run's tier
 micro depth, with the tier's sizes from `bin/utils/valis_config.py` `MEMORY_PRESETS`
 (read from its source: importing it builds VALIS's matchers); PALOM's thumbnail size and
 keypoints; ASHLAR's max shift, noise and affine prior; DeeperHistReg's preset, device and
-`fluo`. The recorded or optional keys they do not name follow. `versions` gives the image
+`fluo`. VALIS 1.2.0's processing, non-rigid and micro sizes read `not recorded`, with
+why: they are upstream's `Valis()` / `register_micro()` defaults (no constant of
+`methods.valis`; valis is not importable score-side), and the hires micro size is
+computed per patient at run time (`MICRO_REG_FRACTION` x the smallest slide's longest
+side) and not recorded. The recorded or optional keys they do not name follow. `versions` gives the image
 tag the launcher pins (`slurm/launch.sbatch` `IMAGES`), and the image digest, the Python
 and the StarDist version as far as a record gives them: **no result records any of the
 three today**, so they read `not recorded`. A run of a dataset's `excluded_runs.csv` is a
-row of NA with its reason in `method_summary` (`which = excluded`, `excluded_reason`),
-`versions` and, on a landmark dataset, `public_landmarks`; `method_best` names the
-family's left-out runs (`excluded_runs`), and a family with no run left is a row of NA.
+row of NA with its reason (`excluded_reason`): in `method_summary` one per (set,
+pooling) slot (`which = excluded`), in `valis_stages` / `stare_tiers` one per slot for a
+VALIS / STARE run (with the settings its module gives it; no figure draws them), in
+`cohort_counts` one per set, in `run_parameters` the run's module settings, in
+`versions` and, on a landmark dataset, in `public_landmarks`. `method_best` names the
+family's left-out runs (`excluded_runs`) on its rows of each set, and a family with no
+row in a set is a row of NA there.
 
 ### The paper's cost: the rules every number obeys (`paper/costs.py`)
 

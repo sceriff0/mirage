@@ -169,6 +169,9 @@ _FULL = (
 # T29 (the fair comparison): every accuracy table of the paper has rows per polygon set
 # (outlines: the headline; nuclei beside) and per pooling (user 2026-10-18 "pool various
 # ways"; ruling: patient pooling = the median of the per-patient medians)
+# T29 fix 2 (M8): a run of the dataset's excluded_runs.csv is a row of NA with its reason
+_EXCLUDED = ("excluded_reason", "", "why the run is not on this dataset (excluded_runs.csv): "
+             "a row of NA; NA for a run that is")
 _SET = ("set", "", "outlines (the headline: each nucleus grown by 10 px) or nuclei (the "
         "bare nuclei, beside)")
 _POOLING = ("pooling", "", "how the cases are pooled: case (every case one value), patient "
@@ -402,7 +405,7 @@ _TABLE_LIST = [
        ("stage", "", "initial, rigid (depth 0), micro_rigid (the _rigid row at depth 1 and 2: "
                      "affine + micro-rigid), nonrigid, or micro (depth 2 only); R18"),
        ("stage_row", "", "result name of the stage; NA when the run has no such stage"),
-       _SET, _POOLING, _N_UNITS,
+       _SET, _POOLING, _N_UNITS, _EXCLUDED,
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
        *_DICE_RULES,
        ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
@@ -411,7 +414,7 @@ _TABLE_LIST = [
     _t("stare_tiers", ("dataset", "row", "set", "pooling"),
        "Dice and cost per STARE run (tier, stride, prep)",
        ("dataset", "", ""), ("row", "", ""), ("tier", "", ""), ("stride", "px", ""),
-       ("sprep", "", ""), _SET, _POOLING, _N_UNITS,
+       ("sprep", "", ""), _SET, _POOLING, _N_UNITS, _EXCLUDED,
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
        *_DICE_RULES,
        ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
@@ -576,7 +579,8 @@ _TABLE_LIST = [
     _t("run_parameters", ("row", "key"), "the parameters each run recorded (Table S6)",
        ("row", "", ""), ("method", "", ""), ("key", "", ""), ("value", "", ""),
        ("from", "", "run.json info.implementation.parameters, or the run's options"),
-       ("n_unreadable", "count", "run.json files of the final row that could not be read")),
+       ("n_unreadable", "count", "run.json files of the final row that could not be read"),
+       _EXCLUDED),
     _t("hosts", ("row",), "where the runs ran",
        ("row", "", ""), ("cpu_model", "", ""), ("cpus_requested", "", "distinct, '|'-joined"),
        ("mem_requested_gb", "", "distinct rungs"), ("n_results", "count", "")),
@@ -588,7 +592,8 @@ _TABLE_LIST = [
        ("name", "", ""), ("default", "", ""), ("type", "", ""), ("description", "", "")),
     _t("cohort_counts", ("dataset", "patient_id", "row", "set"),
        "panel pairs per case, nuclei per pair",
-       ("dataset", "", ""), ("patient_id", "", ""), ("row", "", ""), _SET, ("n_panels", "count", "moving panels"),
+       ("dataset", "", ""), ("patient_id", "", ""), ("row", "", ""), _SET, _EXCLUDED,
+       ("n_panels", "count", "moving panels"),
        ("n_pairs_min", "count", "matched nuclei per pair, min"), ("n_pairs_med", "count", "matched nuclei per pair, median over the row's pairs in the patient"),
        ("n_pairs_max", "count", "matched nuclei per pair, max over the row's pairs in the patient")),
     _t("crosscheck_arms", ("patient_id", "panel", "row"),

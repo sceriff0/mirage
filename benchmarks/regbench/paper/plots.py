@@ -468,7 +468,8 @@ def fig3d_valis_stages(paper_dir, fig_dir):
     colors = _colors(fig_dir)
     runs = {}
     for r in got["vs"]:
-        if tables.is_headline(r):  # T29: the outlines on the common cases
+        # T29: the outlines on the common cases, and no excluded run's row of NA
+        if tables.is_headline(r) and r.get("excluded_reason") in (None, "", schema.NA):
             runs.setdefault(r["row"], {})[r["stage"]] = r
     styles = {"high": "-", "medium": "--", "low": ":"}
     marks = {"0": "o", "1": "s", "2": "^"}
@@ -503,7 +504,8 @@ def fig3d_stare_tiers(paper_dir, fig_dir):
         return _placeholder(fig_dir, "fig3d_stare_tiers", missing)
     picks = {}
     for r in got["st"]:
-        if not tables.is_headline(r) or tables.is_cost_only(r.get("row")):
+        if (not tables.is_headline(r) or tables.is_cost_only(r.get("row"))
+                or r.get("excluded_reason") not in (None, "", schema.NA)):
             continue  # a cost row is no tier of STARE's (T31 fix C1)
         if _num(r.get("stride")) == 64 and (r.get("sprep") or "none") == "none":
             picks[r["tier"]] = r["row"]
