@@ -1480,7 +1480,9 @@ if [ "$prepare" = 1 ]; then
                             case "$syn_real" in "${syn_dir%/}/"*) syn_bound=1 ;; esac
                         done
                         [ "$syn_bound" = 1 ] || die "--prepare --datasets synthetic: REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE (really $syn_real) is under none of the folders the images bind (REGBENCH_INPUTS, REGBENCH_CASES, REGBENCH_BIND): the plan job could not read it. Put it under one, or name its folder in REGBENCH_BIND. Nothing more was submitted."
-                        syn_plan=(--source "$REGBENCH_SYNTH_SOURCE" --grid "$syn_grid" --seed "${REGBENCH_SYNTH_SEED:-0}")
+                        # handed over as its realpath, the path the check above held
+                        # bound: a link that only looks bound never reaches the image
+                        syn_plan=(--source "$syn_real" --grid "$syn_grid" --seed "${REGBENCH_SYNTH_SEED:-0}")
                         [ -z "${REGBENCH_SYNTH_CHANNEL:-}" ] || syn_plan+=(--channel "$REGBENCH_SYNTH_CHANNEL")
                         submit "rb-synth-plan" "${COMMON[@]}" "$LOG_ONE" --cpus-per-task=1 --mem=16G \
                             --time="$(limit "$synth_plan_s")" "$HERE/synth.sbatch" plan "$syn_to" "${syn_plan[@]}"

@@ -4532,7 +4532,9 @@ def test_prepare_synthetic_submits_plan_then_array_then_finish(site, tmp_path):
     assert set(jobs) == {"rb-synth-plan", "rb-synth", "rb-synth-finish"}
     plan, array, finish = jobs["rb-synth-plan"], jobs["rb-synth"], jobs["rb-synth-finish"]
     assert plan.script == array.script == finish.script == "synth.sbatch"
-    assert plan.args == ["plan", str(to), "--source", str(src), "--grid", "default", "--seed", "0"]
+    # the source's realpath (the bind check's, final review)
+    assert plan.args == ["plan", str(to), "--source", os.path.realpath(src), "--grid", "default",
+                         "--seed", "0"]  # fmt: skip
     # one task per (patient, panel): 5 sizes x 11 panels
     assert array.opt("--array").startswith("0-54%") and array.args == ["unit", str(to)]
     assert finish.args == ["finish", str(to)]
@@ -4718,3 +4720,18 @@ def test_a_synthetic_launch_prints_its_results_estimate_and_the_free_space(site,
     cohort, _, _ = launch(site, log="syn-disk-cohort")
     assert "# synthetic:" not in cohort.stdout
 
+
+def test_the_plan_job_is_handed_the_sources_realpath(site, tmp_path):
+    """Final review: the bind check compares realpaths, so the plan job is handed the
+    realpath too: a link that only LOOKS bound never reaches the image."""
+    src = _syn_source(tmp_path)
+    bound = tmp_path / "bound"
+    bound.mkdir()
+    (bound / "link.ome.tif").symlink_to(src)
+    env = {"REGBENCH_CASES_SYNTHETIC": str(tmp_path / "syn"),
+           "REGBENCH_SYNTH_SOURCE": str(bound / "link.ome.tif"),
+           "REGBENCH_BIND": f"{bound},{tmp_path}"}  # fmt: skip
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-real")
+    plan = jobs_of(done)["rb-synth-plan"]
+    got = plan.args[plan.args.index("--source") + 1]
+    assert got == os.path.realpath(src) and got != str(bound / "link.ome.tif")

@@ -239,3 +239,22 @@ def test_the_rgb_container_keeps_the_decoded_values(tmp_path, kind):
         assert len(tif.pages) == 1 and tif.pages[0].photometric.name == "RGB"
         assert tif.pages[0].is_tiled and tif.pages[0].compression.name == "NONE"
         assert np.array_equal(tif.pages[0].asarray(), want)
+
+
+def test_ashlars_excluded_run_reason_on_hyreco_names_no_removed_set():
+    """Final review: the reason excluded_runs.csv writes for ASHLAR on HyReCo keeps the
+    adapter's meaning and rulings but no longer names ANHIR (removed 2026-10-19); the
+    frozen adapter text itself is unchanged."""
+    from benchmarks.regbench import variants
+
+    why = {
+        r: w for r, w in variants.excluded_for("hyreco") if r.startswith("ashlar")
+    }
+    assert why
+    for reason in why.values():
+        assert "anhir" not in reason.lower()
+        assert reason.startswith(
+            "ASHLAR stitches unstitched tiles by one translation per tile;"
+        )
+        assert reason.endswith("(rulings R3.8 and R3.20: ASHLAR is not run on HyReCo)")
+    assert methods.NO_BRIGHTFIELD["ashlar"].endswith("HyReCo nor ANHIR)")

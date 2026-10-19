@@ -8,8 +8,9 @@ Treated as CC BY-SA 4.0 (page title and paper; the DataCite record says CC BY 4.
 
 **One dataset** (ruling 2026-10-19). ``prepare hyreco --data-root DIR`` writes ``hyreco``:
 subset A's nine re-stained pairs (``DIR/HyReCo/{HE,PHH3}``) and, when it is there, subset
-B's 54 ("HyReCo-Additional", ``DIR/HyReCo-Additional/{HE,PHH3}``; downloaded only with
-``HYRECO_ADDITIONAL=1``, ``download/hyreco.sh``), in one cases folder, scored together.
+B's 54 ("HyReCo-Additional", ``DIR/HyReCo-Additional/{HE,PHH3}``; ``download/hyreco.sh``
+fetches it by default, and ``HYRECO_ADDITIONAL=0`` fetches the core zip alone), in one
+cases folder, scored together.
 A case id is the file's id prefixed by its subset (``a_29``, ``b_29``): four ids (29,
 108, 361, 464) are in both lists, whether they are the same slides is not stated by any
 source read, so both are kept, distinct, and flagged (``extra.shared_id``; a column of

@@ -9,7 +9,8 @@ landmarks and is ``not_run`` (``notrun.STALE_TRUTH``: an integrity refusal, a
 ``stale_result`` row of ``losses.csv``); the tuning lock (subset A chooses, subset B
 reports only with A's settings) is REMOVED (ruling 2026-10-18) and the two subsets are
 ONE dataset (ruling 2026-10-19): subset A and, when it was downloaded
-(``HYRECO_ADDITIONAL=1``), subset B, in one cases folder, every pair scored by every run
+(``download/hyreco.sh`` fetches it by default; ``HYRECO_ADDITIONAL=0`` skips it), subset
+B, in one cases folder, every pair scored by every run
 of the list, the four ids both subsets list kept in both and flagged (``shared_id``);
 no settings file gates anything; nothing
 blocks (2026-10-18): a pair whose landmarks fail a sanity check
@@ -488,7 +489,8 @@ def markdown(dataset, cases, summary, fails, primary, lost=(), frames=None):
     shared = [c for c in cases if c.extra.get("shared_id")]
     parts.append(
         f"One dataset (ruling 2026-10-19): subset(s) {', '.join(subsets)} prepared "
-        "(subset B is downloaded only with HYRECO_ADDITIONAL=1). Nothing was tuned on "
+        "(subset B is downloaded by default; HYRECO_ADDITIONAL=0 skips it). Nothing "
+        "was tuned on "
         "it: every run of the list runs with its own fixed settings. **Pairs whose id "
         f"both subsets list: {len(shared)}** (column `shared_id`; kept in both, "
         "whether they are the same slides is stated by no source read).\n"

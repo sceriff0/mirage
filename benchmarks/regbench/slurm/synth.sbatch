@@ -3,7 +3,11 @@
 #SBATCH --output=regbench-synth-%j.log
 # One step of the synthetic scaling set (T32, benchmarks/regbench/synth.py), written under
 # <to>/synthetic/ (REGBENCH_CASES_SYNTHETIC). submit_cohort.sh --prepare --datasets synthetic
-# submits the three steps, each after the one before it (afterany):
+# submits the three steps, each after the one before it: the array after the plan with
+# `afterok`, the finish after the array with `afterany`. Every job is submitted with
+# --kill-on-invalid-dep=yes, so a plan that fails cancels the array (its dependency can
+# never be met). The finish waits for the array whatever became of it and names any
+# slide that is missing:
 #
 #   synth.sbatch plan   <to> --source <slide> [--grid default|small] [--seed N] [--channel C]
 #       ONE job: prints the bytes it will write, then fixes the set (its texture, its units).
@@ -14,7 +18,8 @@
 #       ONE job: writes the cases (case.json last); refuses a set with a missing slide
 #
 # The source slide must be readable inside the image: under REGBENCH_INPUTS, REGBENCH_CASES
-# or a folder named in REGBENCH_BIND (env.sh: regbench_exec binds those).
+# or a folder named in REGBENCH_BIND (env.sh: regbench_exec binds those). The launcher
+# checks its realpath against those folders and hands the plan job that realpath.
 set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"
 source "$REGBENCH_REPO/benchmarks/regbench/slurm/env.sh"

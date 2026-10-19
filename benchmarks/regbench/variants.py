@@ -823,6 +823,13 @@ def _in_regime(dataset, run):
     return reg in run.regimes
 
 
+# ASHLAR's reason on a brightfield set as excluded_runs.csv writes it (final review): the
+# adapter's text (methods.NO_BRIGHTFIELD, frozen word for word) ends with its rulings and
+# the two landmark sets they named, one of them removed on 2026-10-19. Here the rulings
+# are kept and only HyReCo is named: the same meaning, ASHLAR is not run on it.
+_ASHLAR_RULINGS = "(rulings R3.8 and R3.20: ASHLAR is not run on HyReCo)"
+
+
 def _not_on(dataset, run):
     """Why an active run is left out of a public dataset, or None: no input rule for the
     dataset's modality (``methods.input_rule``), or a rule of ``NOT_ON``."""
@@ -833,6 +840,8 @@ def _not_on(dataset, run):
         return SYNTHETIC_REASON
     why = methods.input_rule(run.method, spec["modality"])
     if why is not None:
+        if run.method == "ashlar" and "(rulings R3.8 and R3.20:" in why:
+            why = why.rsplit("(rulings", 1)[0] + _ASHLAR_RULINGS
         return why
     keys = dict.fromkeys((base_name(dataset), str(dataset)))
     for key in keys:
