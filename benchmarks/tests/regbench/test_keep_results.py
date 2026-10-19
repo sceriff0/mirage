@@ -99,3 +99,23 @@ def test_an_incomplete_copy_stops_before_slim(tmp_path):
     assert "incomplete" in (tmp_path / "keep" / "keep_results.log").read_text()
     for p in sum(images.values(), []):
         assert p.exists(), f"{p} was deleted after a failed copy"
+
+
+def test_the_synthetic_sets_tables_are_kept_and_drawn(tmp_path):
+    """T32: a results folder with tables/synthetic/ keeps the synthetic set's own tables in
+    KEEP/tables/synthetic/, where the draft figures find them."""
+    from benchmarks.regbench.paper import schema
+
+    out, arms, *_ = _trees(tmp_path)
+    syn = out / "tables" / "synthetic"
+    syn.mkdir(parents=True)
+    for name in ("synthetic_cost", "synthetic_scaling", "synthetic_extrapolation"):
+        schema.write(syn / f"{name}.csv", name, [])
+    keep = tmp_path / "keep"
+    r = _run("--to", keep, "--regbench", out, "--arms", arms)
+    assert r.returncode == 0, r.stdout + r.stderr
+    for name in ("synthetic_cost", "synthetic_scaling", "synthetic_extrapolation"):
+        kept = keep / "tables" / "synthetic" / f"{name}.csv"
+        assert kept.is_file() and kept.read_bytes() == (syn / f"{name}.csv").read_bytes()
+    assert "synthetic/" in (keep / "tables" / "README.txt").read_text()
+    assert any((keep / "figures").glob("figS_synth_cost_scaling*"))

@@ -71,6 +71,7 @@ import json
 import math
 import pickle
 import re
+import shutil
 from pathlib import Path
 
 from .. import trace, variants
@@ -702,6 +703,9 @@ def _readme(to, counts, inputs, notes):
         "(`paper`, tables.py); this collection does not.",
         "The synthetic sweep is removed from the paper: its rows (cost_points, dataset "
         f"{SWEEP_DATASET}) are here for reference only.",
+        "synthetic/: the synthetic scaling set's own tables (synthetic_cost, _scaling, "
+        "_extrapolation: cost only, never pooled with the cohort), copied as the scorer "
+        "wrote them when a --regbench folder has tables/synthetic/.",
         "cost_points: unit_kind `task` is one Nextflow task of the sweep (every sweep "
         "process); an arm's point is one patient (REGISTER, or a tiled arm's TILED_* jobs "
         "summed per patient, wall = the critical path with every task at once). Regbench cost "
@@ -719,6 +723,30 @@ def _readme(to, counts, inputs, notes):
         *([f"  - {n}" for n in notes] or ["  (none)"]),
     ]
     (Path(to) / README).write_text("\n".join(lines) + "\n")
+
+
+SYNTHETIC_DIR = "synthetic"
+
+
+def copy_synthetic(to, regbench, notes):
+    """The synthetic set's own tables (T32: ``<out>/tables/synthetic/synthetic_*.csv``,
+    cost only, never pooled), copied as they are into ``<to>/synthetic/``, where
+    ``plots`` looks for them. A second results folder that has them goes into
+    ``<to>/synthetic/<its name>/`` and is noted. The paths copied."""
+    copied = []
+    for folder in regbench:
+        found = sorted((Path(folder) / "tables" / SYNTHETIC_DIR).glob("synthetic_*.csv"))
+        if not found:
+            continue
+        dest = Path(to) / SYNTHETIC_DIR
+        if any(dest.glob("synthetic_*.csv")):
+            dest = dest / Path(folder).name
+            notes.append(f"{folder}: a second synthetic set, kept in {dest}")
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in found:
+            shutil.copyfile(f, dest / f.name)
+            copied.append(dest / f.name)
+    return copied
 
 
 def run(to, arms, sweep, sweep_plan, regbench, cases):
@@ -754,6 +782,9 @@ def run(to, arms, sweep, sweep_plan, regbench, cases):
     for name in schema.TABLES:
         schema.write(to / f"{name}.csv", name, built[name])
         counts[name] = len(built[name])
+    synthetic = copy_synthetic(to, regbench, notes)
+    if synthetic:
+        counts["synthetic (copied)"] = len(synthetic)
     inputs = {
         "arms": arms,
         "sweep": sweep,

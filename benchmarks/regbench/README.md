@@ -1565,6 +1565,80 @@ base name (`regbench.base_name`). On a brightfield dataset ASHLAR and PALOM have
 rule and are left out, and so are the `fluo=1` DeeperHistReg rows (their adapter refuses a
 brightfield case); `excluded_runs.csv` and the summary say so, run by run.
 
+### The synthetic scaling set (`synthetic`: cost only, `<out>/tables/synthetic/`)
+
+A supplementary set that measures how the COST of STARE and VALIS grows with the size of a
+slide. **Accuracy is not measured on it**: no truth map, no field error, no Dice; the
+transform each moving panel was made with is kept in its case's `synth_transform.json` for
+reproducibility only. It is a public entry (`regbench.PUBLIC["synthetic"]`, kind
+`synthetic`), scored for cost alone and never pooled with the cohort.
+
+- **Design** (`synth.py`; user, 2026-10-19): one synthetic patient per size, square,
+  4096, 8192, 16384, 32768 and 65536 px (`--grid small` is 4096 alone); 11 panels per
+  patient as the cohort has (panel 0 the reference, 1..10 moving), each ONE image of 3
+  channels `DAPI`, `S1`, `S2`, uint16 at 0.325 µm. The texture is a cohort slide's
+  nuclear channel, a centred crop of up to 4096 px mirror-tiled to the size, so nuclei
+  keep their size at every size. Moving panel k is the reference moved by a rotation of
+  up to 1 degree, a translation of up to 2 % of the side and a smooth deformation of 5 µm,
+  seeded by (seed, size, k). The slides are single-level tiled OME-TIFFs, like the cohort's
+  inputs; the same seed gives byte-identical files.
+- **Runs**: STARE's tier x stride cross with no preprocessing (`stare`, `stare_medium`,
+  `stare_low`, each at stride 64, 128 and 256) and the three VALIS runs (`valis_mirage`,
+  `valis120`, `valis120_hires`). Every other run is in `excluded_runs.csv` with the
+  reason. A method that declares `MAX_SIDE_PX` and is given a larger slide is a
+  `refused_size` loss (cause `input`), not a failure.
+- **Tables** (`<out>/tables/synthetic/`): `synthetic_cost` (one row per run and size),
+  `synthetic_scaling` (per run and quantity, the log-log slope on gigapixels with its 95%
+  interval, from at least 3 sizes; at 3 sizes the interval is wide) and
+  `synthetic_extrapolation` (the fit at the cohort's median and largest patient beside the
+  cohort's measured cost, `extrapolated` when outside the fitted range). One repeat. The
+  figures are `figS_synth_cost_scaling`, `figS_synth_cross_scaling` and
+  `figS_synth_vs_cohort`; `fig2c_cost_vs_input` adds the synthetic peaks as hollow markers
+  when the set is there.
+- **Disk**: about 378 GB uncompressed for the default grid, 284 GB of it the 65536 px
+  patient (`regbench synth --estimate --to D` prints it; `plan` prints it again before it
+  writes anything). On disk the slides are zlib-compressed.
+- **Caveat**: moving panels carry a cohort-like rigid offset and a mild deformation so
+  methods do real work; accuracy is not measured on this set; one repeat.
+
+It is never in `--all` (`--cases-there` says `named only`). Made once, then launched by
+name:
+
+```bash
+export REGBENCH_CASES_SYNTHETIC=$ROOT/cases_synthetic
+# a cohort slide whose nuclear channel is the texture, under a folder the images bind
+# (REGBENCH_INPUTS, REGBENCH_CASES or REGBENCH_BIND)
+export REGBENCH_SYNTH_SOURCE=$REGBENCH_INPUTS/<a preprocessed slide>.ome.tif
+# the plan job, an array of one task per (patient, panel), then the finish job; a
+# complete set is reused, a planned one continued (REGBENCH_SYNTH_GRID=small: 4096 alone)
+benchmarks/regbench/slurm/submit_cohort.sh --prepare --datasets synthetic -- <site options>
+# when those are done: its own run list, scored for cost alone (no per-case scoring)
+benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic -- <site options>
+```
+
+By hand, the same three steps are `regbench synth --source S --to D --plan`, `--unit I`
+for every `I` below `--units`, and `--finish` (`--status` says `absent`, `planned` or
+`complete`).
+
+**Its CPU cross** runs `stare` and `valis_mirage` at 4 and 8 CPUs on the 4096 and 32768 px
+patients, as the cohort's cross does (one folder per count, two repeats). The subset's
+cases are symlinks: bind the original folder too.
+
+```bash
+regbench_py STARE_REGBENCH subset-cases --dataset synthetic \
+    --cases "$REGBENCH_CASES_SYNTHETIC" --groups s04096,s32768 --to "$ROOT/cases_synthetic_cross"
+for c in 4 8; do
+    REGBENCH_CPUS=$c REGBENCH_REPEAT=2 REGBENCH_STARE_EXECUTION=local \
+    REGBENCH_OUT=$ROOT/out_synth_c$c REGBENCH_CASES_SYNTHETIC=$ROOT/cases_synthetic_cross \
+    REGBENCH_BIND=$ROOT/cases_synthetic \
+        benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic \
+        --runs "stare valis_mirage" -- <site options>
+done
+regbench_py STARE_REGBENCH cpu-scaling --dataset synthetic --rows stare,valis_mirage \
+    --point 4=$ROOT/out_synth_c4 --point 8=$ROOT/out_synth_c8 \
+    --to "$ROOT/out_synthetic/paper/synthetic/cpu_scaling.csv"
+```
+
 ### Landmark set (`hyreco`)
 
 HyReCo is scored on its manual landmarks by a scorer of its own (`regbench.landmarks`),
