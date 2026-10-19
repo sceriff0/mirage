@@ -632,7 +632,7 @@ def test_every_summary_row_has_its_set_and_pooling_and_the_headline_first(scored
     pp = [r for r in built["per_pair"] if r["row"] == "stare" and r["n_pairs"] > 0]
     assert pp and all(r["pair_fraction_sym"] == pytest.approx(
         2 * r["n_pairs"] / (r["n_ref"] + r["n_mov"])) for r in pp)
-    assert "pair_fraction_sym_med" in head[0] and "pair_fraction_max_med" in head[0]
+    assert "pair_fraction_sym_med" in head[0] and "pair_fraction_maxn_med" in head[0]
 
 
 def test_a_best_row_carries_its_candidates_and_says_it_is_a_ceiling(scored):

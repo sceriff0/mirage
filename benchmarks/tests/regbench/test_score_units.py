@@ -151,7 +151,7 @@ def test_a_case_with_no_pair_on_both_rows_leaves_the_zero_filled_difference():
 
 def test_the_three_pair_fractions_are_computed_from_the_recorded_counts():
     """T29 (WD10): beside ``pair_fraction`` (pairs / min n, unchanged, the headline),
-    ``pair_fraction_max`` (pairs / max n) and ``pair_fraction_sym`` (2 pairs /
+    ``pair_fraction_maxn`` (pairs / max n) and ``pair_fraction_sym`` (2 pairs /
     (n_ref + n_mov)), each with its null, null max and excess, from the recorded
     ``n_pairs`` / ``n_ref`` / ``n_moving`` (the pair records are untouched)."""
     row = cell("a", "P1_r1", "P1", n_pairs=60, n_ref=100, n_moving=80,
@@ -159,31 +159,60 @@ def test_the_three_pair_fractions_are_computed_from_the_recorded_counts():
                pair_fraction_null_max=0.15)
     score.add_pair_fractions([row])
     assert row["pair_fraction"] == 0.75  # unchanged
-    assert row["pair_fraction_max"] == pytest.approx(0.6)
+    assert row["pair_fraction_maxn"] == pytest.approx(0.6)
     assert row["pair_fraction_sym"] == pytest.approx(120 / 180)
-    assert row["pair_fraction_max_null"] == pytest.approx(0.08)
+    assert row["pair_fraction_maxn_null"] == pytest.approx(0.08)
     assert row["pair_fraction_sym_null"] == pytest.approx(16 / 180)
     # the null's largest placement had 0.15 x min(n) = 12 pairs
-    assert row["pair_fraction_max_null_max"] == pytest.approx(12 / 100)
+    assert row["pair_fraction_maxn_null_max"] == pytest.approx(12 / 100)
     assert row["pair_fraction_sym_null_max"] == pytest.approx(24 / 180)
-    assert row["pair_fraction_max_excess"] == pytest.approx((0.6 - 0.08) / 0.92)
+    assert row["pair_fraction_maxn_excess"] == pytest.approx((0.6 - 0.08) / 0.92)
     assert row["pair_fraction_sym_excess"] == pytest.approx(
         (120 / 180 - 16 / 180) / (1 - 16 / 180))
     # no cell on one side: 0, as the record's own pair_fraction
     empty = cell("a", "P1_r2", "P1", n_pairs=0, n_ref=0, n_moving=5, n_pairs_null=0.0,
                  pair_fraction=0.0, pair_fraction_null=0.0, pair_fraction_null_max=0.0)
     score.add_pair_fractions([empty])
-    assert empty["pair_fraction_max"] == 0.0 and empty["pair_fraction_sym"] == 0.0
+    assert empty["pair_fraction_maxn"] == 0.0 and empty["pair_fraction_sym"] == 0.0
     # a row without the counts (an old table) has none, never a made-up one
     bare = cell("a", "P1_r3", "P1")
     score.add_pair_fractions([bare])
     assert math.isnan(bare["pair_fraction_sym"])
     rec = by(score.summarise_cells([row]), method="a", subset="all")
-    assert rec["pair_fraction_max_med"] == pytest.approx(0.6)
+    assert rec["pair_fraction_maxn_med"] == pytest.approx(0.6)
     assert rec["pair_fraction_sym_null_med"] == pytest.approx(16 / 180)
     assert "pair_fraction_sym_excess_med" in rec
-    assert set(score.PAIR_FRACTIONS) == {"pair_fraction", "pair_fraction_max",
+    assert set(score.PAIR_FRACTIONS) == {"pair_fraction", "pair_fraction_maxn",
                                          "pair_fraction_sym"}
+
+
+def test_pair_fraction_max_has_one_meaning_the_max_of_pair_fraction():
+    """T29 fix round 2: ``pair_fraction_max`` already meant, in a summary, the max over
+    units of ``pair_fraction``; the per-case "pairs / max n" metric is
+    ``pair_fraction_maxn``. No score row, summary record or paper column uses
+    ``pair_fraction_max`` for the per-case metric or anything derived from it."""
+    from benchmarks.regbench import table_schema as schema
+
+    def per_case_meaning(keys):
+        # the old per-case name and everything derived from it: pair_fraction_max_*
+        # (never pair_fraction_maxn*, and never the summary's own pair_fraction_max)
+        return sorted(k for k in keys if k.startswith("pair_fraction_max_"))
+
+    a = cell("a", "P1_r1", "P1", n_pairs=60, n_ref=100, n_moving=80, pair_fraction=0.75,
+             n_pairs_null=8.0, pair_fraction_null=0.1, pair_fraction_null_max=0.15)
+    b = cell("a", "P2_r1", "P2", n_pairs=90, n_ref=100, n_moving=100, pair_fraction=0.9,
+             n_pairs_null=8.0, pair_fraction_null=0.08, pair_fraction_null_max=0.1)
+    score.add_pair_fractions([a, b])
+    assert "pair_fraction_maxn" in score.PAIR_FRACTIONS
+    assert a["pair_fraction_maxn"] == pytest.approx(0.6)
+    assert per_case_meaning(a) == [] and "pair_fraction_max" not in a
+    rec = by(score.summarise_cells([a, b]), method="a", subset="all")
+    assert per_case_meaning(rec) == []
+    # the one summary column of that name: the max over units of pair_fraction
+    assert rec["pair_fraction_max"] == pytest.approx(0.9)
+    assert rec["pair_fraction_maxn_med"] == pytest.approx((0.6 + 0.9) / 2)
+    for name in schema.TABLES:
+        assert per_case_meaning(schema.columns(name)) == [], name
 
 
 # ── item 7: the common block is among the primary rows that ran ──────────────────────

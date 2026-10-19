@@ -188,7 +188,7 @@ _DICE_RULES = (
 _PAIR_FRACTIONS = (
     ("pair_fraction_med", "1", "pairs over the smaller native count (the headline pair "
      "fraction), pooled as `pooling` says"),
-    ("pair_fraction_max_med", "1", "pairs over the LARGER native count: a loss on the larger "
+    ("pair_fraction_maxn_med", "1", "pairs over the LARGER native count: a loss on the larger "
      "side lowers it"),
     ("pair_fraction_sym_med", "1", "2 x pairs over (n_ref + n_mov)"),
 )
@@ -226,8 +226,8 @@ _TABLE_LIST = [
        ("iou_p50", "1", "median IoU of the pairs"),
        ("pair_fraction", "1", "pairs over the smaller native count"),
        ("pair_fraction_null_max", "1", "the null's largest pair fraction"),
-       ("pair_fraction_max", "1", "pairs over the larger native count (score.add_pair_fractions)"),
-       ("pair_fraction_max_null_max", "1", "the null's largest pair_fraction_max"),
+       ("pair_fraction_maxn", "1", "pairs over the larger native count (score.add_pair_fractions)"),
+       ("pair_fraction_maxn_null_max", "1", "the null's largest pair_fraction_maxn"),
        ("pair_fraction_sym", "1", "2 x pairs over (n_ref + n_mov)"),
        ("pair_fraction_sym_null_max", "1", "the null's largest pair_fraction_sym"),
        ("displacement_um_p50", "um", "median centroid displacement of the pairs"),

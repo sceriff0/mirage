@@ -71,18 +71,23 @@ _VALUES = (
     "fold_pct sd_log_jac n_unmapped coverage nn_distance fallback_frac "
     "imputed_initial excluded_from_summaries "
     # T29: the two other pair fractions, each with its excess
-    "pair_fraction_max pair_fraction_max_excess pair_fraction_sym pair_fraction_sym_excess"
+    "pair_fraction_maxn pair_fraction_maxn_excess pair_fraction_sym pair_fraction_sym_excess"
 ).split()
 # T29 (fix round 1): the summaries' headline medians, so the golden pins the values the
 # paper reads (dice_matched_med is the zero-filled one, the headline) and not only the
 # per-case cells and the paired differences
 SUMMARY_MEDS = (
     "dice_matched_med dice_matched_zero_med dice_matched_skip_med "
-    "pair_fraction_med pair_fraction_max_med pair_fraction_sym_med"
+    "pair_fraction_med pair_fraction_maxn_med pair_fraction_sym_med"
 ).split()
+# fix round 2: a summary's own pair_fraction_max, the max over units of pair_fraction
+# (score.summarise_cells' ``f"{h}_max"``). Fix round 1 pinned it only because the
+# per-case "pairs / max n" metric then had the same name (now pair_fraction_maxn); kept
+# here by name, on purpose, so the rename moved no pinned column
+SUMMARY_STATS = ("pair_fraction_max",)
 VALUE_COLUMNS = tuple(
     name + suffix for name in _VALUES for suffix in ("", "_shared", "_ranked", "_exact")
-) + tuple(SUMMARY_MEDS)
+) + tuple(SUMMARY_MEDS) + SUMMARY_STATS
 _BASE = (
     "cells summary_cells common_block paired_vs_primary paired_summary "
     "nonband_cells nonband_summary"

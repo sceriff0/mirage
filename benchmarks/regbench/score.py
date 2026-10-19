@@ -239,15 +239,15 @@ NO_NUCLEI_IN_RESULT = (
 # T29 (WD10, user 2026-10-18 "fix both, report all"): three pair fractions side by
 # side, all from the recorded counts at table time (``add_pair_fractions``; the pair
 # records are untouched): ``pair_fraction`` (pairs / min n: the headline, unchanged),
-# ``pair_fraction_max`` (pairs / max n: a loss on the LARGER side shows) and
+# ``pair_fraction_maxn`` (pairs / max n: a loss on the LARGER side shows) and
 # ``pair_fraction_sym`` (2 pairs / (n_ref + n_mov)).
-PAIR_FRACTIONS = ("pair_fraction", "pair_fraction_max", "pair_fraction_sym")
+PAIR_FRACTIONS = ("pair_fraction", "pair_fraction_maxn", "pair_fraction_sym")
 # pair_fraction_excess is already "above the null", so it has no null column of its own
 HEADLINES = (
     "pair_fraction",
     "pair_fraction_excess",
-    "pair_fraction_max",
-    "pair_fraction_max_excess",
+    "pair_fraction_maxn",
+    "pair_fraction_maxn_excess",
     "pair_fraction_sym",
     "pair_fraction_sym_excess",
     "dice_matched",
@@ -256,7 +256,7 @@ HEADLINES = (
 )
 HAS_NULL = (
     "pair_fraction",
-    "pair_fraction_max",
+    "pair_fraction_maxn",
     "pair_fraction_sym",
     "dice_matched",
     "within_1um",
@@ -2565,7 +2565,7 @@ def dice_rule_columns(rows):
 
 
 def add_pair_fractions(rows):
-    """Set, in place, ``pair_fraction_max`` and ``pair_fraction_sym`` (``PAIR_FRACTIONS``)
+    """Set, in place, ``pair_fraction_maxn`` and ``pair_fraction_sym`` (``PAIR_FRACTIONS``)
     with their ``_null``, ``_null_max`` and ``_excess`` on cell rows, from what the
     pair record recorded: ``n_pairs``, ``n_ref``, ``n_moving``, the null's mean pair
     count ``n_pairs_null`` and ``pair_fraction_null_max`` (the null's largest
@@ -2577,7 +2577,7 @@ def add_pair_fractions(rows):
         n_r, n_m, n_p = _f(r.get("n_ref")), _f(r.get("n_moving")), _f(r.get("n_pairs"))
         null_p = _f(r.get("n_pairs_null"))
         null_top = _f(r.get("pair_fraction_null_max")) * min(n_r, n_m)
-        dens = {"pair_fraction_max": max(n_r, n_m), "pair_fraction_sym": (n_r + n_m) / 2.0}
+        dens = {"pair_fraction_maxn": max(n_r, n_m), "pair_fraction_sym": (n_r + n_m) / 2.0}
         for name, den in dens.items():
             if not (math.isfinite(n_r) and math.isfinite(n_m)):
                 vals = (math.nan, math.nan, math.nan)
