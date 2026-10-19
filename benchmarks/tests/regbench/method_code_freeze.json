@@ -67,7 +67,7 @@
       "benchmarks/regbench/resources.py",
       "benchmarks/regbench/stages.py"
     ],
-    "fingerprint": "21811e1b8de0967c13c35c4c3ccf295467ed786d193a506995e2f29c86b2047a"
+    "fingerprint": "835e3b8dadea7eaaf0b09594d8e860cd8216d488ccab303ff150b1419fb6398d"
   },
   "valis": {
     "files": [

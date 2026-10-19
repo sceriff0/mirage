@@ -7,7 +7,8 @@ dataset of plan F now, so this module is not edited after the Task 8 freeze.
 A regime names four LEVELS of STARE's input: ``baseline`` (STARE unchanged: the
 fluorescence channel as it is, or the case's own grey proxy of an RGB slide; ``--prep
 none``), ``default`` (the modality's chosen preprocessing), ``alt`` (its main alternative)
-and ``pct`` (a percentile window). Every STARE cross runs all of them, deduplicated.
+and ``pct`` (a percentile window), and may name more after them (``bf_same``'s
+``none_haem``). Every STARE cross runs all of them, in the regime's order, deduplicated.
 ``proxy`` is the single-channel image STARE is given: the channel of a fluorescence slide,
 or a benchmark-side one-channel image of an RGB slide (listed in ``benchmark_side``);
 ``sprep`` is STARE's own ``--prep`` (STARE 1.3.0, not a departure). VALIS and every other
@@ -21,9 +22,12 @@ window and its tile matcher is gain-invariant: it measures whether clipping the 
 cyclic_if       same nuclei, same stain -> none; alt CLAHE on the channel (what VALIS does
                 on DAPI by default)
 bf_same         H&E -> IHC re-stain: haematoxylin is the one shared signal, the IHC
-                counterstain is pale -> haem + CLAHE; alt grey + CLAHE
-bf_consecutive  different cells, shared architecture -> grey + CLAHE (DeeperHistReg's own
-                shipped preprocessing is the same); alt grey_smooth
+                counterstain is pale -> haem + CLAHE; alt grey + CLAHE; none_haem the
+                haematoxylin with NO intensity preprocessing (user ruling 2026-10-19:
+                the manuscript's HyReCo STARE row, Fig. 3f, high tier, stride 64)
+
+``bf_consecutive`` (consecutive sections) was removed with its only dataset (user ruling
+2026-10-19); ``grey_smooth`` stays in ``PROXIES``, a proxy STARE's adapter accepts.
 
 A raw-tile case set is named ``<name>@<front end>`` and has the regime of ``<name>``.
 """
@@ -56,18 +60,14 @@ REGIMES = {
         "default": Level("haem", "clahe"),
         "alt": Level("grey", "clahe"),
         "pct": Level("haem", "percentile"),
-    },
-    "bf_consecutive": {
-        "baseline": _RGB,
-        "default": Level("grey", "clahe"),
-        "alt": Level("grey_smooth", "none"),
-        "pct": Level("grey", "percentile"),
+        # user ruling 2026-10-19: the manuscript's HyReCo STARE row (Fig. 3f); after the
+        # four, so no other level's order moves. Its runs: stare_haem_none, ...
+        "none_haem": Level("haem", "none"),
     },
 }
 
 DATASET_REGIME = {
     "multiplex": "cyclic_if",
-    "anhir": "bf_consecutive",
     "hyreco": "bf_same",
     "mcmicro": "cyclic_if",
     "phenocycler": "cyclic_if",
@@ -89,8 +89,7 @@ def regime_of(dataset):
 
 def stare_levels(regime):
     seen, out = set(), []
-    for key in ("baseline", "default", "alt", "pct"):
-        lv = REGIMES[regime][key]
+    for key, lv in REGIMES[regime].items():
         if lv not in seen:
             seen.add(lv)
             out.append((key, lv))
