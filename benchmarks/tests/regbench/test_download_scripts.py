@@ -29,11 +29,31 @@ done
 echo "$url" >> "$LOG_DIR/curl.log"
 printf 'payload:%s' "$url" > "$out"
 """
+# stand-in unzip: each zip unpacks to its own layout (the core zip to HyReCo/{HE,PHH3},
+# each Additional zip to HyReCo-Additional/<stain>/ with one file in it); UNZIP_TOP_HE /
+# UNZIP_TOP_PHH3 name another top-level folder for that Additional zip (a zip whose
+# layout is not the one prepare reads). `-Z1` lists the zip's entries and logs nothing
 UNZIP = """#!/usr/bin/env bash
+d=""; prev=""; zip=""; list=0
+for a in "$@"; do
+  [ "$prev" = "-d" ] && d=$a
+  case $a in -Z1) list=1;; *.zip) [ -n "$zip" ] || zip=$a;; esac
+  prev=$a
+done
+case $(basename "$zip") in
+  HyReCo-Additional-HE.zip) top=${UNZIP_TOP_HE:-HyReCo-Additional}; stains=HE; file=1;;
+  HyReCo-Additional-PHH3.zip) top=${UNZIP_TOP_PHH3:-HyReCo-Additional}; stains=PHH3; file=1;;
+  *) top=HyReCo; stains="HE PHH3"; file=0;;
+esac
+if [ "$list" = 1 ]; then
+  for s in $stains; do echo "$top/$s/"; echo "$top/$s/1.tif"; done
+  exit 0
+fi
 echo "unzip $*" >> "$LOG_DIR/unzip.log"
-d=""; prev=""
-for a in "$@"; do [ "$prev" = "-d" ] && d=$a; prev=$a; done
-mkdir -p "$d/HyReCo/HE" "$d/HyReCo/PHH3"
+for s in $stains; do
+  mkdir -p "$d/$top/$s"
+  [ "$file" = 0 ] || : > "$d/$top/$s/1.tif"
+done
 """
 
 
@@ -121,6 +141,33 @@ def test_hyreco_additional_0_fetches_the_core_zip_only(env):
     assert "HyReCo/HE/*" in unz and "HyReCo/PHH3/*" in unz
     assert "free space of" in r.stdout and "466.7 GB" in r.stdout
     assert "1479.3 GB" not in r.stdout
+
+
+def test_hyreco_fails_when_subset_b_is_not_where_prepare_reads_it(env):
+    """Final review I2: after the unzip, HyReCo-Additional/HE and /PHH3 must be there and
+    hold something; else the script fails naming the top-level folders the two
+    Additional zips really hold."""
+    e, logs, tmp = env
+    urls = _url_file(tmp / "hyreco.tsv", HYRECO_NAMES)
+    r = _run("hyreco.sh", tmp / "h", e, HYRECO_URLS=str(urls), UNZIP_TOP_HE="Additional_HE")
+    assert r.returncode == 1, r.stdout
+    assert "HyReCo-Additional/HE" in r.stderr and "missing or empty" in r.stderr
+    assert "HyReCo-Additional-HE.zip: Additional_HE" in r.stderr
+    assert "HyReCo-Additional-PHH3.zip: HyReCo-Additional" in r.stderr
+    assert "done; next" not in r.stdout
+    # an empty folder is not there either
+    (tmp / "h2" / "HyReCo-Additional" / "PHH3").mkdir(parents=True)
+    r = _run("hyreco.sh", tmp / "h2", e, HYRECO_URLS=str(urls), UNZIP_TOP_PHH3="elsewhere")
+    assert r.returncode == 1 and "HyReCo-Additional/PHH3" in r.stderr
+    assert "HyReCo-Additional-PHH3.zip: elsewhere" in r.stderr
+
+
+def test_hyreco_additional_0_never_checks_subset_b(env):
+    e, logs, tmp = env
+    urls = _url_file(tmp / "hyreco.tsv", HYRECO_NAMES[:1])
+    r = _run("hyreco.sh", tmp / "h", e, HYRECO_URLS=str(urls), HYRECO_ADDITIONAL="0")
+    assert r.returncode == 0, r.stderr
+    assert not (tmp / "h" / "HyReCo-Additional").exists()
 
 
 def test_hyreco_refuses_a_url_file_without_the_additional_zips_by_default(env):

@@ -79,4 +79,25 @@ for s in HE PHH3; do
 		exit 1
 	}
 done
+# subset B must land where `prepare hyreco` reads it: HyReCo-Additional/{HE,PHH3}, each
+# holding something. The two zips' layout is not documented on the dataset page, so a
+# zip that unpacks elsewhere is caught here, naming the top-level folders it holds.
+if [ "${HYRECO_ADDITIONAL:-1}" != 0 ]; then
+	bad=""
+	for s in HE PHH3; do
+		d="$dest/HyReCo-Additional/$s"
+		[ -d "$d" ] && [ -n "$(ls -A "$d")" ] || bad="$bad $d"
+	done
+	if [ -n "$bad" ]; then
+		echo "hyreco.sh: missing or empty after unzip:$bad" >&2
+		echo "  \`prepare hyreco\` reads subset B from $dest/HyReCo-Additional/{HE,PHH3}. The" >&2
+		echo "  Additional zips hold these top-level folders:" >&2
+		for name in HyReCo-Additional-HE.zip HyReCo-Additional-PHH3.zip; do
+			tops=$(unzip -Z1 "$dest/$name" | cut -d/ -f1 | sort -u | tr '\n' ' ')
+			echo "    $name: ${tops% }" >&2
+		done
+		echo "  Move the unpacked HE and PHH3 folders under $dest/HyReCo-Additional/ by hand." >&2
+		exit 1
+	fi
+fi
 echo "hyreco.sh: done; next: python -m benchmarks.regbench prepare hyreco --data-root $dest --cases <cases>"
