@@ -397,6 +397,10 @@ SCORED_KINDS="tissue nuclei landmarks synthetic"
 # named only (never in --cases-there's yes), prepared here (synth.sbatch), and given no
 # per-case or tissue scoring job
 COST_ONLY_SETS="synthetic"
+# the public LANDMARK sets (kind landmarks; a test keeps them equal to regbench.PUBLIC):
+# their scorer (regbench.landmarks) reads no per-case record and no tissue piece, so they
+# are given no per-case scoring job, and no tissue job when they are all a call scores
+LANDMARK_SETS="hyreco"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0 cases_there=0
 ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
@@ -2188,8 +2192,10 @@ scored=""
 tissued=0
 for ds in $sized; do
     # a cost-only set (the synthetic set) has no per-case rows: its scorer reads the
-    # results' resources alone
+    # results' resources alone. Nor has a landmark set (hyreco): its scorer reads the
+    # landmarks and the results, never a per-case record or a tissue piece
     has "$COST_ONLY_SETS" "$ds" && continue
+    has "$LANDMARK_SETS" "$ds" && continue
     tissued=1
     n_cases="CASES_$ds"
     submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
@@ -2207,7 +2213,8 @@ scored_sets=()
 for ds in $sized; do
     [ "$ds" = multiplex ] || { read -r -a scored_sets <<< "$sized"; break; }
 done
-# and no tissue job when every set is cost-only: the scorer then waits for the settle job
+# and no tissue job when every set is cost-only or a landmark set: the scorer then waits
+# for the settle job
 if [ "$tissued" = 1 ]; then
     submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
         --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue \

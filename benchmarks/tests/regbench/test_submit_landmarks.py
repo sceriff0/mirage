@@ -80,12 +80,11 @@ def test_the_set_is_scored_alone_into_its_own_tables(site, ds):
     done, _, _ = launch(site, "--datasets", ds, env=_env(site, ds), log=f"{ds}-score")
     jobs = jobs_of(done)
     assert jobs["rb-score"].args == ["score", ds]
-    # after the settle job, through the per-case records and the tissue job (both a
-    # no-op on a landmark set: these cases have no nuclear channel)
-    deps = {name for _, name in jobs["rb-score"].deps}
-    assert {"<rb-tissue>", f"<rb-score-case-{ds}>"} <= deps
-    assert ("afterany", "<rb-settle>") in jobs[f"rb-score-case-{ds}"].deps
-    assert jobs[f"rb-score-case-{ds}"].args == ["case", ds]
+    # no per-case record and no tissue job: the landmark scorer reads neither (final
+    # review I3), so the scorer waits for the settle job alone
+    assert f"rb-score-case-{ds}" not in jobs and "rb-tissue" not in jobs
+    assert not any(n.startswith("rb-score-case") for n in jobs)
+    assert jobs["rb-score"].deps == {("afterany", "<rb-settle>")}
     assert not any(
         j.args[6] == "multiplex" for j in jobs.values() if j.script == "run_rung.sbatch"
     )
@@ -122,3 +121,43 @@ def test_cases_there_says_yes_for_prepared_landmark_sets(site):
     got = dict(ln.split("\t")[:2] for ln in done.stdout.splitlines() if "\t" in ln)
     assert got["hyreco"] == "yes"
     assert "hyreco_a" not in got and "hyreco_b" not in got and "anhir" not in got
+
+
+def test_beside_the_cohort_the_landmark_set_has_no_case_or_tissue_scoring(site):
+    """--datasets "multiplex hyreco": the cohort keeps its per-case jobs and the tissue job;
+    hyreco has no per-case job (the tissue job skips it itself: cli._tissue)."""
+    done, _, _ = launch(
+        site, "--datasets", "multiplex hyreco", env=_env(site, "hyreco"), log="hy-both"
+    )
+    jobs = jobs_of(done)
+    assert "rb-score-case-multiplex" in jobs and "rb-score-case-hyreco" not in jobs
+    assert jobs["rb-tissue"].args == ["tissue", "multiplex", "hyreco"]
+    assert jobs["rb-score"].args == ["score", "multiplex", "hyreco"]
+
+
+def test_the_launchers_landmark_sets_are_the_public_landmark_kind():
+    from benchmarks.regbench import PUBLIC
+
+    (line,) = [x for x in code_of(SCRIPT).splitlines() if x.startswith("LANDMARK_SETS=")]
+    want = tuple(d for d, s in PUBLIC.items() if s["kind"] == "landmarks")
+    assert tuple(line.split("=", 1)[1].strip('"').split()) == want == ("hyreco",)
+
+
+def test_score_case_and_tissue_return_early_on_the_landmark_set(site, monkeypatch, capsys):
+    """The CLI mirrors the launcher (final review I3): `score-case` and `tissue` on a
+    landmark set say why and compute nothing."""
+    from benchmarks.regbench import cli, score, tissue
+
+    def never(*a, **k):
+        raise AssertionError("computed on a landmark set")
+
+    monkeypatch.setattr(score, "score_case", never)
+    monkeypatch.setattr(tissue, "score_all", never)
+    cases, out = str(site[0] / "hyreco_cases"), str(site[0] / "out-cli")
+    argv = ["--cases", cases, "--out", out, "--dataset", "hyreco"]
+    assert cli.main(["score-case", *argv, "--index", "0"]) == 0
+    said = capsys.readouterr().out
+    assert "score-case: hyreco is a landmark set" in said and "regbench.landmarks" in said
+    assert cli.main(["tissue", *argv]) == 0
+    said = capsys.readouterr().out
+    assert "tissue: hyreco is a landmark set" in said

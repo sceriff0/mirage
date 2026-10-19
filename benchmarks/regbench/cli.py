@@ -1512,13 +1512,31 @@ def _verdict(a):
     return 0
 
 
+def _no_case_scoring(dataset):
+    """Why ``dataset`` has no per-case record and no tissue piece, or None when it has
+    them. A cost-only set (T32) is scored from its resources alone; a landmark set's
+    scorer (``regbench.landmarks``) reads its landmarks and the results, never a per-case
+    record or a tissue piece (final review I3: the launcher submits neither job for it)."""
+    from . import variants
+
+    if variants.is_cost_only_set(dataset):
+        return "is scored for cost alone (no per-case record)"
+    spec = public_of(dataset)
+    if spec is not None and spec["kind"] == "landmarks":
+        return (
+            "is a landmark set: its scorer (regbench.landmarks) reads no per-case "
+            "record and no tissue piece"
+        )
+    return None
+
+
 def _score_one(a):
     """One case's record (``score.score_case``), made exactly as ``score`` would."""
     from . import failure_log, score, variants
 
-    if variants.is_cost_only_set(a.dataset):
-        # T32: a cost-only set has no per-case record: `score` reads its resources
-        print(f"score-case: {a.dataset} is scored for cost alone (no per-case record)")
+    why = _no_case_scoring(a.dataset)
+    if why is not None:
+        print(f"score-case: {a.dataset} {why}")
         return 0
     if a.submission:
         os.environ[score.SUBMISSION_ENV] = a.submission
@@ -1562,6 +1580,10 @@ def _tissue(a):
         if variants.is_cost_only_set(ds):
             print(f"tissue: {ds} is scored for cost alone (no tissue block)")
             continue
+        why = _no_case_scoring(ds)
+        if why is not None:
+            print(f"tissue: {ds} {why}")
+            continue
         expected = (
             None
             if a.only_run
@@ -1584,7 +1606,7 @@ def _tissue(a):
                 print(f"tissue: {ds}/{one}: a dev_* case, not computed here")
                 return 0
         jobs += [(a.out, c, found) for c in cases]
-    if not jobs and all(variants.is_cost_only_set(d) for d in a.dataset or DATASETS):
+    if not jobs and all(_no_case_scoring(d) for d in a.dataset or DATASETS):
         return 0
     if not jobs:
         raise SystemExit(f"no prepared cases under {a.cases}")
