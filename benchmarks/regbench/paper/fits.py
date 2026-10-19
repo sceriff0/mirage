@@ -99,6 +99,8 @@ def fit(x, y, log=False, min_n=3):
         slope=slope,
         intercept=intercept,
         r2=None if ss_tot == 0 else 1.0 - ss_res / ss_tot,
+        # ddof=1 as the brief defines sigma (the residuals' s.d.); the slope interval
+        # above uses n - 2, the residual degrees of freedom of a two-parameter fit
         sigma=float(np.std(resid, ddof=1)),
         fit_ok=True,
         slope_ci_low=slope - half if half == half else None,

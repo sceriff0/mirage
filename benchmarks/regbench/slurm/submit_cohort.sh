@@ -193,7 +193,9 @@
 #                                     the most tasks in the queue at once
 #   REGBENCH_REPEAT (1)               the same submission N times, repeat k into
 #                                     $REGBENCH_OUT/rep<k> (the CPU cross's repetitions,
-#                                     README "The CPU cross"); 1 is the launch as it was
+#                                     README "The CPU cross"), one after the other (its
+#                                     first jobs afterany the last of the one before);
+#                                     1 is the launch as it was
 #   REGBENCH_WAVES (0)                1: one method at a time, each method's first jobs
 #                                     after every job of the method before it (afterany):
 #                                     a timing replicate with no other method on the nodes

@@ -1836,7 +1836,8 @@ without their label.
 **Memory one job needs, and the cluster-wide demand.** `fold_peak_vs_stare` is gone (it
 divided a sampled tree peak by a single stage job's high-water mark). In its place:
 `fold_peak_vs_stare_local4` (a one-process peak over `stare_local4`'s, the same Monitor,
-the common patients) and, for STARE's stage jobs, `peak_largest_job_gb` (the largest
+both over the SAME patients: common, complete for both, a comparable peak,
+`n_patients_fold`; NaN with a `fold_note` for STARE's stage-job row) and, for STARE's stage jobs, `peak_largest_job_gb` (the largest
 single attempt: what a node must give one job) and `peak_concurrent_gb` (the most the
 jobs of one round held at once: at every moment the sum of the peaks of the attempts
 running then, as `peak_cpus_at_once` is computed). Fig. 3e shows the first, with the
@@ -2932,7 +2933,9 @@ figure; each item names the column that answers it.
   `cpu_h_reserved` on the staged rows.
 - [ ] **C10. VALIS's heap**: the heap a rung asked for against what the JVM got.
   `jvm_peak_heap_gb` is `NA` (no instrument reads it: a label, not a figure); until one
-  does, `peak_rss_gb` of a JVM row is bounded by `-Xmx` (the `JVM_RSS` header line).
+  does, `peak_rss_gb` of a JVM row is bounded by `-Xmx` (the `JVM_RSS` header line). The
+  heap is inside the in-process RSS, and reading it would move the VALIS and ASHLAR
+  fingerprints: NA is the controller's ruling (T31, 2026-10-19).
 - [ ] **C11. The tile throttle's cost**: `elapsed_with_queue_s` against
   `wall_unlimited_parallel_s`, `peak_cpus_at_once` against `n_tiles x 2`.
 - [ ] **C12.** How often compute-all's traces leave `%cpu` blank (`pipeline_cost.csv`).
@@ -3155,8 +3158,8 @@ are the best-Dice rows, DeeperHistReg's among its CPU rows, T31 R12).
   at 8 CPUs, each count in its own folder (`out_c4`, `out_c8`), so no point is the main
   run's result under another load. Each point is run twice: `REGBENCH_REPEAT=2` is the
   same submission into `rep1/` and `rep2/` of the folder (each repeat its own results;
-  the two repeats are submitted together, so they share the nodes' time like every
-  other job: the figure draws their spread).
+  `rep2`'s first jobs wait `afterany` for `rep1`'s last ones, its scorers, so the two
+  never share the nodes' time with each other: the figure draws their spread).
 - **`REGBENCH_CPUS`** (4 or 8; anything else, 16 included, stops the launch before any `sbatch`)
   is every ladder task's `--cpus-per-task`, recorded in `run.json` as
   `cpus_requested`. The selfchecks and the prepare, settle, tissue and score jobs keep

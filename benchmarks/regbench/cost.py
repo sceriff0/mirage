@@ -281,7 +281,10 @@ JVM_RSS = (
     "JVM methods (VALIS): a JVM's resident memory follows its maximum heap (-Xmx, "
     "`jvm_max_heap_gb`), which the adapter sets from the rung, so its peak grows with "
     "the rung it ran at and is not the method's need; `jvm_peak_heap_gb` (the heap "
-    "the JVM used) is NA: it is not measured."
+    "the JVM used) is NA: it is not measured. The heap is inside the in-process RSS "
+    "(`peak_rss_gb` counts it), and reading it would need a call into the JVM from the "
+    "adapters, whose code is in the VALIS and ASHLAR fingerprints: NA is the "
+    "controller's ruling (T31, 2026-10-19)."
 )
 def header_lines(res_rows):
     """What a reader of any cost table must know first, from what the runs recorded:
