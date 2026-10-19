@@ -137,13 +137,25 @@ def test_every_point_not_drawn_and_every_lower_bound_is_a_loss_row(paper):
     figs = paper / "figures"
     got = {"fig3f_cpu_wall_best": cost_plots.fig3f_cpu_wall_best(paper, figs),
            "figS_end_to_end": cost_plots.figS_end_to_end(paper, figs)}  # a placeholder
-    path = cost_plots.write_losses(figs, got, "multiplex")
+    from benchmarks.regbench import losses
+
+    # T31 fix M7: the figures' rows go into paper/losses.csv, beside the tables' own,
+    # replacing the figures' rows of an earlier draw and nothing else (no third file)
+    losses.write(paper / "losses.csv", [
+        losses.row(stage="paper", dataset="multiplex", run="r", cause="fit_points_dropped",
+                   effect="dropped", detail="kept", source="paper/cost_fits.csv"),
+        losses.row(stage="paper", dataset="multiplex", run="old", cause="plot_placeholder",
+                   effect="dropped", detail="an earlier draw", source="figures/x")])
+    path = cost_plots.write_losses(paper / "losses.csv", got, "multiplex")
+    assert path == paper / "losses.csv" and not (figs / "losses.csv").exists()
     rows = list(csv.DictReader(open(path)))
     found = {(r["run"], r["patient_id"], r["cause"], r["effect"]) for r in rows}
     assert ("valis_b", "P0", "plot_points_dropped", "dropped") in found
     assert ("valis_b", "P1", "plot_lower_bound", "flagged") in found
     assert any(r["cause"] == "plot_placeholder" and "figS_end_to_end" in r["detail"] for r in rows)
     assert {r["stage"] for r in rows} == {"paper"}
+    assert [r["detail"] for r in rows if r["cause"] == "fit_points_dropped"] == ["kept"]
+    assert not any(r["run"] == "old" for r in rows)
 
 
 def test_a_tick_reads_common_over_all_with_capped_and_failed():
@@ -183,7 +195,7 @@ def test_the_scored_cohort_draws_every_cost_figure_on_patients(tmp_path, monkeyp
         drawn = {r["unit_id"] for r in src}
         assert drawn <= {p["unit_id"] for p in pts if p["unit_kind"] == "patient"}
     assert ticks and all("n=" in t and "/" in t for group in ticks for t in group)
-    assert (figs / "losses.csv").is_file()
+    assert (out / "paper" / "losses.csv").is_file() and not (figs / "losses.csv").exists()
     assert "fold_peak_vs_stare," not in (out / "paper" / "method_summary.csv").read_text()
     summary = schema.read(out / "paper" / "method_summary.csv")
     assert summary and all(not math.isnan(float(r["n_patients_common"]))

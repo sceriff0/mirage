@@ -164,25 +164,44 @@ CAUSES = {
         "a run.json the paper tables could not read: n_unreadable of versions / "
         "run_parameters (S13)",
     ),
+    # T31 rule 6: what a cost table left out of a median is a row, never a count alone
+    "cost_figure_missing": (
+        INFRA,
+        "paper",
+        "a common patient the row completed has no figure for a cost the row has for "
+        "other patients: left out of that method_summary median (paper/losses.csv)",
+    ),
+    "cost_peak_not_comparable": (
+        INFRA,
+        "paper",
+        "a common patient's peak is a rusage lower bound: left out of every peak median "
+        "of method_summary (paper/losses.csv)",
+    ),
+    "cost_lower_bound": (
+        INFRA,
+        "paper",
+        "a common patient's times and CPU-hours are lower bounds (cost_points.lower_bound): "
+        "kept in method_summary's medians and flagged (paper/losses.csv)",
+    ),
     # T31 rule 6: what a cost figure could not draw is a row, never a silent gap
     "plot_points_dropped": (
         INFRA,
         "paper",
         "a cost figure could not draw a patient's value (no figure, <= 0 on a log axis, "
         "a rusage peak in a peak comparison, a GPU row without a CPU twin on a CPU axis): "
-        "paper/figures/losses.csv",
+        "paper/losses.csv",
     ),
     "plot_lower_bound": (
         INFRA,
         "paper",
         "a cost figure drew a patient's value that is a lower bound "
-        "(cost_points.lower_bound): kept and flagged, paper/figures/losses.csv",
+        "(cost_points.lower_bound): kept and flagged, paper/losses.csv",
     ),
     "plot_placeholder": (
         INFRA,
         "paper",
         "a cost figure is its placeholder: its input table is absent or all NA "
-        "(paper/figures/losses.csv)",
+        "(paper/losses.csv)",
     ),
     "stare_local4_differs": (
         INTEGRITY,
@@ -438,6 +457,16 @@ def write(path, rows):
         w = csv.DictWriter(fh, fieldnames=list(COLUMNS), restval="")
         w.writeheader()
         w.writerows(rows)
+
+
+def merge(path, rows, causes):
+    """``losses.csv`` at ``path`` with ``rows`` in place of its rows of ``causes``; every
+    other row kept. Two writers share ``paper/losses.csv`` (the tables, the figures):
+    each replaces its own causes only (T31 fix M7). ALWAYS written."""
+    causes = set(causes)
+    kept = [r for r in read_csv(path) if r.get("cause") not in causes]
+    write(path, [*kept, *rows])
+    return path
 
 
 def counts(rows):

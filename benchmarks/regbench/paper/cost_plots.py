@@ -18,8 +18,8 @@ and end-to-end panels, every one by the rules of ``paper.costs``.
 * **Intervals.** A median's bootstrap 95% interval over the drawn patients
   (``costs.interval``: ``score.bootstrap_interval``) is drawn as a bar beside it.
 * **Nothing silent.** Every point not drawn, every lower-bound point and every
-  placeholder of these figures is a row of ``<figures>/losses.csv`` (stage ``paper``,
-  ``write_losses``).
+  placeholder of these figures is a row of the paper's ``losses.csv`` (stage ``paper``,
+  ``write_losses``), beside the tables' own rows.
 """
 
 from __future__ import annotations
@@ -664,10 +664,15 @@ FIGURES = {
 P.PLOTS.update(FIGURES)
 
 
-def write_losses(fig_dir, results, dataset=""):
-    """``<fig_dir>/losses.csv``: every loss row of the cost figures drawn, and one
-    ``plot_placeholder`` row per cost figure that is its placeholder. ALWAYS written (a
-    header alone when nothing was lost)."""
+# the causes the figures write (``write_losses``); the tables write the others
+PLOT_CAUSES = ("plot_points_dropped", "plot_lower_bound", "plot_placeholder")
+
+
+def write_losses(path, results, dataset=""):
+    """``path`` (the paper's ``losses.csv``, beside the tables' own rows: T31 fix M7):
+    every loss row of the cost figures drawn, and one ``plot_placeholder`` row per cost
+    figure that is its placeholder, in place of the figures' rows of an earlier draw.
+    ALWAYS written (a header alone when nothing was lost)."""
     rows = []
     for name, res in results.items():
         if name not in FIGURES:
@@ -677,6 +682,4 @@ def write_losses(fig_dir, results, dataset=""):
                                        effect="dropped", detail=f"{name}: input absent or all NA",
                                        source=f"figures/{name}"))
         rows += res.get("losses") or []
-    path = Path(fig_dir) / "losses.csv"
-    losses_mod.write(path, rows)
-    return path
+    return losses_mod.merge(Path(path), rows, PLOT_CAUSES)

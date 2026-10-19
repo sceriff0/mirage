@@ -725,7 +725,7 @@ def main(a):
         res = got[name] = draw(name, paper_dir, fig_dir)
         tag = "placeholder" if res.get("placeholder") else "drawn"
         print(f"{name}\t{tag}\t{res['files'][0]}")
-    print(f"losses\t{cost_plots.write_losses(fig_dir, got, a.dataset)}")
+    print(f"losses\t{cost_plots.write_losses(paper_dir / 'losses.csv', got, a.dataset)}")
     return 0
 
 
@@ -870,7 +870,7 @@ def render_tables(tables_dir, to, draft=None, only=None, results=None, cases=Non
     finally:
         _CTX.clear()
         _CTX.update(saved)
-    cost_plots.write_losses(to, got, dataset)
+    cost_plots.write_losses(to / "losses.csv", got, dataset)
     return got
 
 

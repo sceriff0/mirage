@@ -1330,6 +1330,43 @@ def local4_differs(per_pair, shown):
     return out
 
 
+def cost_losses(points, summary, shown):
+    """Rule 6 for the tables (T31 fix I6): per ``method_summary`` row and common patient
+    it completed, one ``cost_figure_missing`` row naming the costs it has no figure for
+    (that the row has for another such patient: they are left out of those medians), one
+    ``cost_peak_not_comparable`` row (a rusage peak, out of every peak median) and one
+    ``cost_lower_bound`` row (kept and flagged)."""
+    from .. import losses
+
+    rows = []
+    for m in {m["row"]: m for m in summary}.values():
+        row = m["row"]
+        mine = [p for p in points
+                if p["row"] == row and p["unit_kind"] == costs.PATIENT
+                and p["status"] == costs.COMPLETE and p.get("in_common") is True]
+        have = [s for s in costs.STEMS
+                if any(math.isfinite(costs.num(p.get(s))) for p in mine)]
+
+        def loss(p, cause, effect, detail):
+            rows.append(losses.row(
+                stage="paper", dataset=shown, patient_id=p["unit_id"], run=row,
+                method=m.get("family") or "", cause=cause, effect=effect, detail=detail,
+                source="paper/method_summary.csv"))
+
+        for p in sorted(mine, key=lambda p: str(p["unit_id"])):
+            lost = [s for s in have if not math.isfinite(costs.num(p.get(s)))]
+            if lost:
+                loss(p, "cost_figure_missing", "dropped",
+                     f"no {', '.join(lost)}: left out of those common-patient medians")
+            if p.get("peak_rss_comparable") is False:
+                loss(p, "cost_peak_not_comparable", "dropped",
+                     "a rusage peak: left out of every peak median")
+            if not costs.missing(p.get("lower_bound")):
+                loss(p, "cost_lower_bound", "flagged",
+                     f"times and CPU-hours are lower bounds ({p['lower_bound']})")
+    return rows
+
+
 def paper_losses(built, dataset):
     """The paper stage's loss rows (M3): one per cost fit that left points out (S12)
     and one per run whose run.json files the paper tables could not all read (S13),
@@ -1356,6 +1393,7 @@ def paper_losses(built, dataset):
                 source=f"paper/{table}.csv",
             ))
     rows += local4_differs(built["per_pair"], shown)
+    rows += cost_losses(built["cost_points"], built["method_summary"], shown)
     seen = set()  # one row per run: versions reads every variant, so it comes first
     for table in ("versions", "run_parameters"):
         for r in built[table]:
@@ -1387,7 +1425,10 @@ def write_all(out, dataset=COHORT, cases_root=None):
         schema.write(path, name, rows)
         paths[name] = path
     paths["losses"] = target / "losses.csv"
-    losses.write(paths["losses"], paper_losses(built, dataset))
+    from .cost_plots import PLOT_CAUSES  # the figures' rows are theirs (T31 fix M7)
+
+    mine = [c for c in losses.CAUSES if c not in PLOT_CAUSES]
+    losses.merge(paths["losses"], paper_losses(built, dataset), mine)
     return paths
 
 

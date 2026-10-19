@@ -486,3 +486,43 @@ def test_the_prior_counts_the_rounds_it_has_no_line_for_and_is_summed_per_patien
     # sums 1, 10, 10 -> 10; median + median would be 1 + 0 = 1
     assert tables._with_prior(own, got) == 10.0
     assert tables._prior_by_patient("ashlar", [], res, {"P1"}, peaks) == {}
+
+
+def test_a_table_side_drop_or_lower_bound_is_a_paper_loss_row():
+    """T31 fix I6 (rule 6): what method_summary's medians leave out of a common patient
+    the row completed (a figure it has for other patients, a rusage peak) and what is a
+    lower bound there is a (patient, run, cause) row of paper/losses.csv, not a count."""
+    pts = [dict(_pt("x", "P1", "complete", 1.0, 2.0), in_common=True, gpu_peak_gb=3.0),
+           dict(_pt("x", "P2", "complete", None, 2.0), in_common=True, gpu_peak_gb=None,
+                lower_bound="unmeasured"),
+           dict(_pt("x", "P3", "complete", 1.0, 2.0), in_common=True, gpu_peak_gb=3.0,
+                peak_rss_comparable=False),
+           dict(_pt("x", "P4", "failed", None, None), in_common=True),  # not in a median
+           dict(_pt("x", "P5", "complete", None, None), in_common=False)]  # not common
+    built = {k: [] for k in ("cost_fits", "pipeline_cost_fits", "per_pair", "versions",
+                             "run_parameters")}
+    built.update(cost_points=pts, method_summary=[{"row": "x", "family": "palom"}])
+    rows = tables.paper_losses(built, "multiplex")
+    got = {(r["run"], r["patient_id"], r["cause"], r["effect"]) for r in rows}
+    assert got == {("x", "P2", "cost_figure_missing", "dropped"),
+                   ("x", "P2", "cost_lower_bound", "flagged"),
+                   ("x", "P3", "cost_peak_not_comparable", "dropped")}
+    (miss,) = [r for r in rows if r["cause"] == "cost_figure_missing"]
+    assert "cpu_h_used" in miss["detail"] and "gpu_peak_gb" in miss["detail"]
+    assert {r["stage"] for r in rows} == {"paper"}
+    assert all(r["source"] == "paper/method_summary.csv" for r in rows)
+
+
+def test_the_tables_keep_the_figures_loss_rows_in_paper_losses_csv(scored):
+    """T31 fix M7: each writer of paper/losses.csv replaces its own rows only."""
+    from benchmarks.regbench import losses
+
+    paths = tables.write_all(scored, "multiplex")
+    old = list(csv.DictReader(open(paths["losses"])))
+    plot = losses.row(stage="paper", dataset="multiplex", run="r", cause="plot_placeholder",
+                      effect="dropped", detail="fig", source="figures/fig")
+    losses.write(paths["losses"], [*old, plot])
+    tables.write_all(scored, "multiplex")
+    again = list(csv.DictReader(open(paths["losses"])))
+    assert [r for r in again if r["cause"] == "plot_placeholder"] == [plot]
+    assert len(again) == len(old) + 1

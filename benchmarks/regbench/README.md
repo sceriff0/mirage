@@ -1539,9 +1539,12 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `realcheck_unreadable` | infrastructure | score | a realcheck.json (or the run.json beside it) cannot be read: the run's realcheck verdict is `unreadable` (verdicts.tsv) |
 | `fit_points_dropped` | infrastructure | paper | a cost fit left points out (no finite target or predictor, or no input size): `n_dropped` of cost_fits / pipeline_cost_fits (S12; `paper/losses.csv`) |
 | `paper_record_unreadable` | infrastructure | paper | a run.json the paper tables could not read: `n_unreadable` of versions / run_parameters, one row per run (S13; `paper/losses.csv`) |
-| `plot_points_dropped` | infrastructure | paper | a cost figure could not draw a patient's value (no figure, `<= 0` on a log axis, a `rusage` peak in a peak comparison, a GPU row without a CPU twin on a CPU axis): `paper/figures/losses.csv` (T31) |
-| `plot_lower_bound` | infrastructure | paper | a cost figure drew a value that is a lower bound (`cost_points.lower_bound`): kept, flagged (`paper/figures/losses.csv`) |
-| `plot_placeholder` | infrastructure | paper | a cost figure is its placeholder: its input is absent or all NA (`paper/figures/losses.csv`) |
+| `cost_figure_missing` | infrastructure | paper | a common patient the row completed has no figure for a cost the row has for other patients: left out of that `method_summary` median (`paper/losses.csv`, T31) |
+| `cost_peak_not_comparable` | infrastructure | paper | a common patient's peak is a `rusage` lower bound: left out of every peak median of `method_summary` (`paper/losses.csv`) |
+| `cost_lower_bound` | infrastructure | paper | a common patient's times and CPU-hours are lower bounds: kept in the medians, flagged (`paper/losses.csv`) |
+| `plot_points_dropped` | infrastructure | paper | a cost figure could not draw a patient's value (no figure, `<= 0` on a log axis, a `rusage` peak in a peak comparison, a GPU row without a CPU twin on a CPU axis): `paper/losses.csv` (T31) |
+| `plot_lower_bound` | infrastructure | paper | a cost figure drew a value that is a lower bound (`cost_points.lower_bound`): kept, flagged (`paper/losses.csv`) |
+| `plot_placeholder` | infrastructure | paper | a cost figure is its placeholder: its input is absent or all NA (`paper/losses.csv`) |
 | `stare_local4_differs` | integrity | paper | `stare_local4` scored a case differently from `stare` (`paper/losses.csv`, effect `flagged`) |
 | `not_run` | infrastructure | run | no result of this submission: nobody ran it |
 | `stale_result` | integrity | run | a result made for an earlier version of the case or by another submission |
@@ -1578,8 +1581,7 @@ says `cost_bound=upper`.
 | `logs/refused_units.tsv` | results folder | the units of a refused (or given-up) selfcheck or stage step, which no record can carry (`retry.sbatch` `mark_cut`): a row each, of its cause. A watcher that gives up writes the units of the step it was at down itself (`watcher_gave_up`) before it exits, so a failed settle job does not leave them the method's |
 | `logs/compute/plan.tsv` | results folder | the compute-all plan the launcher submitted: a planned patient that left no folder is a `no_trace` row (so is one with an end line and no folder) |
 | `tables/losses_run.csv` | tables | the run-level rows (dataset blank) alone |
-| `paper/losses.csv` | paper | the paper stage's rows (`fit_points_dropped`, `paper_record_unreadable`, `stare_local4_differs`) |
-| `paper/figures/losses.csv` | paper | what the cost figures could not draw or drew as a lower bound, and their placeholders (`plot_points_dropped`, `plot_lower_bound`, `plot_placeholder`) |
+| `paper/losses.csv` | paper | the paper stage's rows: the tables' (`fit_points_dropped`, `paper_record_unreadable`, `stare_local4_differs`, `cost_figure_missing`, `cost_peak_not_comparable`, `cost_lower_bound`) and the cost figures' (`plot_points_dropped`, `plot_lower_bound`, `plot_placeholder`); each writer replaces only its own rows |
 | `pipeline_cost_summary.csv` | tables | `reason` and `n_tasks_unmeasured` per compute-all patient (`no_trace`, `failed_task`, `cached`, `no_ok_end`) |
 | `summary.json` | tables | `losses`: the counts by stage, cause, blame and effect |
 
@@ -1813,9 +1815,11 @@ read the tables above by six rules, the same for every method (user ruling
    billed) and counted (`n_lower_bound`); a peak read by `rusage` alone is flagged
    (`peak_rss_comparable = False`), counted (`n_peak_not_comparable`) and in no peak
    comparison; a round that registered and was scored as an imputed failure is costed
-   (it used the resources) and counted (`n_imputed_costed`). Every point a figure could
+   (it used the resources) and counted (`n_imputed_costed`). Each of those patients of
+   `method_summary` is also a row (`cost_figure_missing`, `cost_peak_not_comparable`,
+   `cost_lower_bound`). Every point a figure could
    not draw (no figure, or `<= 0` on a log axis), every lower-bound point it drew and
-   every placeholder is a row of `paper/figures/losses.csv` (stage `paper`).
+   every placeholder is a row of `paper/losses.csv` (stage `paper`).
 
 **`stare_local4`: the wall time at 4 CPUs.** A cost row of STARE's: the `stare` run with
 `--stages local` and `workers=4`, every case of the cohort in ONE job of 4 CPUs on the
