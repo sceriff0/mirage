@@ -30,8 +30,13 @@ PUBLIC = {
     "mcmicro": {**_NUCLEI, "raw_tiles": True},
     "phenocycler": {**_NUCLEI, "raw_tiles": True},
     "rashid": {**_NUCLEI, "raw_tiles": True},
+    # T32 (user 2026-10-19): generated locally (`regbench synth`), never downloaded; COST
+    # only -- the scorer never runs nuclei, pairs or landmarks on it (score.SYNTHETIC)
+    "synthetic": {"kind": "synthetic", "modality": "fluorescence"},
 }
 KINDS = ("landmarks", "tissue", "nuclei")
+# the kinds whose sets are scored for cost alone (no accuracy table of any kind)
+COST_ONLY_KINDS = ("synthetic",)
 
 
 def base_name(dataset):

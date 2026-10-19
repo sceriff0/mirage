@@ -105,7 +105,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import PUBLIC, base_name, methods, plugins, public_of, regimes
+from . import COST_ONLY_KINDS, PUBLIC, base_name, methods, plugins, public_of, regimes
 from .methods import ashlar as _ashlar
 from .methods import valis_mirage as _valis_mirage
 
@@ -516,6 +516,40 @@ NOT_ON = {
     for name, spec in PUBLIC.items()
     if spec["modality"] == "brightfield"
 }
+# T32 (user 2026-10-19): the synthetic scaling set (regbench.PUBLIC["synthetic"], cost
+# only) runs STARE's tier x stride cross with no prep and the three VALIS runs, nothing
+# else. These are existing RUNS entries: no run is added for it, so the cohort's and the
+# other datasets' run lists are what they were. Every other run is in the set's
+# excluded_runs.csv with SYNTHETIC_REASON (excluded_for).
+SYNTHETIC_RUNS = (
+    "stare",
+    "stare_s128_none",
+    "stare_s256_none",
+    "stare_medium",
+    "stare_medium_s128_none",
+    "stare_medium_s256_none",
+    "stare_low",
+    "stare_low_s128_none",
+    "stare_low_s256_none",
+    "valis_mirage",
+    "valis120",
+    "valis120_hires",
+)
+SYNTHETIC_REASON = (
+    "synthetic: STARE (tier x stride, no prep) and VALIS (mirage, 1.2.0 default, 1.2.0 "
+    "hires) only (user 2026-10-19)"
+)
+# the CPU cross on the synthetic set (T32): these runs at 4 and 8 CPUs, at these sizes
+SYNTHETIC_CROSS_RUNS = ("stare", "valis_mirage")
+SYNTHETIC_CROSS_SIZES = (4096, 32768)
+
+
+def is_cost_only_set(dataset):
+    """Whether ``dataset`` is a set scored for cost alone (``regbench.COST_ONLY_KINDS``)."""
+    spec = public_of(dataset)
+    return spec is not None and spec["kind"] in COST_ONLY_KINDS
+
+
 for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
     NOT_ON[_dataset] = tuple(NOT_ON.get(_dataset, ())) + tuple(
         (lambda r, n=_name: (r.label or r.method) == n, _why)
@@ -761,6 +795,9 @@ def check():
         for pick, _ in rules:
             if not any(pick(r) for r in RUNS):
                 raise ValueError(f"a rule of NOT_ON[{dataset!r}] matches no run")
+    missing = [n for n in SYNTHETIC_RUNS + SYNTHETIC_CROSS_RUNS if n not in names]
+    if missing:
+        raise ValueError(f"SYNTHETIC_RUNS names no run of RUNS: {missing}")
     for dataset in PUBLIC:
         kept = {run_name(r) for r in runs_for(dataset)}
         for run in runs_for(dataset):
@@ -777,6 +814,11 @@ def _in_regime(dataset, run):
     """Whether the run's ``regimes`` take this dataset's regime; the cohort (``dataset``
     None) is ``regimes.COHORT_REGIME``. A dataset with no regime
     (``regimes.DATASET_REGIME``) is a KeyError."""
+    if dataset is not None and is_cost_only_set(dataset):
+        # a cost-only set has no STARE preprocessing regime: it names its runs
+        # (SYNTHETIC_RUNS); every run is considered, so every other one is excluded
+        # with its reason rather than silently absent
+        return True
     reg = regimes.COHORT_REGIME if dataset is None else regimes.regime_of(dataset)
     return reg in run.regimes
 
@@ -787,6 +829,8 @@ def _not_on(dataset, run):
     spec = public_of(dataset)
     if spec is None:
         return None
+    if is_cost_only_set(dataset) and run_name(run) not in SYNTHETIC_RUNS:
+        return SYNTHETIC_REASON
     why = methods.input_rule(run.method, spec["modality"])
     if why is not None:
         return why

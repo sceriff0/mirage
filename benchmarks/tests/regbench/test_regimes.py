@@ -133,10 +133,14 @@ _MERGED = {"hyreco_a": "hyreco", "hyreco_b": "hyreco"}
 
 
 def test_the_remaining_datasets_regimes_are_those_of_e898d763():
-    from benchmarks.regbench import PUBLIC
+    from benchmarks.regbench import COST_ONLY_KINDS, PUBLIC
 
     now = {_MERGED.get(d, d) for d in _AT_E898D763}
-    assert now == set(PUBLIC) | {"multiplex"}
+    # T32: the synthetic scaling set is cost only and names its runs
+    # (variants.SYNTHETIC_RUNS): it has no STARE preprocessing regime
+    regimed = {d for d, s in PUBLIC.items() if s["kind"] not in COST_ONLY_KINDS}
+    assert now == regimed | {"multiplex"}
+    assert "synthetic" in PUBLIC and "synthetic" not in rg.DATASET_REGIME
     for old, regime in _AT_E898D763.items():
         dataset = _MERGED.get(old, old)
         assert rg.regime_of(dataset) == regime, dataset
