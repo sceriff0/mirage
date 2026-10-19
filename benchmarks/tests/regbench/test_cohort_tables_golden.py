@@ -1,6 +1,9 @@
 import hashlib
 import json
+import math
 from pathlib import Path
+
+import numpy as np
 
 from . import make_cohort_golden
 
@@ -136,3 +139,70 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
     }
     blob = json.dumps(back, sort_keys=True, separators=(",", ":")).encode()
     assert hashlib.sha256(blob).hexdigest() == T7_GOLDEN_SHA256
+
+
+# ── WT9 (T29): golden cells computed by hand, not by the scorer ───────────────────
+# The golden above only says the tables did not CHANGE. These cells say they are RIGHT:
+# each is recomputed here from the cohort's own generator (scored_cohort: the seeds, the
+# shift, the smooth error of each toy map) with nothing of regbench but those constants.
+_SEEDS = {"P1_r1": 1, "P1_r2": 2, "P2_r1": 3, "P3_r1": 4}
+_AMPLITUDE = {"stare": 0.4, "tiles": 1.5, "blocks": 2.5, "dropme": 0.1}
+_PIXEL_UM = 0.5
+
+
+def _shoelace_centroid(ring):
+    x, y = ring[:, 0], ring[:, 1]
+    x1, y1 = np.roll(x, -1), np.roll(y, -1)
+    c = x * y1 - x1 * y
+    a = c.sum() / 2.0
+    return np.array([((x + x1) * c).sum() / (6 * a), ((y + y1) * c).sum() / (6 * a)])
+
+
+def _hand_displacements_um(case_id, amplitude):
+    """Each moving outline (a square of half-side OUTLINE_HALF) carried by the toy map
+    vertex by vertex (xy + SHIFT + the smooth error), its centroid against its own
+    reference centre: one cell per pair (the cells are 40 px apart, the error < 3 px)."""
+    sc = make_cohort_golden.scored_cohort
+    ref, mov = sc._centres(_SEEDS[case_id])
+    h = sc.OUTLINE_HALF
+    out = []
+    for (rx, ry), (mx, my) in zip(ref, mov):
+        v = np.array([[mx - h, my - h], [mx + h, my - h], [mx + h, my + h], [mx - h, my + h]])
+        w = v + sc.SHIFT + sc._wobble(v, amplitude)
+        out.append(float(np.hypot(*(_shoelace_centroid(w) - [rx, ry]))) * _PIXEL_UM)
+    return np.array(out)
+
+
+def _golden_cell(case_id, method):
+    want = json.loads(GOLDEN.read_text())
+    (row,) = [r for r in want["cells"] if r["case_id"] == case_id
+              and r["method"] == method and r["set"] == "outlines"]
+    return row
+
+
+def test_hand_computed_golden_cells():
+    for case_id in _SEEDS:
+        for method, amp in _AMPLITUDE.items():
+            if method == "tiles" and case_id == "P3_r1":
+                continue  # never run there: an imputed row, below
+            row, d = _golden_cell(case_id, method), _hand_displacements_um(case_id, amp)
+            # every cell pairs its own: the pair fraction and the count ratio are 1
+            assert row["pair_fraction"] == 1.0 and row["count_ratio"] == 1.0
+            # within 1 um: the share of the hand displacements under 1 um
+            assert abs(row["within_1um"] - float((d < 1.0).mean())) < 1e-8, (case_id, method)
+            assert row["within_3um"] == 1.0
+            # the median and the 90th percentile, to 1e-4 px (the centroid of a ring
+            # warped at its vertices, not the warped centre: that differs by ~1e-3 um)
+            assert abs(row["displacement_um_p50"] - float(np.median(d))) < 5e-5, (case_id, method)
+            assert abs(row["displacement_um_p90"] - float(np.percentile(d, 90))) < 5e-5
+    # the unregistered pose: SHIFT is 15 px, beyond the 1.5 x sqrt(144 / pi) = 10.16 px
+    # gate and beyond 3 um (6 px): no pair, nothing within, no Dice; a failure (crash)
+    # and a run never made (ghost, tiles on P3_r1) are scored at that pose
+    gate = 1.5 * math.sqrt((2 * make_cohort_golden.scored_cohort.OUTLINE_HALF) ** 2 / math.pi)
+    assert float(np.hypot(*make_cohort_golden.scored_cohort.SHIFT)) - 3.0 > gate
+    for case_id in _SEEDS:
+        for method in ("initial", "crash", "ghost") + (("tiles",) if case_id == "P3_r1" else ()):
+            row = _golden_cell(case_id, method)
+            assert (row["pair_fraction"], row["within_1um"], row["within_3um"]) == (0.0, 0.0, 0.0)
+            assert row["dice_matched"] is None and row["displacement_um_p50"] is None
+            assert row["imputed_initial"] == ("False" if method == "initial" else "True")

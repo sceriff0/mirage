@@ -970,6 +970,47 @@ def test_anchored_moving_tiles_are_cut_where_the_anchor_puts_them(
     )
 
 
+def test_a_rotated_anchor_cuts_each_tile_where_its_own_centre_goes(tmp_path, pair, small):
+    """WT7 (T29): the anchor with a rotation. Moving tile ``k`` is cut, unrotated, around
+    where M0's inverse carries reference tile ``k``'s centre, so the offset differs from
+    tile to tile (a pure shift would move every tile alike). Computed here by hand, not by
+    ``tilemap.anchor_tile_origins``."""
+    cases = patient(tmp_path, pair, rounds=1)
+    out = tmp_path / "out"
+    t = math.radians(2.0)
+    m0 = np.array([[math.cos(t), -math.sin(t), 18.0],
+                   [math.sin(t), math.cos(t), -12.0], [0.0, 0.0, 1.0]])
+    stare_run(out, cases[0], m0)
+    done = methods.run_group("ashlar", cases, out, {"affine": "stare", "noise": "none"},
+                             label="affine_ashlar_clean", keep_work=True)
+    assert done == {"P1_r1": ["affine_ashlar_clean"]}
+    (mov_dir,) = out.rglob("cycle_1")
+    grid = json.loads((mov_dir / "grid.json").read_text())
+    nominal = np.asarray(am.nominal_origins([pair["reference"], pair["moving"]]), float)
+    half = SMALL_TILE / 2.0
+    want = []
+    for y, x in nominal:  # the reference tile's centre, back through M0 (x-y), rounded
+        cx, cy = x + half - 18.0, y + half + 12.0
+        mx = math.cos(t) * cx + math.sin(t) * cy
+        my = -math.sin(t) * cx + math.cos(t) * cy
+        want.append([round(my - half), round(mx - half)])
+    got = np.asarray(grid["true_positions_yx"])
+    np.testing.assert_array_equal(got, want)
+    shifts = got - nominal
+    assert len({tuple(d) for d in shifts.tolist()}) > 1  # the rotation moves tiles apart
+    # a tile wholly inside the moving slide holds exactly those pixels, unrotated
+    mov = tifffile.imread(pair["moving"])
+    h, w = mov.shape[-2:]
+    inside = [k for k, (y, x) in enumerate(got)
+              if 0 <= y and 0 <= x and y + SMALL_TILE <= h and x + SMALL_TILE <= w]
+    assert inside
+    names = sorted(p.name for p in mov_dir.glob("r*_c*.tif"))
+    for k in inside[:2]:
+        y, x = (int(v) for v in got[k])
+        np.testing.assert_array_equal(
+            tifffile.imread(mov_dir / names[k]), mov[:, y:y + SMALL_TILE, x:x + SMALL_TILE])
+
+
 def test_the_anchored_row_passes_its_selfcheck(tmp_path, small):
     """The same two comparisons with moving tiles cut off the grid."""
     h, w = SMALL

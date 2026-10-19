@@ -316,20 +316,47 @@ def test_palom_points_follow_its_written_image(tmp_path):
         assert 0 < seams["masked_frac"] <= 0.05
 
 
+def equal_shift_outcome(constrain):
+    """PALOM's filter on a purely rigid map (every block the same shift), judged against
+    the two outcomes the adapter is built for (``methods.palom``'s docstring): it raises
+    ``ValueError`` (no block under the threshold: "Found array with 0 sample(s)"), which
+    fails the ``palom`` row and keeps ``palom_affine``; or it returns the shifts
+    unchanged. Anything else fails (WT8, T29): another exception, or shifts it moved."""
+    shifts = np.full((80, 2), 3.0, dtype=np.float32)
+    try:
+        kept = constrain(shifts.copy(), (8, 10))
+    except ValueError as exc:
+        assert "0 sample" in str(exc), f"PALOM raised another ValueError: {exc}"
+        return f"raised ValueError: {exc}"
+    kept = np.asarray(kept, dtype=float).reshape(-1, 2)
+    assert kept.shape == shifts.shape and np.allclose(kept, 3.0), (
+        "PALOM moved the shifts of a purely rigid map")
+    return "returned the shifts unchanged"
+
+
 def test_palom_on_equal_shifts_everywhere():
-    """What PALOM's filter does when every block has the same shift (a purely
-    rigid map; expected to raise from the reading, never run). Reported, not
-    judged: the row is published as it comes out either way."""
+    """What PALOM's filter does when every block has the same shift, against what the
+    adapter assumes (``equal_shift_outcome``); the outcome is also reported."""
     package, _ = need_palom()
     import warnings
 
-    shifts = np.full((80, 2), 3.0, dtype=np.float32)
-    constrain = package.align.constrain_block_shifts
-    try:
-        kept = constrain(shifts, (8, 10))
-        outcome = f"returned; all shifts still equal: {bool((kept == 3.0).all())}"
-    except Exception as exc:
-        outcome = f"raised {type(exc).__name__}: {exc}"
+    outcome = equal_shift_outcome(package.align.constrain_block_shifts)
     warnings.warn(
         f"PALOM constrain_block_shifts on equal shifts {outcome}", stacklevel=1
     )
+
+
+def test_the_equal_shift_judge_can_fail():
+    """WT8: the judge above runs here without PALOM, on stand-ins for each outcome."""
+
+    def raises_empty(s, g):
+        raise ValueError("Found array with 0 sample(s) (shape=(0, 1))")
+
+    assert equal_shift_outcome(raises_empty).startswith("raised ValueError")
+    assert equal_shift_outcome(lambda s, g: s) == "returned the shifts unchanged"
+    with pytest.raises(AssertionError, match="moved the shifts"):
+        equal_shift_outcome(lambda s, g: s * 0.0)
+    with pytest.raises(AssertionError, match="another ValueError"):
+        equal_shift_outcome(lambda s, g: (_ for _ in ()).throw(ValueError("bad shape")))
+    with pytest.raises(RuntimeError):
+        equal_shift_outcome(lambda s, g: (_ for _ in ()).throw(RuntimeError("other")))

@@ -60,6 +60,52 @@ def test_both_frames_give_the_same_score_for_a_rigid_error():
         assert math.isclose(in_ref_frame[key], in_mov_frame[key], abs_tol=1e-9)
 
 
+def _square_rings(centres, half=5.0):
+    return [np.array([[x - half, y - half], [x + half, y - half],
+                      [x + half, y + half], [x - half, y + half]], dtype=float)
+            for x, y in centres]
+
+
+def _similar(rings, theta, scale, shift):
+    """The rings under x -> scale * R(theta) x + shift."""
+    c, s = math.cos(theta), math.sin(theta)
+    a = scale * np.array([[c, -s], [s, c]])
+    return cells.from_rings([r @ a.T + np.asarray(shift, float) for r in rings])
+
+
+def test_both_frames_agree_when_the_slides_differ_by_a_rotation_and_a_scale(
+    pixel_size=0.5, scale=1.25,
+):
+    """WT2 (T29): the moving slide is the reference rotated by 20 degrees, scaled by 1.25
+    (its pixels are 1/1.25 of the reference's in size) and shifted; the method's map
+    is that similarity after a residual error ``err`` (reference pixels). The reference
+    frame pairs ``(ref, ref - err)``; the moving frame ``(S(ref + err), S(ref))`` at the
+    moving slide's pixel size. Every score in micrometres, and every count, agrees."""
+    theta, shift = math.radians(20.0), (120.0, -35.0)
+    rings = _square_rings(GRID)
+    err = np.array([3.0, -2.0])
+    ref = cells.from_rings(rings)
+    mov_native = _similar(rings, theta, scale, shift)
+    in_ref_frame = pairs.record(ref, mov_native, ref,
+                                cells.from_rings([r - err for r in rings]), pixel_size)
+    in_mov_frame = pairs.record(ref, mov_native,
+                                _similar([r + err for r in rings], theta, scale, shift),
+                                mov_native, pixel_size / scale)
+    want = float(np.hypot(*err)) * pixel_size
+    assert math.isclose(in_ref_frame["displacement_um_p50"], want, rel_tol=1e-6)
+    for key in ("pair_fraction", "displacement_um_p50", "within_2um", "n_pairs"):
+        assert math.isclose(in_ref_frame[key], in_mov_frame[key], rel_tol=1e-6,
+                            abs_tol=1e-9), key
+    # Dice is RASTERISED (cell_pairs.pair_iou, 2x supersampling): exact only to the
+    # raster. A 10 px square shifted by (3, -2) overlaps 7 x 8 of 100 px: Dice 0.56 in
+    # both frames; measured 0.578 axis-aligned (edges on the sample grid) and 0.561
+    # rotated. The frames agree to that raster error and no better.
+    exact = 2.0 * 7 * 8 / 200
+    for rec in (in_ref_frame, in_mov_frame):
+        assert abs(rec["dice_matched"] - exact) < 0.025
+    assert abs(in_ref_frame["dice_matched"] - in_mov_frame["dice_matched"]) < 0.025
+
+
 def test_null_is_chance_level_on_a_sparse_grid():
     ref = squares(GRID)
     rec = pairs.record(ref, ref, ref, ref, pixel_size_um=0.5)
@@ -351,6 +397,35 @@ def test_above_the_threshold_the_two_pairings_differ_and_the_record_says_so():
     assert got["displacement_um_p50_exact"] > got["displacement_um_p50"]
     assert 0 < got["dice_matched_exact"] < got["dice_matched"]
     assert "n_fallback_cells" not in pairs.score(ref, mov, radius, 0.5, "mutual_nn")
+
+
+def test_a_lymphoid_aggregate_in_tumour_reaches_the_fallback_at_the_records_own_gate():
+    """WT3 (T29): the fallback at a density the cohort has, with the gate the record
+    itself takes from the cells (``gate_px``: 1.5 x the median nuclear radius), not a
+    radius chosen to make a large component. Tumour nuclei (radius ~13.5 px, a 30 px pitch;
+    the majority, so they set the median) around a lymphoid aggregate of small nuclei on a
+    12 px pitch: the gate (~20 px) spans several of the small ones, so the aggregate is ONE
+    component of more than 5,000 cells. The pipeline pairs it by mutual nearest neighbour;
+    the exact assignment pairs every cell of it; the headline stays the pipeline's."""
+    rng = np.random.default_rng(1)
+    sa, sb = tissue_centroids(55, seed=2, pitch=12.0, noise=1.8)  # the aggregate
+    g = np.stack(np.meshgrid(np.arange(60), np.arange(60)), -1).reshape(-1, 2) * 30.0 + 800
+    la = g + rng.uniform(-8, 8, g.shape)
+    lb = la + rng.normal(0, 3.0, la.shape)
+    assert len(la) > len(sa)  # the tumour's nuclei are the median
+    ref = cells.from_rings(_square_rings(sa, 5.0) + _square_rings(la, 12.0))
+    mov = cells.from_rings(_square_rings(sb, 5.0) + _square_rings(lb, 12.0))
+    radius, cell_radius = pairs.gate_px(ref, mov)
+    assert 2.0 * 12.0 > radius > 1.5 * 12.0 and cell_radius > 12.0
+    got = pairs.score(ref, mov, radius, 0.325, exact=True)
+    assert got["largest_component_cells"] > pairs.cp.DEFAULT_MAX_COMPONENT_CELLS
+    assert got["n_fallback_cells"] == got["largest_component_cells"]
+    assert got["exact_status"] == pairs.EXACT_SOLVED.format(n=1)
+    assert 0.3 < got["fallback_frac"] < 0.6  # the aggregate's share of every cell
+    # the exact assignment pairs more; the headline is the pipeline's, never replaced
+    assert got["n_pairs_exact"] > got["n_pairs"]
+    assert got["pair_fraction_exact"] > got["pair_fraction"] > 0.9
+    assert got["dice_matched_exact"] != got["dice_matched"]
 
 
 def test_a_component_above_the_bound_is_blank_with_the_reason(monkeypatch):
