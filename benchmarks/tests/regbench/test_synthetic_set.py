@@ -484,3 +484,98 @@ def test_the_fit_slope_recovers_a_known_power_law_end_to_end(tmp_path):
     assert fit["fit_ok"] is True and fit["slope"] == pytest.approx(0.8)
     assert fit["n_sizes_used"] == 5
     assert math.isclose(fit["fit_hi_gpx"], 10 * 65536**2 / 1e9)
+
+
+# ---- the figures --------------------------------------------------------------------------
+
+from benchmarks.regbench.paper import cost_plots  # noqa: E402
+from benchmarks.regbench.paper import plots as P  # noqa: E402
+from benchmarks.tests.regbench.test_cost_figures import paper  # noqa: E402,F401
+
+SYNTH_FIGS = ("figS_synth_cost_scaling", "figS_synth_cross_scaling", "figS_synth_vs_cohort")
+
+
+def test_the_synthetic_figures_are_registered_in_plots_and_needs():
+    for name in SYNTH_FIGS:
+        assert P.PLOTS[name] is not None and name in P.NEEDS
+        assert all(k.startswith("synthetic/") for k in P.NEEDS[name])
+
+
+def test_the_synthetic_figures_draw_from_the_sets_tables(built, scored, tmp_path):
+    _, out, _ = built
+    T.write_all(out, "synthetic")
+    figs = tmp_path / "figs"
+    # from the scorer's tables/synthetic/ beside paper/, and from paper/synthetic/
+    for where in (Path(out) / "paper", Path(out) / "paper" / "synthetic"):
+        for name in SYNTH_FIGS[:2]:
+            res = P.draw(name, where, figs)
+            assert not res.get("placeholder"), (where, name)
+            assert res["n"] and Path(res["files"][0]).is_file()
+    # no cohort cost yet: the extrapolation has no measured value, a placeholder
+    res = P.draw("figS_synth_vs_cohort", Path(out) / "paper", figs)
+    assert res.get("placeholder")
+    # with the cohort's cost points, drawn: fitted against measured, y = x
+    _cohort_points(out, [(0.0005, 1e-6), (0.001, 2e-6), (0.004, 9e-6)])
+    T.write_all(out, "synthetic")
+    res = P.draw("figS_synth_vs_cohort", Path(out) / "paper", figs)
+    assert not res.get("placeholder")
+    src = _read(next(f for f in res["files"] if f.endswith("_source_data.csv")))
+    assert {r["row"] for r in src} == {"stare"} and {r["at"] for r in src} == set(S.AT)
+    (Path(out) / "paper" / "cost_points.csv").unlink()
+    T.write_all(out, "synthetic")
+
+
+def test_without_the_set_every_synthetic_figure_is_a_placeholder_naming_it(tmp_path):
+    for name in SYNTH_FIGS:
+        res = P.draw(name, tmp_path, tmp_path / "f")
+        assert res.get("placeholder"), name
+        src = _read(next(f for f in res["files"] if f.endswith("_source_data.csv")))
+        assert any("synthetic" in r["expected_path"] for r in src), name
+
+
+def _synthetic_cost_rows(peaks):
+    return [
+        schema.empty_row(
+            "synthetic_cost", source="regbench", dataset="synthetic", family=fam, row=row,
+            run=row, patient_id=synth.patient_of(size), size_px=size, status="complete",
+            input_gpx=10 * size * size / 1e9, **{key: value},
+        )
+        for row, fam, key, size, value in peaks
+    ]
+
+
+def test_fig2c_overlays_the_synthetic_peaks_and_draws_as_before_without_them(paper):  # noqa: F811
+    # fig2c is a placeholder without a cost_fits row (as test_cost_figures writes one)
+    schema.write(paper / "cost_fits.csv", "cost_fits", [schema.empty_row(
+        "cost_fits", source="regbench", dataset="multiplex", family="valis_mirage",
+        row="valis_a", target="cpu_h_used", predictor="input_gpx", fit_ok=False)])
+    before = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
+    src_before = _read(next(f for f in before["files"] if f.endswith("_source_data.csv")))
+    assert not any(r["row"].startswith("synthetic") for r in src_before)
+    d = paper / "synthetic"
+    d.mkdir()
+    schema.write(d / "synthetic_cost.csv", "synthetic_cost", _synthetic_cost_rows([
+        ("stare", "stare", "peak_largest_job_gb", 4096, 1.5),
+        ("stare", "stare", "peak_largest_job_gb", 8192, 2.5),
+        ("valis_mirage", "valis_mirage", "peak_rss_gb", 4096, 6.0),
+        ("valis_mirage", "valis_mirage", "peak_rss_gb", 8192, 20.0),
+    ]))
+    res = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
+    src = _read(next(f for f in res["files"] if f.endswith("_source_data.csv")))
+    synth_rows = [r for r in src if r["row"].startswith("synthetic")]
+    assert {(r["row"], r["unit_id"]) for r in synth_rows} == {
+        ("synthetic:stare:peak_largest_job_gb", "s04096"),
+        ("synthetic:stare:peak_largest_job_gb", "s08192"),
+        ("synthetic:valis_mirage:peak_rss_gb", "s04096"),
+        ("synthetic:valis_mirage:peak_rss_gb", "s08192"),
+    }
+    assert {r["panel"] for r in synth_rows} == {"patient:peak_rss_gb"}
+    # the cohort's own points are untouched by the overlay
+    assert [r for r in src if not r["row"].startswith("synthetic")] == src_before
+    # and without the folder, as before
+    for f in d.iterdir():
+        f.unlink()
+    d.rmdir()
+    again = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
+    assert _read(next(f for f in again["files"] if f.endswith("_source_data.csv"))) == src_before
+    assert again["legend"] == before["legend"] and again["n"] == before["n"]

@@ -31,6 +31,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.lines  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import matplotlib.ticker  # noqa: E402
 import numpy as np  # noqa: E402
@@ -677,6 +678,254 @@ def public_landmarks_best(paper_dir, fig_dir):
     return _result(files, n)
 
 
+# ── the synthetic scaling set (T32, supplementary, cost only) ────────────────
+SYNTH = "synthetic"
+SYNTH_LOG = matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}")
+SYNTH_QUANTITIES = (
+    ("cpu_h_used", "CPU-hours"),
+    ("wall_s", "Wall time at 4 CPUs (s)"),
+    ("peak_rss_gb", "Peak memory (GB)"),
+    ("gb_h_used", "GB-hours"),
+)
+STRIDE_STYLE = {"64": "-", "128": "--", "256": ":"}
+
+
+def synthetic_dir(paper_dir):
+    """The folder of the synthetic set's tables seen from ``paper_dir``: itself (a
+    ``paper/synthetic/`` folder), its ``synthetic/`` (a ``paper/`` folder or a
+    collection), or the scorer's ``tables/synthetic/`` beside a ``paper/`` folder; None
+    when there is none (the figures that read it are placeholders, Fig. 2c draws as
+    before)."""
+    base = Path(paper_dir)
+    for d in (base, base / SYNTH, base.parent / "tables" / SYNTH):
+        if (d / "synthetic_cost.csv").is_file():
+            return d
+    return None
+
+
+def _synth_path(paper_dir, fname):
+    """``NEEDS``' path of a ``synthetic/<table>.csv`` entry (``synthetic_dir``)."""
+    name = fname.split("/", 1)[1]
+    d = synthetic_dir(paper_dir)
+    return (d if d is not None else Path(paper_dir) / SYNTH) / name
+
+
+def _synth_need(paper_dir, *tables_):
+    got, missing = {}, []
+    for t in tables_:
+        path = _synth_path(paper_dir, f"{SYNTH}/{t}.csv")
+        rows = _read(path)
+        if rows is None:
+            missing.append((t, path))
+        else:
+            got[t] = rows
+    return got, missing
+
+
+def _synth_rows(cost):
+    """``{row: [(gpx, size, point)]}`` of the complete sizes of each run (not excluded)."""
+    by = {}
+    for r in cost:
+        if r.get("excluded_reason") or r.get("status") != "complete":
+            continue
+        by.setdefault(r["row"], []).append((_num(r.get("input_gpx")), r.get("size_px"), r))
+    return {k: sorted(v, key=lambda t: t[0]) for k, v in by.items()}
+
+
+def _synth_axis(ax, ylabel):
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.xaxis.set_major_formatter(SYNTH_LOG)
+    ax.yaxis.set_major_formatter(SYNTH_LOG)
+    ax.set_xlabel("Moving image per patient (gigapixels, log10)")
+    ax.set_ylabel(f"{ylabel} (log10)")
+
+
+def _synth_caveat(fig, cost):
+    from .. import synth
+
+    n = len({r.get("size_px") for r in cost if r.get("size_px")})
+    fig.text(0.0, 0.0, f"Synthetic set, {n} size(s), one repeat: {synth.CAVEAT}",
+             fontsize=ps.TICK_PT - 1, va="bottom", ha="left", wrap=True)
+
+
+def _slopes(scaling):
+    return {(r["row"], r["quantity"]): r for r in scaling or []
+            if not r.get("excluded_reason")}
+
+
+TIER_MARKER = {"high": "o", "medium": "s", "low": "^"}
+
+
+def _run_style(row):
+    """``(family, line style, marker, label)`` of a synthetic row: the family's locked
+    colour (eight at most: never a colour per run); STARE's tier is the marker and its
+    stride the line, the VALIS 1.2.0 hires run is dashed."""
+    from .. import variants
+
+    fam = variants.family(row) or row
+    try:
+        run = variants.run_of(row)
+    except KeyError:
+        run = None
+    if run is not None and run.method == "stare":
+        tier = run.opts.get("tier", "high")
+        stride = str(run.opts.get("stride", "64"))
+        return fam, STRIDE_STYLE.get(stride, "-"), TIER_MARKER.get(tier, "o"), \
+            f"STARE {tier} s{stride}"
+    hires = run is not None and run.opts.get("hires")
+    return fam, "--" if hires else "-", "D", row
+
+
+def figS_synth_cost_scaling(paper_dir, fig_dir):
+    """CPU-hours, wall at 4 CPUs, peak memory and GB-hours against gigapixels, log-log,
+    one line per run of the synthetic set (its complete sizes), the fitted slope in the
+    legend."""
+    name = "figS_synth_cost_scaling"
+    got, missing = _synth_need(paper_dir, "synthetic_cost", "synthetic_scaling")
+    if missing:
+        return _placeholder(fig_dir, name, missing)
+    cost, fits = got["synthetic_cost"], _slopes(got["synthetic_scaling"])
+    by = _synth_rows(cost)
+    _style()
+    colors = _colors(fig_dir, extra=sorted({_run_style(r)[0] for r in by}))
+    fig, axes = ps.figure(width="double", nrows=2, ncols=2, aspect=0.95)
+    axes = np.asarray(axes).reshape(-1)
+    data, n = [], {}
+    for ax, (key, ylab) in zip(axes, SYNTH_QUANTITIES):
+        for row, pts in by.items():
+            good = [(x, _num(p.get(key)), size) for x, size, p in pts
+                    if math.isfinite(x) and _fin(p.get(key)) and _num(p.get(key)) > 0]
+            if not good:
+                continue
+            f = fits.get((row, key)) or {}
+            slope = f"slope {_num(f['slope']):.2f}" if _flag(f.get("fit_ok")) else "no fit"
+            fam, ls, marker, label = _run_style(row)
+            ax.plot([g[0] for g in good], [g[1] for g in good], marker=marker, ms=3, lw=0.8,
+                    ls=ls, color=colors[fam], label=f"{label} ({slope})")
+            n[f"{key}:{row}"] = len(good)
+            data += [{"quantity": key, "row": row, "size_px": s, "input_gpx": x, "value": y,
+                      "slope": f.get("slope"), "n_sizes_used": f.get("n_sizes_used")}
+                     for x, y, s in good]
+        _synth_axis(ax, ylab)
+        ax.set_title(ylab, fontsize=ps.TICK_PT)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(fontsize=ps.TICK_PT - 1, ncol=1)
+    ps.panel_labels(list(axes))
+    _synth_caveat(fig, cost)
+    files = _save(fig, fig_dir, name, _Table(
+        ["quantity", "row", "size_px", "input_gpx", "value", "slope", "n_sizes_used"], data))
+    return _result(files, n)
+
+
+QUANTITY_MARKER = {"cpu_h_used": "o", "wall_s": "s", "peak_rss_gb": "^", "gb_h_used": "D"}
+
+
+def figS_synth_cross_scaling(paper_dir, fig_dir):
+    """STARE's tier x stride cross and the three VALIS runs on the same axes: each run's
+    fitted exponent (``synthetic_scaling``: the quantity grows as gigapixels^slope) with
+    its 95% interval, one marker per quantity; a run without a fit is named, not drawn."""
+    from .. import variants
+
+    name = "figS_synth_cross_scaling"
+    got, missing = _synth_need(paper_dir, "synthetic_scaling")
+    if missing:
+        return _placeholder(fig_dir, name, missing)
+    scaling = [r for r in got["synthetic_scaling"] if not r.get("excluded_reason")]
+    order = [r for r in variants.SYNTHETIC_RUNS]
+    finals = tables.terminal_rows("synthetic")
+    rows = [finals.get(r, r) for r in order]
+    rows += sorted({r["row"] for r in scaling} - set(rows))
+    _style()
+    colors = _colors(fig_dir, extra=sorted({_run_style(r)[0] for r in rows}))
+    fig, (ax,) = ps.figure(width="double", aspect=0.45)
+    data, n, labels = [], {}, []
+    keys = [k for k, _ in SYNTH_QUANTITIES]
+    for i, row in enumerate(rows):
+        fam, _, _, label = _run_style(row)
+        drawn = 0
+        for j, key in enumerate(keys):
+            f = next((r for r in scaling if r["row"] == row and r["quantity"] == key), None)
+            if f is None or not _flag(f.get("fit_ok")) or not _fin(f.get("slope")):
+                continue
+            x = i + (j - 1.5) * 0.15
+            y = _num(f["slope"])
+            lo, hi = _num(f.get("slope_ci_low")), _num(f.get("slope_ci_high"))
+            if math.isfinite(lo) and math.isfinite(hi):
+                ax.plot([x, x], [lo, hi], color=colors[fam], lw=0.7)
+            ax.scatter([x], [y], s=14, marker=QUANTITY_MARKER[key], color=colors[fam],
+                       label=key if i == 0 or key not in n else None)
+            n[key] = n.get(key, 0) + 1
+            drawn += 1
+            data.append({"row": row, "quantity": key, "slope": y, "slope_ci_low": f.get(
+                "slope_ci_low"), "slope_ci_high": f.get("slope_ci_high"),
+                "n_sizes_used": f.get("n_sizes_used")})
+        labels.append(label if drawn else f"{label}\n(no fit)")
+    ax.set_xticks(range(len(rows)))
+    ax.set_xticklabels(labels, rotation=90)
+    ax.axhline(1.0, color="0.6", lw=0.6, ls="--")
+    ax.set_ylabel("Fitted exponent on gigapixels (95% interval)")
+    handles = [matplotlib.lines.Line2D([], [], ls="", marker=QUANTITY_MARKER[k], color="0.3",
+                                       label=lab) for k, lab in SYNTH_QUANTITIES]
+    ax.legend(handles=handles, fontsize=ps.TICK_PT - 1)
+    ps.panel_labels([ax])
+    _synth_caveat(fig, scaling)
+    files = _save(fig, fig_dir, name, _Table(
+        ["row", "quantity", "slope", "slope_ci_low", "slope_ci_high", "n_sizes_used"], data))
+    return _result(files, n)
+
+
+def figS_synth_vs_cohort(paper_dir, fig_dir):
+    """The synthetic fit at the cohort's median and largest patient against the cohort's
+    measured cost of the same row, log-log, y = x drawn; a hollow marker is a fit used
+    outside the sizes it was made on (``extrapolated``)."""
+    name = "figS_synth_vs_cohort"
+    got, missing = _synth_need(paper_dir, "synthetic_extrapolation")
+    if missing:
+        return _placeholder(fig_dir, name, missing)
+    rows = [r for r in got["synthetic_extrapolation"] if not r.get("excluded_reason")
+            and _fin(r.get("fitted")) and _fin(r.get("measured_cohort"))
+            and _num(r["fitted"]) > 0 and _num(r["measured_cohort"]) > 0]
+    if not rows:
+        return _placeholder(fig_dir, name, [(
+            "synthetic_extrapolation: no row with both a fitted and a measured cohort value "
+            "(a fit of >= 3 sizes, and the cohort's cost tables)",
+            _synth_path(paper_dir, f"{SYNTH}/synthetic_extrapolation.csv"))])
+    _style()
+    colors = _colors(fig_dir, extra=sorted({_run_style(r["row"])[0] for r in rows}))
+    fig, axes = ps.figure(width="double", nrows=2, ncols=2, aspect=0.95)
+    axes = np.asarray(axes).reshape(-1)
+    data, n = [], {}
+    for ax, (key, ylab) in zip(axes, SYNTH_QUANTITIES):
+        mine = [r for r in rows if r["quantity"] == key]
+        vals = []
+        for r in mine:
+            x, y = _num(r["measured_cohort"]), _num(r["fitted"])
+            hollow = _flag(r.get("extrapolated"))
+            ax.scatter([x], [y], s=16, marker="o" if r["at"] == "cohort_median" else "^",
+                       facecolor="none" if hollow else colors[_run_style(r["row"])[0]],
+                       edgecolor=colors[_run_style(r["row"])[0]], linewidths=0.7,
+                       label=f"{_run_style(r['row'])[3]} ({r['at'].replace('cohort_', '')})")
+            vals += [x, y]
+            data.append({"quantity": key, "row": r["row"], "at": r["at"], "measured": x,
+                         "fitted": y, "extrapolated": hollow, "at_gpx": r.get("at_gpx")})
+        if vals:
+            lo, hi = min(vals) / 1.5, max(vals) * 1.5
+            ax.plot([lo, hi], [lo, hi], color="0.5", lw=0.6, ls="--", label="y = x")
+            ax.legend(fontsize=ps.TICK_PT - 1)
+        n[key] = len(mine)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(f"Cohort, measured: {ylab} (log10)")
+        ax.set_ylabel(f"Synthetic fit: {ylab} (log10)")
+    ps.panel_labels(list(axes))
+    fig.text(0.0, 0.0, "circle: the cohort's median patient; triangle: its largest; hollow: "
+             "extrapolated outside the synthetic sizes", fontsize=ps.TICK_PT - 1)
+    files = _save(fig, fig_dir, name, _Table(
+        ["quantity", "row", "at", "measured", "fitted", "extrapolated", "at_gpx"], data))
+    return _result(files, n)
+
+
 PLOTS = {
     "fig3b_dice_best": fig3b_dice_best,
     "fig3b_dice_best_nuclei": fig3b_dice_best_nuclei,
@@ -692,6 +941,10 @@ PLOTS = {
     "figS_pipeline_cost_fits": figS_pipeline_cost_fits,
     "public_dice_best": public_dice_best,
     "public_landmarks_best": public_landmarks_best,
+    # T32: the synthetic scaling set (supplementary, cost only)
+    "figS_synth_cost_scaling": figS_synth_cost_scaling,
+    "figS_synth_cross_scaling": figS_synth_cross_scaling,
+    "figS_synth_vs_cohort": figS_synth_vs_cohort,
 }
 
 
@@ -716,6 +969,11 @@ NEEDS = {
     "figS_cpu_scaling": {"cpu_scaling.csv": ("wall_s",)},
     "figS_end_to_end": {"end_to_end.csv": ("estimate_s_med",)},
     "figS_pipeline_cost_fits": {"pipeline_cost_fits.csv": ("slope",)},
+    # a `synthetic/` table is read from the set's folder (synthetic_dir)
+    "figS_synth_cost_scaling": {"synthetic/synthetic_cost.csv": ("cpu_h_used",),
+                                "synthetic/synthetic_scaling.csv": ("quantity",)},
+    "figS_synth_cross_scaling": {"synthetic/synthetic_scaling.csv": ("slope",)},
+    "figS_synth_vs_cohort": {"synthetic/synthetic_extrapolation.csv": ("fitted",)},
 }
 
 
@@ -724,9 +982,10 @@ def _not_drawable(paper_dir, name):
     are all NA; ``[]`` when the figure can be drawn."""
     missing = []
     for fname, cols in NEEDS.get(name, {}).items():
-        path = Path(paper_dir) / fname
+        path = (_synth_path(paper_dir, fname) if fname.startswith(f"{SYNTH}/")
+                else Path(paper_dir) / fname)
         rows = _read(path)
-        table = fname.removesuffix(".csv")
+        table = fname.removesuffix(".csv").split("/")[-1]
         if rows is None:
             missing.append((table, path))
         elif all(r.get(c) is None for r in rows for c in cols):

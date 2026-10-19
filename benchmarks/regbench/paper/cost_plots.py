@@ -453,6 +453,41 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
 
 
 # ── Fig. 2c: scaling with the input ──────────────────────────────────────────
+# T32: what fig. 2c reads of the synthetic scaling set, against its size: STARE's
+# per-task peak (its largest stage job) and the pipeline VALIS's per-patient peak
+SYNTH_PEAKS = (
+    ("stare", "peak_largest_job_gb", "STARE per-task peak (largest stage job)", "D"),
+    ("valis_mirage", "peak_rss_gb", "VALIS (MIRAGE) per-patient peak", "s"),
+)
+
+
+def _synthetic_peaks(paper_dir):
+    """``[(row, key, what, marker, family, [(gpx, value, row)], [(row, why)])]`` of the
+    synthetic set's ``synthetic_cost`` (``plots.synthetic_dir``); ``[]`` when the set has
+    no tables there, so fig. 2c draws as it did without it."""
+    d = P.synthetic_dir(paper_dir)
+    if d is None:
+        return []
+    rows = P._read(d / "synthetic_cost.csv") or []
+    out = []
+    for row, key, what, marker in SYNTH_PEAKS:
+        pts, gone = [], []
+        for r in rows:
+            if r.get("row") != row or r.get("excluded_reason"):
+                continue
+            x, y = P._num(r.get("input_gpx")), P._num(r.get(key))
+            if r.get("status") != costs.COMPLETE:
+                gone.append(({**r, "unit_id": r.get("patient_id")},
+                             f"synthetic {row}: status {r.get('status')}"))
+            elif math.isfinite(x) and math.isfinite(y) and x > 0 and y > 0:
+                pts.append((x, y, r))
+            else:
+                gone.append(({**r, "unit_id": r.get("patient_id")},
+                             f"synthetic {row}: no {key}, or <= 0 on a log axis"))
+        out.append((row, key, what, marker, variants.family(row) or row, pts, gone))
+    return out
+
+
 def fig2c_cost_vs_input(paper_dir, fig_dir):
     name = "fig2c_cost_vs_input"
     got, missing = P._need(paper_dir, best="method_best.csv", cost="cost_points.csv",
@@ -465,6 +500,7 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
     fig, axes = ps.figure(width="double", nrows=2, ncols=2, aspect=0.95)
     axes = np.asarray(axes).reshape(2, 2)
     rows = _rows_to_draw(cost, got["best"])
+    synth = _synthetic_peaks(paper_dir)  # [] without the synthetic set: drawn as before
     # R11: on the CPU-hours facets a GPU row is its CPU twin (or left out, counted)
     cpu_rows, gpu_left = _cpu_entries(cost, got["best"])
     data, losses, n, legend = [], [], {}, []
@@ -525,6 +561,24 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
                             data.append({"panel": f"{unit}:{key}", "unit": unit, "family": fam,
                                          "row": row, "row_kind": kind, "unit_id": None,
                                          "input_gpx": a, "value": b, "fit": True})
+            if unit == "patient" and key == "peak_rss_gb" and synth:
+                # T32: the synthetic set's peaks against size, the cohort's points above
+                for row, skey, what, marker, fam, pts, gone in synth:
+                    # a size not drawn is in the legend's count and in the set's own
+                    # synthetic_cost (its status), never in the cohort's losses
+                    if not pts:
+                        continue
+                    ax.scatter([x for x, _, _ in pts], [y for _, y, _ in pts], s=12,
+                               marker=marker, facecolor="none", edgecolor=colors[fam],
+                               linewidths=0.8,
+                               label=f"synthetic: {what} [{row}] n={len(pts)}/"
+                               f"{len(pts) + len(gone)} size(s)")
+                    n[f"{unit}:{key}:synthetic:{row}"] = len(pts)
+                    for x, y, p in pts:
+                        data.append({"panel": f"{unit}:{key}", "unit": unit, "family": fam,
+                                     "row": f"synthetic:{row}:{skey}",
+                                     "row_kind": "synthetic", "unit_id": p.get("patient_id"),
+                                     "input_gpx": x, "value": y, "fit": False})
             ax.set_xscale("log")
             ax.set_yscale("log")
             ax.xaxis.set_major_formatter(LOG_FMT)
