@@ -167,6 +167,13 @@ CAUSES = {
         "in detail): its numbers are NA, the headline row is kept (flagged) and the "
         "next scoring tries again",
     ),
+    "full_lsa_killed": (
+        INFRA,
+        "full_pairs",
+        "the process was killed during the full-LSA solve of a pair record (memory, "
+        "walltime: it left its in-flight marker and no result): the solve is not tried "
+        "again, its numbers are NA and the headline row is kept (flagged)",
+    ),
     "tissue_missing": (
         INFRA,
         "score",

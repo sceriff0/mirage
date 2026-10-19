@@ -1016,7 +1016,10 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   gate. Its cost is recorded, never capped: `full_lsa_seconds`,
   `full_lsa_largest_component_cells`, `full_lsa_work` (in the cap's unit). No timeout,
   no approximation: a result the solver does not certify is NA (`not_certified`), a
-  solve that raises is NA (`failed`, tried again by the next scoring), and either is a
+  solve that raises is NA (`failed`, tried again by the next scoring), a solve that
+  killed its process (OOM killer, walltime: its `full_pairs/<key>.started` marker is
+  left with no record) is NA (`interrupted`, never tried again, or the same kill would
+  take the case's headline rows with it; `fresh` tries again), and each is a
   `losses.csv` row of stage `full_pairs` with its headline row kept. `full_mnn` is
   mutual nearest neighbour on the whole case: the `*_mnn` columns, never recomputed.
   The registered placement only (the null has none). The summaries carry, beside every
@@ -1788,6 +1791,7 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `table_unreadable` | infrastructure | score | a per-stage table is there and cannot be read: the losses it holds are not rows here (its path is in source) |
 | `full_lsa_not_certified` | infrastructure | full_pairs | the full LSA (no fallback, no cap) of a pair record has fewer pairs than the candidates allow: its numbers are NA, the headline row is kept (flagged) |
 | `full_lsa_failed` | infrastructure | full_pairs | the full-LSA solve of a pair record raised (memory, anything; the exception is in detail): its numbers are NA, the headline row is kept (flagged) and the next scoring tries again |
+| `full_lsa_killed` | infrastructure | full_pairs | the process was killed during the full-LSA solve of a pair record (memory, walltime: it left its in-flight marker and no result): the solve is not tried again, its numbers are NA and the headline row is kept (flagged) |
 | `tissue_missing` | infrastructure | score | the tissue block could not score a written image (tissue_missing.csv) |
 | `realcheck_unreadable` | infrastructure | score | a realcheck.json (or the run.json beside it) cannot be read: the run's realcheck verdict is `unreadable` (verdicts.tsv) |
 | `fit_points_dropped` | infrastructure | paper | a cost fit left points out (no finite target or predictor, or no input size): `n_dropped` of cost_fits / pipeline_cost_fits (S12; `paper/losses.csv`) |

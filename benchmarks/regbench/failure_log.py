@@ -122,10 +122,11 @@ WHOSE = {
     "plot_placeholder": BENCHMARK,
     "stare_local4_differs": BENCHMARK,
     "low_agreement": BENCHMARK,
-    "landmark_flagged": BENCHMARK,
+    "landmark_flagged": BENCHMARK,  # a landmark set's sanity flag: kept, scored (Task 21)
     # the scorer's full LSA beside the headline (Task 21b, regbench.full_pairs)
     "full_lsa_not_certified": BENCHMARK,
-    "full_lsa_failed": BENCHMARK,  # a landmark set's sanity flag: kept, scored (Task 21)
+    "full_lsa_failed": BENCHMARK,
+    "full_lsa_killed": BENCHMARK,
     "frame_check_failed": BENCHMARK,
     "pixel_size_fallback": BENCHMARK,
 }

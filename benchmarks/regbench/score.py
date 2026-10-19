@@ -1930,15 +1930,27 @@ def _full_inputs(ctx, spec):
     return inputs
 
 
+FULL_STARTED = ".started"
+
+
+def _solve_full(ctx, spec, rec, marker, key):
+    """One full-LSA solve, with its in-flight marker written first (``marker``: the
+    record's path with ``FULL_STARTED``, holding the key). A process killed in the
+    solve (memory, walltime) leaves the marker and no record: ``_full_records`` then
+    reports it ``interrupted`` and never solves it again."""
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(key, sort_keys=True, default=str))
+    return full_pairs.full_record(rec, _full_inputs(ctx, spec))
+
+
 def _full_task(task):
     """One full-pairs record that needs a solve, in a pool worker (``_pair_task``)."""
-    i, job, spec, rec = task
+    i, job, spec, rec, marker, key = task
     name = (job[0], job[1].dataset, str(job[1].case_id))
     if _IN_WORKER.get("name") != name:
         _IN_WORKER.clear()
         _IN_WORKER.update(name=name, case=_ScoredCase(job))
-    ctx = _IN_WORKER["case"]
-    return i, full_pairs.full_record(rec, _full_inputs(ctx, spec))
+    return i, _solve_full(_IN_WORKER["case"], spec, rec, marker, key)
 
 
 def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
@@ -1946,15 +1958,34 @@ def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
     its record (``full_key``) or made: copied from the pair record where the full LSA
     is its ``*_exact`` (no solve), solved where it is not (``full_pairs.needs_solve``),
     side by side when there is a ``pool``. Saved as each is made, except a failed solve
-    (``full_pairs.KEPT``), which the next scoring tries again."""
+    (``full_pairs.KEPT``), which the next scoring tries again.
+
+    A solve that killed its process (its ``FULL_STARTED`` marker is there and its record
+    is not) is never tried again: it is saved as ``full_pairs.interrupted()`` (NA, a
+    ``full_lsa_killed`` loss row), since the same solve would kill this scoring too and
+    the case would have no rows at all. ``fresh`` removes the markers and tries.
+    (A pool worker killed by the system is NOT seen by ``imap_unordered``, which then
+    waits for it; the job's walltime ends that scoring, and the marker the worker left
+    is what the next one reads.)"""
     folder = records_dir(ctx.out, ctx.case) / full_pairs.RECORDS
-    keys = {spec: full_key(ctx, spec) for spec in specs}
+    code = full_pairs_code()
+    keys = {spec: {**ctx.pair_key(*spec), "full_pairs_code": code} for spec in specs}
     paths = {spec: folder / f"{_key_sha256(keys[spec])}.rec" for spec in specs}
+    markers = {spec: paths[spec].with_suffix(FULL_STARTED) for spec in specs}
     out, todo = {}, []
     for spec in specs:
+        if fresh:
+            markers[spec].unlink(missing_ok=True)
         got = None if fresh else _read_record(paths[spec], keys[spec])[0]
         if got is not None:
             out[spec] = got
+            markers[spec].unlink(missing_ok=True)
+        elif full_pairs.needs_solve(recs[spec]) and markers[spec].exists():
+            out[spec] = full_pairs.interrupted()
+            _write_record(paths[spec], keys[spec], out[spec])
+            markers[spec].unlink(missing_ok=True)
+            if progress is not None:
+                progress.say(f"full LSA {_spec_name(spec)}: {out[spec]['full_lsa_detail']}")
         elif full_pairs.needs_solve(recs[spec]):
             todo.append(spec)
         else:
@@ -1967,6 +1998,8 @@ def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
         out[spec] = got
         if got["full_lsa_status"] in full_pairs.KEPT:
             _write_record(paths[spec], keys[spec], got)
+        # a solve that returned (a failure too) is no longer in flight
+        markers[spec].unlink(missing_ok=True)
         if progress is not None:
             progress.say(
                 f"full LSA {_spec_name(spec)}: {got['full_lsa_status']} in "
@@ -1974,12 +2007,15 @@ def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
             )
 
     if pool is not None and len(todo) > 1:
-        tasks = [(i, ctx.job, spec, recs[spec]) for i, spec in enumerate(todo)]
+        tasks = [
+            (i, ctx.job, spec, recs[spec], markers[spec], keys[spec])
+            for i, spec in enumerate(todo)
+        ]
         for i, got in pool.imap_unordered(_full_task, tasks):
             keep(todo[i], got)
     else:
         for spec in todo:
-            keep(spec, full_pairs.full_record(recs[spec], _full_inputs(ctx, spec)))
+            keep(spec, _solve_full(ctx, spec, recs[spec], markers[spec], keys[spec]))
     return out
 
 

@@ -66,12 +66,17 @@ FROM_EXACT = "full_lsa_from_exact"
 SOLVED = "full_lsa_solved"
 NOT_CERTIFIED = "not_certified"
 FAILED = "failed"
-# what a scoring keeps as a record: a failure is tried again
-KEPT = (FROM_EXACT, SOLVED, NOT_CERTIFIED)
+INTERRUPTED = "interrupted"
+INTERRUPTED_DETAIL = "killed during the full-LSA solve: no result"
+# what a scoring keeps as a record: a failure is tried again; a solve that killed its
+# process (its in-flight marker left behind, ``score._full_records``) is not, since the
+# same solve would kill the next scoring too and with it the case's headline rows
+KEPT = (FROM_EXACT, SOLVED, NOT_CERTIFIED, INTERRUPTED)
 # the losses.csv cause of a full-LSA number that is not reported
 LOSS_CAUSE = {
     NOT_CERTIFIED: "full_lsa_not_certified",
     FAILED: "full_lsa_failed",
+    INTERRUPTED: "full_lsa_killed",
 }
 
 _TOO_LARGE = pairs.EXACT_TOO_LARGE.split("{")[0]
@@ -104,6 +109,15 @@ def from_exact(pair_rec):
     if said.startswith(_NOT_CERTIFIED):
         return _blank(NOT_CERTIFIED, said)
     out = _blank(FROM_EXACT, said)
+    if not said:
+        # pairs.score leaves exact_status blank only where there is nothing to pair (a
+        # side without cells, or no gate): the zero result of ``solve``, as the headline
+        out.update(n_pairs_full_lsa=0, n_pairs_scored_full_lsa=0)
+        out["pair_fraction_full_lsa"] = 0.0
+        out["full_lsa_largest_component_cells"] = pair_rec.get(
+            "largest_component_cells", 0
+        )
+        return out
     out.update({f"{k}_full_lsa": pair_rec.get(f"{k}_exact", math.nan) for k in SCORED})
     out["full_lsa_largest_component_cells"] = pair_rec.get(
         "largest_component_cells", math.nan
@@ -185,6 +199,11 @@ def solve(ref_in, mov_in, radius, pixel_size_um, geometry=None):
         full_lsa_work=work,
     )
     return out
+
+
+def interrupted():
+    """The columns of a solve whose process was killed: NA, never solved again."""
+    return _blank(INTERRUPTED, INTERRUPTED_DETAIL)
 
 
 def full_record(pair_rec, inputs):

@@ -295,7 +295,11 @@ def test_a_full_lsa_that_cannot_be_reported_is_a_loss_and_drops_no_row(
 
 
 def test_the_loss_causes_have_an_owner():
-    assert set(full_pairs.LOSS_CAUSE) == {full_pairs.NOT_CERTIFIED, full_pairs.FAILED}
+    assert set(full_pairs.LOSS_CAUSE) == {
+        full_pairs.NOT_CERTIFIED,
+        full_pairs.FAILED,
+        full_pairs.INTERRUPTED,
+    }
     for cause in full_pairs.LOSS_CAUSE.values():
         assert losses.stage_of(cause) == "full_pairs"
         assert losses.blame_of(cause) == losses.INFRA  # the benchmark's own step
@@ -473,3 +477,81 @@ def test_the_collector_copies_the_full_columns(scored_out):
     assert all(r["fallback_frac"] != schema.NA for r in stare)
     assert all(r["dice_matched_full_mnn"] != schema.NA for r in stare)
 
+
+
+# ── fix round 1 ───────────────────────────────────────────────────────────────
+def test_nothing_to_pair_is_the_zero_result_not_nan():
+    """``exact_status`` is blank where a side has no cell or there is no gate: the full
+    LSA is then ``solve``'s zero result, as the headline's, not NaN."""
+    ref = squares(GRID)
+    empty = pairs.as_polyset(squares([]))
+    for a, b, radius in ((ref, empty, 8.0), (ref, ref, 0.0)):
+        rec = pairs.score(a, b, radius, 0.5, exact=True)
+        assert rec["exact_status"] == "" and rec["pair_fraction"] == 0.0
+        got = full_pairs.from_exact(rec)
+        want = full_pairs.solve(a, b, radius, 0.5)
+        assert got["full_lsa_status"] == full_pairs.FROM_EXACT
+        for k in full_pairs.KEYS:
+            assert same(got[k], want[k]), k
+        assert got["pair_fraction_full_lsa"] == 0.0 and got["n_pairs_full_lsa"] == 0
+
+
+class Killed(BaseException):
+    """What the OOM killer or the walltime does to the process: nothing catches it."""
+
+
+def test_a_solve_that_killed_its_process_is_never_solved_again(tmp_path, monkeypatch):
+    root, out, made = scored_cohort.build(tmp_path)
+    score.score(root, out, **scored_cohort.SCORE_KW)
+    before = _cells(out)
+    import shutil
+
+    # a first scoring: no case record and no full record yet, the pair records kept
+    for kept in (out / "cache" / "scores").glob(f"*/*/{full_pairs.RECORDS}"):
+        shutil.rmtree(kept)
+    for kept in (out / "cache" / "scores").glob("*/*/case.rec"):
+        kept.unlink()
+    monkeypatch.setattr(full_pairs, "needs_solve", lambda rec: True)
+    real = full_pairs.full_lsa_pairs
+
+    def kill(*a, **k):
+        raise Killed()
+
+    monkeypatch.setattr(full_pairs, "full_lsa_pairs", kill)
+    with pytest.raises(Killed):
+        score.score(root, out, **scored_cohort.SCORE_KW)
+    started = list((out / "cache" / "scores").glob(f"*/*/{full_pairs.RECORDS}/*.started"))
+    assert len(started) == 1  # the one in flight; nothing else had started
+    # the next scoring (the rb-score job after a killed array task): every other solve
+    # runs, the killed one never does, and every headline row is there
+    calls = []
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(full_pairs, "full_lsa_pairs", counted)
+    got = score.score(root, out, **scored_cohort.SCORE_KW)
+    after = _cells(out)
+    assert len(after) == len(before)
+    for was, now in zip(before, after):
+        assert {k: now[k] for k in was if "full_lsa" not in k} == {
+            k: was[k] for k in was if "full_lsa" not in k
+        }
+    recs = list((out / "cache" / "scores").glob(f"*/*/{full_pairs.RECORDS}/*.rec"))
+    assert len(calls) == len(recs) - 1
+    assert not list((out / "cache" / "scores").glob(f"*/*/{full_pairs.RECORDS}/*.started"))
+    killed = [r for r in after if r["full_lsa_status"] == full_pairs.INTERRUPTED]
+    assert killed and all(r["pair_fraction_full_lsa"] in ("", "nan") for r in killed)
+    assert all(r["full_lsa_detail"] == full_pairs.INTERRUPTED_DETAIL for r in killed)
+    lost = [r for r in got["losses"] if r["cause"] == "full_lsa_killed"]
+    assert lost and {r["stage"] for r in lost} == {"full_pairs"}
+    assert {r["blame"] for r in lost} == {losses.INFRA}
+    assert failure_log.classify("full_lsa_killed") == failure_log.BENCHMARK
+    # read as kept from then on; `fresh` tries the solve again
+    calls.clear()
+    score.score(root, out, **scored_cohort.SCORE_KW)
+    assert calls == []
+    score.score(root, out, **scored_cohort.SCORE_KW, fresh=True)
+    assert len(calls) == len(recs)
+    assert full_pairs.INTERRUPTED not in {r["full_lsa_status"] for r in _cells(out)}
