@@ -294,7 +294,10 @@ def extrapolation_table(scaling, out, dataset=DATASET):
             note = []
             fitted = None
             if not sizes:
-                note.append(f"no cohort cost under the results folder ({source})")
+                note.append(
+                    "cohort not scored in this REGBENCH_OUT: no cohort cost under it "
+                    f"({source}); run `paper --dataset synthetic` after the cohort is scored"
+                )
             if fit_ok and gpx is not None:
                 fitted = 10 ** (s["intercept"] + s["slope"] * math.log10(gpx))
             elif not fit_ok:

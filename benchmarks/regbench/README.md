@@ -1622,9 +1622,23 @@ export REGBENCH_SYNTH_SOURCE=$REGBENCH_INPUTS/<a preprocessed slide>.ome.tif
 # the plan job, an array of one task per (patient, panel), then the finish job; a
 # complete set is reused, a planned one continued (REGBENCH_SYNTH_GRID=small: 4096 alone)
 benchmarks/regbench/slurm/submit_cohort.sh --prepare --datasets synthetic -- <site options>
-# when those are done: its own run list, scored for cost alone (no per-case scoring)
-benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic -- <site options>
+# when those are done: its own run list, scored for cost alone (no per-case scoring),
+# INTO THE COHORT'S REGBENCH_OUT (default $REGBENCH_ROOT/out, here $ROOT/out)
+REGBENCH_OUT=$ROOT/out \
+    benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic -- <site options>
+# only AFTER the cohort has been scored in that same REGBENCH_OUT: the set's paper tables
+regbench_py STARE_REGBENCH paper --dataset synthetic --out "$ROOT/out"
 ```
+
+**Where and in what order.** The set is scored into the cohort's `REGBENCH_OUT` (the
+default `$REGBENCH_ROOT/out`), never a folder of its own: `synthetic_extrapolation` sets
+the fit beside the cohort's measured cost, and reads that cost from the same folder
+(`paper/cost_points.csv`, else the scorer's `tables/summary_resources.csv`). So `paper
+--dataset synthetic` runs AFTER the cohort has been scored there. Run earlier, or in a
+folder with no cohort, every extrapolation row says so in its `note` ("cohort not scored in
+this REGBENCH_OUT") and has no measured value. The paper's copy (`paper/collect`) takes
+`<out>/paper/synthetic/` when it is there and the scorer's `<out>/tables/synthetic/` only
+otherwise, whatever order the two were written in.
 
 The array starts only after a plan job that ended ok (`afterok`); the finish job waits
 for the array whatever became of it (`afterany`) and names any slide that is missing.
@@ -1640,7 +1654,10 @@ for every `I` below `--units`, and `--finish` (`--status` says `absent`, `planne
 
 **Its CPU cross** runs `stare` and `valis_mirage` at 4 and 8 CPUs on the 4096 and 32768 px
 patients, as the cohort's cross does (one folder per count, two repeats). The subset's
-cases are symlinks: bind the original folder too.
+cases are symlinks: bind the original folder too. The cross folders (`out_synth_c4`,
+`out_synth_c8`) hold no cohort, so the `synthetic_extrapolation` their scorer writes is NOT
+the one to use (its rows say "cohort not scored in this REGBENCH_OUT"); the cross's own
+table, `cpu_scaling.csv`, goes beside the set's paper tables in the cohort's folder.
 
 ```bash
 regbench_py STARE_REGBENCH subset-cases --dataset synthetic \
@@ -1654,7 +1671,7 @@ for c in 4 8; do
 done
 regbench_py STARE_REGBENCH cpu-scaling --dataset synthetic --rows stare,valis_mirage \
     --point 4=$ROOT/out_synth_c4 --point 8=$ROOT/out_synth_c8 \
-    --to "$ROOT/out_synthetic/paper/synthetic/cpu_scaling.csv"
+    --to "$ROOT/out/paper/synthetic/cpu_scaling.csv"
 ```
 
 ### Landmark set (`hyreco`)

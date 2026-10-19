@@ -729,13 +729,20 @@ SYNTHETIC_DIR = "synthetic"
 
 
 def copy_synthetic(to, regbench, notes):
-    """The synthetic set's own tables (T32: ``<out>/tables/synthetic/synthetic_*.csv``,
-    cost only, never pooled), copied as they are into ``<to>/synthetic/``, where
-    ``plots`` looks for them. A second results folder that has them goes into
+    """The synthetic set's own tables (T32, cost only, never pooled), copied as they are
+    into ``<to>/synthetic/``, where ``plots`` looks for them. From
+    ``<out>/paper/synthetic/`` when it has them (``paper --dataset synthetic``, whose
+    ``synthetic_extrapolation`` reads the cohort's ``paper/cost_points.csv``), else from
+    the scorer's ``<out>/tables/synthetic/`` (final review I4: never by the order the
+    folders were written in). A second results folder that has them goes into
     ``<to>/synthetic/<its name>/`` and is noted. The paths copied."""
     copied = []
     for folder in regbench:
-        found = sorted((Path(folder) / "tables" / SYNTHETIC_DIR).glob("synthetic_*.csv"))
+        found = []
+        for where in ("paper", "tables"):
+            found = sorted((Path(folder) / where / SYNTHETIC_DIR).glob("synthetic_*.csv"))
+            if found:
+                break
         if not found:
             continue
         dest = Path(to) / SYNTHETIC_DIR

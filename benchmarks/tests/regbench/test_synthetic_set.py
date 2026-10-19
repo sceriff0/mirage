@@ -606,3 +606,36 @@ def test_the_foreground_fraction_is_a_column_of_cost_and_extrapolation(scored, t
     ext = [r for r in schema.read(tables / "synthetic_extrapolation.csv")
            if r["excluded_reason"] is None]  # fmt: skip
     assert ext and all(float(r["foreground_fraction"]) == synth.FOREGROUND_FRACTION for r in ext)
+
+
+def test_copy_synthetic_prefers_the_paper_folder_over_the_scorers(tmp_path):
+    """Final review I4: `paper --dataset synthetic` writes paper/synthetic/ against the
+    cohort's paper/cost_points.csv; the scorer's tables/synthetic/ is the fallback."""
+    from benchmarks.regbench.paper import collect
+
+    res = tmp_path / "res"
+    for sub, text in (("tables/synthetic", "scorer"), ("paper/synthetic", "paper")):
+        d = res / sub
+        d.mkdir(parents=True)
+        (d / "synthetic_extrapolation.csv").write_text(text)
+    notes = []
+    got = collect.copy_synthetic(tmp_path / "to", [res], notes)
+    assert [p.read_text() for p in got] == ["paper"]
+    # without paper/synthetic/, the scorer's tables
+    only = tmp_path / "only"
+    (only / "tables" / "synthetic").mkdir(parents=True)
+    (only / "tables" / "synthetic" / "synthetic_cost.csv").write_text("scorer")
+    got = collect.copy_synthetic(tmp_path / "to2", [only], [])
+    assert [p.read_text() for p in got] == ["scorer"]
+
+
+def test_the_extrapolation_note_says_the_cohort_is_not_scored_here(scored):
+    _, tables = scored
+    rows = [
+        r
+        for r in schema.read(tables / "synthetic_extrapolation.csv")
+        if r["excluded_reason"] is None
+    ]
+    assert rows and all(
+        "cohort not scored in this REGBENCH_OUT" in r["note"] for r in rows
+    )
