@@ -344,3 +344,20 @@ def test_the_cli_runs_the_whole_set_and_answers_the_unit_count(tmp_path, capsys)
     out = capsys.readouterr().out
     assert str(synth.estimate((4096,))["total_bytes"]) in out
     assert not to.exists()
+
+
+def test_units_are_the_grids_before_the_plan_and_the_plans_after(tmp_path, capsys):
+    """The launcher sizes the array before the plan job has run: ``--units`` is the
+    grid's count (one per patient and panel) until a plan is written, then the plan's."""
+    from types import SimpleNamespace
+
+    args = dict(estimate=False, status=False, units=True, plan=False, unit=None,
+                finish=False, source=None, seed=0, channel=None)  # fmt: skip
+    to = tmp_path / "cases"
+    for grid, want in (("default", 55), ("small", 11)):
+        synth.main(SimpleNamespace(to=str(to), grid=grid, **args))
+        assert capsys.readouterr().out.strip() == str(want)
+    _plan(tmp_path, _source(tmp_path), sizes=(64, 128), to=to)
+    capsys.readouterr()
+    synth.main(SimpleNamespace(to=str(to), grid="default", **args))
+    assert capsys.readouterr().out.strip() == "22"

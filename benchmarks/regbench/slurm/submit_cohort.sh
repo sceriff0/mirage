@@ -22,6 +22,13 @@
 # run with its own run list (`runs --dataset <name>`) and scored into tables of its own,
 # never pooled with the cohort. Any other name is refused.
 #
+# THE SYNTHETIC SET (`synthetic`, T32: cost only, never pooled, never in --all) is made
+# by this launcher: --prepare --datasets synthetic (REGBENCH_CASES_SYNTHETIC, and
+# REGBENCH_SYNTH_SOURCE, a cohort slide whose nuclear channel is the texture) submits
+# slurm/synth.sbatch's plan job, its array (one task per patient and panel) and its finish
+# job; a complete set is reused, a planned one is continued. It is then launched by name
+# (--datasets synthetic) and scored for cost alone: no per-case or tissue scoring.
+#
 # HyReCo (`hyreco`, the one landmark set): download/hyreco.sh fetches the FULL set by
 # default, the core zip and both Additional zips (HYRECO_ADDITIONAL=0: the core zip
 # alone), and `prepare hyreco` puts subset A and subset B into one cases folder
@@ -380,12 +387,16 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the default dataset; the public datasets are named on request
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
-PUBLIC_DATASETS="hyreco mcmicro phenocycler rashid"
+PUBLIC_DATASETS="hyreco mcmicro phenocycler rashid synthetic"
 # each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
 # (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
 # scorer: a dataset of a kind not scored is refused up front (every kind is, since Task 21)
-PUBLIC_KINDS="hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
-SCORED_KINDS="tissue nuclei landmarks"
+PUBLIC_KINDS="hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei synthetic=synthetic"
+SCORED_KINDS="tissue nuclei landmarks synthetic"
+# the public datasets scored for COST alone (cli.COST_ONLY_SETS; a test keeps them equal):
+# named only (never in --cases-there's yes), prepared here (synth.sbatch), and given no
+# per-case or tissue scoring job
+COST_ONLY_SETS="synthetic"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0 cases_there=0
 ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
@@ -501,7 +512,9 @@ case_sizes() {
 if [ "$cases_there" = 1 ]; then
     for ds in multiplex $PUBLIC_DATASETS; do
         why="" ds_cases=""
-        if [ "$ds" != multiplex ]; then
+        if has "$COST_ONLY_SETS" "$ds"; then
+            why="named only: cost alone, launched by --datasets $ds and never by --all"
+        elif [ "$ds" != multiplex ]; then
             kind=""
             for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
             if ! has "$SCORED_KINDS" "$kind"; then
@@ -538,14 +551,21 @@ DATASETS_SAID="the cohort is multiplex; the public datasets are ${PUBLIC_DATASET
 for ds in $datasets; do
     [ "$ds" = multiplex ] && continue
     has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
-    [ "$prepare" != 1 ] || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) only. Nothing was submitted."
+    [ "$prepare" != 1 ] || has "$COST_ONLY_SETS" "$ds" || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) and the synthetic set only. Nothing was submitted."
     kind=""
     for k in $PUBLIC_KINDS; do [ "${k%%=*}" != "$ds" ] || kind="${k#*=}"; done
     has "$SCORED_KINDS" "$kind" \
         || die "--datasets '$ds': a $kind dataset, and score() scores ${SCORED_KINDS// / and } only: its methods do not run ahead of their scorer. Nothing was submitted."
     ds_var="REGBENCH_CASES_$(tr '[:lower:]' '[:upper:]' <<< "$ds")"
     ds_cases="$(regbench_cases_of "$ds")" || die "--datasets '$ds': $ds_var is not set: export the folder its cases were prepared under. Nothing was submitted."
-    [ -d "$ds_cases" ] || die "--datasets '$ds': $ds_var=$ds_cases does not exist: export the folder its cases were prepared under. Nothing was submitted."
+    # the synthetic set's folder is made by its --prepare (bound into the images from the
+    # first call on, so made here; not in a dry run, which writes nothing)
+    if [ "$prepare" = 1 ]; then
+        [ "$DRY" = 1 ] || [ -d "$ds_cases" ] || mkdir -p "$ds_cases" \
+            || die "--prepare --datasets '$ds': cannot make $ds_var=$ds_cases. Nothing was submitted."
+    else
+        [ -d "$ds_cases" ] || die "--datasets '$ds': $ds_var=$ds_cases does not exist: export the folder its cases were prepared under. Nothing was submitted."
+    fi
     has "$public_sets" "$ds" || public_sets="${public_sets:+$public_sets }$ds"
 done
 # the public datasets of this submission, and only those, are bound into the images
@@ -1258,6 +1278,8 @@ plan_watch() {
 
 # ── prepare, on its own: array sizes are read from what it writes ─────────────────────
 if [ "$prepare" = 1 ]; then
+    # the rounds are the cohort's: a --prepare of the synthetic set alone reads none
+    if has "$datasets" multiplex; then
     if [ -z "${REGBENCH_MANIFEST:-}" ]; then
         # the rounds of the cohort, from regbench's own input step (launch.sbatch --inputs)
         [ -n "${REGBENCH_INPUTS:-}" ] || die "--prepare needs REGBENCH_INPUTS (the input folder, whose rounds.csv is written from the input step) or REGBENCH_MANIFEST (a rounds.csv to take as it is). Nothing was submitted."
@@ -1273,6 +1295,7 @@ if [ "$prepare" = 1 ]; then
         echo "# the rounds: REGBENCH_MANIFEST=$REGBENCH_MANIFEST, taken as it is"
     fi
     [ -s "$REGBENCH_MANIFEST" ] || die "--prepare: the rounds file $REGBENCH_MANIFEST is not there. Nothing was submitted."
+    fi
     force=()
     [ "${REGBENCH_PREPARE_FORCE:-0}" = 1 ] && force=(--force)
     alloc=(--cpus-per-task="$CPUS" --mem="${REGBENCH_PREPARE_MEM:-64G}"
@@ -1390,7 +1413,58 @@ if [ "$prepare" = 1 ]; then
                 what+=(--nuclei-dir "$REGBENCH_NUCLEI")
                 [ -n "${REGBENCH_NUCLEI_FALLBACK:-}" ] && what+=(--nuclei-fallback "$REGBENCH_NUCLEI_FALLBACK")
                 ;;
-            *) die "--prepare: '$ds' is not multiplex (this launcher prepares the cohort only)" ;;
+            synthetic)
+                # THE SYNTHETIC SET (T32, synth.sbatch): generated once and shared by every
+                # run. A complete set is reused; a planned one is continued (its array
+                # keeps every slide already written); none is planned from the source
+                # slide first. Each step waits (afterany) for the one before it: a step
+                # whose input is missing stops on it, naming it.
+                syn_to="$(regbench_cases_of synthetic)"
+                syn_grid="${REGBENCH_SYNTH_GRID:-default}"
+                case "$syn_grid" in default|small) ;; *) die "REGBENCH_SYNTH_GRID='$syn_grid': default or small. Nothing more was submitted." ;; esac
+                # read in a dry run too: it writes nothing
+                syn_state="$(regbench_py "$REGBENCH_HEAD_IMAGE" synth --to "$syn_to" --status)" \
+                    || die "--prepare --datasets synthetic: cannot read the state of $syn_to/synthetic (synth --status). Nothing more was submitted."
+                syn_state="$(awk 'NF { last = $0 } END { print last }' <<< "$syn_state")"
+                syn_after=()
+                case "$syn_state" in
+                    complete)
+                        echo "# synthetic: the set under $syn_to/synthetic is complete: reused, nothing to make"
+                        continue
+                        ;;
+                    partial)
+                        die "--prepare --datasets synthetic: $syn_to/synthetic exists without its plan (synth_plan.json under _slides): not a set this launcher made or can continue. Move it aside by hand. Nothing more was submitted."
+                        ;;
+                    planned)
+                        echo "# synthetic: the set under $syn_to/synthetic is planned, not complete: its array continues it (slides already written are kept)"
+                        ;;
+                    absent)
+                        [ -n "${REGBENCH_SYNTH_SOURCE:-}" ] || die "--prepare --datasets synthetic needs REGBENCH_SYNTH_SOURCE: a cohort slide (OME-TIFF) whose nuclear channel is the texture, under a folder the images bind (REGBENCH_INPUTS, REGBENCH_CASES or REGBENCH_BIND). Nothing more was submitted."
+                        [ "$DRY" = 1 ] || [ -f "$REGBENCH_SYNTH_SOURCE" ] || die "--prepare --datasets synthetic: REGBENCH_SYNTH_SOURCE=$REGBENCH_SYNTH_SOURCE is not a file. Nothing more was submitted."
+                        syn_plan=(--source "$REGBENCH_SYNTH_SOURCE" --grid "$syn_grid" --seed "${REGBENCH_SYNTH_SEED:-0}")
+                        [ -z "${REGBENCH_SYNTH_CHANNEL:-}" ] || syn_plan+=(--channel "$REGBENCH_SYNTH_CHANNEL")
+                        submit "rb-synth-plan" "${COMMON[@]}" "$LOG_ONE" --cpus-per-task=1 --mem=16G \
+                            --time="$(limit "$(seconds 04:00:00)")" "$HERE/synth.sbatch" plan "$syn_to" "${syn_plan[@]}"
+                        syn_after=(--dependency="afterany:$JOB_ID")
+                        ;;
+                    *) die "--prepare --datasets synthetic: synth --status said '$syn_state'. Nothing more was submitted." ;;
+                esac
+                syn_n="$(regbench_py "$REGBENCH_HEAD_IMAGE" synth --to "$syn_to" --grid "$syn_grid" --units)" \
+                    || die "--prepare --datasets synthetic: cannot size its array (synth --units). Nothing more was submitted."
+                syn_n="$(awk 'NF { last = $0 } END { print last }' <<< "$syn_n")"
+                # one task per (patient, panel): a 65536 px panel is ~25 min on one CPU
+                # (measured at 4096 px: ~6 s per moving panel), its memory the texture
+                # and a few tiles
+                submit "rb-synth" "${COMMON[@]}" "$LOG_ARRAY" ${syn_after[@]+"${syn_after[@]}"} \
+                    --array="0-$((syn_n - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task=1 \
+                    --mem="${REGBENCH_SYNTH_MEM:-8G}" --time="$(limit "$(seconds "${REGBENCH_SYNTH_TIME:-04:00:00}")")" \
+                    "$HERE/synth.sbatch" unit "$syn_to"
+                submit "rb-synth-finish" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID" \
+                    --cpus-per-task=1 --mem=4G --time="$(limit "$(seconds 01:00:00)")" \
+                    "$HERE/synth.sbatch" finish "$syn_to"
+                continue
+                ;;
+            *) die "--prepare: '$ds' is not multiplex or synthetic (this launcher prepares the cohort and the synthetic set only)" ;;
         esac
         submit "rb-prepare-$ds" "${COMMON[@]}" "$log" "${alloc[@]}" ${array[@]+"${array[@]}"} \
             ${after[@]+"${after[@]}"} "$HERE/prepare.sbatch" "${what[@]}" ${force[@]+"${force[@]}"}
@@ -2083,7 +2157,12 @@ settle_job="$JOB_ID"
 # that fails or is killed leaves its case to the scorer, which computes what is missing
 score_time="$(limit "$score_s")"
 scored=""
+tissued=0
 for ds in $sized; do
+    # a cost-only set (the synthetic set) has no per-case rows: its scorer reads the
+    # results' resources alone
+    has "$COST_ONLY_SETS" "$ds" && continue
+    tissued=1
     n_cases="CASES_$ds"
     submit "rb-score-case-$ds" "${COMMON[@]}" "$LOG_ARRAY" --dependency="afterany:$settle_job" \
         --array="0-$((${!n_cases} - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task="$REGBENCH_SCORE_CPUS" \
@@ -2100,9 +2179,14 @@ scored_sets=()
 for ds in $sized; do
     [ "$ds" = multiplex ] || { read -r -a scored_sets <<< "$sized"; break; }
 done
-submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
-    --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue \
-    ${scored_sets[@]+"${scored_sets[@]}"}
+# and no tissue job when every set is cost-only: the scorer then waits for the settle job
+if [ "$tissued" = 1 ]; then
+    submit "rb-tissue" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany${scored}" --cpus-per-task="$CPUS" \
+        --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" tissue \
+        ${scored_sets[@]+"${scored_sets[@]}"}
+else
+    JOB_ID="$settle_job"
+fi
 submit "rb-score" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID$scored" --cpus-per-task="$CPUS" \
     --mem="$REGBENCH_SCORE_MEM" --time=1-00:00:00 "$HERE/score_cohort.sbatch" score \
     ${scored_sets[@]+"${scored_sets[@]}"}

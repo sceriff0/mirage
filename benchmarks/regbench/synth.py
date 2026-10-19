@@ -488,6 +488,12 @@ def n_units(to):
     return len(_read_plan(to)["units"])
 
 
+def n_units_of(sizes):
+    """The units a grid makes, one per (patient, panel): what the launcher sizes the
+    array from before the plan is written."""
+    return len(tuple(sizes)) * N_PANELS
+
+
 def render_unit(to, i):
     """Write unit ``i``'s slide; a slide already written is kept (the write is atomic)."""
     rec = _read_plan(to)
@@ -594,7 +600,9 @@ def main(a):
         print(status(a.to))
         return 0
     if a.units:
-        print(n_units(a.to))
+        # the plan's, once there is one; else the grid's (the launcher sizes the array
+        # before the plan job has run)
+        print(n_units(a.to) if (_root(a.to) / PLAN).exists() else n_units_of(sizes))
         return 0
     if a.plan:
         plan(a.source, a.to, sizes, a.seed, channel=a.channel, grid=a.grid)

@@ -686,7 +686,7 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     assert 'DEFAULT_DATASETS="multiplex"' in code
 
 
-@pytest.mark.parametrize("named", ["anhir", "synthetic", "multiplex x", "mcmicro@raw"])
+@pytest.mark.parametrize("named", ["anhir", "synthetics", "multiplex x", "mcmicro@raw"])
 def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     """Neither the cohort nor a public dataset: refused before anything is read or
     submitted, in one line naming the allowed values, with no argparse usage and no
@@ -720,7 +720,7 @@ def test_a_public_dataset_is_refused_by_prepare(site, public_launcher, tmp_path)
         env={"REGBENCH_CASES_NUCSET": str(tmp_path)}, log="ds-prep",
     )  # fmt: skip
     assert done.returncode == 2
-    assert "prepares the cohort (multiplex) only" in done.stderr
+    assert "prepares the cohort (multiplex) and the synthetic set only" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
@@ -3287,7 +3287,7 @@ def test_prepare_is_a_step_of_its_own(site, tmp_path):
     assert "run this script again without --prepare" in done.stdout
     assert "taken as it is" in done.stdout  # a REGBENCH_MANIFEST named by hand
     gone, _, _ = launch(
-        site, "--prepare", "--datasets", "synthetic", env=env, log="gone"
+        site, "--prepare", "--datasets", "nosuchset", env=env, log="gone"
     )
     assert gone.returncode == 2 and "the cohort is multiplex" in gone.stderr
     none, _, _ = launch(site, "--prepare", log="prepare-bad")
@@ -4490,3 +4490,154 @@ def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
     assert sum(after in ln for ln in rep2) == len(first)
     assert sorted(ln.replace("/rep1", "/rep2") for ln in half) == sorted(
         ln.replace(after, "") for ln in rep2)
+
+
+# ---- the synthetic set (T32: cost only, named only, prepared here) ------------------------
+
+BEFORE_SYNTHETIC = "887e18fc"
+
+
+def test_the_launchers_cost_only_sets_are_the_clis():
+    from benchmarks.regbench import cli
+
+    (line,) = [x for x in code_of(SCRIPT).splitlines() if x.startswith("COST_ONLY_SETS=")]
+    assert tuple(line.split("=", 1)[1].strip('"').split()) == cli.COST_ONLY_SETS == ("synthetic",)
+
+
+def test_cases_there_names_the_synthetic_set_named_only(site, tmp_path):
+    """--all (launch.sbatch) launches what --cases-there says yes to: never the synthetic
+    set, even with its cases there."""
+    done, _, _ = launch(
+        site, "--cases-there", env={"REGBENCH_CASES_SYNTHETIC": str(tmp_path)}, log="there-syn"
+    )
+    assert done.returncode == 0, done.stderr
+    (line,) = [x for x in done.stdout.splitlines() if x.startswith("synthetic\t")]
+    assert line.split("\t")[1] == "no" and "named only" in line
+    assert any(x.startswith("multiplex\tyes") for x in done.stdout.splitlines())
+
+
+def _syn_source(tmp_path):
+    from .test_synth import _source
+
+    return _source(tmp_path)
+
+
+def test_prepare_synthetic_submits_plan_then_array_then_finish(site, tmp_path):
+    to = tmp_path / "syn"
+    src = _syn_source(tmp_path)
+    env = {"REGBENCH_CASES_SYNTHETIC": str(to), "REGBENCH_SYNTH_SOURCE": str(src)}
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-prep")
+    jobs = jobs_of(done)
+    assert set(jobs) == {"rb-synth-plan", "rb-synth", "rb-synth-finish"}
+    plan, array, finish = jobs["rb-synth-plan"], jobs["rb-synth"], jobs["rb-synth-finish"]
+    assert plan.script == array.script == finish.script == "synth.sbatch"
+    assert plan.args == ["plan", str(to), "--source", str(src), "--grid", "default", "--seed", "0"]
+    # one task per (patient, panel): 5 sizes x 11 panels
+    assert array.opt("--array").startswith("0-54%") and array.args == ["unit", str(to)]
+    assert finish.args == ["finish", str(to)]
+    assert "<rb-synth-plan>" in array.opt("--dependency")
+    assert "<rb-synth>" in finish.opt("--dependency")
+    # the cohort's rounds are never read for the synthetic set alone
+    assert "rb-prepare-multiplex" not in jobs and "rb-nuclei" not in jobs
+    small, _, _ = launch(site, "--prepare", "--datasets", "synthetic",
+                         env={**env, "REGBENCH_SYNTH_GRID": "small"}, log="syn-small")  # fmt: skip
+    assert jobs_of(small)["rb-synth"].opt("--array").startswith("0-10%")
+    # a dry run makes no folder
+    assert not to.exists()
+
+
+def test_prepare_synthetic_needs_its_source(site, tmp_path):
+    env = {"REGBENCH_CASES_SYNTHETIC": str(tmp_path / "syn")}
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-nosrc")
+    assert done.returncode == 2 and "REGBENCH_SYNTH_SOURCE" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+    unset, _, _ = launch(site, "--prepare", "--datasets", "synthetic", log="syn-novar")
+    assert unset.returncode == 2 and "REGBENCH_CASES_SYNTHETIC is not set" in unset.stderr
+
+
+def test_prepare_synthetic_continues_a_planned_set_and_reuses_a_complete_one(site, tmp_path):
+    from benchmarks.regbench import synth
+
+    from .test_synth import _plan
+
+    src = _syn_source(tmp_path)
+    to = _plan(tmp_path, src, sizes=(64,))
+    env = {"REGBENCH_CASES_SYNTHETIC": str(to)}  # no source: a planned set needs none
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-planned")
+    jobs = jobs_of(done)
+    assert set(jobs) == {"rb-synth", "rb-synth-finish"}
+    # the plan's units (1 size x 11 panels), not the grid's
+    assert jobs["rb-synth"].opt("--array").startswith("0-10%")
+    assert "planned, not complete" in done.stdout
+    for i in range(synth.n_units(to)):
+        synth.render_unit(to, i)
+    synth.finish(to)
+    again, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-complete")
+    assert again.returncode == 0, again.stderr
+    assert not _sbatch_lines(again.stdout) and "complete: reused" in again.stdout
+
+
+def test_prepare_synthetic_refuses_a_folder_without_its_plan(site, tmp_path):
+    (tmp_path / "synthetic").mkdir()
+    env = {"REGBENCH_CASES_SYNTHETIC": str(tmp_path), "REGBENCH_SYNTH_SOURCE": "x.tif"}
+    done, _, _ = launch(site, "--prepare", "--datasets", "synthetic", env=env, log="syn-partial")
+    assert done.returncode == 2 and "without its plan" in done.stderr
+    assert not _sbatch_lines(done.stdout)
+
+
+def test_a_synthetic_launch_runs_its_list_and_has_no_case_or_tissue_scoring(site, tmp_path):
+    cases = tmp_path / "syn_cases"
+    _case(cases, "synthetic", "s04096_r01", "s04096")
+    _case(cases, "synthetic", "s04096_r02", "s04096")
+    done, _, _ = launch(site, "--datasets", "synthetic",
+                        env={"REGBENCH_CASES_SYNTHETIC": str(cases)}, log="syn-launch")  # fmt: skip
+    jobs = jobs_of(done)
+    ran = {j.args[0] for j in [*jobs.values(), *jobs.later.values()]
+           if j.script == "run_rung.sbatch"}  # fmt: skip
+    assert ran and ran <= set(variants.SYNTHETIC_RUNS)
+    assert {"stare", "valis_mirage", "valis120_hires"} <= ran
+    assert not any(n.startswith("rb-score-case") for n in jobs) and "rb-tissue" not in jobs
+    assert jobs["rb-score"].args == ["score", "synthetic"]
+    assert "<rb-settle>" in jobs["rb-score"].opt("--dependency")
+    # beside the cohort: the cohort keeps its per-case and tissue jobs, synthetic has none
+    both, _, _ = launch(site, "--datasets", "multiplex synthetic",
+                        env={"REGBENCH_CASES_SYNTHETIC": str(cases)}, log="syn-both")  # fmt: skip
+    jb = jobs_of(both)
+    assert "rb-score-case-multiplex" in jb and "rb-score-case-synthetic" not in jb
+    assert jb["rb-tissue"].args == ["tissue", "multiplex", "synthetic"]
+    assert jb["rb-score"].args == ["score", "multiplex", "synthetic"]
+
+
+def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_synthetic_set(
+    site, dry, tmp_path
+):
+    """T32 adds the synthetic set to the launcher; the default launch (the cohort alone)
+    submits and plans exactly what the launcher at BASE did."""
+    have = subprocess.run(
+        ["git", "-C", str(REPO), "cat-file", "-e", f"{BEFORE_SYNTHETIC}^{{commit}}"],
+        capture_output=True,
+    )
+    if have.returncode != 0:
+        pytest.skip(f"{BEFORE_SYNTHETIC} is not in this clone (shallow)")
+    old = tmp_path / "old"
+    old.mkdir()
+    archive = subprocess.run(
+        ["git", "-C", str(REPO), "archive", BEFORE_SYNTHETIC, "benchmarks/regbench/slurm"],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    subprocess.run(["tar", "-x", "-C", str(old)], input=archive.stdout, check=True)
+    old_slurm = old / "benchmarks" / "regbench" / "slurm"
+    argv, base, _ = _launch_command(site, (), {"REGBENCH_REPO": str(REPO)}, True, "before-syn")
+    argv[1] = str(old_slurm / "submit_cohort.sh")
+    done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
+    assert done.returncode == 0, done.stderr
+
+    def norm(text):
+        return [
+            ln.replace(str(old_slurm), str(SLURM)).replace("out-before-syn", "out-calls")
+            for ln in text.splitlines()
+            if ln.startswith(("sbatch ", LATER))
+        ]
+
+    now = norm(dry[1].stdout)
+    assert now and norm(done.stdout) == now
