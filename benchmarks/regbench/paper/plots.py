@@ -610,11 +610,11 @@ def public_landmarks_best(paper_dir, fig_dir):
     if not rows:
         return _placeholder(fig_dir, "public_landmarks_best",
                             [("public_landmarks", base / "public_landmarks.csv")])
-    # every pair of each set (ANHIR `all`, HyReCo `all_pairs`), not a subset's rows
+    # every pair of each set (HyReCo `all_pairs`), not a subset's rows
     # and only a method's rows: `initial` (no registration) has no family
     rows = [r for r in rows if _fin(r.get("rtre_median_med")) and r.get("family")
             and r["family"] != "NA"
-            and r.get("set", "all") in ("all", "all_pairs", "", None)]
+            and r.get("set", "all_pairs") in ("all_pairs", "", None)]
     datasets = sorted({r["dataset"] for r in rows})
     _style()
     colors = _colors(fig_dir, extra=sorted({r["family"] for r in rows if r.get("family")}))

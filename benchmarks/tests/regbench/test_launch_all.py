@@ -280,7 +280,7 @@ def test_the_launch_stage_names_its_datasets_and_compute_all(site, tmp_path):
     assert done.returncode == 0, done.stderr[-3000:]
     assert not calls
     # no public dataset has cases here: each is said to be left out, and why
-    for ds in ("anhir", "mcmicro", "phenocycler", "rashid", "hyreco"):
+    for ds in ("mcmicro", "phenocycler", "rashid", "hyreco"):
         assert re.search(rf"left out: .*\b{ds}\b", done.stdout), ds
     assert '--datasets "multiplex"' in done.stdout
     assert "--compute-all" in done.stdout and "rb-score-compute" in done.stdout

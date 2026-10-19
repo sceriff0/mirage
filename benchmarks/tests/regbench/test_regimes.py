@@ -4,8 +4,13 @@ from benchmarks.regbench import regimes as rg
 
 
 def test_every_regime_has_its_four_levels():
+    """``bf_same`` has a fifth, ``none_haem`` (user ruling 2026-10-19: the manuscript's
+    HyReCo STARE row, Fig. 3f, haematoxylin with NO intensity preprocessing)."""
+    extra = {"bf_same": {"none_haem"}}
     for name, r in rg.REGIMES.items():
-        assert set(r) == {"baseline", "default", "alt", "pct"}, name
+        assert set(r) == {"baseline", "default", "alt", "pct"} | extra.get(
+            name, set()
+        ), name
 
 
 def test_baseline_is_stare_unchanged():
@@ -37,37 +42,33 @@ def test_the_cohorts_regime_is_unchanged():
     ]
 
 
-def test_the_regimes_are_the_three_this_plan_uses():
+def test_the_regimes_are_the_two_this_plan_uses():
     """Restored from 5a46f778 without ``dapi_he`` and ``cytassist`` (no dataset of this
-    plan uses them)."""
-    assert set(rg.REGIMES) == {"cyclic_if", "bf_same", "bf_consecutive"}
+    plan uses them), and without ``bf_consecutive`` since its only dataset was removed
+    (user ruling 2026-10-19). ``grey_smooth`` stays a proxy STARE's adapter accepts."""
+    assert set(rg.REGIMES) == {"cyclic_if", "bf_same"}
     assert rg.PROXIES == ("channel", "grey", "haem", "grey_smooth")
     assert rg.SPREPS == ("none", "clahe", "percentile")
 
 
-def test_the_brightfield_levels_are_the_archived_ones():
+def test_the_brightfield_levels_are_the_archived_ones_and_haem_none():
     assert rg.stare_levels("bf_same") == (
         ("baseline", rg.Level("grey", "none")),
         ("default", rg.Level("haem", "clahe")),
         ("alt", rg.Level("grey", "clahe")),
         ("pct", rg.Level("haem", "percentile")),
-    )
-    assert rg.stare_levels("bf_consecutive") == (
-        ("baseline", rg.Level("grey", "none")),
-        ("default", rg.Level("grey", "clahe")),
-        ("alt", rg.Level("grey_smooth", "none")),
-        ("pct", rg.Level("grey", "percentile")),
+        ("none_haem", rg.Level("haem", "none")),
     )
     # an RGB baseline is STARE unchanged on the case's own grey proxy: the name `none`
     assert rg.level_key(rg.Level("grey", "none")) == "none"
-    assert rg.level_key(rg.Level("grey_smooth", "none")) == "grey_smooth_none"
+    # the new level's run names: stare_haem_none, stare_s128_haem_none, ...
+    assert rg.level_key(rg.Level("haem", "none")) == "haem_none"
 
 
 def test_every_dataset_of_the_plan_has_its_regime_now():
     # the two datasets removed by the user's ruling of 2026-10-18 are not here
     want = {
         "multiplex": "cyclic_if",
-        "anhir": "bf_consecutive",
         # one HyReCo dataset (ruling 2026-10-19 (hyreco)), in hyreco_a's and hyreco_b's place
         "hyreco": "bf_same",
         "mcmicro": "cyclic_if",
@@ -102,7 +103,6 @@ def test_unknown_dataset_names_itself():
 # cohort: removing the two moves nothing of the others' STARE runs.
 _AT_E898D763 = {
     "multiplex": "cyclic_if",
-    "anhir": "bf_consecutive",
     "hyreco_a": "bf_same",
     "hyreco_b": "bf_same",
     "mcmicro": "cyclic_if",
@@ -121,13 +121,11 @@ _LEVELS_AT_E898D763 = {
         ("alt", ("grey", "clahe")),
         ("pct", ("haem", "percentile")),
     ),
-    "bf_consecutive": (
-        ("baseline", ("grey", "none")),
-        ("default", ("grey", "clahe")),
-        ("alt", ("grey_smooth", "none")),
-        ("pct", ("grey", "percentile")),
-    ),
 }
+# user ruling 2026-10-19: bf_same gains one level AFTER its four (the order of the
+# others, and so every other run's name and options, does not move); the brightfield
+# landmark set of bf_consecutive and that regime were removed the same day
+_ADDED_SINCE = {"bf_same": (("none_haem", ("haem", "none")),)}
 
 
 # ruling 2026-10-19 (hyreco): HyReCo's two subsets are one dataset, in the same regime
@@ -144,5 +142,7 @@ def test_the_remaining_datasets_regimes_are_those_of_e898d763():
         assert rg.regime_of(dataset) == regime, dataset
         assert rg.regime_of(f"{dataset}@raw") == regime, dataset
         got = tuple((k, tuple(lv)) for k, lv in rg.stare_levels(regime))
-        assert got == _LEVELS_AT_E898D763[regime], dataset
+        assert got == _LEVELS_AT_E898D763[regime] + _ADDED_SINCE.get(regime, ()), (
+            dataset
+        )
     assert set(rg.DATASET_REGIME) == now

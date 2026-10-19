@@ -77,9 +77,11 @@ The STARE runs of a set are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``; a baseline cell, STARE unchanged, is one run in every regime),
 and for the cohort two tier runs, ``stare_medium`` and ``stare_low``
 (``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
-On a landmark set (``LANDMARK_REGIMES``) STARE runs the FULL cross, tier x stride x level
-(36 runs; ``stare_<tier>[_s<stride>]_<level>``, ``stare_tier_cell``), and every other
-method its defaults only (41 runs per set; ruling 2026-10-19).
+On the landmark set (``LANDMARK_REGIMES``: HyReCo's ``bf_same``) STARE runs the FULL
+cross, tier x stride x level (45 runs: ``bf_same``'s five levels;
+``stare_<tier>[_s<stride>]_<level>``, ``stare_tier_cell``), and every other method its
+defaults only (50 runs; rulings 2026-10-19). The manuscript's HyReCo STARE row (Fig. 3f)
+is ``stare_haem_none``: haematoxylin, high tier, stride 64, no intensity preprocessing.
 The pipeline's VALIS runs at its three tiers x micro-registration depth 0, 1, 2
 (``_valis_mirage_runs``): ``valis_mirage`` is (``high``, 2), the shipped call, and the
 other eight are ``valis_mirage_<tier>_m<depth>``, checked by ``valis_mirage``'s selfcheck,
@@ -214,9 +216,10 @@ def _stare_tier_runs():
 
 
 # The regimes of the public landmark sets (``regimes.DATASET_REGIME``: HyReCo's
-# ``bf_same``, ANHIR's ``bf_consecutive``). On them STARE runs its FULL cross (ruling
-# 2026-10-19): tier {high, medium, low} x stride ``STARE_STRIDES`` x every level of the
-# regime, 36 runs per set; every other method its defaults only (``_LANDMARK_DEFAULTS``).
+# ``bf_same``, the only one since the user's ruling of 2026-10-19). On them STARE runs its
+# FULL cross (ruling 2026-10-19): tier {high, medium, low} x stride ``STARE_STRIDES`` x
+# every level of the regime, 45 runs; every other method its defaults only
+# (``_LANDMARK_DEFAULTS``).
 LANDMARK_REGIMES = tuple(
     dict.fromkeys(
         regimes.DATASET_REGIME[name]
@@ -476,8 +479,8 @@ CHECKED_BY.update(plugins.get("SELFCHECK_GATED_BY", {}) or {})
 # Runs a public dataset does not take although their method has an input rule for its
 # modality: ``{dataset: ((which runs, why), ...)}``, keyed by base name
 # (``regbench.base_name``; a key ``<name>@<front end>`` holds that front end's own rules).
-# Ported from 5a46f778, where the rule below was ANHIR's; it holds on every brightfield
-# set, because the adapter refuses ``fluo=1`` on any brightfield case
+# Ported from 5a46f778, where the rule below was a removed landmark set's; it holds on
+# every brightfield set, because the adapter refuses ``fluo=1`` on any brightfield case
 # (``methods/deeperhistreg.py``). 5a46f778's HyReCo rule (no DeeperHistReg at all, its RGB
 # rule being for JPEG / PNG only) is not ported: the adapter now reads an RGB TIFF too.
 _FLUO_ON_RGB = (

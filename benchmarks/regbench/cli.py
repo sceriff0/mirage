@@ -1,7 +1,7 @@
 """``python -m benchmarks.regbench``: prepare cases, run a method, score everything.
 
-``prepare <dataset>``  write the cases of ``multiplex``, ``anhir`` or ``hyreco`` (subset A
-                       and, when it is there, subset B, in one set), idempotent
+``prepare <dataset>``  write the cases of ``multiplex`` or ``hyreco`` (subset A and,
+                       when it is there, subset B, in one set), idempotent
 ``list``               the number of prepared cases of a dataset (sizes a SLURM array), their
                        ids (``--ids``) or their patients (``--groups``)
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
@@ -147,31 +147,6 @@ def build_parser():
         "where cells touch). Never used unless given",
     )
 
-    an = prepare_sub.add_parser(
-        "anhir",
-        help="ANHIR's training pairs (a public landmark set, scored apart: "
-        "regbench.challenge)",
-    )
-    common(an)
-    an.add_argument(
-        "--source",
-        default=None,
-        help="a folder holding dataset_medium.csv, images/ and landmarks/ (as "
-        "download/anhir.sh leaves it)",
-    )
-    an.add_argument(
-        "--table", default=None, help="the cover table (dataset_medium.csv)"
-    )
-    an.add_argument("--images", default=None, help="the unpacked image archive")
-    an.add_argument("--landmarks", default=None, help="the unpacked landmark archive")
-    an.add_argument(
-        "--allow-incomplete",
-        action="store_true",
-        help="prepare the pairs whose images are there and mark every case so",
-    )
-    an.add_argument(
-        "--count", action="store_true", help="print the number of training pairs"
-    )
     hy = prepare_sub.add_parser(
         "hyreco",
         help="HyReCo's re-stained pairs (a public landmark set, scored apart: "

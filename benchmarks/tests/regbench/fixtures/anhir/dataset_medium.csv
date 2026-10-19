@@ -1,5 +1,0 @@
-,Image diagonal [pixels],Image size [pixels],Source image,Source landmarks,Target image,Target landmarks,status,Warped target landmarks,Warped source landmarks,Execution time [minutes]
-0,100.0,"(80, 60)",COAD_01/scale-25pc/S2.jpg,COAD_01/scale-25pc/S2.csv,COAD_01/scale-25pc/S1.jpg,COAD_01/scale-25pc/S1.csv,evaluation,,,
-4,100.0,"(80, 60)",COAD_01/scale-25pc/S3.jpg,COAD_01/scale-25pc/S3.csv,COAD_01/scale-25pc/S1.jpg,COAD_01/scale-25pc/S1.csv,training,,,
-12,100.0,"(80, 60)",COAD_02/scale-25pc/S5.jpg,COAD_02/scale-25pc/S5.csv,COAD_02/scale-25pc/S1.jpg,COAD_02/scale-25pc/S1.csv,training,,,
-370,100.0,"(80, 60)",lung-lobes_1/scale-100pc/29-039-U-35W-Izd1-2-cd31.png,lung-lobes_1/scale-100pc/29-039-U-35W-Izd1-2-cd31.csv,lung-lobes_1/scale-100pc/29-039-U-35W-Izd1-1-HE.png,lung-lobes_1/scale-100pc/29-039-U-35W-Izd1-1-HE.csv,training,,,

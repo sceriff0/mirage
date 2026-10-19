@@ -6,7 +6,8 @@ has to be tested on a dataset of each kind it handles, and the user ruled on 202
 that the only ``tissue`` set and a ``nuclei`` set are removed. These stand in:
 
 ``nucset``     a ``nuclei`` set, fluorescence, regime ``cyclic_if`` (as MCMICRO is)
-``tissueset``  a ``tissue`` set, brightfield, regime ``bf_consecutive`` (as the removed tissue set was)
+``tissueset``  a ``tissue`` set, brightfield, regime ``bf_same`` (the one brightfield regime
+               since ``bf_consecutive`` was removed, 2026-10-19)
 
 ``register`` adds them to ``regbench.PUBLIC`` and ``regimes.DATASET_REGIME`` (and the
 derived ``variants.NOT_ON`` and ``cli.ALL_DATASETS`` once those are imported), through
@@ -29,7 +30,7 @@ SPECS = {
     NUCLEI: {"kind": "nuclei", "modality": "fluorescence"},
     TISSUE: {"kind": "tissue", "modality": "brightfield"},
 }
-REGIMES = {NUCLEI: "cyclic_if", TISSUE: "bf_consecutive"}
+REGIMES = {NUCLEI: "cyclic_if", TISSUE: "bf_same"}
 
 REPO = Path(__file__).resolve().parents[3]
 SLURM = REPO / "benchmarks" / "regbench" / "slurm"

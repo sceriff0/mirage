@@ -1,59 +1,28 @@
-"""Write the committed ANHIR and HyReCo fixtures (``fixtures/anhir/``, ``fixtures/hyreco/``).
+"""Write the committed HyReCo fixture (``fixtures/hyreco/``).
 
-Tiny SYNTHETIC images and landmarks in each dataset's real layout: no pixel and no
-landmark row of either dataset is in them (ANHIR is CC BY-NC-SA). Each pair's moving
+Tiny SYNTHETIC images and landmarks in the dataset's real layout: no pixel and no
+landmark row of the dataset is in them. Each pair's moving
 landmarks are its reference landmarks moved by a known translation (``SHIFT_PX``), and
 the moving image is the reference image moved by the same translation, so a method that
-recovers it scores (almost) zero. Where every format detail comes from is in each
+recovers it scores (almost) zero. Where every format detail comes from is in the
 folder's ``README.md``. Run from the repository root:
 
     python -m benchmarks.tests.regbench.make_landmark_fixtures
 
-It rewrites both folders but their ``README.md``; the images and landmarks are
+It rewrites the folder but its ``README.md``; the images and landmarks are
 deterministic (fixed seeds).
 """
 
 from __future__ import annotations
 
-import csv
-import math
 import shutil
 from pathlib import Path
 
 import numpy as np
 
 HERE = Path(__file__).resolve().parent / "fixtures"
-ANHIR_DIR, HYRECO_DIR = HERE / "anhir", HERE / "hyreco"
+HYRECO_DIR = HERE / "hyreco"
 SHIFT_PX = (4.0, -3.0)  # moving = reference + this, in pixels (x, y)
-ANHIR_HEADER = [
-    "",
-    "Image diagonal [pixels]",
-    "Image size [pixels]",
-    "Source image",
-    "Source landmarks",
-    "Target image",
-    "Target landmarks",
-    "status",
-    "Warped target landmarks",
-    "Warped source landmarks",
-    "Execution time [minutes]",
-]
-# (table index, set, scale folder, source stem, target stem, extension, status)
-ANHIR_ROWS = (
-    (0, "COAD_01", "scale-25pc", "S2", "S1", "jpg", "evaluation"),
-    (4, "COAD_01", "scale-25pc", "S3", "S1", "jpg", "training"),
-    (12, "COAD_02", "scale-25pc", "S5", "S1", "jpg", "training"),
-    (
-        370,
-        "lung-lobes_1",
-        "scale-100pc",
-        "29-039-U-35W-Izd1-2-cd31",
-        "29-039-U-35W-Izd1-1-HE",
-        "png",
-        "training",
-    ),
-)
-ANHIR_HW = (60, 80)  # (H, W) of every synthetic image
 HYRECO_PX_UM = 0.24
 HYRECO_HW = (96, 128)
 # (folder, id, how the TIFF states its pixel size)
@@ -110,70 +79,6 @@ def _points(hw, seed, n=6, margin=6):
     return np.stack([xs, ys], axis=1)
 
 
-def _write_anhir_landmarks(path, xy):
-    """``,X,Y`` with an index column: the archive's own layout (README)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as fh:
-        w = csv.writer(fh, lineterminator="\n")
-        w.writerow(["", "X", "Y"])
-        for i, (x, y) in enumerate(xy):
-            w.writerow([i, f"{x:.1f}", f"{y:.1f}"])
-
-
-def make_anhir():
-    from PIL import Image
-
-    _clear(ANHIR_DIR)
-    rows = []
-    written = set()
-    for k, (index, set_name, scale, src, tgt, ext, status) in enumerate(ANHIR_ROWS):
-        base = f"{set_name}/{scale}"
-        ref, mov = _pair_images(ANHIR_HW, 100 + k)
-        for stem, img in ((tgt, ref), (src, mov)):
-            path = ANHIR_DIR / "images" / base / f"{stem}.{ext}"
-            if path in written:
-                continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if ext == "jpg":
-                Image.fromarray(img).save(path, quality=95)
-            else:
-                Image.fromarray(img).save(path)
-            written.add(path)
-        ref_xy = _points(ANHIR_HW, 200 + k)
-        mov_xy = ref_xy + np.asarray(SHIFT_PX)
-        if status == "training":
-            _write_anhir_landmarks(
-                ANHIR_DIR / "landmarks" / base / f"{tgt}.csv", ref_xy
-            )
-            _write_anhir_landmarks(
-                ANHIR_DIR / "landmarks" / base / f"{src}.csv", mov_xy
-            )
-        else:  # an evaluation pair: only the source's landmarks are public
-            _write_anhir_landmarks(
-                ANHIR_DIR / "landmarks" / base / f"{src}.csv", mov_xy
-            )
-        h, w = ANHIR_HW
-        rows.append(
-            [
-                index,
-                f"{math.hypot(h, w):.1f}",
-                f"({w}, {h})",
-                f"{base}/{src}.{ext}",
-                f"{base}/{src}.csv",
-                f"{base}/{tgt}.{ext}",
-                f"{base}/{tgt}.csv",
-                status,
-                "",
-                "",
-                "",
-            ]
-        )
-    with open(ANHIR_DIR / "dataset_medium.csv", "w", newline="") as fh:
-        w = csv.writer(fh, lineterminator="\n")
-        w.writerow(ANHIR_HEADER)
-        w.writerows(rows)
-
-
 def _write_tiff(path, rgb, how):
     import tifffile
 
@@ -208,9 +113,8 @@ def make_hyreco():
 
 
 def main():
-    make_anhir()
     make_hyreco()
-    for path in sorted(HERE.glob("anhir/**/*")) + sorted(HERE.glob("hyreco/**/*")):
+    for path in sorted(HERE.glob("hyreco/**/*")):
         if path.is_file():
             print(path.relative_to(HERE))
 

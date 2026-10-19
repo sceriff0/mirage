@@ -71,7 +71,7 @@ FLAGGED (``extra.flags``; ``losses.csv``: ``landmark_flagged``), never removed.
    Anything else drops the pair (``_open_rgb``): there is nothing to register.
 2. *Landmarks are paired by line number.* The page implies it and does not say it. Two
    CSVs of a pair with different numbers of points are FLAGGED and the common prefix is
-   scored (the rule ANHIR's official evaluation applies). A line that is not ``x,y[,z]``
+   scored (the rule BIRL's evaluation applies). A line that is not ``x,y[,z]``
    drops the pair wherever it is, except one header line at the top: a blank line
    between points could be a missing landmark, and an id column (more than three
    columns) must be paired by id, which this module does not do.

@@ -686,7 +686,7 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     assert 'DEFAULT_DATASETS="multiplex"' in code
 
 
-@pytest.mark.parametrize("named", ["anhir_tune", "synthetic", "multiplex x", "mcmicro@raw"])
+@pytest.mark.parametrize("named", ["anhir", "synthetic", "multiplex x", "mcmicro@raw"])
 def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     """Neither the cohort nor a public dataset: refused before anything is read or
     submitted, in one line naming the allowed values, with no argparse usage and no
@@ -695,7 +695,7 @@ def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     assert done.returncode == 2
     lines = [x for x in done.stderr.splitlines() if x.strip()]
     assert len(lines) == 1 and "the cohort is multiplex" in lines[0], lines
-    assert "the public datasets are anhir, hyreco, mcmicro" in lines[0]
+    assert "the public datasets are hyreco, mcmicro" in lines[0]
     assert "usage" not in done.stderr.lower() and "cannot list" not in done.stderr
     assert not _sbatch_lines(done.stdout)
 
@@ -775,7 +775,7 @@ def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher
     assert not ran & {"ashlar", "palom", "stare_clahe"}, ran
 
 
-# the landmark sets (anhir, hyreco) launch: test_submit_landmarks.py (ruling 2026-10-19)
+# the landmark set (hyreco) launches: test_submit_landmarks.py (ruling 2026-10-19)
 
 
 def test_the_launchers_kinds_are_regbench_public_and_scored_kinds():

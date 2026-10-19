@@ -160,17 +160,8 @@ NUCLEI_TABLES = (
     "nonband_cells",
     "nonband_summary",
 )
-# The landmark sets' own tables (``tables/<dataset>/``): ANHIR's (``regbench.challenge``)
-# and HyReCo's (``regbench.landmarks``), named here so that ``TABLES`` holds every one.
-ANHIR_TABLES = (
-    "anhir_pairs",
-    "anhir_summary",
-    "anhir_by_set",
-    "anhir_failures",
-    "anhir_resources",
-    "anhir_summary_resources",
-    "anhir_not_run",
-)
+# The landmark set's own tables (``tables/<dataset>/``): HyReCo's (``regbench.landmarks``),
+# named here so that ``TABLES`` holds every one.
 HYRECO_TABLES = (
     "hyreco_pairs",
     "hyreco_points",
@@ -220,7 +211,6 @@ TABLES = (
     "nuclei_checks",
     *(f"{name}{NUCLEI_SUFFIX}" for name in NUCLEI_TABLES),
     *tissue.TABLES,
-    *ANHIR_TABLES,
     *HYRECO_TABLES,
 )
 # tables of earlier versions, still cleared from a folder that holds them
@@ -5310,7 +5300,7 @@ NO_SCORER_YET = (
     "of this harness yet and comes in a later task. Nothing was scored or written"
 )
 KIND_SCORER = {
-    "landmarks": "the challenge's landmark scoring",
+    "landmarks": "the landmark scoring (regbench.landmarks)",
     "tissue": "the tissue-level block (regbench.tissue)",
     "nuclei": "the matched cells, as the cohort",
 }
@@ -5417,16 +5407,8 @@ def _score_tissue(
 
 def _score_landmarks(tables, cases_root, out, dataset, workers=1, expected=None,
                      primary=None):  # fmt: skip
-    """The landmark scorer of a public ``landmarks`` dataset: ANHIR's
-    (``regbench.challenge``) or HyReCo's (``regbench.landmarks``), into ``tables``."""
-    from . import base_name
-
-    if base_name(dataset) == "anhir":
-        from . import challenge
-
-        return challenge.score(
-            cases_root, out, dataset, workers, expected, primary, tables=tables
-        )
+    """The landmark scorer of a public ``landmarks`` dataset (HyReCo's,
+    ``regbench.landmarks``), into ``tables``."""
     from . import landmarks
 
     return landmarks.score(
@@ -5452,8 +5434,8 @@ def score(
     ``<out>/tables/<dataset>/`` (``tables_dir``), so no row of a public dataset ever
     reaches a table of the cohort. A public dataset goes to the scorer of its ``kind``
     (``PUBLIC[base_name]["kind"]``): ``nuclei`` to the cells (every table of ``TABLES``),
-    ``tissue`` to the tissue-level block, ``landmarks`` to the landmark scorers (ANHIR's
-    ``regbench.challenge``, HyReCo's ``regbench.landmarks``); a kind whose scorer this
+    ``tissue`` to the tissue-level block, ``landmarks`` to the landmark scorer (HyReCo's
+    ``regbench.landmarks``); a kind whose scorer this
     harness does not have (none since Task 21 of plan F) would be refused with
     ``SystemExit`` before anything is read or written. ``expected`` and ``primary`` apply to every dataset of the call (the
     command line scores each public dataset in a call of its own, with its own lists:

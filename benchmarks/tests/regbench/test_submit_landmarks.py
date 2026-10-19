@@ -1,10 +1,11 @@
-"""submit_cohort.sh on the public LANDMARK sets (``anhir``, ``hyreco``): read off the dry
-run with ``test_submit_cohort.py``'s stand-in ``sbatch`` and helpers.
+"""submit_cohort.sh on the public LANDMARK set (``hyreco``, the only one since ANHIR was
+removed by the user's ruling of 2026-10-19): read off the dry run with
+``test_submit_cohort.py``'s stand-in ``sbatch`` and helpers.
 
-Ruling 2026-10-19: each set runs its own 41-run list (STARE's whole tier x stride x
-level cross, the other methods at their defaults), STARE first in the default order,
-and is scored into its own tables; ``hyreco`` is one dataset and HYRECO_ADDITIONAL is a
-download switch the launcher never reads.
+Rulings 2026-10-19: the set runs its own 50-run list (STARE's whole tier x stride x
+level cross over ``bf_same``'s five levels, the other methods at their defaults), STARE
+first in the default order, and is scored into its own tables; ``hyreco`` is one dataset
+and HYRECO_ADDITIONAL is a download switch the launcher never reads.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from benchmarks.regbench import variants
 
 from .test_submit_cohort import SCRIPT, _case, _sbatch_lines, code_of, jobs_of, launch
 
-SETS = ("anhir", "hyreco")
+SETS = ("hyreco",)
 
 
 @pytest.fixture(scope="module")
@@ -23,8 +24,6 @@ def site(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("landmark_site")
     cases = tmp / "cases"
     _case(cases, "multiplex", "P1_a", "P1")
-    for cid in ("004", "012", "370"):
-        _case(tmp / "anhir_cases", "anhir", cid, cid)  # each pair is its own patient
     for cid in ("a_29", "a_533", "b_29"):
         _case(tmp / "hyreco_cases", "hyreco", cid, cid)
     fake = tmp / "bin"
@@ -50,7 +49,7 @@ def _laddered(jobs):
 
 
 @pytest.mark.parametrize("ds", SETS)
-def test_the_set_runs_its_own_41_runs_stare_first(site, ds):
+def test_the_set_runs_its_own_50_runs_stare_first(site, ds):
     done, log, out = launch(
         site,
         "--datasets",
@@ -62,8 +61,9 @@ def test_the_set_runs_its_own_41_runs_stare_first(site, ds):
     assert not log.exists()
     ran = _laddered(jobs_of(done))
     want = [variants.run_name(r) for r in variants.runs_for(ds)]
-    assert len(ran) == 41 and set(ran) == set(want)
-    assert sum(variants.family(r) == "stare" for r in ran) == 36
+    assert len(ran) == 50 and set(ran) == set(want)
+    assert sum(variants.family(r) == "stare" for r in ran) == 45
+    assert "stare_haem_none" in ran  # the manuscript's HyReCo STARE row
     assert ran[0] == "stare" and variants.family(ran[0]) == "stare"
     first_other = next(i for i, r in enumerate(ran) if variants.family(r) != "stare")
     assert all(variants.family(r) == "stare" for r in ran[:first_other])
@@ -71,7 +71,7 @@ def test_the_set_runs_its_own_41_runs_stare_first(site, ds):
         x for x in done.stdout.splitlines() if x.startswith(f"# run order ({ds}): ")
     ]
     assert line.split(": ", 1)[1].split() == ran
-    assert f"# {ds}: 41 run(s) of its own list" in done.stdout
+    assert f"# {ds}: 50 run(s) of its own list" in done.stdout
     assert f"{out}/tables/{ds}/" in done.stdout
 
 
@@ -107,17 +107,18 @@ def test_hyreco_additional_is_never_read_by_the_launcher(site):
     assert "HYRECO_ADDITIONAL" not in code_of(SCRIPT)
 
 
-@pytest.mark.parametrize("old", ["hyreco_a", "hyreco_b"])
-def test_the_two_old_hyreco_sets_are_no_dataset(site, old):
+@pytest.mark.parametrize("old", ["hyreco_a", "hyreco_b", "anhir"])
+def test_the_old_landmark_sets_are_no_dataset(site, old):
     done, _, _ = launch(site, "--datasets", old, log=f"old-{old}")
     assert done.returncode == 2 and "no such dataset" in done.stderr
+    assert "the public datasets are hyreco, mcmicro, phenocycler, rashid" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
 def test_cases_there_says_yes_for_prepared_landmark_sets(site):
-    env = {**_env(site, "anhir"), **_env(site, "hyreco")}
+    env = _env(site, "hyreco")
     done, _, _ = launch(site, "--cases-there", env=env, log="there")
     assert done.returncode == 0, done.stderr
     got = dict(ln.split("\t")[:2] for ln in done.stdout.splitlines() if "\t" in ln)
-    assert got["anhir"] == "yes" and got["hyreco"] == "yes"
-    assert "hyreco_a" not in got and "hyreco_b" not in got
+    assert got["hyreco"] == "yes"
+    assert "hyreco_a" not in got and "hyreco_b" not in got and "anhir" not in got

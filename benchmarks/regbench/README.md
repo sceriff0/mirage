@@ -153,8 +153,8 @@ inputs and compute-all.
 been built, so `--all` cannot run it. The public datasets the user has not prepared are also
 left out: their data is downloaded and prepared by hand (see "State"), and `--all`
 includes each one only when its cases are prepared under `REGBENCH_CASES_<NAME>`, saying
-which datasets it left out and why. The landmark sets (ANHIR, HyReCo) are launched like any
-other public set once their cases are prepared ("Landmark sets", below).
+which datasets it left out and why. The landmark set (HyReCo) is launched like any other
+public set once its cases are prepared ("Landmark set", below).
 
 ## The rule
 
@@ -190,11 +190,11 @@ each method's section give them in full. In short:
 
 `regbench` is the official, and the only, benchmarking harness of Mirage. It scores
 registration methods on the user's cyclic-IF cohort (`multiplex`), which is what every
-command takes by default. The public datasets of the paper (`regbench.PUBLIC`: ANHIR,
-HyReCo, MCMICRO, PhenoCycler, Rashid) are named only on request and are
+command takes by default. The public datasets of the paper (`regbench.PUBLIC`: HyReCo,
+MCMICRO, PhenoCycler, Rashid) are named only on request and are
 scored BESIDE the cohort, each into tables of its own, never pooled with it (see "Public
-datasets"); ANHIR and HyReCo have download scripts (`download/`) and a landmark scorer of
-their own ("Landmark sets"); the other public sets are downloaded and prepared by hand. The
+datasets"); HyReCo has a download script (`download/`) and a landmark scorer of its own
+("Landmark set"); the other public sets are downloaded and prepared by hand. The
 generated rungs of the earlier harnesses are gone. **Nothing here has run on the
 cluster**: every part is tested against stand-ins (small trees laid out like the pipeline's
 published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for each
@@ -238,11 +238,11 @@ cells.py       nuclei of a native slide: label images, cell GeoJSON
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      multiplex writes the cohort's cases; anhir and hyreco the landmark sets' pairs
+datasets/      multiplex writes the cohort's cases; hyreco the landmark set's pairs
 landmark_io.py the landmarks of a case (truth.npz), written before case.json
-challenge.py   ANHIR's scorer (<out>/tables/anhir/); landmarks.py HyReCo's (<out>/tables/hyreco/)
+landmarks.py   HyReCo's scorer (<out>/tables/hyreco/)
 truth.py       per-pair error statistics of a landmark scorer; notrun.py its not-run pairs
-download/      anhir.sh, hyreco.sh: fetch and unpack a landmark set (common.sh: rb_fetch)
+download/      hyreco.sh: fetch and unpack the landmark set (common.sh: rb_fetch)
 score.py       reads files only; writes <out>/tables, and keeps what it computed for each
                case under <out>/cache/scores ("Records: a case is scored once")
 selfcheck.py   do a method's points follow the image its own writer produced?
@@ -358,12 +358,13 @@ does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 55 runs, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
-regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the two brightfield
-regimes (`bf_same`: one section re-stained; `bf_consecutive`: consecutive sections) and
-the regime of every dataset of the paper; a run carries the regimes that take it
-(`Run.regimes`: every regime by default, a generated STARE cell the regimes whose levels
-make it, and the two STARE tier runs the cohort's alone), so the brightfield regimes' 15
-STARE runs are in `RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
+regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the brightfield
+regime (`bf_same`: one section re-stained; `bf_consecutive`, consecutive sections, was
+removed with its only dataset on 2026-10-19) and the regime of every dataset of the paper; a run carries the
+regimes that take it (`Run.regimes`: every regime by default, a generated STARE cell the
+regimes whose levels make it, and the two STARE tier runs the cohort's and the landmark
+set's), so the brightfield regime's 12 high-tier STARE runs and its 28 medium and low
+cells are in `RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
 exactly the cohort's result names and opens its summary on the six primary rows:
 
 `stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu`, `ashlar`, `palom`.
@@ -1532,82 +1533,79 @@ writes `<out>/paper/<name>/`. Each public dataset is scored with its own run lis
 (`variants.expected_variants(<name>)`, `variants.primary_for(<name>)`), and goes to the
 scorer of its `kind`: `nuclei` (MCMICRO, PhenoCycler, Rashid) to the matched cells,
 every table above; `tissue` (no dataset has this kind now) to the tissue-level block alone;
-`landmarks` (ANHIR, HyReCo) to its own landmark scorer ("Landmark sets", below). A kind
+`landmarks` (HyReCo) to its own landmark scorer ("Landmark set", below). A kind
 with no scorer would be refused with a message naming the dataset, and nothing written. A
 set of unstitched tiles is named `<name>@<front end>` and is looked up by its
 base name (`regbench.base_name`). On a brightfield dataset ASHLAR and PALOM have no input
 rule and are left out, and so are the `fluo=1` DeeperHistReg rows (their adapter refuses a
 brightfield case); `excluded_runs.csv` and the summary say so, run by run.
 
-### Landmark sets (`anhir`, `hyreco`)
+### Landmark set (`hyreco`)
 
-ANHIR and HyReCo are scored on their manual landmarks, each by a scorer of its own, into
-`<out>/tables/anhir/` and `<out>/tables/hyreco/` (`score.ANHIR_TABLES`,
-`score.HYRECO_TABLES`), never into a cohort table. Ruling 2026-10-19:
+HyReCo is scored on its manual landmarks by a scorer of its own (`regbench.landmarks`),
+into `<out>/tables/hyreco/` (`score.HYRECO_TABLES`), never into a cohort table. The other
+landmark set of Task 21 was removed with its scorer, its download script and its regime
+(`bf_consecutive`) by the user's ruling of 2026-10-19: it is in no figure of the
+manuscript. Rulings 2026-10-19:
 
-- **ANHIR** (`regbench.challenge`): all 230 training pairs of the cover table are scored
-  together; there is no split and nothing is tuned on them. Per pair: the challenge's
-  median and maximum rTRE (TRE over the target image's diagonal) and robustness; a pair
-  the method failed on counts at its unregistered landmarks with robustness 0, the
-  official rule. `rank_median_rtre` / `avg_rank_median_rtre` rank each pair's median rTRE
-  **among the methods present here** (`initial` excluded, ties averaged), not on the
-  leaderboard, whose submissions are not public.
-- **HyReCo** (`regbench.landmarks`): ONE dataset, `hyreco` (ruling 2026-10-19 (hyreco)):
-  `prepare hyreco --data-root <dir>` reads subset A (`HyReCo/{HE,PHH3}`) and, when it was
-  downloaded, subset B (`HyReCo-Additional/{HE,PHH3}`) into one cases folder, case ids
-  `a_<id>` and `b_<id>`. An id both subsets list is kept in both and flagged
-  (`shared_id`, counted as `n_shared_id`); nothing is dropped. The summary has three sets,
-  `all_pairs`, `subset_a` and `subset_b`, and the authors' published numbers stand beside
-  them (`hyreco_published`), never inside. Errors are in micrometres (per-pair median, and
-  one pooled median over all landmarks).
+- **HyReCo, the full set and the Additional set** (`regbench.landmarks`): ONE dataset,
+  `hyreco`. `prepare hyreco --data-root <dir>` reads subset A (`HyReCo/{HE,PHH3}`) and
+  subset B (`HyReCo-Additional/{HE,PHH3}`) into one cases folder, case ids `a_<id>` and
+  `b_<id>`; the download script fetches both by default. An id both subsets list is kept
+  in both and flagged (`shared_id`, counted as `n_shared_id`); nothing is dropped. The
+  summary has three sets, `all_pairs`, `subset_a` and `subset_b`, and the authors'
+  published numbers stand beside them (`hyreco_published`), never inside. Errors are in
+  micrometres (per-pair median, and one pooled median over all landmarks); each pair row
+  also carries the median and maximum rTRE (TRE over the target image's diagonal) and
+  robustness; a pair the method failed on counts at its unregistered landmarks.
 - **Nothing blocks.** A landmark sanity check that fails (a landmark outside its image,
-  two landmark files of different lengths, a pixel size off the published one, a cover
-  table whose diagonal is not the image's) is a flag on the pair (`flags`, `n_flagged`)
-  and a `landmark_flagged` row of `losses.csv`; the pair is scored. A pair prepare could
-  not read, or whose images are not there (`--allow-incomplete`), is a row of
-  `prepare_dropped.csv`. A result whose `run.json: truth_sha256` is not the case's
-  `truth.npz` as it is now was made for other landmarks: it is `not run` on the case
-  (`*_not_run.csv`, a `stale_result` loss), in no statistic.
-- **Run lists, 41 runs each.** STARE runs its whole cross on each set: tier {high,
-  medium, low} x stride {64, 128, 256} x every level of the set's regime
-  (`regimes.stare_levels`; `bf_consecutive` for ANHIR, `bf_same` for HyReCo), 36 runs.
-  The other methods run their defaults only: `valis_mirage`, `valis120`,
+  two landmark files of different lengths, a pixel size off the published one) is a flag
+  on the pair (`flags`, `n_flagged`) and a `landmark_flagged` row of `losses.csv`; the
+  pair is scored. A pair prepare could not read, or whose images are not there
+  (`--allow-incomplete`), is a row of `prepare_dropped.csv`. A result whose `run.json:
+  truth_sha256` is not the case's `truth.npz` as it is now was made for other landmarks:
+  it is `not run` on the case (`*_not_run.csv`, a `stale_result` loss), in no statistic.
+- **Run list, 50 runs.** STARE runs its whole cross: tier {high, medium, low} x stride
+  {64, 128, 256} x the five levels of `bf_same` (`regimes.stare_levels`: `none` (grey,
+  STARE unchanged), `haem_clahe`, `grey_clahe`, `haem_percentile` and `haem_none`), 45
+  runs. The other methods run their defaults only: `valis_mirage`, `valis120`,
   `valis120_hires`, `deeperhistreg_gpu`, `deeperhistreg_hr_gpu`; every other run is listed
   in `excluded_runs.csv` with the ruling as its reason. The cohort keeps its 56 runs and
-  the fluorescence sets theirs; `RUNS` holds 105 (the cohort's 56, the brightfield levels'
-  15 and the landmark sets' medium and low tiers, 34). On a public set `runs --order
-  default` puts STARE first; on the cohort ASHLAR stays first.
-- **Paper tables** (`paper --dataset anhir|hyreco`): `public_landmarks` (one row per set
-  and row), `public_landmark_pairs` (one row per pair and row) and `method_best`: each
+  the fluorescence sets theirs; `RUNS` holds 96 (the cohort's 56, `bf_same`'s 12 high-tier
+  cells and its 28 medium and low cells). On a public set `runs --order default` puts
+  STARE first; on the cohort ASHLAR stays first.
+- **The manuscript's HyReCo STARE row** (Fig. 3f) is `stare_haem_none`: haematoxylin from
+  colour deconvolution, high tier, stride 64, NO intensity preprocessing (`--opt
+  proxy=haem --opt sprep=none`; level `none_haem` of `bf_same`, added by the user's
+  ruling of 2026-10-19). The harness has no per-dataset primary row, so `stare` (grey, no
+  preprocessing) stays STARE's primary in `summary.md`; the manuscript's row is read by
+  its name: the `row` column of `public_landmarks` / `public_landmark_pairs`, and
+  `hyreco_summary.csv`'s `method` column.
+- **Paper tables** (`paper --dataset hyreco`): `public_landmarks` (one row per set and
+  row), `public_landmark_pairs` (one row per pair and row) and `method_best`: each
   family's lowest median over pairs of the per-pair median rTRE, every terminal row of the
-  family a candidate (STARE's 36), chosen on these same pairs (`in_sample_selection`
+  family a candidate (STARE's 45), chosen on these same pairs (`in_sample_selection`
   True). A family with no row scored has no best row (`NA`).
 
 Getting the data (nothing in the repository downloads it for you):
 
 ```bash
-# ANHIR: the links from the challenge's Data page after registering, one
-# `url<TAB>name[<TAB>md5]` line each (dataset_medium.csv, dataset_medium.z01..z05,
-# dataset_medium.zip, landmarks.zip); the split archive is rejoined with `zip -s 0`
-ANHIR_URLS=anhir_urls.tsv benchmarks/regbench/download/anhir.sh /data/anhir
-python -m benchmarks.regbench prepare anhir --source /data/anhir --cases /data/cases_anhir
-
-# HyReCo: the IEEE DataPort links (HyReCo.zip, 233.36 GB); HYRECO_ADDITIONAL=1 also
-# fetches HyReCo-Additional-HE.zip and -PHH3.zip (273.73 + 232.58 GB). It only chooses
-# what is downloaded: prepare takes subset B whenever it is there
+# HyReCo: the IEEE DataPort links, one `url<TAB>name[<TAB>md5]` line each. By default the
+# FULL set is fetched: HyReCo.zip (233.36 GB) AND HyReCo-Additional-HE.zip and -PHH3.zip
+# (273.73 + 232.58 GB); the free-space hint is twice their sum, 1479.3 GB.
+# HYRECO_ADDITIONAL=0 fetches HyReCo.zip alone (a quick core-only download, 466.7 GB).
+# prepare takes subset B whenever it is there
 HYRECO_URLS=hyreco_urls.tsv benchmarks/regbench/download/hyreco.sh /data/hyreco
 python -m benchmarks.regbench prepare hyreco --data-root /data/hyreco --cases /data/cases_hyreco
 
-REGBENCH_CASES_ANHIR=/data/cases_anhir benchmarks/regbench/slurm/submit_cohort.sh --datasets anhir
 REGBENCH_CASES_HYRECO=/data/cases_hyreco benchmarks/regbench/slurm/submit_cohort.sh --datasets hyreco
 ```
 
-Each download is resumable (`curl -C -` into `<name>.part`; an md5 given on the line must
+The download is resumable (`curl -C -` into `<name>.part`; an md5 given on the line must
 match before the file takes its name), and a failure stops the script, never swallowed.
-ANHIR is CC
-BY-NC-SA: never commit what it writes. The committed fixtures
-(`benchmarks/tests/regbench/fixtures/{anhir,hyreco}/`) hold made-up images and landmarks in
-each dataset's layout; their `README.md` cites where every format detail comes from.
+The committed fixture (`benchmarks/tests/regbench/fixtures/hyreco/`) holds made-up images
+and landmarks in the dataset's layout; its `README.md` cites where every format detail
+comes from.
 
 ### Off the seams
 
@@ -1811,8 +1809,8 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `no_trace` | infrastructure | run | a compute-all patient with no Nextflow trace (pipeline_cost_summary: complete_run 0) |
 | `compute_incomplete` | infrastructure | run | a compute-all patient whose run is not whole (a failed task no retry recovered, a cached task, no ok end line): out of the backend's `all` row |
 | `manifest_dropped` | input | manifest | the manifest could not list the round |
-| `prepare_dropped` | input | prepare | prepare dropped the round (multiplex) or the pair (anhir, hyreco) |
-| `prepare_failed` | input | prepare | prepare failed on the round (multiplex) or the pair (anhir, hyreco) |
+| `prepare_dropped` | input | prepare | prepare dropped the round (multiplex) or the pair (hyreco) |
+| `prepare_failed` | input | prepare | prepare failed on the round (multiplex) or the pair (hyreco) |
 | `landmark_flagged` | input | prepare | a landmark sanity check of a public landmark set failed (a landmark outside the image, a diagonal the table disagrees with, unequal landmark files, a pixel size off the published one): the pair is kept, scored and flagged |
 | `frame_check_failed` | input | run | a STARE proxy moved image content in prep's frame check: written, run and flagged (`stages/prep/record.json` `frame_check=failed`; B10, user ruling "no blocking") |
 | `low_agreement` | input | nuclei | the slide's nuclei agree with its outlines under the threshold: kept, scored and flagged (nuclei_checks.csv) |

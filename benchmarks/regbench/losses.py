@@ -283,12 +283,12 @@ CAUSES = {
     "prepare_dropped": (
         INPUT,
         "prepare",
-        "prepare dropped the round (multiplex) or the pair (anhir, hyreco)",
+        "prepare dropped the round (multiplex) or the pair (hyreco)",
     ),
     "prepare_failed": (
         INPUT,
         "prepare",
-        "prepare failed on the round (multiplex) or the pair (anhir, hyreco)",
+        "prepare failed on the round (multiplex) or the pair (hyreco)",
     ),
     "landmark_flagged": (
         INPUT,

@@ -22,6 +22,11 @@
 # run with its own run list (`runs --dataset <name>`) and scored into tables of its own,
 # never pooled with the cohort. Any other name is refused.
 #
+# HyReCo (`hyreco`, the one landmark set): download/hyreco.sh fetches the FULL set by
+# default, the core zip and both Additional zips (HYRECO_ADDITIONAL=0: the core zip
+# alone), and `prepare hyreco` puts subset A and subset B into one cases folder
+# (REGBENCH_CASES_HYRECO). This launcher reads neither the download nor its switch.
+#
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
 #
@@ -375,11 +380,11 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the default dataset; the public datasets are named on request
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
-PUBLIC_DATASETS="anhir hyreco mcmicro phenocycler rashid"
+PUBLIC_DATASETS="hyreco mcmicro phenocycler rashid"
 # each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
 # (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
 # scorer: a dataset of a kind not scored is refused up front (every kind is, since Task 21)
-PUBLIC_KINDS="anhir=landmarks hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
+PUBLIC_KINDS="hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei"
 SCORED_KINDS="tissue nuclei landmarks"
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0 cases_there=0

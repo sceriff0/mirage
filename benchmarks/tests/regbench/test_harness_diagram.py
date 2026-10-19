@@ -65,7 +65,6 @@ PREFIXES = (
 FORBIDDEN = (
     r"synthetic",
     r"semisynth",
-    r"anhir_tune",
     r"stare_prep",
     r"gate\.sbatch",
     r"(?<![A-Za-z0-9_])arms(?![A-Za-z0-9_])",

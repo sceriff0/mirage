@@ -1,14 +1,13 @@
-"""The paper tables of a public LANDMARK dataset (``anhir``, ``hyreco``): built from the
-tables its scorer wrote (``<out>/tables/<dataset>/``: ``regbench.challenge`` for ANHIR,
-``regbench.landmarks`` for HyReCo) and nothing else; computes no error itself.
+"""The paper tables of a public LANDMARK dataset (``hyreco``): built from the tables its
+scorer wrote (``<out>/tables/<dataset>/``: ``regbench.landmarks``) and nothing else;
+computes no error itself.
 
 ``public_landmark_pairs``  one row per (pair, row): the terminal row of every run of the
                            dataset's list (``tables.terminal_rows``) and ``initial``.
 ``public_landmarks``       one row per (set, row): the pairs' statistics aggregated the
                            challenge's way (BIRL ``compute_scores``: per-pair median /
                            maximum rTRE and robustness, then the median and the mean over
-                           pairs; the robust subset, robustness above 0.5), the mean rank
-                           (ANHIR: among the METHODS PRESENT, not the leaderboard) and the
+                           pairs; the robust subset, robustness above 0.5) and the
                            micrometre medians.
 ``method_best``            the best row of each family, in the cohort's columns: the lowest
                            ``rtre_median_med`` over every pair, EVERY terminal row of the
@@ -30,17 +29,14 @@ from . import schema
 from . import tables as T
 
 LANDMARK_WRITTEN = ("public_landmarks", "public_landmark_pairs", "method_best")
-ROBUST_ABOVE = 0.5  # BIRL evaluate_submission.py:281 (regbench.challenge)
-PAIRS_TABLE = {"anhir": "anhir_pairs", "hyreco": "hyreco_pairs"}
+ROBUST_ABOVE = 0.5  # BIRL evaluate_submission.py:281
+PAIRS_TABLE = {"hyreco": "hyreco_pairs"}
 SUMMARY_TABLE = {"hyreco": "hyreco_summary"}
 AGGREGATION = {
-    "anhir": "ANHIR's (BIRL compute_scores): per-pair median / maximum rTRE (TRE over the "
-    "target image's diagonal) and robustness, then the median and the mean over pairs; a "
-    "pair that did not register at its initial rTRE with robustness 0; rank_mean among "
-    "the methods present here, not the leaderboard",
     "hyreco": "per-pair median TRE, then the median over pairs (tre_um_med); "
     "tre_um_pooled_med is one median over all landmarks of all pairs (Lotz et al. 2023's "
-    "MTRE); rTRE and robustness as ANHIR's definitions",
+    "MTRE); rTRE (TRE over the target image's diagonal) and robustness as BIRL "
+    "compute_scores defines them",
 }
 CRITERION = "median over pairs of the per-pair median rTRE (lowest wins), every pair"
 RULE = (
@@ -53,9 +49,7 @@ RULE = (
 
 
 def _sets(dataset, r):
-    """The sets a pair row belongs to: ANHIR ``all``; HyReCo ``all_pairs`` and its subset."""
-    if dataset == "anhir":
-        return ["all"]
+    """The sets a pair row belongs to: HyReCo ``all_pairs`` and its subset."""
     sub = str(r.get("subset") or "").lower()
     return ["all_pairs"] + ([f"subset_{sub}"] if sub in ("a", "b") else [])
 
@@ -86,16 +80,13 @@ def pairs_table(rows, dataset):
                 source=T.SOURCE,
                 dataset=dataset,
                 case_id=r["case_id"],
-                set=r.get("set") if dataset == "anhir" else r.get("subset"),
+                set=r.get("subset"),
                 family=fam if fam is not None else schema.NA,
                 row=r["method"],
                 frame=r.get("frame"),
                 rtre_median=T._num(r.get("rtre_median")),
                 rtre_max=T._num(r.get("rtre_max")),
                 robustness=T._num(r.get("robustness")),
-                rank_median_rtre=T._num(r.get("rank_median_rtre"))
-                if dataset == "anhir"
-                else math.nan,
                 tre_um_p50=T._num(r.get("tre_um_p50")),
                 tre_um_p90=T._num(r.get("tre_um_p90")),
                 imputed_initial=_bool(r.get("imputed_initial", r.get("failed"))),
@@ -162,9 +153,6 @@ def landmarks_table(rows, dataset, pooled):
                 rtre_max_robust_mean=_stat(num("rtre_max", robust), T._mean),
                 robustness_med=_stat(num("robustness"), T._median),
                 robustness_mean=_stat(num("robustness"), T._mean),
-                rank_mean=_stat(num("rank_median_rtre"), T._mean)
-                if dataset == "anhir"
-                else math.nan,
                 tre_um_med=_stat(num("tre_um_p50"), T._median),
                 tre_um_pooled_med=pooled.get((name, row), math.nan),
                 best_of_family=False,
@@ -181,7 +169,7 @@ def best_rows(summary, dataset):
     """The ``method_best`` rows (module docstring) and, in place, ``best_of_family`` of
     the chosen rows of ``summary``."""
     out = []
-    every_set = "all" if dataset == "anhir" else "all_pairs"
+    every_set = "all_pairs"
     terminals = list(dict.fromkeys(T.terminal_rows(dataset).values()))
     families = list(
         dict.fromkeys(T.family_of(t) for t in terminals if T.family_of(t) is not None)

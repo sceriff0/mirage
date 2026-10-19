@@ -504,8 +504,8 @@ _TABLE_LIST = [
        ("rule", "", "")),
     _t("public_landmarks", ("dataset", "set", "row"),
        "landmark error per public landmark dataset, set of pairs and row (the terminal "
-       "rows and initial; regbench.challenge / regbench.landmarks)",
-       ("dataset", "", ""), ("set", "", "all (ANHIR); all_pairs, subset_a, subset_b (HyReCo)"),
+       "rows and initial; regbench.landmarks)",
+       ("dataset", "", ""), ("set", "", "all_pairs, subset_a, subset_b (HyReCo)"),
        ("family", "", ""), ("row", "", ""),
        ("n_pairs", "count", "pairs in the statistics (not_run pairs left out)"),
        ("n_failed", "count", "pairs scored at their unregistered landmarks"),
@@ -521,8 +521,6 @@ _TABLE_LIST = [
        ("rtre_max_robust_mean", "1", "rtre_max_mean over the robust pairs"),
        ("robustness_med", "1", "median over pairs of the share of landmarks improved"),
        ("robustness_mean", "1", "mean over pairs of the share of landmarks improved"),
-       ("rank_mean", "1", "ANHIR: mean over pairs of the rank of the median rTRE among the "
-        "METHODS PRESENT (initial excluded), not the leaderboard's; NA elsewhere"),
        ("tre_um_med", "um", "median over pairs of the per-pair median TRE"),
        ("tre_um_pooled_med", "um", "HyReCo: one median over all landmarks of all pairs "
         "(Lotz et al. 2023's MTRE [PARTIAL]); NA elsewhere"),
@@ -535,10 +533,9 @@ _TABLE_LIST = [
        "one row per landmark pair and row (the terminal rows and initial) of a public "
        "landmark dataset",
        ("dataset", "", ""), ("case_id", "", "the pair (the scorer's case id)"),
-       ("set", "", "ANHIR: the tissue set; HyReCo: the subset (A, B)"),
+       ("set", "", "HyReCo: the subset (A, B)"),
        ("family", "", ""), ("row", "", ""), ("frame", "", ""),
        ("rtre_median", "1", "the median landmark error of the pair over the target image's diagonal"), ("rtre_max", "1", "the largest landmark error of the pair over the target image's diagonal"), ("robustness", "1", "the share of the pair's landmarks whose error is below their initial error"),
-       ("rank_median_rtre", "1", "ANHIR: rank among the methods present; NA elsewhere"),
        ("tre_um_p50", "um", "the median landmark error of the pair, micrometres (NA without a pixel size)"), ("tre_um_p90", "um", "the 90th percentile landmark error of the pair, micrometres"),
        ("imputed_initial", "bool", "scored at the unregistered landmarks"),
        ("excluded_from_summaries", "bool", "not run for a cause not the method's"),

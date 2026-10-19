@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by the regbench download scripts (anhir.sh, hyreco.sh); sourced, never run.
+# Shared by the regbench download scripts (hyreco.sh); sourced, never run.
 #
 #   rb_need <command>...            refuse (exit 2) when a command is not on PATH
 #   rb_fetch <url> <dest> [<md5>]   download <url> to <dest>: curl into <dest>.part,
@@ -74,7 +74,7 @@ rb_free() { # <dir> <bytes>
 	local kb
 	kb=$(df -Pk "$1" | awk 'NR == 2 {print $4}')
 	awk -v kb="$kb" -v need="$2" -v d="$1" 'BEGIN {
-		printf "free space of %s: %.1f GB; needed (twice the archive): %.1f GB%s\n",
+		printf "free space of %s: %.1f GB; needed (twice the archives): %.1f GB%s\n",
 			d, kb * 1024 / 1e9, need / 1e9, (kb * 1024 < need ? "  -- NOT ENOUGH" : "")
 	}'
 }

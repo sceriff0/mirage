@@ -1,5 +1,5 @@
 """Score HyReCo (``hyreco``), a public landmark set: its own tables, never
-the cohort's; and the per-pair landmark error both landmark scorers share.
+the cohort's; and the per-pair landmark error.
 
 Restored from commit 5a46f778 (``benchmarks/regbench/landmarks.py``). What changed:
 the landmarks are the case's ``truth.npz`` (``regbench.landmark_io``), moved by the
@@ -36,9 +36,15 @@ reason that is not the method's is in none (``n_not_run``, ``hyreco_not_run.csv`
                 Lotz et al. 2023 ("MTRE": the median "over all N_images image pairs and
                 over all available landmarks"). It weights a pair by its landmark count.
 
-Each pair row also carries the challenge's relative numbers (``rtre_*``, robustness:
-``pair_stats``, the definitions of ``regbench.challenge``), so the paper's
-``public_landmarks`` reads one set of columns for every landmark set.
+Each pair row also carries the relative numbers (``rtre_*``, robustness: ``pair_stats``),
+so the paper's ``public_landmarks`` reads one set of columns for every landmark set. Their
+definitions are BIRL's (Borda/BIRL at ``f1648b29`` ``[PARTIAL: read
+birl/utilities/evaluate.py:1-123 (compute_tre, compute_target_regist_error_statistic,
+compute_tre_robustness) and the repository's evaluate_submission.py:225-345
+(compute_scores); the rest of the repository not read; read for Task 21, not re-read
+since]``): rTRE is TRE over the diagonal of the target (reference) image, robustness the
+share of a pair's landmarks whose TRE after registration is strictly below their initial
+TRE.
 
 **Sets** (column ``set``). ``all_pairs`` (every prepared pair), ``subset_a`` and
 ``subset_b`` (each subset's pairs: the sets the published numbers were computed on). The
@@ -193,8 +199,8 @@ def landmark_errors(case, truth_pts, warped):
 
 
 def pair_stats(err, init, diagonal):
-    """The challenge's per-pair statistics from the errors of one pair's landmarks, in
-    pixels (``regbench.challenge``'s definitions): ``err`` after registration (a
+    """The per-pair statistics from the errors of one pair's landmarks, in pixels (BIRL
+    ``compute_scores``' definitions): ``err`` after registration (a
     non-finite entry = a landmark the method did not map: it stays at its unregistered
     position), ``init`` before."""
     err, init = np.asarray(err, float), np.asarray(init, float)

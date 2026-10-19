@@ -1,8 +1,7 @@
 """Landmark error: how far a method's map leaves a landmark from its partner.
 
 Restored from commit 5a46f778 (``benchmarks/regbench/truth.py``) with ``error_stats`` and
-``jacobian_stats`` only, the two the landmark scorers call (``regbench.landmarks``,
-``regbench.challenge``). The known-truth spec, its families and its probes are not
+``jacobian_stats`` only, the two the landmark scorer calls (``regbench.landmarks``). The known-truth spec, its families and its probes are not
 restored: nothing in this harness generates a case any more.
 
 **Direction.** A method is asked only for what it estimated. For a ``mov_to_ref`` map the

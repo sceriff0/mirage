@@ -8,7 +8,7 @@ method has no input rule for a public dataset's modality is left out of it, with
 reason (``excluded_runs.csv``).
 
 ``REMOVED`` is the module-level tuple that later removals extend: names that came back
-with nothing (the synthetic rungs, ANHIR's tuning side, the preprocessing row). The
+with nothing (the synthetic rungs, ANHIR and its tuning side, the preprocessing row). The
 scan below says so for the CLI, the regimes and every launcher file.
 """
 
@@ -31,6 +31,7 @@ pytestmark = pytest.mark.usefixtures("public_datasets")  # conftest: nucset, tis
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 RB = ROOT / "benchmarks" / "regbench"
 REMOVED = ("synthetic", "semisynth", "anhir_tune")
+REMOVED += ("anhir",)  # user ruling 2026-10-19; the rest of it: test_no_anhir.py
 REMOVED += ("stare_prep",)
 
 sys.path.insert(0, str(ROOT / "tests"))
@@ -66,7 +67,7 @@ def test_the_public_lookup_reads_the_base_name():
     }
 
 
-@pytest.mark.parametrize("name", ["anhir", "hyreco", "tissueset"])
+@pytest.mark.parametrize("name", ["hyreco", "tissueset"])
 def test_brightfield_public_sets_leave_out_ashlar_and_palom(name):
     kept = {variants.run_name(r) for r in variants.runs_for(name)}
     assert not any(n.startswith(("ashlar", "affine_ashlar", "palom")) for n in kept)
@@ -161,17 +162,17 @@ def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
 
 
 def test_the_command_line_refuses_an_unscored_kind_before_scoring(tmp_path, monkeypatch):
-    """``score --dataset multiplex anhir`` with no landmark scorer: nothing is written, the
+    """``score --dataset multiplex hyreco`` with no landmark scorer: nothing is written, the
     cohort's tables neither (every kind of PUBLIC has a scorer since Task 21, so the
     refusal is exercised with landmarks taken out of SCORED_KINDS)."""
     from benchmarks.regbench import cli
 
     monkeypatch.setattr(score, "SCORED_KINDS", ("tissue", "nuclei"))
     root, out, made = scored_cohort.build(tmp_path)
-    with pytest.raises(SystemExit, match=r"anhir.*later"):
+    with pytest.raises(SystemExit, match=r"hyreco.*later"):
         cli.main(
             ["score", "--cases", str(root), "--out", str(out), "--workers", "1",
-             "--dataset", "multiplex", "anhir"]
+             "--dataset", "multiplex", "hyreco"]
         )  # fmt: skip
     assert not (out / "tables").exists()
 
@@ -180,15 +181,14 @@ def test_every_public_kind_has_a_scorer():
     assert {spec["kind"] for spec in PUBLIC.values()} <= set(score.SCORED_KINDS)
 
 
-@pytest.mark.parametrize("name", ["anhir", "hyreco"])
+@pytest.mark.parametrize("name", ["hyreco"])
 def test_a_landmark_set_is_scored_into_its_own_tables_never_the_cohorts(tmp_path, name):
-    """Task 21: ANHIR and HyReCo are scored, each alone, into ``tables/<name>/``."""
+    """Task 21: HyReCo is scored alone into ``tables/<name>/``."""
     from benchmarks.regbench import cli
 
     fixtures = pathlib.Path(__file__).resolve().parent / "fixtures" / name
     root, out, made = scored_cohort.build(tmp_path)
-    flag = ["--source", str(fixtures)] if name == "anhir" else [
-        "--data-root", str(fixtures), "--allow-incomplete"]
+    flag = ["--data-root", str(fixtures), "--allow-incomplete"]
     assert cli.main(["prepare", name, *flag, "--cases", str(root)]) == 0
     score.score(root, out, datasets=["multiplex", name], **scored_cohort.SCORE_KW)
     assert (out / "tables" / name / f"{name}_pairs.csv").is_file()
@@ -215,17 +215,11 @@ def test_the_known_truth_spec_stays_gone():
     assert not (RB / "truth_spec.json").exists()
 
 
-@pytest.mark.parametrize("module", ["challenge", "landmarks"])
-def test_the_landmark_scorers_write_only_their_own_tables(module):
-    """Task 21 brought ANHIR's and HyReCo's scorers back: every table they write is named
-    for their dataset, so none can be taken for a cohort table."""
-    mod = importlib.import_module(f"benchmarks.regbench.{module}")
-    prefix = "anhir_" if module == "challenge" else "hyreco_"
-    assert mod.TABLES and all(t.startswith(prefix) for t in mod.TABLES)
-
-
-def test_no_benchmarks_anhir_directory():
-    assert not (ROOT / "benchmarks" / "anhir").exists()
+def test_the_landmark_scorer_writes_only_its_own_tables():
+    """Task 21 brought HyReCo's scorer back: every table it writes is named for its
+    dataset, so none can be taken for a cohort table."""
+    mod = importlib.import_module("benchmarks.regbench.landmarks")
+    assert mod.TABLES and all(t.startswith("hyreco_") for t in mod.TABLES)
 
 
 def test_no_preprocessing_selection():

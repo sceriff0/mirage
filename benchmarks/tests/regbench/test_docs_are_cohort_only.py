@@ -1,11 +1,11 @@
 """The regbench documents describe the harness as it is, and nothing that was removed.
 
 ``benchmarks/regbench/README.md``, ``benchmarks/README.md`` and ``docs/benchmarks.md`` do
-not name the removed harnesses (the generated rungs, ANHIR's tuning side, the
-preprocessing row and its known-truth spec, the arms and the sweep) or the removed gate
+not name the removed harnesses (the generated rungs, a removed landmark set's tuning
+side, the preprocessing row and its known-truth spec, the arms and the sweep) or the removed gate
 switches. The one place that may is the ``## Removed harnesses`` section of
 ``benchmarks/README.md``, the record of the removal and of the archive tag. The public
-datasets of plan F (``regbench.PUBLIC``: ANHIR, HyReCo, MCMICRO, ...) are back,
+datasets of plan F (``regbench.PUBLIC``: HyReCo, MCMICRO, ...) are back,
 beside the cohort and never pooled with it, so their names are allowed.
 
 The text is read comment-free (HTML comments out), and every ``submit_cohort.sh`` flag the

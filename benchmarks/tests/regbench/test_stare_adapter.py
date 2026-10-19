@@ -474,7 +474,7 @@ def test_a_failed_proxy_is_the_benchmarks_cause(
     [
         # HyReCo prepared with `--reduce 2`: a proxy written at the slide's size
         (lambda c: _reduced(c, 2), {"proxy": "haem"}, "reduced proxy"),
-        # ANHIR's mammary glands: CLAHE's region is in micrometres
+        # a case whose pixel size is not established: CLAHE's region is in micrometres
         (
             lambda c: dataclasses.replace(c, pixel_size_um=None),
             {"sprep": "clahe"},

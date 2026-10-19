@@ -18,7 +18,7 @@ METHODS = (
 # (``<out>/tables/<dataset>/``, ``<out>/paper/<dataset>/``), never pooled with it and
 # never read by default (``DATASETS`` stays the cohort). ``kind`` is what a case of the
 # set is scored on, and so which scorer ``score.score`` hands it to: ``landmarks`` (the
-# challenge's landmark pairs), ``tissue`` (the tissue-level block of the written images)
+# dataset's landmark pairs), ``tissue`` (the tissue-level block of the written images)
 # or ``nuclei`` (the matched cells, as the cohort). ``modality`` is the case's
 # (``methods.input_rule``). ``raw_tiles``: the set also has its unstitched tiles, run as
 # ``<name>@raw`` (a front end; ``base_name``). HyReCo is ONE set, ``hyreco``: subset A
@@ -26,7 +26,6 @@ METHODS = (
 _BF_LANDMARKS = {"kind": "landmarks", "modality": "brightfield"}
 _NUCLEI = {"kind": "nuclei", "modality": "fluorescence"}
 PUBLIC = {
-    "anhir": dict(_BF_LANDMARKS),
     "hyreco": dict(_BF_LANDMARKS),
     "mcmicro": {**_NUCLEI, "raw_tiles": True},
     "phenocycler": {**_NUCLEI, "raw_tiles": True},

@@ -46,14 +46,14 @@ def _stare_names():
 
 
 def _brightfield_stare_names():
-    """The STARE runs of the brightfield regimes that are not the cohort's (every
-    stride x level of ``bf_same`` and ``bf_consecutive`` whose name is no cohort cell's),
+    """The STARE runs of the brightfield regime that are not the cohort's (every
+    stride x level of ``bf_same`` whose name is no cohort cell's),
     in the order of ``RUNS``: in ``RUNS``, never in the cohort's list."""
     from benchmarks.regbench import regimes as rg_
 
     cohort = set(_stare_names())
     out = []
-    for reg in ("bf_same", "bf_consecutive"):
+    for reg in ("bf_same",):
         for k, lv in rg_.stare_levels(reg):
             for s_ in variants.STARE_STRIDES:
                 name = variants.stare_cell(s_, k, lv)[0]
@@ -70,7 +70,7 @@ def _landmark_tier_names():
     from benchmarks.regbench import regimes as rg_
 
     out = []
-    for reg in ("bf_consecutive", "bf_same"):
+    for reg in ("bf_same",):
         for k, lv in rg_.stare_levels(reg):
             for s_ in variants.STARE_STRIDES:
                 high = variants.stare_cell(s_, k, lv)[0]
@@ -168,11 +168,11 @@ def test_counts():
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
     cohort = variants.runs_for(None)
     assert n_runs == len(cohort) == N_RUNS
-    # RUNS also holds the brightfield regimes' STARE runs, which the cohort never takes,
-    # and their medium and low tiers (ruling 2026-10-19: STARE's whole cross on ANHIR
-    # and HyReCo)
-    assert len(_brightfield_stare_names()) == 15 and len(_landmark_tier_names()) == 34
-    assert len(variants.RUNS) == N_RUNS + 15 + 34 == 105
+    # RUNS also holds the brightfield regime's STARE runs, which the cohort never takes,
+    # and their medium and low tiers (rulings 2026-10-19: STARE's whole cross on HyReCo,
+    # bf_same's five levels; the other brightfield regime went with its only dataset)
+    assert len(_brightfield_stare_names()) == 12 and len(_landmark_tier_names()) == 28
+    assert len(variants.RUNS) == N_RUNS + 12 + 28 == 96
     assert {variants.run_name(r) for r in cohort if r.gpu} == GPU
     per_patient = {
         variants.run_name(r) for r in cohort if variants.scope(r.method) == "group"
@@ -984,18 +984,21 @@ def test_each_regime_has_its_strides_times_levels_and_the_baseline_is_shared():
             assert r.regimes == tuple(rg.REGIMES)
     by = {variants.run_name(r): r.regimes for r in _generated_stare()}
     assert by["stare_clahe"] == ("cyclic_if",)
-    assert by["stare_grey_clahe"] == ("bf_same", "bf_consecutive")
+    assert by["stare_grey_clahe"] == ("bf_same",)
     assert by["stare_haem_clahe"] == ("bf_same",)
-    assert by["stare_s256_grey_smooth_none"] == ("bf_consecutive",)
+    assert by["stare_haem_none"] == ("bf_same",)
+    assert by["stare_s256_haem_none"] == ("bf_same",)
+    names = {variants.run_name(r) for r in variants.RUNS}
+    assert not any("grey_smooth" in n or "grey_percentile" in n for n in names)
 
 
 def test_every_run_but_stare_takes_every_regime_and_the_tiers_are_the_cohorts():
     """Every method but STARE runs as shipped on every dataset (R2): its run takes every
     regime, and a public dataset leaves it out only with a reason (``excluded_for``).
     STARE's tier runs are the cohort's and, since ruling 2026-10-19 (STARE's whole
-    tier x stride x level cross on ANHIR and HyReCo), the landmark sets' regimes'."""
+    tier x stride x level cross on HyReCo), the landmark set's regime's."""
     landmark = tuple(variants.LANDMARK_REGIMES)
-    assert set(landmark) == {"bf_consecutive", "bf_same"}
+    assert landmark == ("bf_same",)
     for r in variants.RUNS:
         if r.method == "stare" and "tier" in r.opts:
             name = variants.run_name(r)
@@ -1112,22 +1115,22 @@ def test_runs_for_takes_a_dataset_by_its_regime():
     names = {variants.run_name(r) for r in variants.runs_for("multiplex")}
     assert "stare_clahe" in names and "stare_percentile" in names
     assert not any("grey" in n or "haem" in n for n in names)
-    anhir = [variants.run_name(r) for r in variants.runs_for("anhir")]
-    assert [n for n in anhir if variants.run_of(n).method == "stare"] == [
+    hyreco = [variants.run_name(r) for r in variants.runs_for("hyreco")]
+    assert [n for n in hyreco if variants.run_of(n).method == "stare"] == [
         variants.run_name(r)
         for r in variants.RUNS
-        if r.method == "stare" and "bf_consecutive" in r.regimes
+        if r.method == "stare" and "bf_same" in r.regimes
     ]
     # the other methods' runs, less those left out with a reason (no input rule)
-    left_out = dict(variants.excluded_for("anhir"))
-    assert [n for n in anhir if variants.run_of(n).method != "stare"] == [
+    left_out = dict(variants.excluded_for("hyreco"))
+    assert [n for n in hyreco if variants.run_of(n).method != "stare"] == [
         variants.run_name(r)
         for r in variants.active_runs()
         if r.method != "stare" and variants.run_name(r) not in left_out
     ]
-    assert "valis120_hires" in anhir and "deeperhistreg_hr_gpu" in anhir
+    assert "valis120_hires" in hyreco and "deeperhistreg_hr_gpu" in hyreco
     assert (
-        "stare" in anhir and "stare_grey_clahe" in anhir and "stare_clahe" not in anhir
+        "stare" in hyreco and "stare_grey_clahe" in hyreco and "stare_clahe" not in hyreco
     )
     assert {variants.run_name(r) for r in variants.runs_for("hyreco@raw")} == {
         variants.run_name(r) for r in variants.runs_for("hyreco")
@@ -1273,7 +1276,7 @@ def test_stare_local4_is_a_4_cpu_cost_row_of_stare():
 
 
 # ── the run list of each dataset (ruling 2026-10-19) ─────────────────────────
-LANDMARK_SETS = ("anhir", "hyreco")
+LANDMARK_SETS = ("hyreco",)
 LANDMARK_OTHERS = (
     "valis_mirage", "valis120", "valis120_hires", "deeperhistreg_gpu", "deeperhistreg_hr_gpu",
 )  # fmt: skip
@@ -1283,7 +1286,7 @@ LANDMARK_OTHERS = (
 def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(ds):
     names = [variants.run_name(r) for r in variants.runs_for(ds)]
     stare = [n for n in names if variants.run_of(n).method == "stare"]
-    assert len(names) == 41 and len(stare) == 36
+    assert len(names) == 50 and len(stare) == 45
     # tier {high, medium, low} x stride {64, 128, 256} x every level of the set's regime
     levels = rg.stare_levels(rg.regime_of(ds))
     assert len(stare) == 3 * len(variants.STARE_STRIDES) * len(levels)
@@ -1294,6 +1297,53 @@ def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(ds):
     why = dict(variants.excluded_for(ds))
     assert "valis120" not in why and "deeperhistreg_cpu" in why
     assert "2026-10-19" in why["deeperhistreg_cpu"]
+
+
+# the manuscript's HyReCo STARE row (Fig. 3f; user ruling 2026-10-19): haematoxylin from
+# colour deconvolution, high tier, stride 64, NO intensity preprocessing
+HYRECO_STARE_ROW = "stare_haem_none"
+
+
+def test_hyreco_runs_the_45_stare_cells_and_the_5_defaults():
+    names = [variants.run_name(r) for r in variants.runs_for("hyreco")]
+    want_stare = [
+        f"stare_{t}{'' if s == 64 else f'_s{s}'}_{lk}".replace("stare_high", "stare")
+        for t in ("high", "medium", "low")
+        for s in variants.STARE_STRIDES
+        for lk in ("none", "haem_clahe", "grey_clahe", "haem_percentile", "haem_none")
+    ]
+    # the baselines of each tier: `stare`, `stare_medium`, `stare_low` at stride 64
+    want_stare = [
+        {"stare_none": "stare", "stare_medium_none": "stare_medium",
+         "stare_low_none": "stare_low"}.get(n, n)
+        for n in want_stare
+    ]  # fmt: skip
+    assert len(want_stare) == 45 == len(set(want_stare))
+    assert sorted(n for n in names if variants.run_of(n).method == "stare") == sorted(
+        want_stare
+    )
+    assert [n for n in names if variants.run_of(n).method != "stare"] == list(
+        LANDMARK_OTHERS
+    )
+    assert len(names) == 50
+    row = variants.run_of(HYRECO_STARE_ROW)
+    assert row.opts == {"proxy": "haem", "sprep": "none"}  # high tier, stride 64
+    for name in ("stare_s128_haem_none", "stare_medium_haem_none", "stare_low_s256_haem_none"):
+        assert name in names, name
+
+
+def test_runs_dataset_hyreco_prints_50_lines(capsys):
+    from benchmarks.regbench import cli
+
+    assert cli.main(["runs", "--dataset", "hyreco"]) in (0, None)
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    assert len(lines) == 50
+    assert HYRECO_STARE_ROW in {ln.split("\t")[0] for ln in lines}
+
+
+def test_the_new_level_runs_on_no_other_dataset():
+    for ds in ("multiplex", "mcmicro", "phenocycler", "rashid", None):
+        assert not any("haem" in variants.run_name(r) for r in variants.runs_for(ds))
 
 
 @pytest.mark.parametrize("ds", ["mcmicro", "phenocycler", "rashid", None])
@@ -1310,5 +1360,5 @@ def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
         listed = [r for r in variants.runs_table(dataset=ds, order=order)]
         assert variants.family(listed[0][0]) == "stare"
         first_other = next(i for i, r in enumerate(listed) if variants.family(r[0]) != "stare")
-        assert first_other == 36
+        assert first_other == 45
     assert variants.default_order("mcmicro")[0] == "stare"
