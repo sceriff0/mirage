@@ -752,6 +752,27 @@ def build_parser():
         "is read from its slide files (blank without it)",
     )
 
+    sy = sub.add_parser(
+        "synth",
+        help="the synthetic scaling set (benchmarks/regbench/synth.py): 11 panels of 3 "
+        "channels per size, cost only; generated once under <to>/synthetic/",
+    )
+    sy.add_argument("--source", default="", help="a real slide: its nuclear channel is the texture")
+    sy.add_argument("--to", required=True, help="the cases folder (REGBENCH_CASES_SYNTHETIC)")
+    sy.add_argument("--grid", default="default", choices=("default", "small"))
+    sy.add_argument("--seed", type=int, default=0)
+    sy.add_argument(
+        "--channel", type=int, default=None,
+        help="the source's nuclear channel (default: the first named DAPI/Hoechst, else 0)",
+    )
+    syw = sy.add_mutually_exclusive_group()
+    syw.add_argument("--estimate", action="store_true", help="print the bytes only")
+    syw.add_argument("--plan", action="store_true", help="print the bytes, fix the texture and the units")
+    syw.add_argument("--unit", type=int, default=None, help="write one (size, panel) slide")
+    syw.add_argument("--finish", action="store_true", help="write the cases, case.json last")
+    syw.add_argument("--units", action="store_true", help="print the number of units")
+    syw.add_argument("--status", action="store_true", help="complete / planned / partial / absent")
+
     pl = sub.add_parser(
         "plots",
         help="the paper's figures (benchmarks/regbench/paper/plots.py) from the paper tables: "
@@ -1651,6 +1672,10 @@ def _compute_all(a):
 def _main(a):
     if a.cmd == "compute-all":
         return _compute_all(a)
+    if a.cmd == "synth":
+        from . import synth
+
+        return synth.main(a)
     if a.cmd == "nuclei":
         from . import nuclei
 
