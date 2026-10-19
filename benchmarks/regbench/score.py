@@ -1031,7 +1031,9 @@ def bill_from_disk(
     by_id = {(c.dataset, str(c.case_id)): c for c in cases}
     if node_telemetry is not None:  # the scorer reads `<out>/logs/telemetry`
         for row in res_rows:
-            row.update(telemetry.columns(node_telemetry, row.get("launch_id")))
+            case = by_id.get((row["dataset"], str(row["case_id"])))
+            row.update(telemetry.columns(
+                node_telemetry, row.get("launch_id"), _earlier_launches(out, row, case)))
     for row in res_rows:
         case = by_id.get((row["dataset"], str(row["case_id"])))
         if case is None:
@@ -1051,6 +1053,19 @@ def bill_from_disk(
                     row[col] = ""
             row["cost_blank_reason"] = BILLED_WITH.format(parent)
     return res_rows
+
+
+def _earlier_launches(out, row, case):
+    """The launch ids of a row's earlier ladder rungs (``run.json: previous_attempts``),
+    whose telemetry the row reads beside its own (T31 fix M9); ``[]`` without them."""
+    if case is None:
+        return []
+    try:
+        run = json.loads((result_dir(out, row["method"], case) / "run.json").read_text())
+    except (OSError, ValueError):
+        return []
+    prev = run.get("previous_attempts") if isinstance(run, dict) else None
+    return [p.get("launch_id") for p in prev or [] if isinstance(p, dict) and p.get("launch_id")]
 
 
 def _reserve(row, jobs, reservations):
@@ -2974,6 +2989,8 @@ def summarise_resources(res_rows):
             "load_end",
             "other_jobs_start",
             "other_jobs_end",
+            "load_max_attempts",
+            "other_jobs_max_attempts",
         ):
             rec[key] = _blank(_stat(_values(ok, key), np.max))
         # R19: a peak read by `rusage` alone is no peak to compare (a lower bound)

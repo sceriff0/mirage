@@ -498,3 +498,24 @@ def test_squeue_is_asked_once_per_run_job_and_never_by_a_stage_job(tmp_path):
     assert subprocess.run(["bash", "-c", script], env={**env, "SLURM_JOB_ID": "90"}).returncode == 0
     assert not calls.exists()
     assert "other_jobs_start" not in telemetry.read(tmp_path / "out")["90"]
+
+
+def test_every_attempts_telemetry_reaches_its_row(tmp_path):
+    """T31 fix M9 (R14, every attempt): a row read only its final launch's file; its
+    earlier ladder rungs' load and other jobs were written and never read. The row's
+    own columns stay its final job's; the *_max_attempts columns are over every
+    attempt, and telemetry_attempts says how many of them left a file."""
+    out, case, rows = _rows(tmp_path)
+    palom = rows[2]
+    folder = out / "palom" / "multiplex" / "P1_r1"
+    folder.mkdir(parents=True)
+    (folder / "run.json").write_text(json.dumps(single(launch_id="30_1")))  # rung 1: 10_3
+    tel = {"10_3": {"loadavg_start": "8.00 1 1 1/1 1", "other_jobs_start": "5"},
+           "30_1": {"loadavg_start": "1.00 1 1 1/1 1", "other_jobs_start": "1"}}
+    score.bill_from_disk(rows, out, [case], {}, {}, tel)
+    assert palom["load_start"] == 1.0 and palom["other_jobs_start"] == 1.0
+    assert palom["load_max_attempts"] == 8.0 and palom["other_jobs_max_attempts"] == 5.0
+    assert palom["telemetry_attempts"] == "2/2"
+    del tel["10_3"]
+    score.bill_from_disk(rows, out, [case], {}, {}, tel)
+    assert palom["telemetry_attempts"] == "1/2" and palom["load_max_attempts"] == 1.0

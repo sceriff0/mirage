@@ -2941,7 +2941,9 @@ figure; each item names the column that answers it.
 - [ ] **C14. The OOM watcher** can be read (`oom_watch`): it decides whether a kill is
   `wasted` or `killed_unsettled` (billed from the scheduler, `wasted_from_scheduler`).
 - [ ] **Contention** (R14): the `contention` header line (`load_start`/`load_end`,
-  `other_jobs_start`/`other_jobs_end` per attempt, `telemetry` yes/partly/no). Wall
+  `other_jobs_start` of the row's own job, `load_max_attempts`/`other_jobs_max_attempts`
+  over every attempt with `telemetry_attempts` = how many left a file; a stage job asks
+  no `squeue`; `telemetry` yes/partly/no). Wall
   times are on shared nodes; the headline is CPU-hours. `REGBENCH_WAVES=1` gives a
   timing replicate with one method on the nodes at a time.
 

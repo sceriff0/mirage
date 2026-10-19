@@ -93,7 +93,7 @@ _EXCLUDED = re.compile(
     r"|^(launch_id|submission|log_path|written_file)$"
     # T31: the node's telemetry, the count of jobs sacct held and the stage jobs' host
     # figures (what the machine running the test is, not what the code computed)
-    r"|^(load|other_jobs)_(start|end)$|^telemetry$|^reservation_jobs$"
+    r"|^(load|other_jobs)_(start|end|max_attempts)$|^telemetry(_attempts)?$|^reservation_jobs$"
     r"|^stage_(jobs_known|jobs_confined|cpu_model|load_max)$|^cpu_read_failures$"
 )
 GOLDEN = Path(__file__).parent / "fixtures" / "cohort_golden.json"

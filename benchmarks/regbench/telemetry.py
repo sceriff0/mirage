@@ -67,6 +67,10 @@ COLUMNS = (
     "other_jobs_end",
     "peak_hwm_gb",
     "telemetry",
+    # over EVERY attempt of the row (earlier ladder rungs too, R14; T31 fix M9)
+    "load_max_attempts",
+    "other_jobs_max_attempts",
+    "telemetry_attempts",
 )
 
 
@@ -117,12 +121,23 @@ def of(tel, launch_id):
     return (tel or {}).get(str(launch_id or "")) or {}
 
 
-def columns(tel, launch_id):
-    """``COLUMNS`` of a resource row whose job is ``launch_id``."""
+def columns(tel, launch_id, earlier=()):
+    """``COLUMNS`` of a resource row whose job is ``launch_id``: its own job's, and the
+    largest load and count of other jobs over every attempt (``earlier``: the launch
+    ids of the row's earlier rungs), with ``telemetry_attempts`` = how many of those
+    attempts left a file, of how many."""
     t = of(tel, launch_id)
 
     def blank(v):  # a figure the file does not have is blank, as in every cost table
         return v if v == v else ""
+
+    ids = [str(i) for i in (*earlier, launch_id) if i not in (None, "")]
+    files = [of(tel, i) for i in ids]
+    told = [f for f in files if f]
+    loads = [v for f in told for k in ("loadavg_start", "loadavg_end")
+             if (v := load(f.get(k))) == v]
+    others = [v for f in told for k in ("other_jobs_start", "other_jobs_end")
+              if (v := _num(f.get(k))) == v]
 
     return {
         "load_start": blank(load(t.get("loadavg_start"))),
@@ -131,6 +146,9 @@ def columns(tel, launch_id):
         "other_jobs_end": blank(_num(t.get("other_jobs_end"))),
         "peak_hwm_gb": blank(_num(t.get("hwm_peak_mb")) / 1024.0),
         "telemetry": "yes" if t else "no",
+        "load_max_attempts": max(loads) if loads else "",
+        "other_jobs_max_attempts": max(others) if others else "",
+        "telemetry_attempts": f"{len(told)}/{len(ids)}" if ids else "",
     }
 
 
