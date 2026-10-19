@@ -8,8 +8,9 @@ each, from ``regbench_start`` and ``regbench_end``:
 =====================  ================================================================
 ``loadavg_start``,     ``/proc/loadavg`` at the job's start and end (the whole line; its
 ``loadavg_end``        first figure, the 1-minute load, is what the tables read)
-``other_jobs_start``,  the jobs RUNNING on the node at the start and at the end, this
-``other_jobs_end``     one left out (``squeue -h -w <node> -t RUNNING``)
+``other_jobs_start``,  the jobs RUNNING on the node at the start of a RUN job (and at
+``other_jobs_end``     its end only with ``REGBENCH_TEL_SQUEUE_END=1``), this one left
+                       out (``squeue -h -w <node> -t RUNNING``); a stage job never asks
 ``cpu_model``          the node's CPU (``/proc/cpuinfo: model name``)
 ``nproc``,             the CPUs the job's shell may use, and the node's
 ``nproc_all``

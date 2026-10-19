@@ -453,3 +453,48 @@ def test_the_job_shell_leaves_its_telemetry(tmp_path):
         text=True,
     )
     assert off.returncode == 0 and "80" not in telemetry.read(out)
+
+
+def _shell_env(tmp_path, job="77"):
+    proc = tmp_path / "proc"
+    proc.mkdir(exist_ok=True)
+    (proc / "loadavg").write_text("1.50 1.00 0.50 2/100 7\n")
+    (proc / "cpuinfo").write_text("model name\t: Test CPU 9000\n")
+    (proc / "self").mkdir(exist_ok=True)
+    (proc / "self" / "cgroup").write_text("12:memory:/slurm/job_77\n")  # v1: no 0:: line
+    fake = tmp_path / "bin"
+    fake.mkdir(exist_ok=True)
+    calls = tmp_path / "squeue_calls"
+    (fake / "squeue").write_text(f"#!/bin/bash\necho x >> {calls}\nprintf '77\\n78\\n'\n")
+    (fake / "squeue").chmod(0o755)
+    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", "REGBENCH_PROC": str(proc),
+           "REGBENCH_OUT": str(tmp_path / "out"), "SLURM_JOB_ID": job}
+    env.pop("SLURM_ARRAY_JOB_ID", None)
+    env.pop("SLURM_ARRAY_TASK_ID", None)
+    return env, calls
+
+
+def test_telemetry_without_a_v2_cgroup_never_stops_a_set_e_job(tmp_path):
+    """T31 fix M10: _regbench_cgroup_dir returns 1 on a cgroup v1 or hybrid node; a
+    caller under `set -e` must go on (telemetry is never fatal)."""
+    env, _ = _shell_env(tmp_path)
+    script = f'set -e\nsource "{SLURM}/env.sh"\nregbench_telemetry_start run\necho went-on\n'
+    done = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert done.returncode == 0 and "went-on" in done.stdout, done.stderr
+
+
+def test_squeue_is_asked_once_per_run_job_and_never_by_a_stage_job(tmp_path):
+    """T31 fix M9: every run and stage job asked squeue twice (start and end, up to 20 s
+    each on its end path); with hundreds of tile jobs that loads slurmctld. A run job
+    asks once, at its start; a stage job, whose count nothing reads, never."""
+    env, calls = _shell_env(tmp_path)
+    script = (f'source "{SLURM}/env.sh"\nregbench_telemetry_start run\nregbench_telemetry_end\n')
+    assert subprocess.run(["bash", "-c", script], env=env).returncode == 0
+    assert calls.read_text().count("x") == 1
+    t = telemetry.read(tmp_path / "out")["77"]
+    assert t["other_jobs_start"] == "1" and "other_jobs_end" not in t
+    calls.unlink()
+    script = script.replace("start run", "start stage")
+    assert subprocess.run(["bash", "-c", script], env={**env, "SLURM_JOB_ID": "90"}).returncode == 0
+    assert not calls.exists()
+    assert "other_jobs_start" not in telemetry.read(tmp_path / "out")["90"]

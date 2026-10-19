@@ -268,7 +268,7 @@ _regbench_peak_mb() {
 # shell. Only for a scheduler job (SLURM_JOB_ID) of kind run or stage, and never a
 # reason to fail: REGBENCH_TELEMETRY=0 turns it off. REGBENCH_PROC (/proc) is where
 # the load, the CPU and the cgroup are read (a test points it at a folder of its own).
-REGBENCH_TEL_FILE="" REGBENCH_HWM_PID=""
+REGBENCH_TEL_FILE="" REGBENCH_HWM_PID="" REGBENCH_TEL_KIND=""
 _regbench_launch_id() {
     if [ -n "${SLURM_ARRAY_JOB_ID:-}" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
         echo "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
@@ -324,12 +324,17 @@ regbench_telemetry_start() {
     _regbench_tel kind "$kind"
     _regbench_tel host "$(hostname 2>/dev/null)"
     _regbench_tel loadavg_start "$(cat "${REGBENCH_PROC:-/proc}"/loadavg 2>/dev/null)"
-    _regbench_tel other_jobs_start "$(_regbench_other_jobs)"
+    # squeue once per run job, at its start, and never from a stage job (nothing reads a
+    # stage job's count; hundreds of tile jobs asking slurmctld twice each was the cost,
+    # T31 fix M9); REGBENCH_TEL_SQUEUE_END=1 also asks at a run job's end
+    REGBENCH_TEL_KIND="$kind"
+    [ "$kind" = run ] && _regbench_tel other_jobs_start "$(_regbench_other_jobs)"
     _regbench_tel cpu_model "$(awk -F': ' '/^model name/ { print $2; exit }' "${REGBENCH_PROC:-/proc}"/cpuinfo 2>/dev/null)"
     _regbench_tel nproc "$(nproc 2>/dev/null)"
     _regbench_tel nproc_all "$(nproc --all 2>/dev/null)"
     _regbench_tel cpus_per_task "${SLURM_CPUS_PER_TASK:-}"
-    cg="$(_regbench_cgroup_dir)"
+    # no v2 cgroup (v1, hybrid) returns 1: never fatal to a caller under `set -e`
+    cg="$(_regbench_cgroup_dir)" || cg=""
     if [ -n "$cg" ] && [ -r "$cg/cgroup.procs" ]; then
         # its output goes nowhere: a caller reading this job's output must not wait on it
         _regbench_hwm_loop "$cg/cgroup.procs" "$REGBENCH_TEL_FILE.hwm" > /dev/null 2>&1 < /dev/null &
@@ -353,7 +358,9 @@ regbench_telemetry_end() {
     peak="$(_regbench_peak_mb)"
     [ "$peak" = - ] || _regbench_tel cgroup_peak_mb "$peak"
     _regbench_tel loadavg_end "$(cat "${REGBENCH_PROC:-/proc}"/loadavg 2>/dev/null)"
-    _regbench_tel other_jobs_end "$(_regbench_other_jobs)"
+    if [ "$REGBENCH_TEL_KIND" = run ] && [ "${REGBENCH_TEL_SQUEUE_END:-0}" = 1 ]; then
+        _regbench_tel other_jobs_end "$(_regbench_other_jobs)"
+    fi
     REGBENCH_TEL_FILE=""
     return 0
 }
