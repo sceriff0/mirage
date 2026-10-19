@@ -478,7 +478,6 @@ def test_the_collector_copies_the_full_columns(scored_out):
     assert all(r["dice_matched_full_mnn"] != schema.NA for r in stare)
 
 
-
 # ── fix round 1 ───────────────────────────────────────────────────────────────
 def test_nothing_to_pair_is_the_zero_result_not_nan():
     """``exact_status`` is blank where a side has no cell or there is no gate: the full

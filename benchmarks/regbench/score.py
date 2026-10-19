@@ -1555,10 +1555,12 @@ def full_pairs_code():
     }
 
 
-def full_key(ctx, spec):
+def full_key(ctx, spec, code=None):
     """The key of one full-pairs record: its pair record's key (``pair_key``) and
-    ``full_pairs_code``. Changing ``full_pairs.py`` changes this key and no pair key."""
-    return {**ctx.pair_key(*spec), "full_pairs_code": full_pairs_code()}
+    ``full_pairs_code`` (``code``, when the caller computed it once for many specs).
+    Changing ``full_pairs.py`` changes this key and no pair key."""
+    code = full_pairs_code() if code is None else code
+    return {**ctx.pair_key(*spec), "full_pairs_code": code}
 
 
 def case_code():
@@ -1969,7 +1971,7 @@ def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
     is what the next one reads.)"""
     folder = records_dir(ctx.out, ctx.case) / full_pairs.RECORDS
     code = full_pairs_code()
-    keys = {spec: {**ctx.pair_key(*spec), "full_pairs_code": code} for spec in specs}
+    keys = {spec: full_key(ctx, spec, code) for spec in specs}
     paths = {spec: folder / f"{_key_sha256(keys[spec])}.rec" for spec in specs}
     markers = {spec: paths[spec].with_suffix(FULL_STARTED) for spec in specs}
     out, todo = {}, []
