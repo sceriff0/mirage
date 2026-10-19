@@ -126,6 +126,15 @@ NUMERIC = (
     "n_ref",
     "n_moving",
 )
+# Task 21b: beside the headline, never ranked (score.FULL_PAIRINGS): the per_pair column
+# and the cells column it is read from
+FULL_PAIR_COLUMNS = {
+    "dice_matched_full_lsa": "dice_matched_full_lsa",
+    "dice_matched_full_mnn": "dice_matched_mnn",
+    "pair_fraction_full_lsa": "pair_fraction_full_lsa",
+    "pair_fraction_full_mnn": "pair_fraction_mnn",
+    "fallback_frac": "fallback_frac",
+}
 FLAGS = ("imputed_initial", "excluded_from_summaries", "displacement_readable")
 
 REPO = Path(__file__).resolve().parents[3]
@@ -367,9 +376,35 @@ def per_pair(out, dataset):
                     excluded_from_summaries=flags["excluded_from_summaries"],
                     cause=r.get("cause"),
                     selfcheck_status=r.get("selfcheck_status"),
+                    **{k: _num(r.get(c)) for k, c in FULL_PAIR_COLUMNS.items()},
+                    full_lsa_status=r.get("full_lsa_status"),
                 )
             )
     return rows
+
+
+def full_stats(mine):
+    """The Task 21b columns of a summary row over the rows ``mine`` (schema ``_FULL``):
+    the full pairings' Dice and the fallback share, each the median over patients of
+    the patient medians of the FINITE values (a missing one is left out, never 0: these
+    numbers rank nothing), with ``fallback_frac_max`` and the cases with a full LSA."""
+
+    def per_patient(key):
+        by = {}
+        for r in mine:
+            v = _num(r.get(key))
+            if math.isfinite(v):
+                by.setdefault(r["patient_id"], []).append(v)
+        return _median(_median(v) for v in by.values())
+
+    fallback = _finite(r.get("fallback_frac") for r in mine)
+    return {
+        "dice_full_lsa_med": per_patient("dice_matched_full_lsa"),
+        "dice_full_mnn_med": per_patient("dice_matched_full_mnn"),
+        "fallback_frac_med": per_patient("fallback_frac"),
+        "fallback_frac_max": max(fallback) if fallback else math.nan,
+        "n_full_lsa": len(_finite(r.get("pair_fraction_full_lsa") for r in mine)),
+    }
 
 
 def _rows_of(pp, row, dataset, kept=True):
@@ -550,6 +585,7 @@ def _accuracy(pp, row, dataset):
         "disp_um_q25": d25,
         "disp_um_q75": d75,
         "n_readable": len(_finite(readable)),
+        **full_stats(mine),
     }
 
 
@@ -898,6 +934,7 @@ def _stage_stats(pp, row, dataset):
         "dice_q75": q75,
         "n_pairs": len(mine),
         "disp_um_med": _median(readable),
+        **full_stats(mine),
     }
 
 
@@ -967,6 +1004,7 @@ def stare_tiers(pp, cost_rows, dataset, points=(), common=()):
                 dice_q25=stats["dice_q25"],
                 dice_q75=stats["dice_q75"],
                 n_pairs=stats["n_pairs"],
+                **{k: stats.get(k, math.nan) for k in full_stats([])},
                 **cost,
             )
         )

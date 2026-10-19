@@ -1005,6 +1005,30 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   approximated. With more pairs the exact assignment also has LONGER pairs than mutual
   nearest neighbour (in that lattice 5 % more pairs at more than twice the mean
   distance): most-pairs-first chains cells past a missing one.
+- **The full pairings, beside the headline (Task 21b, `full_pairs.py`).** USER
+  2026-10-18: "I would like score to also test full lsa and full mnn". `full_lsa` is
+  the exact assignment in EVERY component with no fallback AND no cap
+  (`pairs.exact_pairs(max_work=inf)`): `*_full_lsa` in `cells.csv` (the same score
+  stems as `*_exact`). It differs from `*_exact` only where the cap was hit, so a row
+  whose `exact_status` is "exact here" or "solved exactly" COPIES `*_exact`
+  (`full_lsa_status = full_lsa_from_exact`, no solve) and only a row above the cap (or a
+  record made before the exact columns) is solved, from the same polygon sets and
+  gate. Its cost is recorded, never capped: `full_lsa_seconds`,
+  `full_lsa_largest_component_cells`, `full_lsa_work` (in the cap's unit). No timeout,
+  no approximation: a result the solver does not certify is NA (`not_certified`), a
+  solve that raises is NA (`failed`, tried again by the next scoring), and either is a
+  `losses.csv` row of stage `full_pairs` with its headline row kept. `full_mnn` is
+  mutual nearest neighbour on the whole case: the `*_mnn` columns, never recomputed.
+  The registered placement only (the null has none). The summaries carry, beside every
+  headline, `<h>_full_lsa_med` and `<h>_full_mnn_med` for `pair_fraction` and
+  `dice_matched` (aggregated as `*_exact_med`), `fallback_frac_med`,
+  `fallback_frac_max` and `n_full_lsa`; the paper tables `dice_full_lsa_med`,
+  `dice_full_mnn_med`, `fallback_frac_med`, `fallback_frac_max`, `n_full_lsa`
+  (`table_schema._FULL`). Nothing ranks on them: no best row, no common block, no
+  shared subset, no difference. Their records are kept beside the pair records
+  (`cache/scores/<dataset>/<case>/full_pairs/`) under a key of their own (the pair
+  record's key plus `full_pairs.py`'s sha256), so changing `full_pairs.py` makes them
+  again and no pair record.
 - **Per case and variant:** pair fraction, matched Dice, IoU p50, share of pairs with
   IoU >= 0.5, centroid displacement in µm (p50, p90).
 - **Pair fraction is pairs over the smaller NATIVE count, in both directions.** A cell the
@@ -1442,13 +1466,13 @@ it is scoring.
 
 | file | one row per | what |
 |---|---|---|
-| `cells.csv` | case x variant | `dataset, tier, case_id, group, patient_id` (= `group`), `panel` (the moving slide's channels as `A_B_C`, or `not recorded`), `tool_version` (the run's `info.version`, `not recorded` when it has none, `-` for `initial`; the same three are in `cells_nuclei.csv`, `nonband_cells*.csv` and `resources.csv`), `family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`, `set` (`outlines`: this file is the outlines; the nuclei are in `cells_nuclei.csv`), and what the case records of that set: `set_source_ref`, `set_source_mov` (where each side's objects come from), `set_inexact` (either side is declared not to be, object for object, the segmentation it stands for) and `set_shrunk` (either side is the outlines with the 10 px rim taken off, the fallback for a slide without bare nuclei). Among the record keys: the pipeline pairing's own account (`n_components`, `largest_component_cells`, `n_fallback_components`, `n_fallback_cells`, `fallback_frac`, `fallback_frac_null`) and the exact assignment's extra columns (`*_exact`, `exact_status`). Every row scores ALL nuclei |
+| `cells.csv` | case x variant | `dataset, tier, case_id, group, patient_id` (= `group`), `panel` (the moving slide's channels as `A_B_C`, or `not recorded`), `tool_version` (the run's `info.version`, `not recorded` when it has none, `-` for `initial`; the same three are in `cells_nuclei.csv`, `nonband_cells*.csv` and `resources.csv`), `family, pose, method, frame, selfcheck_status`, every key of `pairs.RECORD_KEYS`, `coverage, nn_distance_um_p50, fold_pct, sd_log_jac, imputed_initial, problem, cause`, and since 2026-10-11 `unit` (the independent unit), `n_unmapped, unmapped_frac`, `excluded_from_summaries`, `set` (`outlines`: this file is the outlines; the nuclei are in `cells_nuclei.csv`), and what the case records of that set: `set_source_ref`, `set_source_mov` (where each side's objects come from), `set_inexact` (either side is declared not to be, object for object, the segmentation it stands for) and `set_shrunk` (either side is the outlines with the 10 px rim taken off, the fallback for a slide without bare nuclei). Among the record keys: the pipeline pairing's own account (`n_components`, `largest_component_cells`, `n_fallback_components`, `n_fallback_cells`, `fallback_frac`, `fallback_frac_null`) and the exact assignment's extra columns (`*_exact`, `exact_status`); then the full LSA (`*_full_lsa`, `full_lsa_status`, `full_lsa_detail`, `full_lsa_seconds`, `full_lsa_largest_component_cells`, `full_lsa_work`: `full_pairs.ROW_KEYS`, Task 21b). Every row scores ALL nuclei |
 | `nonband_cells.csv` | case x variant x owner | the same columns for `<variant>:non_<owner>`, plus `variant, owner, n_mov_kept, n_mov_all, n_ref_kept, n_ref_all`. See "Off the seams" |
 | `nonband_summary.csv` | dataset x owner x variant | the summary of those rows, with the nuclei kept and `within_ceiling`: what the mask alone lets `within_*um` reach for any method |
 | `cells_nuclei.csv`, `summary_cells_nuclei.csv`, `common_block_nuclei.csv`, `paired_vs_primary_nuclei.csv`, `paired_summary_nuclei.csv`, `nonband_cells_nuclei.csv`, `nonband_summary_nuclei.csv` | as the table of the same name | the same columns on the BARE NUCLEI (`set = nuclei`), with their own gate, null and shared subset. Absent when no case has nuclei. See "Outlines and bare nuclei" |
 | `nuclei_missing.csv` | case, or case x variant | why there is no nuclei row: `dataset, case_id, group, …, method, reason`. `method` is empty when the CASE has no nuclei on a side (the prepared reason), and names a result that was made before its case had them |
 | `nonband_missing.csv` | dataset x owner | `n_cases`, and `n_cases_without_mask`: the cases the owner's primary run did not register, which have no off-seam row for any method |
-| `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`; `n_fallback_cases`, `fallback_frac_max` and the exact assignment's `pair_fraction_exact_med`, `dice_matched_exact_med`, `n_exact` (extra numbers, never ranked); `n_inexact_cases`, `n_shrunk_cases` (cases scored on objects marked `set_inexact` / `set_shrunk`). `subset=common` repeats it on the cases every compared row registered |
+| `summary_cells.csv` | dataset x family x variant x subset | per unit the median over rounds, then median, min, max over units; `family` (empty on the cohort); `n_patients` (units), `n_cases, n_ok, n_excluded_not_method`; the minimum over cases and `<headline>_n_nan`; each headline beside its null; `dice_matched_shared_med, n_dice_shared` and `displacement_um_p50_shared_med, n_readable_shared` (the cases every compared row qualifies on) beside the per-row `dice_matched_ranked_med, n_dice_ranked`, `displacement_um_p50_med, n_readable`; `unmapped_frac_max`; `n_fallback_cases`, `fallback_frac_max` and the exact assignment's `pair_fraction_exact_med`, `dice_matched_exact_med`, `n_exact` (extra numbers, never ranked); `fallback_frac_med`, `pair_fraction_full_lsa_med`, `dice_matched_full_lsa_med`, `pair_fraction_full_mnn_med`, `dice_matched_full_mnn_med`, `n_full_lsa` (Task 21b: the full pairings, never ranked); `n_inexact_cases`, `n_shrunk_cases` (cases scored on objects marked `set_inexact` / `set_shrunk`). `subset=common` repeats it on the cases every compared row registered |
 | `common_block.csv` | dataset x primary row | `in_common_block`, `why_not`, `n_cases_common`, `n_cases` |
 | `paired_vs_primary.csv` | unit x variant (x family) | the difference of each headline against the `stare` row, on the cases both have |
 | `paired_summary.csv` | dataset x family x variant | the median and the mean over units of each difference with its bootstrap interval over units (`d_<headline>_med, _mean, _lo, _hi`), `n_patients` |
@@ -1726,7 +1750,7 @@ are cleared, `n_scored_cases=0`) and never stops another. The `paper` command wr
 `paper/losses.csv` (same columns, stage `paper`) beside its tables.
 
 Columns: `stage,dataset,patient_id,case_id,run,method,cause,blame,effect,detail,source`.
-`stage` is one of `submit`, `manifest`, `prepare`, `nuclei`, `run`, `settle`, `score`, `paper`; `blame` one of
+`stage` is one of `submit`, `manifest`, `prepare`, `nuclei`, `run`, `settle`, `score`, `full_pairs`, `paper`; `blame` one of
 `method`, `infrastructure`, `input`, `integrity`; `effect` one of
 `dropped`, `imputed`, `flagged`, `capped`, `not_run` (`dropped`: in no summary; `imputed`: scored
 at the unregistered pose like any failure of the method; `flagged`: kept and scored, with
@@ -1762,6 +1786,8 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `held` | infrastructure | run | its jobs were held or stalled in the queue (the squeue reason is in detail) |
 | `score_error` | infrastructure | score | the scoring of the case raised (score_errors.csv): the case has no row |
 | `table_unreadable` | infrastructure | score | a per-stage table is there and cannot be read: the losses it holds are not rows here (its path is in source) |
+| `full_lsa_not_certified` | infrastructure | full_pairs | the full LSA (no fallback, no cap) of a pair record has fewer pairs than the candidates allow: its numbers are NA, the headline row is kept (flagged) |
+| `full_lsa_failed` | infrastructure | full_pairs | the full-LSA solve of a pair record raised (memory, anything; the exception is in detail): its numbers are NA, the headline row is kept (flagged) and the next scoring tries again |
 | `tissue_missing` | infrastructure | score | the tissue block could not score a written image (tissue_missing.csv) |
 | `realcheck_unreadable` | infrastructure | score | a realcheck.json (or the run.json beside it) cannot be read: the run's realcheck verdict is `unreadable` (verdicts.tsv) |
 | `fit_points_dropped` | infrastructure | paper | a cost fit left points out (no finite target or predictor, or no input size): `n_dropped` of cost_fits / pipeline_cost_fits (S12; `paper/losses.csv`) |
@@ -2999,7 +3025,10 @@ before plan E (on the arms' inputs) are not reused by this branch's code. Two fi
 caches survive code changes: a STARE stage job (COARSE, a tile, SOLVE) is reused when its
 command, STARE's version and the bytes it reads are equal (`stages/jobs/*.json:
 identity`, no code hash), and a pair record of the scorer is reused when `pairs.py`,
-`cases.py`, `mapping.py`, `cell_pairs.py` and the `PAIR_CODE_MEMBERS` are unchanged.
+`cases.py`, `mapping.py`, `cell_pairs.py` and the `PAIR_CODE_MEMBERS` are unchanged; its
+full-pairs record (`full_pairs/`, Task 21b) when, besides, `full_pairs.py` is unchanged
+(`score.full_key`). `regbench reuse` reports results, not scorer records, so it names
+neither.
 There is no switch that ignores a code change.
 
 `python -m benchmarks.regbench reuse --cases C --out O [--dataset multiplex] [--csv PATH]`

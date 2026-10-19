@@ -41,7 +41,9 @@ synthetic sweep is removed from the paper; README.txt says so.
 "payload"}``; unpickled ONLY after the sha256 matches, a record that does not match is
 skipped with a note; the payload is ``score._score_case``'s tuple: ``[0]`` the outlines
 rows, ``[4]["cells"]`` the nuclei rows). Off-seam rows (``<row>:non_<owner>``) are left out,
-as ``tables.per_pair`` leaves them. Costs from every ``<row>/<dataset>/<case>/run.json``
+as ``tables.per_pair`` leaves them; the full pairings of Task 21b (``tables.FULL_PAIR_COLUMNS``,
+``full_lsa_status``) are copied with the rest, from the table or from the record (a case
+record's rows carry them: ``score._full_records``). Costs from every ``<row>/<dataset>/<case>/run.json``
 that registered, one launch counted once per row (by ``launch_id`` and ``attempt``).
 
 **crosscheck_arms**: every (patient, panel, row) present from both an arm and a regbench
@@ -483,6 +485,9 @@ def _pair_row(r, source, default_set):
         excluded_from_summaries=g("excluded_from_summaries"),
         cause=g("cause"),
         selfcheck_status=g("selfcheck_status"),
+        # Task 21b: the full pairings and the fallback share, copied as found
+        **{k: g(c) for k, c in tables.FULL_PAIR_COLUMNS.items()},
+        full_lsa_status=g("full_lsa_status"),
     )
 
 

@@ -10,7 +10,8 @@ never only a line of a log.
     stage,dataset,patient_id,case_id,run,method,cause,blame,effect,detail,source
 
 ``stage``   where it happened (``STAGES``): submit, manifest, prepare, nuclei, run,
-            settle, score, paper
+            settle, score, full_pairs (the scorer's full LSA beside the headline,
+            ``regbench.full_pairs``), paper
 ``blame``   whose it is (``BLAMES``): ``method`` (the package under test),
             ``infrastructure`` (the scheduler, the node, the launcher, the benchmark's
             own steps), ``input`` (the cohort's slides, manifest or nuclei) or
@@ -66,7 +67,17 @@ COLUMNS = (
     "detail",
     "source",
 )
-STAGES = ("submit", "manifest", "prepare", "nuclei", "run", "settle", "score", "paper")
+STAGES = (
+    "submit",
+    "manifest",
+    "prepare",
+    "nuclei",
+    "run",
+    "settle",
+    "score",
+    "full_pairs",
+    "paper",
+)
 BLAMES = ("method", "infrastructure", "input", "integrity")
 EFFECTS = ("dropped", "imputed", "flagged", "capped", "not_run")
 
@@ -140,6 +151,21 @@ CAUSES = {
         "score",
         "a per-stage table is there and cannot be read: the losses it holds are not "
         "rows here (its path is in source)",
+    ),
+    # Task 21b (regbench.full_pairs): the full LSA beside the headline, never ranked;
+    # the headline row stays, its full-LSA numbers are NA
+    "full_lsa_not_certified": (
+        INFRA,
+        "full_pairs",
+        "the full LSA (no fallback, no cap) of a pair record has fewer pairs than the "
+        "candidates allow: its numbers are NA, the headline row is kept (flagged)",
+    ),
+    "full_lsa_failed": (
+        INFRA,
+        "full_pairs",
+        "the full-LSA solve of a pair record raised (memory, anything; the exception is "
+        "in detail): its numbers are NA, the headline row is kept (flagged) and the "
+        "next scoring tries again",
     ),
     "tissue_missing": (
         INFRA,

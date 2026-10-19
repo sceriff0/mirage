@@ -148,6 +148,24 @@ _ID = (
     ("panel", "", "the moving slide's channel set, joined by '_' (e.g. DAPI_CD8_CD3)"),
     ("case_id", "", "the case: one moving panel against its patient's reference"),
 )
+# Task 21b: beside every headline Dice, never ranked and never in a selection (best_of,
+# the paired difference): the full pairings and how much of the headline was the
+# pipeline's fallback (regbench.full_pairs; score.FULL_PAIRINGS)
+_FULL = (
+    ("dice_full_lsa_med", "1", "dice_matched of the full LSA (the exact assignment in "
+     "every component: no mutual-NN fallback, no work cap; regbench.full_pairs), median "
+     "over patients of the patient medians; a case without one (not certified, failed: "
+     "losses.csv) is left out, never 0. Beside dice_med, ranks nothing"),
+    ("dice_full_mnn_med", "1", "dice_matched of mutual nearest neighbour on the whole case "
+     "(dice_matched_mnn), median over patients of the patient medians. Ranks nothing"),
+    ("fallback_frac_med", "1", "share of a case's cells (both sides) in a component the "
+     "pipeline's pairing left to mutual nearest neighbour (more than cell_pairs' "
+     "DEFAULT_MAX_COMPONENT_CELLS cells), median over patients of the patient medians"),
+    ("fallback_frac_max", "1", "the largest fallback_frac of a case"),
+    ("n_full_lsa", "count", "cases with full-LSA numbers"),
+)
+
+
 def _cost_summary_cols():
     """method_summary's paper.costs columns (``costs.summary_column_specs``)."""
     from .paper import costs
@@ -188,7 +206,18 @@ _TABLE_LIST = [
        ("n_ref", "count", "reference objects"), ("n_mov", "count", "moving objects"),
        ("imputed_initial", "bool", "scored at the unregistered pose (a failure)"),
        ("excluded_from_summaries", "bool", "lost for a cause that is not the method's"),
-       ("cause", "", "run.json cause"), ("selfcheck_status", "", "reported, never a gate")),
+       ("cause", "", "run.json cause"), ("selfcheck_status", "", "reported, never a gate"),
+       ("dice_matched_full_lsa", "1", "dice_matched of the full LSA (no fallback, no cap; "
+        "regbench.full_pairs): beside the headline, ranks nothing"),
+       ("dice_matched_full_mnn", "1", "dice_matched of mutual NN on the whole case "
+        "(dice_matched_mnn): beside the headline, ranks nothing"),
+       ("pair_fraction_full_lsa", "1", "pair_fraction of the full LSA"),
+       ("pair_fraction_full_mnn", "1", "pair_fraction of mutual NN on the whole case "
+        "(pair_fraction_mnn)"),
+       ("fallback_frac", "1", "share of the case's cells (both sides) the pipeline's pairing "
+        "left to mutual nearest neighbour"),
+       ("full_lsa_status", "", "full_lsa_from_exact (the record's *_exact, no solve), "
+        "full_lsa_solved, not_certified or failed (both: NA numbers, a losses.csv row)")),
     _t("method_best", ("dataset", "family"),
        "the best variant of each method (family), by the rule in `rule`",
        ("dataset", "", ""), ("family", "", ""), ("best_row", "", "the chosen result name"),
@@ -233,6 +262,7 @@ _TABLE_LIST = [
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""), ("dice_mean", "1", ""),
        ("disp_um_med", "um", "median over readable cases of displacement_um_p50"),
        ("disp_um_q25", "um", ""), ("disp_um_q75", "um", ""), ("n_readable", "count", ""),
+       *_FULL,
        ("d_dice_vs_stare_med", "1", "row minus STARE's best, per case, median"),
        ("d_dice_vs_stare_q25", "1", ""), ("d_dice_vs_stare_q75", "1", ""),
        ("n_pairs_vs_stare", "count", "cases both have"),
@@ -296,11 +326,11 @@ _TABLE_LIST = [
                      "affine + micro-rigid), nonrigid, or micro (depth 2 only); R18"),
        ("stage_row", "", "result name of the stage; NA when the run has no such stage"),
        ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
-       ("n_pairs", "count", ""), ("disp_um_med", "um", "")),
+       ("n_pairs", "count", ""), ("disp_um_med", "um", ""), *_FULL),
     _t("stare_tiers", ("dataset", "row"), "Dice and cost per STARE run (tier, stride, prep)",
        ("dataset", "", ""), ("row", "", ""), ("tier", "", ""), ("stride", "px", ""),
        ("sprep", "", ""), ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
-       ("n_pairs", "count", ""),
+       ("n_pairs", "count", ""), *_FULL,
        ("n_patients_common", "count", "common patients this row completed: the cost columns "
         "are over these (rule 2, method_summary's)"),
        ("n_patients_survivors", "count", "patients this row completed"),

@@ -73,7 +73,9 @@ pair record (one ``pairs.record`` call) the moment it is done, and each case's r
 A record is read again only when its whole key is equal (``pair_key``, ``case_key``);
 ``score_case`` makes one case's record without writing a table, and ``score`` computes
 whatever has none. No table depends on which of them ran: every path writes the same
-bytes (``test_score_records.py``).
+bytes (``test_score_records.py``). Beside each pair record, a full-pairs record
+(``regbench.full_pairs``: the full LSA, ``full_key``) in a folder of its own, under a key
+of its own, so a change to ``full_pairs.py`` makes those again and no pair record.
 """
 
 from __future__ import annotations
@@ -101,6 +103,7 @@ from . import (
     compute_all,
     cost,
     failure_log,
+    full_pairs,
     losses,
     pairs,
     plugins,
@@ -252,6 +255,9 @@ HAS_NULL = ("pair_fraction", "dice_matched", "within_1um", "within_3um")
 # (``pairs.exact_pairs``) has a value of its own for. Shown beside the headline, in
 # no ranking, no shared subset and no paired difference.
 EXACT_HEADLINES = ("pair_fraction", "dice_matched")
+# Task 21b: the full pairings reported beside those headlines, as (name, the cell
+# column's suffix): the full LSA (``full_pairs``) and mutual NN on the whole case
+FULL_PAIRINGS = (("full_lsa", "_full_lsa"), ("full_mnn", "_mnn"))
 PAIRED_AGAINST = "stare"
 # The rows whose settings their authors chose on the cohort, with this metric: STARE's
 # tier and the pipeline's VALIS settings. Said in the caption of the cohort's tables.
@@ -1532,6 +1538,29 @@ def pair_code():
     }
 
 
+# the module the full-pair records are computed by (Task 21b), with what it imports
+FULL_PAIRS_STARTS = ("full_pairs.py",)
+
+
+def full_pairs_code():
+    """What turns a pair record into its full-pairs record: ``full_pairs.py`` and the
+    modules of this package it imports, less those already in ``pair_code`` (which is
+    in the full key too, through ``pair_key``)."""
+    here = Path(__file__).resolve().parent
+    pair = pair_code()
+    return {
+        name: file_sha256(path)
+        for name, path in code_files(here / f for f in FULL_PAIRS_STARTS).items()
+        if name not in pair
+    }
+
+
+def full_key(ctx, spec):
+    """The key of one full-pairs record: its pair record's key (``pair_key``) and
+    ``full_pairs_code``. Changing ``full_pairs.py`` changes this key and no pair key."""
+    return {**ctx.pair_key(*spec), "full_pairs_code": full_pairs_code()}
+
+
 def case_code():
     """Everything a case's rows could depend on: every file of this package's top
     level, every module this file imports inside the package, followed through
@@ -1891,6 +1920,69 @@ def _records(ctx, specs, pool=None, fresh=False, progress=None):
     return recs
 
 
+def _full_inputs(ctx, spec):
+    """What ``full_pairs.full_record`` solves from: the sets of the pair record."""
+    which = spec[0]
+
+    def inputs():
+        return (*ctx.inputs(*spec), ctx.px, ctx.geometry(which))
+
+    return inputs
+
+
+def _full_task(task):
+    """One full-pairs record that needs a solve, in a pool worker (``_pair_task``)."""
+    i, job, spec, rec = task
+    name = (job[0], job[1].dataset, str(job[1].case_id))
+    if _IN_WORKER.get("name") != name:
+        _IN_WORKER.clear()
+        _IN_WORKER.update(name=name, case=_ScoredCase(job))
+    ctx = _IN_WORKER["case"]
+    return i, full_pairs.full_record(rec, _full_inputs(ctx, spec))
+
+
+def _full_records(ctx, specs, recs, pool=None, fresh=False, progress=None):
+    """``{spec: full-pairs columns}`` beside ``recs`` (``_records``), each read from
+    its record (``full_key``) or made: copied from the pair record where the full LSA
+    is its ``*_exact`` (no solve), solved where it is not (``full_pairs.needs_solve``),
+    side by side when there is a ``pool``. Saved as each is made, except a failed solve
+    (``full_pairs.KEPT``), which the next scoring tries again."""
+    folder = records_dir(ctx.out, ctx.case) / full_pairs.RECORDS
+    keys = {spec: full_key(ctx, spec) for spec in specs}
+    paths = {spec: folder / f"{_key_sha256(keys[spec])}.rec" for spec in specs}
+    out, todo = {}, []
+    for spec in specs:
+        got = None if fresh else _read_record(paths[spec], keys[spec])[0]
+        if got is not None:
+            out[spec] = got
+        elif full_pairs.needs_solve(recs[spec]):
+            todo.append(spec)
+        else:
+            out[spec] = full_pairs.full_record(recs[spec], _full_inputs(ctx, spec))
+            _write_record(paths[spec], keys[spec], out[spec])
+    if progress is not None and todo:
+        progress.say(f"{len(todo)} full-LSA solve(s) (no fallback, no cap)")
+
+    def keep(spec, got):
+        out[spec] = got
+        if got["full_lsa_status"] in full_pairs.KEPT:
+            _write_record(paths[spec], keys[spec], got)
+        if progress is not None:
+            progress.say(
+                f"full LSA {_spec_name(spec)}: {got['full_lsa_status']} in "
+                f"{got['full_lsa_seconds']:.1f} s"
+            )
+
+    if pool is not None and len(todo) > 1:
+        tasks = [(i, ctx.job, spec, recs[spec]) for i, spec in enumerate(todo)]
+        for i, got in pool.imap_unordered(_full_task, tasks):
+            keep(todo[i], got)
+    else:
+        for spec in todo:
+            keep(spec, full_pairs.full_record(recs[spec], _full_inputs(ctx, spec)))
+    return out
+
+
 def _kept(ps, keep):
     """How many features ``_keep_features(ps, keep)`` has (all of them without a mask)."""
     return int(ps.n_features) if keep is None else int(np.asarray(keep, bool).sum())
@@ -1959,6 +2051,8 @@ def _score_case(job, pool=None, fresh=False, progress=None):
                     # shares with its run
                     "selfcheck_row": checks.get(method.split(NON)[0], ""),
                     **{k: rec[k] for k in pairs.RECORD_KEYS},
+                    # the full LSA beside the headline (full_pairs; never ranked)
+                    **{k: rec[k] for k in full_pairs.ROW_KEYS},
                     **dens,
                     **jac,
                     "imputed_initial": imputed,
@@ -2072,6 +2166,8 @@ def _score_case(job, pool=None, fresh=False, progress=None):
             for r in nuc_lost
         ]
     recs = _records(ctx, list(wanted), pool, fresh, progress)
+    fulls = _full_records(ctx, list(wanted), recs, pool, fresh, progress)
+    recs = {spec: {**rec, **fulls[spec]} for spec, rec in recs.items()}
 
     def filled(rows):
         return [fill(recs) for fill in rows]
@@ -2620,6 +2716,19 @@ def summarise_cells(rows, primary=None, rule=STRICT):
                         rec[f"{h}_exact_med"] = _stat(per, np.median)
                     rec["n_exact"] = int(
                         np.isfinite(_values(mine, "pair_fraction_exact")).sum()
+                    )
+                    # Task 21b: the full pairings beside the headline, never ranked:
+                    # the full LSA (no fallback, no cap; full_pairs) and mutual NN on
+                    # the whole case (the record's own *_mnn), aggregated as *_exact
+                    rec["fallback_frac_med"] = _stat(
+                        list(_per_patient(mine, "fallback_frac").values()), np.median
+                    )
+                    for h in EXACT_HEADLINES:
+                        for name, col in FULL_PAIRINGS:
+                            per = list(_per_patient(mine, f"{h}{col}").values())
+                            rec[f"{h}_{name}_med"] = _stat(per, np.median)
+                    rec["n_full_lsa"] = int(
+                        np.isfinite(_values(mine, "pair_fraction_full_lsa")).sum()
                     )
                     out.append(rec)
     return out
@@ -3309,6 +3418,16 @@ def _summary_table(rows, primary, run_fails=None):
         for h in EXACT_HEADLINES:
             line[f"{h}_exact"] = r.get(f"{h}_exact_med", math.nan)
         line["cases with exact numbers"] = f"{r.get('n_exact', 0)}/{r['n_cases']}"
+        line["fallback_frac (med / max)"] = (
+            f"{_fmt(r.get('fallback_frac_med', math.nan))} / "
+            f"{_fmt(r.get('fallback_frac_max', math.nan))}"
+        )
+        for h in EXACT_HEADLINES:
+            for name, _ in FULL_PAIRINGS:
+                line[f"{h}_{name}"] = r.get(f"{h}_{name}_med", math.nan)
+        line["cases with full LSA numbers"] = (
+            f"{r.get('n_full_lsa', 0)}/{r['n_cases']}"
+        )
         line["cases on inexact objects (shrunk outlines)"] = (
             f"{r.get('n_inexact_cases', 0)} ({r.get('n_shrunk_cases', 0)})"
         )
@@ -3351,7 +3470,15 @@ PAIRING_RULE = (
     "least total distance): extra numbers, in no ranking, no shared subset and no "
     "difference. `cases with exact numbers` are those where it was solved; a case "
     "with a component above the solver's bound has none (`exact_status` in "
-    "`cells.csv` says why).\n"
+    "`cells.csv` says why). `fallback_frac` is the share of a case's cells (both "
+    "sides) that sat in a component the pipeline paired by mutual nearest neighbour "
+    "instead of solving it (median over units / largest case). `*_full_lsa` is the "
+    "same assignment with no fallback and no cap: solved exactly in every component "
+    "whatever its size (`exact_status` above its bound included; its time and size "
+    "are in `full_lsa_seconds`, `full_lsa_work` of `cells.csv`, and a result that is "
+    "not certified is blank with a row in `losses.csv`). `*_full_mnn` is mutual "
+    "nearest neighbour on the whole case (the `*_mnn` columns). Both are medians "
+    "over units like the headline, beside it, in no ranking.\n"
 )
 
 
@@ -3373,6 +3500,8 @@ SIDE_BY_SIDE = (
     ("dice_shared", "dice_matched_shared_med"),
     ("within_1um", "within_1um_med"),
     ("displacement_um_p50 shared", "displacement_um_p50_shared_med"),
+    ("fallback_frac med", "fallback_frac_med"),
+    ("fallback_frac max", "fallback_frac_max"),
 )
 
 
@@ -4498,6 +4627,7 @@ def loss_rows(
     launch=(),
     tissue_missing=(),
     run_level=True,
+    full_rows=(),
 ):
     """Every row of ``losses.csv`` for ``datasets`` (``regbench.losses``): the
     per-stage tables found beside the results, the cases and the manifest, then the
@@ -4506,8 +4636,10 @@ def loss_rows(
     flagged by the nuclei check (``checks``), the rounds scored at the fallback pixel
     size, the compute-all patients without a trace, every realcheck verdict that is
     ``unreadable`` (``launch``: ``read_verdicts``), every written image the tissue block
-    could not score (``tissue_missing``) and one ``table_unreadable`` row per per-stage
-    table that is there and cannot be read (I5).
+    could not score (``tissue_missing``), every cell row whose full LSA is not reported
+    (``full_rows``: ``(table name, rows)``; ``full_pairs.LOSS_CAUSE``, the row itself
+    kept) and one ``table_unreadable`` row per per-stage table that is there and cannot
+    be read (I5).
 
     The rows of no dataset (a dropped run, an unmarked unit, a compute-all patient,
     an unreadable run-level table) are the RUN's, not a dataset's: they are returned
@@ -4626,6 +4758,25 @@ def loss_rows(
     ]
     got += _fold_not_run(run_rows)
     got += losses.score_error_rows(errors)
+    for table, rows in full_rows:
+        for r in rows:
+            cause = full_pairs.LOSS_CAUSE.get(r.get("full_lsa_status"))
+            if cause is None:
+                continue
+            method = str(r["method"])
+            got.append(
+                losses.row(
+                    dataset=r["dataset"],
+                    patient_id=r.get("group", ""),
+                    case_id=str(r["case_id"]),
+                    run=of_run.get(method.split(NON)[0], method),
+                    method=method,
+                    cause=cause,
+                    effect="flagged",
+                    detail=f"{r.get('set', '')}: {r.get('full_lsa_detail', '')}"[:300],
+                    source=table,
+                )
+            )
     for p in pipe_summary or []:
         if p.get("reason") and p.get("patient") != "all":
             got.append(
@@ -5001,6 +5152,12 @@ def _score_cells(
         launch,
         tis.get("tissue_missing", ()),
         run_level=not any(public_of(d) is not None for d in datasets),
+        full_rows=(
+            ("cells.csv", cells),
+            ("nonband_cells.csv", non_cells),
+            (f"cells{NUCLEI_SUFFIX}.csv", nuc["cells"]),
+            (f"nonband_cells{NUCLEI_SUFFIX}.csv", nuc["nonband_cells"]),
+        ),
     )
     losses.write(tables / "losses.csv", lost)
     write_readme(tables)
