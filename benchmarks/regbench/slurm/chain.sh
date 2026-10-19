@@ -11,8 +11,9 @@
 #   stage    done when (read from disk, by the FIRST head only)   the head runs        the next head waits for
 #   inputs   $REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv exists
 #                                                                   launcher --inputs    afterok: the rb-inputs job
-#   prepare  the rounds file exists AND the cohort has prepared cases (the launcher's
-#            own predicate: submit_cohort.sh --cases-there)       launcher --prepare   afterok: the rb-prepare-<ds> job(s),
+#   prepare  the rounds file exists, the cohort has prepared cases (submit_cohort.sh
+#            --cases-there) AND its last prepare ended ok ($REGBENCH_CASES/prepared-multiplex.ok,
+#            written by prepare.sbatch on success only)          launcher --prepare   afterok: the rb-prepare-<ds> job(s),
 #                                                                                       NEVER the nuclei tasks (a slide that
 #                                                                                       fails is tolerated: afterany upstream)
 #   launch   -                                                      the launch           nothing: the chain ends here
@@ -26,9 +27,14 @@
 # --all call goes to the launch, and the arguments after `--` to every stage.
 #
 # THE RECORD: $REGBENCH_ROOT/logs/chain/<chain id>.tsv (stage, head_job, ids_file,
-# next_head, at), one line per head. Every head prints ONE scancel line that removes
-# everything the chain has queued so far: the heads, and every job id the stages' ids
-# files hold (the tile submitters add theirs to the launch's file as they feed).
+# next_head, state, at), one line per head, written BEFORE its stage runs (state
+# running, with the ids file(s) the stage will write) and set to done or failed after:
+# a head killed mid-stage still names its stage's jobs. Each head prints the scancel line
+# that removes everything the chain has queued so far (the heads, and every job id of
+# every ids file the record names), once before its stage and once after.
+#
+# EACH STAGE HAS ITS OWN SUBMISSION ID: <base>-inputs, <base>-prepare and <base> for the
+# launch, base = the chain id (or a REGBENCH_SUBMISSION exported before the first sbatch).
 #
 # A STAGE THAT QUEUED NOTHING (the launcher refused, or stopped) ends the chain with an
 # exit other than 0 and says why: no next head is submitted to wait on nothing.
@@ -45,11 +51,19 @@ chain_probe() { (unset REGBENCH_LAUNCH_T0; bash "$launcher" "$@"); }
 
 # chain_head_options: the first head's own --partition, --account, --qos and --time,
 # READ from the scheduler (scontrol show job): they were given to the first sbatch and
-# are visible nowhere else inside the job. The next head is given the same.
+# are visible nowhere else inside the job. The next head is given the same. Only from a
+# BATCH job (BatchFlag=1): inside salloc or srun the job is not a head, and nothing of it
+# is copied (said on stderr). Nothing else is copied (--reservation, --constraint,
+# -M ...): README, "The whole benchmark in one command".
 chain_head_options() {
-    local info pair key flag value out=""
+    local info pair key flag value out="" batch
     [ -n "${SLURM_JOB_ID:-}" ] && command -v scontrol >/dev/null 2>&1 || return 0
     info="$(scontrol show job "$SLURM_JOB_ID" 2>/dev/null)" || return 0
+    batch="$(grep -oE '(^|[[:space:]])BatchFlag=[^[:space:]]+' <<< "$info" | head -n 1 | sed -E 's/^[[:space:]]*BatchFlag=//')"
+    if [ "$batch" != 1 ]; then
+        echo "regbench-launch --all: job $SLURM_JOB_ID is not a batch job (BatchFlag=${batch:-unknown}: salloc or an interactive session): none of its options is copied to the next heads" >&2
+        return 0
+    fi
     for pair in Partition:--partition Account:--account QOS:--qos TimeLimit:--time; do
         key="${pair%%:*}" flag="${pair#*:}"
         value="$(grep -oE "(^|[[:space:]])$key=[^[:space:]]+" <<< "$info" | head -n 1 | sed -E "s/^[[:space:]]*$key=//")"
@@ -82,10 +96,13 @@ chain_next_head() {
         --chdir="$REGBENCH_CHAIN_SUBMIT_DIR"
         # an absolute log, beside the chain's record
         --output="$REGBENCH_ROOT/logs/regbench-launch-%j.log"
+        # never requeued: a requeued head would run its stage again and queue its jobs
+        # twice. Leaving --requeue out is not enough (slurm.conf JobRequeue=1, the
+        # default, requeues a batch job unless it says otherwise); launch.sbatch also has
+        # `#SBATCH --no-requeue`. And never --wait: a head would sleep
+        --no-requeue
         # the first head's --partition, --account, --qos and --time (chain_head_options)
         ${opts[@]+"${opts[@]}"}
-        # NEVER --wait (a head would sleep) and never --requeue (a requeued head would
-        # submit its stage a second time)
         "$repo/benchmarks/regbench/slurm/launch.sbatch" --all-stage="$1"
         ${ALL_LAUNCHER[@]+"${ALL_LAUNCHER[@]}"}
     )
@@ -99,17 +116,28 @@ chain_scancel() {
         | awk '!seen[$0]++' | paste -sd' ' -)"
     files="$(awk -F'\t' 'NR > 1 && $3 != "-" { n = split($3, f, ","); for (i = 1; i <= n; i++) printf " \"%s\"", f[i] }' "$CHAIN_FILE")"
     if [ -n "$files" ]; then
-        chain_say "to remove everything this chain has queued so far: scancel ${heads:+$heads }\$(cat${files})"
+        chain_say "${1:-to remove everything this chain has queued so far}: scancel ${heads:+$heads }\$(cat${files} 2>/dev/null)"
     else
-        chain_say "to remove everything this chain has queued so far: scancel $heads"
+        chain_say "${1:-to remove everything this chain has queued so far}: scancel $heads"
     fi
 }
 
-# chain_record <stage> <ids files, `,`-joined, or -> <next head or ->
-chain_record() {
+# chain_begin <stage> <ids files, `,`-joined>: this head's line, BEFORE its stage runs
+chain_begin() {
     mkdir -p "$(dirname "$CHAIN_FILE")" || return 1
-    [ -s "$CHAIN_FILE" ] || printf 'stage\thead_job\tids_file\tnext_head\tat\n' > "$CHAIN_FILE" || return 1
-    printf '%s\t%s\t%s\t%s\t%s\n' "$1" "${SLURM_JOB_ID:--}" "$2" "$3" "$(date +%FT%T)" >> "$CHAIN_FILE"
+    [ -s "$CHAIN_FILE" ] || printf 'stage\thead_job\tids_file\tnext_head\tstate\tat\n' > "$CHAIN_FILE" || return 1
+    printf '%s\t%s\t%s\t-\trunning\t%s\n' "$1" "${SLURM_JOB_ID:--}" "$2" "$(date +%FT%T)" >> "$CHAIN_FILE"
+}
+# chain_finish <stage> <done|failed> <next head or ->: this head's line, after its stage
+# (the last line of that stage still running)
+chain_finish() {
+    awk -F'\t' -v OFS='\t' -v st="$1" -v state="$2" -v nxt="$3" -v at="$(date +%FT%T)" '
+        { line[NR] = $0; if (NR > 1 && $1 == st && $5 == "running") k = NR }
+        END { for (i = 1; i <= NR; i++) {
+                  if (i == k) { split(line[i], f, "\t"); f[4] = nxt; f[5] = state; f[6] = at
+                                print f[1], f[2], f[3], f[4], f[5], f[6] }
+                  else print line[i] } }' "$CHAIN_FILE" > "$CHAIN_FILE.new" \
+        && mv "$CHAIN_FILE.new" "$CHAIN_FILE"
 }
 
 # chain_stage_args <stage>: the launcher's arguments for it, in STAGE_ARGS
@@ -157,8 +185,8 @@ chain_launch_datasets() {
 }
 
 chain_run() {
-    local stage next="" ids_files=() f n code got next_id wait_name wait_ids existing pre rounds
-    local inputs_done=0 cohort=0 prepare_done=0 cohort_said
+    local stage next="" ids_files=() f n code got next_id wait_name wait_ids named pre rounds
+    local inputs_done=0 cohort=0 prepare_done=0 cohort_said prepared_ok sub k
     # the launcher's own arguments of this call: everything but --dry-run
     ALL_LAUNCHER=() ALL_HAS_DATASETS=0
     for f in ${ALL_ARGS[@]+"${ALL_ARGS[@]}"}; do
@@ -175,7 +203,12 @@ chain_run() {
         || { chain_fail "cannot tell which datasets have prepared cases (submit_cohort.sh --cases-there failed: the lines above). Nothing was submitted." 2; return; }
     cohort_said="$(awk -F'\t' '$1 == "multiplex" { print $3 }' <<< "$CASES_THERE")"
     grep -q $'^multiplex\tyes' <<< "$CASES_THERE" && cohort=1
-    [ -s "$rounds" ] && [ "$cohort" = 1 ] && prepare_done=1
+    # cases on disk are not a completed prepare (one cancelled or out of time half-way
+    # leaves some): its own record says so (prepare.sbatch writes it on success only)
+    prepared_ok="$REGBENCH_CASES/prepared-multiplex.ok"
+    [ -s "$rounds" ] && [ "$cohort" = 1 ] && [ -e "$prepared_ok" ] && prepare_done=1
+    [ "$cohort" = 1 ] && [ ! -e "$prepared_ok" ] \
+        && cohort_said="$cohort_said, but its prepare did not record completing ($prepared_ok is not there: cancelled or out of time half-way?): it runs again, and reuses the cases that are there"
     if [ "$inputs_done" = 1 ]; then
         chain_say "stage inputs: done ($pre exists)"
     elif [ "$prepare_done" = 1 ]; then
@@ -211,8 +244,15 @@ chain_run() {
     fi
     : "${REGBENCH_CHAIN_SUBMIT_DIR:=$here}"
     [ -n "${REGBENCH_CHAIN_SBATCH+set}" ] || REGBENCH_CHAIN_SBATCH="$(chain_head_options)"
-    : "${REGBENCH_SUBMISSION:=$REGBENCH_CHAIN}"
-    export REGBENCH_CHAIN REGBENCH_CHAIN_SUBMIT_DIR REGBENCH_CHAIN_SBATCH REGBENCH_SUBMISSION
+    # each stage its own submission id (its retry plans, its ids file): <base>-inputs,
+    # <base>-prepare, <base>; base = a REGBENCH_SUBMISSION exported before the first
+    # sbatch, else the chain id
+    : "${REGBENCH_CHAIN_SUBMISSION:=${REGBENCH_SUBMISSION:-$REGBENCH_CHAIN}}"
+    export REGBENCH_CHAIN REGBENCH_CHAIN_SUBMIT_DIR REGBENCH_CHAIN_SBATCH REGBENCH_CHAIN_SUBMISSION
+    case "$stage" in
+        inputs|prepare) sub="$REGBENCH_CHAIN_SUBMISSION-$stage" ;;
+        *) sub="$REGBENCH_CHAIN_SUBMISSION" ;;
+    esac
     CHAIN_FILE="$REGBENCH_ROOT/logs/chain/$REGBENCH_CHAIN.tsv"
     [ "$stage" != launch ] || chain_launch_datasets
     chain_stage_args "$stage"
@@ -229,7 +269,7 @@ chain_run() {
     if [ "$ALL_DRY" = 1 ]; then
         chain_say "dry run: nothing is submitted, no chain record is written (chain id $REGBENCH_CHAIN)"
         chain_say "the launcher's dry run of the stage $stage:"
-        chain_probe --dry-run "${STAGE_ARGS[@]}" || { chain_fail "the launcher refused the stage $stage (the lines above)" 2; return; }
+        REGBENCH_SUBMISSION="$sub" chain_probe --dry-run "${STAGE_ARGS[@]}" || { chain_fail "the launcher refused the stage $stage (the lines above)" 2; return; }
         if [ -n "$next" ]; then
             chain_next_head "$next" "<$wait_name...>"
             chain_say "the next head: sbatch ${CHAIN_NEXT[*]}"
@@ -240,33 +280,36 @@ chain_run() {
             chain_launch_datasets
             chain_stage_args launch
             chain_say "the inputs and the cohort's cases are there: the launcher's dry run of the launch:"
-            REGBENCH_PEAK=1 chain_probe --dry-run "${STAGE_ARGS[@]}" || { chain_fail "the launcher refused the launch (the lines above)" 2; return; }
+            REGBENCH_SUBMISSION="$REGBENCH_CHAIN_SUBMISSION" REGBENCH_PEAK=1 chain_probe --dry-run "${STAGE_ARGS[@]}" || { chain_fail "the launcher refused the launch (the lines above)" 2; return; }
         fi
         return 0
     fi
 
-    # ── the stage ──
-    mkdir -p "$REGBENCH_ROOT/logs" || { chain_fail "cannot write $REGBENCH_ROOT/logs. Nothing was submitted." 2; return; }
-    bash "$launcher" "${STAGE_ARGS[@]}"
-    code=$?
+    # ── the stage: its ids file(s) are known before it runs, and recorded first ──
     case "$stage" in
-        inputs) ids_files=("$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.inputs.ids") ;;
-        prepare) ids_files=("$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.prepare.ids") ;;
+        inputs) ids_files=("$REGBENCH_OUT/logs/submitted/$sub.inputs.ids") ;;
+        prepare) ids_files=("$REGBENCH_OUT/logs/submitted/$sub.prepare.ids") ;;
         launch)
-            ids_files=("$REGBENCH_OUT/logs/submitted/$REGBENCH_SUBMISSION.ids")
+            ids_files=("$REGBENCH_OUT/logs/submitted/$sub.ids")
             # REGBENCH_REPEAT: one results folder, and one ids file, per repeat
-            for f in "$REGBENCH_OUT"/rep*/logs/submitted/"$REGBENCH_SUBMISSION.ids"; do
-                [ -e "$f" ] && ids_files+=("$f")
+            for ((k = 1; k <= ${REGBENCH_REPEAT:-1}; k++)); do
+                [ "${REGBENCH_REPEAT:-1}" -gt 1 ] && ids_files+=("$REGBENCH_OUT/rep$k/logs/submitted/$sub.ids")
             done ;;
     esac
-    existing="" n=0
+    named="$(IFS=,; echo "${ids_files[*]}")"
+    mkdir -p "$REGBENCH_ROOT/logs" || { chain_fail "cannot write $REGBENCH_ROOT/logs. Nothing was submitted." 2; return; }
+    chain_begin "$stage" "$named" \
+        || { chain_fail "cannot write the chain record $CHAIN_FILE. Nothing was submitted." 2; return; }
+    chain_scancel "if this head stops before its stage is done, this removes everything the chain has queued"
+    REGBENCH_SUBMISSION="$sub" bash "$launcher" "${STAGE_ARGS[@]}"
+    code=$?
+    n=0
     for f in "${ids_files[@]}"; do
         [ -s "$f" ] || continue
-        existing="${existing:+$existing,}$f"
         n=$((n + $(grep -c . "$f")))
     done
     if [ "$code" != 0 ] || [ "$n" = 0 ]; then
-        chain_record "$stage" "${existing:--}" - \
+        chain_finish "$stage" failed - \
             || echo "regbench-launch --all: cannot write the chain record $CHAIN_FILE" >&2
         chain_scancel
         if [ "$n" = 0 ]; then
@@ -277,7 +320,7 @@ chain_run() {
         return
     fi
     if [ -z "$next" ]; then
-        chain_record "$stage" "$existing" - \
+        chain_finish "$stage" "done" - \
             || echo "regbench-launch --all: cannot write the chain record $CHAIN_FILE" >&2
         chain_say "the stage launch queued $n job(s): the chain ends; the launcher's own jobs run from here"
         chain_scancel
@@ -287,7 +330,7 @@ chain_run() {
     wait_ids="$(awk -F'\t' -v pre="$wait_name" 'NR == FNR { mine[$1] = 1; next } index($2, pre) == 1 && ($3 in mine) { print $3 }' \
         <(cat "${ids_files[@]}" 2>/dev/null) "$REGBENCH_OUT/logs/jobs.tsv" 2>/dev/null | paste -sd: -)"
     if [ -z "$wait_ids" ]; then
-        chain_record "$stage" "$existing" - || true
+        chain_finish "$stage" failed - || echo "regbench-launch --all: cannot write the chain record $CHAIN_FILE" >&2
         chain_scancel
         chain_fail "the stage $stage queued $n job(s) but none named $wait_name* ($REGBENCH_OUT/logs/jobs.tsv): no next head is submitted, and the chain ends here." 1
         return
@@ -295,16 +338,18 @@ chain_run() {
     chain_next_head "$next" "$wait_ids"
     got="$(cd "$REGBENCH_CHAIN_SUBMIT_DIR" && sbatch "${CHAIN_NEXT[@]}" < /dev/null 2>&1)"
     code=$?
-    next_id="$(awk 'NF { last = $0 } END { print last }' <<< "$got")"
+    # the id is the line that IS one (`<id>[;cluster]`), wherever the site's submit
+    # plugin prints its notices, before the id or after it
+    next_id="$(grep -E '^[0-9]+(;.*)?$' <<< "$got" | tail -n 1)"
     next_id="${next_id%%;*}"
-    case "$next_id" in ''|*[!0-9]*) code=1 ;; esac
-    if [ "$code" != 0 ]; then
-        chain_record "$stage" "$existing" - || true
+    if [ -z "$next_id" ]; then
+        chain_finish "$stage" failed - || echo "regbench-launch --all: cannot write the chain record $CHAIN_FILE" >&2
         chain_scancel
-        chain_fail "sbatch refused the next head ($got): the stage $stage's jobs are queued; submit the next head yourself: sbatch ${CHAIN_NEXT[*]}" 1
+        chain_fail "sbatch refused the next head (exit $code: $got): the stage $stage's jobs are queued; submit the next head yourself: $(printf '%q ' sbatch "${CHAIN_NEXT[@]}")" 1
         return
     fi
-    chain_record "$stage" "$existing" "$next_id" \
+    [ "$code" = 0 ] || echo "regbench-launch --all: sbatch ended with exit $code but printed the job id $next_id: taken ($got)" >&2
+    chain_finish "$stage" "done" "$next_id" \
         || echo "regbench-launch --all: cannot write the chain record $CHAIN_FILE" >&2
     chain_say "the stage $stage queued $n job(s); the head of the stage $next is job $next_id (afterok:$wait_ids). Watch: squeue --me -n regbench-launch; the record: $CHAIN_FILE"
     chain_scancel

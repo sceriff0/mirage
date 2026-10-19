@@ -8,6 +8,7 @@ test_submit_cohort.py, whose helpers are reused."""
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
@@ -39,6 +40,7 @@ README = REPO / "benchmarks" / "regbench" / "README.md"
 SCONTROL = (
     "#!/bin/bash\n"
     'echo "JobId=${2:-0} JobName=regbench-launch"\n'
+    'echo "   BatchFlag=${FAKE_BATCHFLAG:-1} Reboot=0 ExitCode=0:0"\n'
     'echo "   UserId=u(1) GroupId=g(1) MCS_label=N/A"\n'
     'echo "   Priority=1 Nice=0 Account=lab_acct QOS=long_qos"\n'
     'echo "   RunTime=00:00:01 TimeLimit=06:00:00 TimeMin=N/A"\n'
@@ -49,28 +51,38 @@ SCONTROL = (
 
 def _head(site, tmp_path, *args, state="none", env=None, dry=False, job="7"):
     """One head of the chain, run as the scheduler would run it. ``state``: what is on
-    disk already (``none``, ``inputs`` done, ``prepared``: inputs, rounds and cases).
+    disk already (``none``, ``inputs`` done, ``partial``: inputs and some cases but no
+    record that prepare completed, ``prepared``: inputs, rounds, cases and that record).
     Returns (completed process, sbatch log lines as (id, argv), root)."""
     tmp, cases, fake = site
     root = tmp_path / "root"
     inputs = root / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
-    if state in ("inputs", "prepared"):
+    if state in ("inputs", "partial", "prepared"):
         csvdir = inputs / "preprocess" / "results" / "csv"
         csvdir.mkdir(parents=True, exist_ok=True)
         (csvdir / "preprocessed.csv").write_text("patient_id\nP1\n")
-    if state == "prepared" and not (root / "cases").exists():
+    if state in ("partial", "prepared") and not (root / "cases").exists():
         shutil.copytree(cases, root / "cases")
+    if state == "prepared":
+        (root / "cases" / "prepared-multiplex.ok").write_text("ok\n")
     bin_ = tmp_path / "bin"
     bin_.mkdir(exist_ok=True)
     (bin_ / "scontrol").write_text(SCONTROL)
     # the next head's sbatch: its environment is kept (--export=ALL hands it on)
     (bin_ / "sbatch").write_text(
         "#!/bin/bash\n"
+        # the chain record as the stage's first job is queued (I2: written BEFORE it)
+        f'case "$*" in *--job-name=rb-inputs*) cat "{root}"/logs/chain/*.tsv '
+        f'> "{tmp_path}/during.tsv" 2>/dev/null ;; esac\n'
         f'case "$*" in *launch.sbatch*) env > "{tmp_path}/next.env"; '
-        f'pwd > "{tmp_path}/next.pwd" ;; esac\n'
+        f'pwd > "{tmp_path}/next.pwd"\n'
+        '  [ -z "${NEXT_REFUSE:-}" ] || { echo "sbatch: error: QOS limit" >&2; exit 1; }\n'
+        '  if [ -n "${NEXT_WARN:-}" ]; then "$0.real" "$@"; '
+        'echo "sbatch: warning: a site notice after the id"; exit 0; fi ;; esac\n'
         f'exec "{fake}/sbatch" "$@"\n'
     )
+    (bin_ / "sbatch.real").write_text(f'#!/bin/bash\nexec "{fake}/sbatch" "$@"\n')
     for f in bin_.iterdir():
         f.chmod(0o755)
     sheet = _sheet(tmp_path / "input.csv", ("P1", "P2"))
@@ -128,7 +140,6 @@ def _replay(site, tmp_path, stage_env_file, *args, state, job):
         if "=" in line
     )
     keep = {k: v for k, v in carried.items() if k.startswith("REGBENCH_CHAIN")}
-    keep["REGBENCH_SUBMISSION"] = carried["REGBENCH_SUBMISSION"]
     return _head(site, tmp_path, *args, state=state, env=keep, job=job)
 
 
@@ -173,6 +184,7 @@ def test_the_next_head_has_the_chains_sbatch_flags(site, tmp_path):
     assert _opt(argv, "--qos") == "long_qos"
     assert _opt(argv, "--time") == "06:00:00"
     assert not any(w.startswith(("--wait", "--requeue")) for w in argv)
+    assert "--no-requeue" in argv  # I1: a head is never requeued (JobRequeue=1)
     script = next(i for i, w in enumerate(argv) if w.endswith("launch.sbatch"))
     assert argv[script] == str(LAUNCH)  # the checkout's file, never the spool copy
     assert argv[script + 1 :] == ["--all-stage=prepare"]
@@ -229,12 +241,12 @@ def test_the_chain_record_and_its_cumulative_scancel_line(site, tmp_path):
     tsvs = list((root / "logs" / "chain").glob("*.tsv"))
     assert len(tsvs) == 1
     rows = [ln.split("\t") for ln in tsvs[0].read_text().splitlines()]
-    assert rows[0] == ["stage", "head_job", "ids_file", "next_head", "at"]
+    assert rows[0] == ["stage", "head_job", "ids_file", "next_head", "state", "at"]
     assert rows[1][:2] == ["inputs", "7"] and rows[1][3] == first_next
+    assert rows[1][4] == "done"
     assert rows[1][2].endswith(".inputs.ids") and Path(rows[1][2]).is_file()
     cancel = [ln for ln in done.stdout.splitlines() if "scancel" in ln]
-    assert len(cancel) == 1
-    assert f'scancel 7 {first_next} $(cat "{rows[1][2]}")' in cancel[0]
+    assert f'scancel 7 {first_next} $(cat "{rows[1][2]}" 2>/dev/null)' in cancel[-1]
     # the next head, with the environment the first head handed on
     again, calls2, _ = _replay(
         site, tmp_path, tmp_path / "next.env", "--all-stage=prepare", state="inputs",
@@ -247,9 +259,8 @@ def test_the_chain_record_and_its_cumulative_scancel_line(site, tmp_path):
     assert [r[0] for r in rows[1:]] == ["inputs", "prepare"]
     assert rows[2][1] == first_next and rows[2][3] == second_next
     cancel = [ln for ln in again.stdout.splitlines() if "scancel" in ln]
-    assert len(cancel) == 1
-    assert f"scancel 7 {first_next} {second_next} $(cat " in cancel[0]
-    assert f'$(cat "{rows[1][2]}" "{rows[2][2]}")' in cancel[0]
+    assert f"scancel 7 {first_next} {second_next} $(cat " in cancel[-1]
+    assert f'$(cat "{rows[1][2]}" "{rows[2][2]}" 2>/dev/null)' in cancel[-1]
 
 
 def test_a_later_head_runs_the_stage_it_is_given_never_the_disks(site, tmp_path):
@@ -450,3 +461,142 @@ def test_the_readme_explains_every_knob_launch_sbatch_sets():
 
 def test_the_settings_set_the_gpu_limit_to_four():
     assert re.search(r':\s*"\$\{REGBENCH_GPU_ARRAY_LIMIT:=4\}"', LAUNCH.read_text())
+
+
+# ── fix round 1 ───────────────────────────────────────────────────────────────────
+def test_no_head_is_ever_requeued():
+    """I1: leaving --requeue out does not stop a requeue (slurm.conf JobRequeue
+    defaults to 1); a requeued head would run its stage a second time."""
+    head = LAUNCH.read_text().split("\nset -uo pipefail", 1)[0]
+    assert "\n#SBATCH --no-requeue\n" in head
+    assert "--no-requeue" in code_of(CHAIN)
+
+
+def test_the_chain_record_is_written_before_the_stage_runs(site, tmp_path):
+    """I2: a head killed mid-stage still left its ids file in the record, and the
+    scancel line printed before the stage names it."""
+    done, calls, root = _head(site, tmp_path, "--all", state="none")
+    assert done.returncode == 0, done.stderr[-3000:]
+    during = [
+        ln.split("\t") for ln in (tmp_path / "during.tsv").read_text().splitlines()
+    ]
+    assert during[1][0] == "inputs" and during[1][4] == "running"
+    assert during[1][2].endswith(".inputs.ids") and during[1][3] == "-"
+    first_sbatch = (
+        done.stdout.index("--job-name=rb-inputs")
+        if "--job-name=rb-inputs" in done.stdout
+        else None
+    )
+    lines = done.stdout.splitlines()
+    early = [i for i, ln in enumerate(lines) if "scancel" in ln]
+    stage_at = next(i for i, ln in enumerate(lines) if ln.startswith("rb-inputs\t"))
+    assert early and early[0] < stage_at, first_sbatch
+    assert f'"{during[1][2]}"' in lines[early[0]]
+    final = [
+        ln.split("\t")
+        for ln in next((root / "logs" / "chain").glob("*.tsv")).read_text().splitlines()
+    ]
+    assert len(final) == 2 and final[1][4] == "done"
+    # a stage that fails is recorded as failed, not left running
+    bad, _, root2 = _head(site, tmp_path / "b", "--all", env={"REGBENCH_INPUT": None})
+    rows = [
+        ln.split("\t")
+        for ln in next((root2 / "logs" / "chain").glob("*.tsv"))
+        .read_text()
+        .splitlines()
+    ]
+    assert bad.returncode != 0 and rows[1][4] == "failed"
+
+
+def test_an_interrupted_prepare_is_run_again_on_resume(site, tmp_path):
+    """I3: cases on disk without the record that prepare completed (a prepare that was
+    cancelled or timed out half-way) is not a done prepare."""
+    done, calls, _ = _head(site, tmp_path, "--all", "--dry-run", state="partial")
+    assert done.returncode == 0, done.stderr[-3000:]
+    assert "this head runs the stage prepare" in done.stdout
+    assert "did not record completing" in done.stdout
+
+
+def _prepare_task(tmp_path, ok, *index):
+    cases = tmp_path / "cases"
+    cases.mkdir(parents=True, exist_ok=True)
+    marker = cases / "prepared-multiplex.ok"
+    marker.write_text("an earlier prepare\n")
+    bin_ = tmp_path / "bin"
+    bin_.mkdir(exist_ok=True)
+    (bin_ / "python").write_text("#!/bin/bash\n" + ("exit 0\n" if ok else "exit 3\n"))
+    (bin_ / "python").chmod(0o755)
+    env = {
+        **{
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("REGBENCH_", "SLURM_"))
+        },
+        "PATH": f"{bin_}:{os.environ['PATH']}",
+        "REGBENCH_REPO": str(REPO),
+        "REGBENCH_CASES": str(cases),
+        "REGBENCH_OUT": str(tmp_path / "out"),
+        "REGBENCH_ALLOW_PATH_PYTHON": "1",
+        **({"SLURM_ARRAY_TASK_ID": index[0]} if index else {}),
+    }
+    done = subprocess.run(
+        ["bash", str(SLURM / "prepare.sbatch"), "multiplex"], env=env,
+        capture_output=True, text=True,
+    )  # fmt: skip
+    return done, marker
+
+
+def test_prepare_records_its_completion_and_only_its_completion(tmp_path):
+    done, marker = _prepare_task(tmp_path / "ok", True)
+    assert done.returncode == 0, done.stderr
+    assert marker.exists() and marker.read_text() != "an earlier prepare\n"
+    failed, marker = _prepare_task(tmp_path / "bad", False)
+    assert failed.returncode != 0 and not marker.exists()
+
+
+def test_each_stage_has_a_submission_id_of_its_own(site, tmp_path):
+    """M5: the nuclei chain's plan is the prepare stage's, never the launch's."""
+    done, calls, root = _head(site, tmp_path, "--all", state="inputs")
+    assert done.returncode == 0, done.stderr[-3000:]
+    chain = next((root / "logs" / "chain").glob("*.tsv")).stem
+    submitted = root / "out" / "logs" / "submitted"
+    assert (submitted / f"{chain}-prepare.prepare.ids").is_file()
+    assert (root / "out" / "logs" / "retry" / f"{chain}-prepare" / "rb-nuclei").is_dir()
+    assert not (root / "out" / "logs" / "retry" / chain).exists()
+    first, _, root1 = _head(site, tmp_path / "i", "--all", state="none")
+    chain1 = next((root1 / "logs" / "chain").glob("*.tsv")).stem
+    assert (
+        root1 / "out" / "logs" / "submitted" / f"{chain1}-inputs.inputs.ids"
+    ).is_file()
+
+
+def test_a_notice_after_the_next_heads_id_is_not_a_refusal(site, tmp_path):
+    """M6: the id is the line that is one, wherever the site prints its notices."""
+    done, calls, root = _head(
+        site, tmp_path, "--all", state="none", env={"NEXT_WARN": "1"}
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    nxt, _ = _next_head(calls)
+    rows = next((root / "logs" / "chain").glob("*.tsv")).read_text().splitlines()
+    assert rows[1].split("\t")[3] == nxt
+
+
+def test_a_refused_next_head_prints_a_quoted_line_to_submit_it(site, tmp_path):
+    done, calls, _ = _head(
+        site, tmp_path, "--all", "--runs", "a b", state="none", env={"NEXT_REFUSE": "1"}
+    )
+    assert done.returncode != 0
+    assert "--runs a\\ b" in done.stderr, done.stderr[-2000:]
+
+
+def test_options_are_copied_only_from_a_batch_job(site, tmp_path):
+    """M7: inside salloc/srun the job is not a head: nothing of it is copied."""
+    done, calls, _ = _head(
+        site, tmp_path, "--all", state="none", env={"FAKE_BATCHFLAG": "0"}
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    _, argv = _next_head(calls)
+    assert not any(
+        w.startswith(("--partition", "--account", "--qos", "--time")) for w in argv
+    )
+    assert "not a batch job" in done.stdout + done.stderr

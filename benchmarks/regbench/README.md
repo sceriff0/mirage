@@ -18,7 +18,11 @@ REGBENCH_INPUT=/path/to/input.csv \
 
 `--all --dry-run` submits nothing and prints the stage plan as read from disk, the next
 head's full `sbatch` line, and the launcher's own dry run of the stage it would run now (and
-of the launch as well, once the inputs and the cohort's cases are there).
+of the launch as well, once the inputs and the cohort's cases are there). When the stage
+it would run is prepare and `REGBENCH_MANIFEST` is not set, the dry run still rebuilds
+`$REGBENCH_INPUTS/rounds.csv` from `preprocessed.csv`, as `--prepare --dry-run` always has.
+That file is the deterministic product of `preprocessed.csv`, and a real prepare writes it
+again.
 
 **What runs, in order.** `--all` is a chain of short head jobs, all named `regbench-launch`.
 Each head runs one stage, submits the next head (`launch.sbatch --all-stage=<next>`) and
@@ -28,11 +32,13 @@ ends. No head sleeps waiting for another, nothing waits on the login node, and n
 | stage | done when (read by the first head) | the head runs | the next head waits for |
 |---|---|---|---|
 | inputs | `$REGBENCH_INPUTS/preprocess/results/csv/preprocessed.csv` exists | `--inputs`: one Nextflow head, the pipeline's preprocessing | `afterok` on that job (`rb-inputs`) |
-| prepare | the rounds file exists and the cohort has prepared cases | `--prepare`: the rounds, the nuclei array (StarDist on its memory ladder), `rb-prepare-multiplex` | `afterok` on `rb-prepare-*` only, never on the nuclei tasks: one slide that fails is tolerated (`afterany` upstream) |
+| prepare | the rounds file exists, the cohort has prepared cases, and its last prepare ended ok (`$REGBENCH_CASES/prepared-multiplex.ok`, which `prepare.sbatch` removes when it starts and writes only on success) | `--prepare`: the rounds, the nuclei array (StarDist on its memory ladder), `rb-prepare-multiplex` | `afterok` on `rb-prepare-*` only, never on the nuclei tasks: one slide that fails is tolerated (`afterany` upstream) |
 | launch | - | the launch, with `--datasets "multiplex <every public dataset whose cases are prepared>"` and `--compute-all` when `REGBENCH_INPUT` is set | nothing: the chain ends, and the launcher's own jobs run |
 
 The first head runs the first stage that is not done (a done prepare stage counts the
-inputs as done too). Every later head is given its stage, so the chain cannot loop or skip.
+inputs as done too). Cases on disk without that record (a prepare that was cancelled or ran
+out of time half-way) do not count as done: prepare runs again and reuses the cases that are
+there, so the launch never runs on part of the cohort. Every later head is given its stage, so the chain cannot loop or skip.
 The datasets left out of the launch are listed with the reason; without `REGBENCH_INPUT`, a
 line says compute-all is skipped and why. `--runs`, `--datasets` and the launcher's other
 arguments go to the launch, and the arguments after `--` go to every stage's jobs. Each next
@@ -42,19 +48,49 @@ head is submitted with `--parsable --export=ALL --kill-on-invalid-dep=yes
 first head's own `--partition`, `--account`, `--qos` and `--time`, which it reads from
 `scontrol show job`. `--kill-on-invalid-dep=yes` makes a failed stage cancel the next head
 rather than leave it pending for ever as `DependencyNeverSatisfied`. Heads are never
-`--requeue`d. If a stage queues nothing (for example, the launcher refused it), the chain
+requeued: `launch.sbatch` has `#SBATCH --no-requeue`, and every next head is given
+`--no-requeue` too. Leaving `--requeue` out would not be enough, because Slurm's default
+`JobRequeue=1` requeues a batch job after a node failure, and a requeued head would queue its
+stage a second time.
+
+**Which sbatch options reach the next heads.** Only `--partition`, `--account`, `--qos` and
+`--time`, read from the first head, and only when it is a batch job (`BatchFlag=1`). Run
+inside `salloc` or an interactive session, nothing is copied, and a line says so. Any other
+option of the first `sbatch` (`--reservation`, `--constraint`, `-M/--clusters`, `--mail-*`,
+...) is NOT copied to the heads. To reach every head, export it as sbatch's own input
+variable before the first `sbatch` (`SBATCH_RESERVATION`, `SBATCH_CONSTRAINT`,
+`SBATCH_CLUSTERS`, ...; `--export=ALL` carries them to every head), or export
+`REGBENCH_CHAIN_SBATCH="--partition=... --reservation=..."`, which then replaces what is read
+from scontrol. To give it to the stages' own jobs too, repeat it after `--`. A first head
+submitted to several partitions (`-p a,b`) shows, once running, only the partition it runs
+in, so every later head goes to that one. A `TimeLimit` of `UNLIMITED` is not copied (the
+next head then takes the `#SBATCH --time` of the file, or the site's default).
+
+Each stage has a submission id of its own: `<chain id>-inputs`, `<chain id>-prepare`, and
+`<chain id>` for the launch. Its ids file and retry plans therefore never mix with
+another stage's (with `REGBENCH_SUBMISSION` exported before the first `sbatch`, that id
+replaces the chain id in the three names). If a stage queues nothing (for example, the launcher refused it), the chain
 ends with a non-zero exit and says why. It never submits a head that would wait on nothing.
 
 **Watching it.** `squeue --me -n regbench-launch` shows the heads. The chain's record is
-`$REGBENCH_ROOT/logs/chain/<chain id>.tsv` (stage, head_job, ids_file, next_head, at), with
-one line per head. The heads' logs are `$REGBENCH_ROOT/logs/regbench-launch-<id>.log` (the
+`$REGBENCH_ROOT/logs/chain/<chain id>.tsv` (stage, head_job, ids_file, next_head, state, at),
+with one line per head. Each head writes its line before its stage runs (state `running`,
+with the ids file the stage will write) and sets it to `done` or `failed` afterwards. When
+`squeue` shows no head while the last line is `done` with a `next_head`, a stage failed, and
+`--kill-on-invalid-dep=yes` has cancelled that next head without a word:
+`sacct -j <next_head> -o JobID,State,Reason` shows it CANCELLED
+(`DependencyNeverSatisfied`), and the stage's own job log under `$REGBENCH_OUT/logs/`
+(`rb-inputs-<id>.log`, `rb-prepare-multiplex-<id>.log`) says why. Fix that cause and
+submit `--all` again. The heads' logs are `$REGBENCH_ROOT/logs/regbench-launch-<id>.log` (the
 first one is where it was submitted from), and the stages' own jobs log under
 `$REGBENCH_OUT/logs/`.
 
-**Stopping it.** Every head prints one line,
-`scancel <heads> $(cat "<ids file>" ...)`, which removes everything the chain has queued so
-far: the heads, and every job id in the stages' ids files (the tile submitters add theirs to
-the launch's file as they feed). The last head's line covers the whole chain.
+**Stopping it.** Every head prints the line
+`scancel <heads> $(cat "<ids file>" ... 2>/dev/null)`, which removes everything the chain
+has queued so far: the heads, and every job id in every ids file the record names (the tile
+submitters add theirs to the launch's file as they feed). It is printed once before the stage
+runs and once after it, so a head killed in the middle of its stage has already printed a
+line that covers that stage's jobs. The last head's line covers the whole chain.
 
 **Resuming after a stop.** Submit `--all` again. The stages that are done are skipped, and
 the launch reuses every unit that is already ok in `REGBENCH_OUT` and runs the rest. A new
