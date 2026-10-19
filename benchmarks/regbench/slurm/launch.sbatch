@@ -1,6 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=regbench-launch
 #SBATCH --export=ALL
+# never requeued: a requeued head would run its stage again and queue its jobs twice
+# (slurm.conf JobRequeue=1, the default, requeues a batch job unless it says otherwise)
+#SBATCH --no-requeue
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=04:00:00
@@ -19,10 +22,12 @@
 # head sleeps waiting for another and nothing waits on the login node. The first head
 # runs the first stage not done on disk; each later head is given its stage
 # (--all-stage=prepare, --all-stage=launch), so the chain never loops or skips. Its
-# record is $REGBENCH_ROOT/logs/chain/<chain id>.tsv; every head prints the ONE scancel
-# line that removes everything the chain has queued so far. Submitted again after a
-# stop, --all skips the stages that are done, and the launch reuses every unit that is
-# ok. The flags of the next head, and why each is there: chain_next_head below.
+# record is $REGBENCH_ROOT/logs/chain/<chain id>.tsv (each head's line written before its
+# stage runs); every head prints the scancel line that removes everything the chain has
+# queued so far, before its stage and after it. Submitted again after a stop, --all skips
+# the stages that are done (prepare only when its own record says it ended ok), and the
+# launch reuses every unit that is ok. The flags of the next head, and why each is
+# there: chain_next_head in slurm/chain.sh.
 #
 # The steps one by one, from the repository:
 #
@@ -148,7 +153,10 @@ export REGBENCH_REPO="$repo"
 #   + tile tasks <= STAGE_QUEUE_MAX            STARE's REG-TILE jobs
 #   + the small jobs: a watcher link per chain, a tile submitter per STARE run in
 #     flight (1 CPU, 1 GB each)
-#   CPUs = tasks x REGBENCH_CPUS; memory at the first rung = ladder tasks x 16 GB
+#   CPUs = ladder tasks and selfchecks x REGBENCH_CPUS, plus tile tasks x their own
+#   allocation (the pipeline's: 2 CPUs); memory at the first rung = ladder tasks x 16 GB
+#   + selfchecks x 64 GB + tile tasks x 4 GB. On the cohort's list, with these values:
+#   at most 197 tasks (82 ladder + 15 selfchecks + 100 tiles), 588 CPUs, 20 GPUs, 2672 GB
 #
 # REGBENCH_RUN_LANES: runs in flight. The runs are dealt onto this many lanes; a run
 # starts when the run before it on its lane has ended (afterany). Default here 4 (the
