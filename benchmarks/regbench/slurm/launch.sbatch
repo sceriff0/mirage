@@ -100,6 +100,13 @@ if [ "$ALL" = 1 ]; then
             exit 2 ;;
         esac
     done
+    # the launcher repeats a submission before its input and prepare steps: under --all
+    # each repeat would queue its own input step and the chain would see none queued.
+    # Repeats are the CPU cross's, a plain launch after the benchmark is prepared
+    if [ "${REGBENCH_REPEAT:-1}" != 1 ]; then
+        echo "regbench-launch: --all runs ONE submission; REGBENCH_REPEAT=${REGBENCH_REPEAT} is the CPU cross's, submitted as a plain launch (without --all) once --all has prepared the benchmark. Nothing was submitted." >&2
+        exit 2
+    fi
     case "$ALL_STAGE" in
         ''|inputs|prepare|launch) ;;
         *) echo "regbench-launch: --all-stage=$ALL_STAGE: the stages are inputs, prepare and launch. Nothing was submitted." >&2; exit 2 ;;
@@ -196,7 +203,8 @@ export REGBENCH_REPO="$repo"
 # before it (a timing replicate, nothing else on the nodes). Default 0
 #   REGBENCH_WAVES=0
 # REGBENCH_REPEAT: the same submission N times, repeat k into $REGBENCH_OUT/rep<k> (the
-# CPU cross's repetitions), all at once. Default 1
+# CPU cross's repetitions), one after the other: each repeat's first jobs wait afterany
+# on the previous repeat's scorers. Default 1. Not with --all (refused): a plain launch
 #   REGBENCH_REPEAT=1
 # ── a task's allocation ───────────────────────────────────────────────────────────
 # REGBENCH_CPUS: every ladder task's --cpus-per-task: 4 (every method's allocation, the

@@ -331,6 +331,19 @@ def test_all_refuses_a_step_flag_of_its_own(site, tmp_path):
     assert done.returncode == 2 and not calls and "--all" in done.stderr
 
 
+def test_all_refuses_repeats(site, tmp_path):
+    # the launcher repeats a submission before its --inputs/--prepare: under --all a
+    # repeat would queue one input step per repeat, and the chain would see none queued
+    done, calls, _ = _head(
+        site, tmp_path, "--all", state="prepared", env={"REGBENCH_REPEAT": "2"}
+    )
+    assert done.returncode == 2 and not calls and "REGBENCH_REPEAT" in done.stderr
+    once, calls, _ = _head(
+        site, tmp_path, "--all", state="prepared", env={"REGBENCH_REPEAT": "1"}
+    )
+    assert once.returncode == 0 and calls
+
+
 def test_the_plain_launch_is_unchanged():
     code = code_of(LAUNCH)
     assert 'exec bash "$launcher" "$@"' in code

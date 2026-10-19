@@ -115,7 +115,7 @@ GPU, 2 with a realcheck):
 | `REGBENCH_COMPUTE_LANES` | 2 | compute-all Nextflow heads at once, last and alone | rarely: more lanes means more contention in a cost measurement |
 | `REGBENCH_RETRY_WATCHERS` | 2 | links of each chain's watcher (1 CPU, 1 GB, 7 days each) | a ladder climbs for more than 14 days |
 | `REGBENCH_WAVES` | 0 | 1: one method at a time (a timing replicate) | a timing replicate |
-| `REGBENCH_REPEAT` | 1 | the same submission N times, into `rep<k>`, all at once | the CPU cross's repetitions |
+| `REGBENCH_REPEAT` | 1 | the same submission N times, into `rep<k>`, one after the other (each repeat waits `afterany` on the previous one's scorers); refused with `--all` | the CPU cross's repetitions |
 | `REGBENCH_CPUS` | 4 | every ladder task's CPUs (4 or 8) | the CPU cross only |
 | `REGBENCH_TIME` | 24:00:00 | a ladder task's time per round | a method needs more than a day per round |
 | `REGBENCH_SCORE_CPUS`, `REGBENCH_SCORE_MEM` | 8, 64G | each per-case scoring task (the memory also of the tissue and score jobs) | the scorer runs out of memory |
