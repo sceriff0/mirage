@@ -20,14 +20,17 @@ from benchmarks.regbench import imageio, synth
 from benchmarks.regbench.cases import list_cases
 
 
-def _source(tmp_path, side=300, dtype=np.uint8, names=("DAPI", "CD3"), px=0.325):
-    """A two-channel stand-in slide: channel 0 a blob texture, channel 1 noise."""
+def _source(tmp_path, side=300, dtype=np.uint8, names=("DAPI", "CD3"), px=0.325,
+            blobs=60, floor=0):
+    """A two-channel stand-in slide: channel 0 a blob texture over ``floor`` (its
+    background level), channel 1 noise."""
     rng = np.random.default_rng(7)
     yy, xx = np.mgrid[0:side, 0:side]
     tex = np.zeros((side, side))
-    for cy, cx in rng.uniform(0, side, (60, 2)):
+    for cy, cx in rng.uniform(0, side, (blobs, 2)):
         tex += np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / 18.0)
-    tex = (tex / tex.max() * (np.iinfo(dtype).max * 0.8)).astype(dtype)
+    top = np.iinfo(dtype).max * 0.8 - floor
+    tex = (floor + tex / tex.max() * top).astype(dtype)
     other = rng.integers(0, 50, (side, side)).astype(dtype)
     path = tmp_path / "src.ome.tif"
     imageio.write_channels(path, np.stack([tex, other]), list(names), px)
@@ -152,7 +155,7 @@ def test_panels_have_the_stated_shape_channels_dtype_and_pixel_size(tmp_path):
             assert arr.shape == (3, size, size) and arr.dtype == np.uint16
 
 
-def test_the_reference_panel_is_the_source_crop_and_a_moving_panel_differs(tmp_path):
+def test_the_reference_panel_is_the_quilt_inside_the_mask_and_a_moving_panel_differs(tmp_path):
     src = _source(tmp_path)
     to = _generate(tmp_path, src)
     crop = synth.texture(src, texture_side=128)
@@ -163,26 +166,37 @@ def test_the_reference_panel_is_the_source_crop_and_a_moving_panel_differs(tmp_p
     assert np.array_equal(
         crop, raw[c0 : c0 + 128, c0 : c0 + 128].astype(np.uint16) * 257
     )
-    ref = tifffile.imread(synth.panel_path(to, 64, 0))
-    assert np.array_equal(ref[0], crop[:64, :64])
-    big = tifffile.imread(synth.panel_path(to, 256, 0))[0]
-    assert np.array_equal(big[:128, :128], crop)  # tiled: the crop, then its mirror
-    assert np.array_equal(big[:128, 128:256], crop[:, ::-1])
+    d = synth.design_of(crop)
+    for size in SIZES:
+        ref = tifffile.imread(synth.panel_path(to, size, 0))
+        q = synth.quilt_box(crop, 0, 0, size, 0, size, d["block_px"], d["overlap_px"])
+        inside = synth.tissue_mask(0, size)
+        # the quilt itself (rounded) inside the mask, untouched by noise or gain
+        assert np.array_equal(ref[0][inside], np.rint(q[inside]).astype(np.uint16))
+    # away from the seams a block is a verbatim piece of the crop
+    block, overlap = d["block_px"], d["overlap_px"]
+    oy, ox = synth._block_offset(0, 0, 0, 128, block)
+    h = overlap // 2
+    core = q[h : block - overlap - h, h : block - overlap - h]
+    assert np.array_equal(core, crop[oy + overlap : oy + block - overlap,
+                                     ox + overlap : ox + block - overlap].astype(np.float32))
     mov = tifffile.imread(synth.panel_path(to, 64, 1))
-    assert not np.array_equal(mov[0], ref[0])
+    assert not np.array_equal(mov[0], tifffile.imread(synth.panel_path(to, 64, 0))[0])
 
 
 def test_the_moving_panel_is_the_reference_moved_by_its_transform(tmp_path):
     """Noise aside, moving DAPI at q is the reference texture at the transform of q."""
     src = _source(tmp_path)
     to = _generate(tmp_path, src)
-    tex = synth.texture(src, texture_side=128).astype(float)
+    tex = synth.texture(src, texture_side=128)
+    d = synth.design_of(tex)
     t = synth.transform(0, 256, 4)
     mov = tifffile.imread(synth.panel_path(to, 256, 4))[0].astype(float)
     yy, xx = np.mgrid[0:256, 0:256].astype(float)
     py, px = synth.source_coords(t, yy, xx)
-    want = synth.bilinear(tex, py, px)
-    resid = mov - want
+    inside = synth.tissue_mask_at(0, 256, py, px)
+    want = synth.quilt_at(tex, 0, py, px, d["block_px"], d["overlap_px"])
+    resid = (mov - want)[inside & (want > 50)]  # away from the clip at 0
     assert abs(resid.mean()) < 1.0 and 2.0 < resid.std() < 4.0  # the s.d. 3 noise
 
 
@@ -258,7 +272,8 @@ def test_each_size_is_one_patient_of_ten_cases_on_one_reference(tmp_path):
             assert c.ref_nuclear == "" and c.mov_nuclear == ""
             tj = json.loads((Path(c.dir) / "synth_transform.json").read_text())
             k = int(c.extra["synthetic"]["panel"])
-            assert tj == json.loads(json.dumps(synth.transform(0, size, k)))
+            want = json.loads(json.dumps(synth.transform(0, size, k)))
+            assert {k_: v for k_, v in tj.items() if not k_.startswith("foreground")} == want
             assert c.diagonal == pytest.approx(math.hypot(size, size))
 
 
@@ -361,3 +376,123 @@ def test_units_are_the_grids_before_the_plan_and_the_plans_after(tmp_path, capsy
     capsys.readouterr()
     synth.main(SimpleNamespace(to=str(to), grid="default", **args))
     assert capsys.readouterr().out.strip() == "22"
+
+
+# ---- fix round 1: an aperiodic, asymmetric quilt on a tissue mask -------------------------
+
+# a 256 px texture makes 128 px quilt blocks: 512 and 1024 px are >= 4 blocks
+QUILT_TEX, QUILT_SIZES = 256, (512, 1024)
+
+
+def _quilt_set(tmp_path, sizes=QUILT_SIZES, panels=(0,)):
+    src = _source(tmp_path, side=512, blobs=2000, floor=20)
+    to = tmp_path / "quilt"
+    synth.plan(src, to, sizes=sizes, seed=0, tile=128, texture_side=QUILT_TEX)
+    units = synth._read_plan(to)["units"]
+    for i, (_s, k) in enumerate(units):
+        if k in panels:
+            synth.render_unit(to, i)
+    return to
+
+
+def _differs(a, b):
+    """Mean |a - b| as a fraction of the s.d. of a: 0 for an exact copy."""
+    a, b = a.astype(float), b.astype(float)
+    return float(np.abs(a - b).mean() / max(a.std(), 1e-9))
+
+
+def test_the_reference_is_neither_180_degree_symmetric_nor_half_slide_periodic(tmp_path):
+    """Review (T32 fix 1): the mirror tiling made the reference 180-degree invariant from
+    2x the texture and translation-periodic from 4x. The quilt is neither, at >= 4 blocks."""
+    to = _quilt_set(tmp_path)
+    for size in QUILT_SIZES:
+        ref = tifffile.imread(synth.panel_path(to, size, 0))[0]
+        h = size // 2
+        assert _differs(ref, ref[::-1, ::-1]) > 0.3, size
+        assert _differs(ref[h:, :], ref[:-h, :]) > 0.3, size
+        assert _differs(ref[:, h:], ref[:, :-h]) > 0.3, size
+        assert _differs(ref[h:, h:], ref[:-h, :-h]) > 0.3, size
+        # nor periodic at the old period (twice the texture)
+        p = 2 * QUILT_TEX
+        if size > p:
+            assert _differs(ref[p:, :], ref[:-p, :]) > 0.3, size
+
+
+def test_the_tissue_mask_covers_half_of_every_size_with_one_shape(tmp_path):
+    """Ruling (T32 fix 1): a seeded irregular tissue mask, foreground 0.5 at every size,
+    the same shape scaled; outside it, the background level plus the noise."""
+    to = _quilt_set(tmp_path)
+    rec = synth._read_plan(to)
+    shapes = []
+    for size in QUILT_SIZES:
+        m = synth.tissue_mask(0, size)
+        assert m.shape == (size, size) and m.dtype == bool
+        assert abs(m.mean() - 0.5) <= 0.05, (size, m.mean())
+        shapes.append(m[:: size // 64, :: size // 64])
+        ref = tifffile.imread(synth.panel_path(to, size, 0))[0].astype(float)
+        bg = ref[~m]
+        assert abs(bg.mean() - rec["background"]) < 1.0
+        assert 2.0 < bg.std() < 4.0  # the s.d. 3 noise
+    # the same shape at both sizes, scaled
+    assert (shapes[0] == shapes[1]).mean() > 0.97
+    assert synth.FOREGROUND_FRACTION == 0.5
+
+
+def test_the_moving_panels_mask_is_moved_with_its_texture(tmp_path):
+    to = _quilt_set(tmp_path, sizes=(512,), panels=(0, 3))
+    rec = synth._read_plan(to)
+    t = synth.transform(0, 512, 3)
+    yy, xx = np.mgrid[0:512, 0:512].astype(float)
+    py, px = synth.source_coords(t, yy, xx)
+    moved = synth.tissue_mask_at(0, 512, py, px)
+    mov = tifffile.imread(synth.panel_path(to, 512, 3))[0].astype(float)
+    bg = mov[~moved]
+    assert abs(bg.mean() - rec["background"]) < 1.0 and 2.0 < bg.std() < 4.0
+    # and it is not the reference's mask where the transform moved it
+    assert (moved != synth.tissue_mask(0, 512)).mean() > 0.005
+
+
+def test_the_foreground_fraction_is_recorded_with_each_transform(tmp_path):
+    src = _source(tmp_path, side=512)
+    to = tmp_path / "rec"
+    synth.generate(src, to, sizes=(256,), seed=0, tile=128, texture_side=QUILT_TEX)
+    for k in range(1, 11):
+        t = json.loads((to / "synthetic" / synth.case_id_of(256, k) / synth.TRANSFORM).read_text())
+        assert t["foreground_fraction"] == 0.5
+        assert abs(t["foreground_fraction_measured"] - 0.5) <= 0.05
+
+
+def test_the_texture_crop_is_up_to_16384_px_and_says_what_limited_it(tmp_path):
+    assert synth.TEXTURE_SIDE == 16384
+    src = _source(tmp_path, side=512)
+    to = tmp_path / "lim"
+    synth.plan(src, to, sizes=(256,), seed=0, tile=128)
+    rec = synth._read_plan(to)
+    assert rec["texture_side"] == 512 and rec["texture_side_requested"] == 16384
+    assert rec["texture_limited_by"] == "source"
+    to2 = tmp_path / "lim2"
+    synth.plan(src, to2, sizes=(256,), seed=0, tile=128, texture_side=256)
+    rec2 = synth._read_plan(to2)
+    assert rec2["texture_side"] == 256 and rec2["texture_limited_by"] == "texture_side"
+    assert rec2["block_px"] == 128 and rec2["overlap_px"] == 16
+
+
+def test_stare_coarse_takes_the_same_path_at_two_sizes(tmp_path):
+    """STARE's COARSE anchor on panel 1 against the reference, at two sizes, on thumbnails
+    of one size: the same `trusted` and method at both (the mirror tiling sent the larger
+    size to the fallback)."""
+    coarse = pytest.importorskip("stare.coarse_align")
+    to = _quilt_set(tmp_path, sizes=(256, 1024), panels=(0, 1))
+
+    def thumb(a, n=256):
+        k = a.shape[0] // n
+        return a[: n * k, : n * k].reshape(n, k, n, k).mean(axis=(1, 3))
+
+    got = []
+    for size in (256, 1024):
+        ref = tifffile.imread(synth.panel_path(to, size, 0))[0]
+        mov = tifffile.imread(synth.panel_path(to, size, 1))[0]
+        a = coarse.estimate_anchor(thumb(ref), thumb(mov))
+        got.append((a.trusted, a.method))
+    assert got[0] == got[1], got
+    assert got[0] == (True, "ncc_sweep"), got

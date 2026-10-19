@@ -14,25 +14,38 @@ THE DESIGN (user, 2026-10-19):
 - 11 panels per patient, as the cohort has: panel 0 the reference, 1..10 moving. Each panel
   is ONE image of 3 channels named ``DAPI``, ``S1``, ``S2``, uint16, at 0.325 µm;
 - the texture is real tissue: the source slide's nuclear channel, a centred crop of up to
-  ``TEXTURE_SIDE`` px (resampled to 0.325 µm first when the source states another pixel
-  size), mirror-tiled to the size (the crop, its mirror, the crop, ...), so nuclei keep their
-  size at every slide size. A uint8 source is widened by 257 (255 -> 65535);
-- the reference's DAPI is that tiled crop, untouched. S1 and S2 are the archive's perturbed
-  copies (``synthesize_channels``): channel c is the texture shifted c columns, times a gain
-  uniform in 1 +- 0.1, plus Gaussian noise of s.d. 3 counts, clipped;
+  ``TEXTURE_SIDE`` = 16384 px (the source's extent when that is smaller; the plan records
+  which, ``texture_limited_by``), resampled to 0.325 µm first when the source states another
+  pixel size, so nuclei keep their size at every slide size. A uint8 source is widened by
+  257 (255 -> 65535);
+- the texture is QUILTED to the size (T32 fix 1): blocks of ``BLOCK_PX`` = 2048 px, each
+  taken from the crop at an offset seeded by (seed, block row, block column), blended over a
+  feathered seam of 256 px (``quilt_box``). It is aperiodic and has no 180-degree symmetry,
+  so a registration takes the same path at every size (the mirror tiling it replaced made
+  the reference 180-degree symmetric from 2x the crop and periodic from 4x, and sent STARE's
+  coarse step to its fallback from 8192 px up);
+- a TISSUE MASK (ruling, T32 fix 1): a seeded smooth random field, thresholded so that
+  ``FOREGROUND_FRACTION`` = 0.5 of the slide is inside at every size, the same shape scaled
+  to the slide. Outside it is the source's background level (its 1st percentile) plus the
+  noise;
+- the reference's DAPI is the quilt inside the mask, untouched (rounded). S1 and S2 are the
+  archive's perturbed copies (``synthesize_channels``): channel c is the quilt shifted c
+  columns, times a gain uniform in 1 +- 0.1, plus Gaussian noise of s.d. 3 counts, clipped;
 - moving panel k is the reference moved by one fixed transform seeded by (seed, size, k):
   a rotation uniform in +-1 degree and a translation uniform in +-2 % of the long side per
   axis, both about the image centre, then a smooth deformation, the sum of 4 sine modes of
   wavelength 1 mm (3077 px) whose amplitudes sum to 5 µm (~15 px) -- the same in µm at every
-  size. Every channel then gets Gaussian noise of s.d. 3 counts, clipped to uint16.
+  size. The mask moves with the texture. Every channel then gets Gaussian noise of s.d. 3
+  counts, clipped to uint16.
 
 PORTED: ``compute_target_shape`` and ``synthesize_channels`` are the archive's, from
 ``benchmarks/generate_matrix.py`` at commit ``774e1c9d`` (tag
 ``archive/benchmarks-arms-sweep``), unchanged. The archive bounded memory by building the
 noise in ROW BLOCKS; this module keeps that bound by rendering one TILE at a time
-(``panel_tiles``), so a 65536 px panel is never held in memory: peak memory is the texture
-(at most 4096 px square) plus a few tiles. The moving panels are rendered tile by tile from
-the texture directly (bilinear), which the archive did not do (it had no transform).
+(``panel_tiles``), so a 65536 px panel is never held in memory: a task memory-maps the
+texture (at most 16384 px square, 512 MB, read only where its tiles' blocks lie) and holds a
+few tiles. The moving panels are rendered tile by tile from the quilt directly (bilinear),
+which the archive did not do (it had no transform).
 
 ONE WRITE, MANY READERS. The set is generated once and shared by every run: ``plan``
 refuses an existing ``<CASES>/synthetic`` folder and prints the bytes it will write before
@@ -47,6 +60,7 @@ panel), so the same seed gives byte-identical files.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -70,7 +84,17 @@ N_MODES = 4
 NOISE_SD = 3.0
 GAIN_JITTER = 0.1  # the archive's: 1 + U(-0.1, 0.1)
 TILE = 1024
-TEXTURE_SIDE = 4096
+# the quilt (T32 fix 1): blocks of BLOCK_PX taken at seeded offsets from a texture crop of
+# up to TEXTURE_SIDE px, feathered over OVERLAP_FRACTION of a block. Never a mirror tiling:
+# that made the reference 180-degree symmetric and translation-periodic as it grew
+TEXTURE_SIDE = 16384
+BLOCK_PX = 2048
+OVERLAP_FRACTION = 8  # the overlap is BLOCK_PX // 8 (256 px)
+# the tissue mask (ruling, T32 fix 1): a seeded irregular shape covering half of every
+# size, the same shape scaled; outside it the source's background level plus the noise
+FOREGROUND_FRACTION = 0.5
+MASK_NODES = 8  # the smooth random field's grid, nodes per side
+BACKGROUND_PERCENTILE = 1.0
 SLIDES = "_slides"
 PLAN = "synth_plan.json"
 TRANSFORM = "synth_transform.json"
@@ -107,7 +131,7 @@ def synthesize_channels(
     Memory: the per-channel float64 noise/scale intermediate is built in ROW BLOCKS
     (``block_rows`` at a time), not for the whole image at once. Deterministic per seed.
     (The panels here are rendered per tile by ``panel_tiles``, which applies the same
-    perturbation to the mirror-tiled texture; this function is kept as the reference.)
+    perturbation to the quilted texture; this function is kept as the reference.)
     """
     if src_2d.ndim != 2:
         raise ValueError("src_2d must be 2-D (H, W)")
@@ -276,25 +300,127 @@ def gains(seed, size):
 # ---- the texture --------------------------------------------------------------------------
 
 
-def _fold(i, n):
-    """Mirror-periodic index: 0..n-1, then n-1..0, then 0..n-1, ..."""
-    m = np.mod(i, 2 * n)
-    return np.where(m >= n, 2 * n - 1 - m, m)
-
-
-def bilinear(tex, py, px):
-    """The mirror-tiled texture at float coordinates, bilinear, as float64."""
-    h, w = tex.shape
+def bilinear(img, py, px):
+    """``img`` at float coordinates, bilinear, as float64 (indices clipped to the image)."""
+    h, w = img.shape
     y0 = np.floor(py)
     x0 = np.floor(px)
     fy, fx = py - y0, px - x0
     y0, x0 = y0.astype(np.int64), x0.astype(np.int64)
-    ya, yb = _fold(y0, h), _fold(y0 + 1, h)
-    xa, xb = _fold(x0, w), _fold(x0 + 1, w)
-    t = tex
-    top = t[ya, xa] * (1 - fx) + t[ya, xb] * fx
-    bot = t[yb, xa] * (1 - fx) + t[yb, xb] * fx
+    ya, yb = np.clip(y0, 0, h - 1), np.clip(y0 + 1, 0, h - 1)
+    xa, xb = np.clip(x0, 0, w - 1), np.clip(x0 + 1, 0, w - 1)
+    top = img[ya, xa] * (1 - fx) + img[ya, xb] * fx
+    bot = img[yb, xa] * (1 - fx) + img[yb, xb] * fx
     return top * (1 - fy) + bot * fy
+
+
+# ---- the quilt and the tissue mask --------------------------------------------------------
+
+
+def design_of(tex):
+    """The quilt's block and overlap for a texture of this side, and its background level
+    (the ``BACKGROUND_PERCENTILE`` of a subsample: never a float copy of the whole crop)."""
+    side = int(min(tex.shape))
+    block = int(min(BLOCK_PX, side // 2))
+    overlap = max(2, block // OVERLAP_FRACTION) // 2 * 2
+    step = max(1, side // 1024)
+    background = float(np.percentile(np.asarray(tex[::step, ::step]), BACKGROUND_PERCENTILE))
+    return {"block_px": block, "overlap_px": overlap, "background": background}
+
+
+def _block_offset(seed, i, j, side, block):
+    """Where block (i, j) is taken from in the texture: seeded by (seed, i, j) alone, so a
+    slide is the top-left of every larger one and no two blocks repeat a pattern."""
+    rng = np.random.default_rng([int(seed), int(i) + 2**30, int(j) + 2**30, 11])
+    return [int(v) for v in rng.integers(0, side - block + 1, 2)]
+
+
+def _axis_blocks(a0, a1, block, overlap):
+    """The blocks along one axis that reach ``[a0, a1)``: ``(index, lo, hi, weights)``.
+    Block ``i`` covers ``[i*S - O/2, (i+1)*S + O/2)`` (S = block - overlap), its weight
+    rising over the first O px and falling over the last; neighbours sum to 1."""
+    step, half = block - overlap, overlap // 2
+    out = []
+    for i in range((a0 - half) // step - 1, (a1 + half) // step + 1):
+        start = i * step - half
+        lo, hi = max(a0, start), min(a1, start + block)
+        if lo >= hi:
+            continue
+        s = np.arange(lo, hi, dtype=np.float32)
+        w = np.clip(np.minimum(s - start, start + block - s) / overlap, 0.0, 1.0)
+        out.append((i, lo, hi, lo - start, w.astype(np.float32)))
+    return out
+
+
+def quilt_box(tex, seed, y0, y1, x0, x1, block, overlap):
+    """The quilt on the integer box ``[y0, y1) x [x0, x1)`` (any integers, negative too), as
+    float32: the blend of the seeded blocks over it, gathered from the uint16 texture by
+    slices (no float copy of the texture)."""
+    side = int(min(tex.shape))
+    out = np.zeros((y1 - y0, x1 - x0), np.float32)
+    cols = _axis_blocks(x0, x1, block, overlap)
+    for i, ylo, yhi, ly, wy in _axis_blocks(y0, y1, block, overlap):
+        for j, xlo, xhi, lx, wx in cols:
+            oy, ox = _block_offset(seed, i, j, side, block)
+            patch = tex[oy + ly : oy + ly + (yhi - ylo), ox + lx : ox + lx + (xhi - xlo)]
+            out[ylo - y0 : yhi - y0, xlo - x0 : xhi - x0] += (
+                wy[:, None] * wx[None, :] * patch.astype(np.float32)
+            )
+    return out
+
+
+def quilt_at(tex, seed, py, px, block, overlap):
+    """The quilt at float coordinates, bilinear: the quilt on the coordinates' integer
+    bounding box, then interpolated. At integer coordinates it is the quilt itself."""
+    py, px = np.asarray(py, np.float64), np.asarray(px, np.float64)
+    by0, bx0 = int(np.floor(py.min())), int(np.floor(px.min()))
+    by1, bx1 = int(np.floor(py.max())) + 2, int(np.floor(px.max())) + 2
+    box = quilt_box(tex, seed, by0, by1, bx0, bx1, block, overlap)
+    return bilinear(box, py - by0, px - bx0)
+
+
+def _mask_field(seed):
+    """The tissue shape: a smooth random field on a ``MASK_NODES`` grid, seeded by the set's
+    seed alone (the same shape at every size)."""
+    return np.random.default_rng([int(seed), 13]).normal(size=(MASK_NODES, MASK_NODES))
+
+
+def _field_at(seed, gy, gx):
+    from scipy import ndimage
+
+    return ndimage.map_coordinates(
+        _mask_field(seed), [np.ravel(gy), np.ravel(gx)], order=3, mode="nearest"
+    ).reshape(np.shape(gy))
+
+
+@functools.lru_cache(maxsize=8)
+def _mask_threshold(seed):
+    """The field's level that leaves ``FOREGROUND_FRACTION`` of the slide inside."""
+    g = np.linspace(0.0, MASK_NODES - 1.0, 1024)
+    gy, gx = np.meshgrid(g, g, indexing="ij")
+    return float(np.quantile(_field_at(seed, gy, gx), 1.0 - FOREGROUND_FRACTION))
+
+
+def tissue_mask_at(seed, size, py, px):
+    """True where reference coordinates ``(py, px)`` of a ``size`` px slide are tissue."""
+    k = (MASK_NODES - 1.0) / max(int(size) - 1, 1)
+    return _field_at(seed, np.asarray(py) * k, np.asarray(px) * k) > _mask_threshold(seed)
+
+
+def tissue_mask(seed, size):
+    """The reference's whole mask (small sizes: tests and the measured fraction)."""
+    yy, xx = np.mgrid[0:size, 0:size]
+    return tissue_mask_at(seed, size, yy, xx)
+
+
+def measured_foreground(seed, size, t=None, n=512):
+    """The fraction of the panel inside the mask, on an ``n`` x ``n`` sample of its pixels
+    (the moving panel's through its transform ``t``)."""
+    g = np.linspace(0.0, size - 1.0, n)
+    yy, xx = np.meshgrid(g, g, indexing="ij")
+    if t is not None:
+        yy, xx = source_coords(t, yy, xx)
+    return float(tissue_mask_at(seed, size, yy, xx).mean())
 
 
 def _nuclear_index(path, channel):
@@ -360,39 +486,50 @@ def _tile_noise(seed, size, panel, ch, ty, tx, shape):
     return rng.normal(0.0, NOISE_SD, size=shape)
 
 
-def panel_tiles(tex, seed, size, panel, tile=TILE):
+def panel_tiles(tex, seed, size, panel, tile=TILE, design=None):
     """Every tile of the panel, channel 0 first, row-major within a channel: what
-    ``imageio.write_channel_tiles`` takes. One tile is rendered at a time."""
-    tex = np.asarray(tex)
+    ``imageio.write_channel_tiles`` takes. One tile is rendered at a time.
+
+    Inside the tissue mask the reference's DAPI is the quilt itself (rounded); S_c is the
+    quilt shifted c columns, times its gain, plus the noise. Outside it every channel is
+    the background level (times the channel's gain) plus the noise. A moving panel shows
+    the reference's quilt AND mask at its transform."""
+    d = design or design_of(tex)
+    block, overlap, bg = d["block_px"], d["overlap_px"], d["background"]
     t = transform(seed, size, panel) if panel else None
     g = gains(seed, size)
-    texf = tex.astype(np.float64)
     for ch in range(len(CHANNELS)):
         for ty, y0 in enumerate(range(0, size, tile)):
             y1 = min(y0 + tile, size)
             for tx, x0 in enumerate(range(0, size, tile)):
                 x1 = min(x0 + tile, size)
                 yy, xx = np.mgrid[y0:y1, x0:x1]
-                if t is None and ch == 0:  # the reference's DAPI: the tiled crop itself
-                    yield tex[_fold(yy, tex.shape[0]), _fold(xx, tex.shape[1])]
-                    continue
                 if t is None:
-                    py, px = yy.astype(np.float64), xx.astype(np.float64)
+                    inside = tissue_mask_at(seed, size, yy, xx)
+                    val = quilt_box(tex, seed, y0, y1, x0 - ch, x1 - ch, block, overlap)
+                    val = val.astype(np.float64) * g[ch]
                 else:
                     py, px = source_coords(t, yy, xx)
-                val = bilinear(texf, py, px - ch) * g[ch]  # S_c: shifted c columns
-                val += _tile_noise(seed, size, panel, ch, ty, tx, val.shape)
+                    inside = tissue_mask_at(seed, size, py, px)
+                    val = quilt_at(tex, seed, py, px - ch, block, overlap) * g[ch]
+                    del py, px
+                noise = _tile_noise(seed, size, panel, ch, ty, tx, val.shape)
+                if t is None and ch == 0:
+                    # the reference's DAPI: the quilt untouched inside the mask
+                    val = np.where(inside, val, bg + noise)
+                else:
+                    val = np.where(inside, val, bg * g[ch]) + noise
                 yield np.clip(np.rint(val), 0, 65535).astype(DTYPE)
-                del val, py, px
+                del val, noise, inside
 
 
-def _write_panel(path, tex, seed, size, panel, tile):
+def _write_panel(path, tex, seed, size, panel, tile, design=None):
     import tifffile
 
     from . import imageio
 
     def padded():
-        for a in panel_tiles(tex, seed, size, panel, tile):
+        for a in panel_tiles(tex, seed, size, panel, tile, design):
             if a.shape != (tile, tile):
                 full = np.zeros((tile, tile), DTYPE)
                 full[: a.shape[0], : a.shape[1]] = a
@@ -468,6 +605,7 @@ def plan(
     for line in estimate_lines(sizes):
         print(line, flush=True)
     tex = texture(source, texture_side, channel)
+    d = design_of(tex)
     rec = {
         "source": str(source),
         "channel": _nuclear_index(source, channel),
@@ -476,6 +614,13 @@ def plan(
         "sizes": list(sizes),
         "tile": int(tile),
         "texture_side": int(tex.shape[0]),
+        "texture_side_requested": int(texture_side),
+        # the crop is the requested side unless the source (at 0.325 um) is smaller
+        "texture_limited_by": "source" if tex.shape[0] < int(texture_side) else "texture_side",
+        **d,
+        "background_percentile": BACKGROUND_PERCENTILE,
+        "foreground_fraction": FOREGROUND_FRACTION,
+        "mask_nodes": MASK_NODES,
         "texture_sha256": hashlib.sha256(tex.tobytes()).hexdigest(),
         "units": [[s, k] for s in sizes for k in range(N_PANELS)],
         "estimate": estimate(sizes),
@@ -502,9 +647,11 @@ def render_unit(to, i):
     if path.exists():
         print(f"synth: {path} is already written; kept", flush=True)
         return path
-    tex = np.load(_root(to) / SLIDES / "texture.npy")
+    # memory-mapped: a task reads the blocks its tiles take, never the whole 16384 px crop
+    tex = np.load(_root(to) / SLIDES / "texture.npy", mmap_mode="r")
+    design = {k: rec[k] for k in ("block_px", "overlap_px", "background")}
     print(f"synth: writing {path} ({size} px, panel {panel})", flush=True)
-    return _write_panel(path, tex, rec["seed"], size, panel, rec["tile"])
+    return _write_panel(path, tex, rec["seed"], size, panel, rec["tile"], design)
 
 
 def finish(to):
@@ -527,9 +674,10 @@ def finish(to):
         ref = panel_path(to, size, 0)
         for k in range(1, N_PANELS):
             cid = case_id_of(size, k)
-            write_json(
-                case_dir(to, DATASET, cid) / TRANSFORM, transform(rec["seed"], size, k)
-            )
+            t = transform(rec["seed"], size, k)
+            t["foreground_fraction"] = FOREGROUND_FRACTION
+            t["foreground_fraction_measured"] = measured_foreground(rec["seed"], size, t)
+            write_json(case_dir(to, DATASET, cid) / TRANSFORM, t)
             mov = panel_path(to, size, k)
             names = list(CHANNELS)
             case = Case(
