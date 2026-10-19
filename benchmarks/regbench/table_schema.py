@@ -495,7 +495,7 @@ _TABLE_LIST = [
         "METHODS PRESENT (initial excluded), not the leaderboard's; NA elsewhere"),
        ("tre_um_med", "um", "median over pairs of the per-pair median TRE"),
        ("tre_um_pooled_med", "um", "HyReCo: one median over all landmarks of all pairs "
-        "(Lotz et al. 2023's MTRE); NA elsewhere"),
+        "(Lotz et al. 2023's MTRE [PARTIAL]); NA elsewhere"),
        ("best_of_family", "bool", "the family's best row on this set by rtre_median_med "
         "(every terminal row of the family a candidate)"),
        ("in_sample_selection", "bool", "the best row is chosen on these same pairs"),

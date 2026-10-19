@@ -32,8 +32,8 @@ if [ -z "${HYRECO_URLS:-}" ]; then
 	echo "  (the links from the IEEE DataPort page, after logging in)" >&2
 	exit 2
 fi
-# name, size in bytes (DataPort's file list; which Additional zip is the larger is
-# not recorded, so their two sizes are only the free-space hint), the folder
+# name, size in bytes (DataPort's file list, as recorded under "Verified on the dataset
+# page" at 5a46f778:benchmarks/regbench/README.md:3141-3142; only the free-space hint), the folder
 wanted=("HyReCo.zip 233360000000 HyReCo")
 if [ "${HYRECO_ADDITIONAL:-0}" = 1 ]; then
 	wanted+=("HyReCo-Additional-HE.zip 273730000000 HyReCo-Additional"
