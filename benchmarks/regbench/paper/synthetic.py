@@ -82,6 +82,12 @@ def _common_extra():
     }
 
 
+def _foreground():
+    """The set's tissue fraction by design (synth.FOREGROUND_FRACTION, the same at every
+    size; each case's measured value is in its synth_transform.json)."""
+    return {"foreground_fraction": synth.FOREGROUND_FRACTION}
+
+
 # ── synthetic_cost ───────────────────────────────────────────────────────────
 def cost_table(cost_rows, res_rows, dataset=DATASET):
     """``synthetic_cost`` rows of the runs of the set (excluded runs: ``add``)."""
@@ -112,6 +118,7 @@ def cost_table(cost_rows, res_rows, dataset=DATASET):
                 cpus=T._most_common(x.get("cpus_requested") for x in rounds),
                 lower_bound=p.get("lower_bound") or None,
                 peak_instrument=p.get("peak_instrument") or None,
+                **_foreground(),
                 **_common_extra(),
             )
             vals.pop("unit_id", None)
@@ -342,6 +349,7 @@ def extrapolation_table(scaling, out, dataset=DATASET):
                     cohort_clock=cohort_clock,
                     unit=costs.PATIENT,
                     note="; ".join(note) or None,
+                    **_foreground(),
                     **_common_extra(),
                 )
             )
@@ -366,10 +374,11 @@ def build(out, dataset=DATASET):
         "synthetic_cost": {
             "n_channels": len(synth.CHANNELS),
             "n_panels": synth.N_PANELS,
+            **_foreground(),
             **_common_extra(),
         },
         "synthetic_scaling": _common_extra(),
-        "synthetic_extrapolation": _common_extra(),
+        "synthetic_extrapolation": {**_foreground(), **_common_extra()},
     }
     return T.add_excluded(built, T.excluded_runs(out, dataset), dataset, extra)
 

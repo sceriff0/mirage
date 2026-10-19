@@ -681,6 +681,8 @@ _TABLE_LIST = [
        ("peak_rss_comparable", "bool", "False for a rusage peak"),
        ("wasted_attempts", "count", "failed attempts (rungs, retried stage jobs)"),
        *_POINT_STEMS,
+       ("foreground_fraction", "1", "the panels' tissue fraction by design (synth.FOREGROUND_FRACTION, "
+        "0.5 at every size; each case's measured value is in its synth_transform.json)"),
        ("caveat", "", "the set's caveat (synth.CAVEAT)")),
     _t("synthetic_scaling", ("dataset", "row", "quantity"),
        "the synthetic scaling set: log10(quantity) ~ log10(input_gpx) per run, least "
@@ -738,6 +740,8 @@ _TABLE_LIST = [
        ("n_repeats", "count", "repeats per synthetic size (1)"),
        ("note", "", "why a figure is NA"),
        _EXCLUDED,
+       ("foreground_fraction", "1", "the panels' tissue fraction by design (synth.FOREGROUND_FRACTION, "
+        "0.5 at every size; each case's measured value is in its synth_transform.json)"),
        ("caveat", "", "the set's caveat (synth.CAVEAT)")),
 ]
 

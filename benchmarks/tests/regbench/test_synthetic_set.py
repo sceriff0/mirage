@@ -579,3 +579,30 @@ def test_fig2c_overlays_the_synthetic_peaks_and_draws_as_before_without_them(pap
     again = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
     assert _read(next(f for f in again["files"] if f.endswith("_source_data.csv"))) == src_before
     assert again["legend"] == before["legend"] and again["n"] == before["n"]
+
+
+# ---- fix round 1 --------------------------------------------------------------------------
+
+
+def test_synthetic_cost_is_one_repeat_with_no_interval_columns(scored):
+    """One repeat: every row says n_repeats 1, and no column claims an interval over
+    repeats (the scaling table's slope interval is over sizes, not repeats)."""
+    _, tables = scored
+    rows = schema.read(tables / "synthetic_cost.csv")
+    mine = [r for r in rows if r["excluded_reason"] is None]
+    assert mine and all(r["n_repeats"] == "1" for r in mine)
+    cols = schema.columns("synthetic_cost")
+    bad = [c for c in cols if any(k in c for k in ("_ci", "ci_", "_low", "_high", "iqr",
+                                                     "interval", "_sd", "spread"))]
+    assert bad == []
+
+
+def test_the_foreground_fraction_is_a_column_of_cost_and_extrapolation(scored, tmp_path):
+    _, tables = scored
+    assert "foreground_fraction" in schema.columns("synthetic_cost")
+    assert "foreground_fraction" in schema.columns("synthetic_extrapolation")
+    cost = [r for r in schema.read(tables / "synthetic_cost.csv") if r["excluded_reason"] is None]
+    assert cost and all(float(r["foreground_fraction"]) == synth.FOREGROUND_FRACTION for r in cost)
+    ext = [r for r in schema.read(tables / "synthetic_extrapolation.csv")
+           if r["excluded_reason"] is None]  # fmt: skip
+    assert ext and all(float(r["foreground_fraction"]) == synth.FOREGROUND_FRACTION for r in ext)
