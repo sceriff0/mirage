@@ -289,3 +289,53 @@ def test_a_per_patient_methods_round_without_its_own_figure_is_a_point_that_says
     assert without == 1
     assert [(p["unit_id"], p["status"], p["in_common"]) for p in pts] == [
         ("P1_r1", costs.NOT_SPLIT, True)]
+
+
+# ── T31 fix M4 (rule 5) and M6 (rule 4) ───────────────────────────────────────
+def _labels(monkeypatch):
+    seen = []
+    real = plots._save
+
+    def spy(fig, *a, **kw):
+        seen.extend((ax.get_xlabel(), ax.get_ylabel()) for ax in fig.axes)
+        return real(fig, *a, **kw)
+
+    monkeypatch.setattr(plots, "_save", spy)
+    return seen
+
+
+def test_the_gb_hours_and_the_concurrent_memory_markers_carry_their_interval(paper):
+    gb = [r for r in _source(cost_plots.fig3f_cpu_wall_best(paper, paper / "figures"))
+          if r["quantity"] == "gb_h_used"]
+    conc = [r for r in _source(cost_plots.fig3e_peak_rss_best(paper, paper / "figures"))
+            if r["quantity"] == "peak_concurrent_gb"]
+    for rows in (gb, conc):
+        assert rows and all(r["ci_low"] not in ("", "NA") and r["ci_high"] not in ("", "NA")
+                            for r in rows), rows[:1]
+
+
+def test_the_supplementary_cost_figures_name_their_clock_and_end_to_end_its_intervals(
+        tmp_path, monkeypatch):
+    d = tmp_path / "paper"
+    d.mkdir()
+    schema.write(d / "end_to_end.csv", "end_to_end", [schema.empty_row(
+        "end_to_end", source="regbench", dataset="multiplex", family="valis_mirage",
+        row="valis_a", row_kind="primary", clock=costs.WHOLE, unit="patient", n_patients=3,
+        estimate_s_med=600, estimate_s_ci_low=500, estimate_s_ci_high=700, write_s_med=60,
+        write_s_ci_low=50, write_s_ci_high=70)])
+    schema.write(d / "cpu_scaling.csv", "cpu_scaling", [schema.empty_row(
+        "cpu_scaling", source="regbench", family="valis_mirage", row="valis_a", cpus=c,
+        patient_id="P1", execution="one process", repeat=1, wall_s=w, wall_clock=costs.WHOLE,
+        clock=costs.WHOLE, unit="patient", cpu_h_used=1.0, peak_rss_gb=2.0, speedup_vs_4=s)
+        for c, w, s in ((4, 100, 1.0), (8, 60, 100 / 60))])
+    seen = _labels(monkeypatch)
+    e2e = cost_plots.figS_end_to_end(d, d / "figures")
+    src = _source(e2e)
+    reg = [r for r in src if r["part"] == "estimate_s_med"]
+    assert reg and float(reg[0]["ci_low_min"]) == pytest.approx(500 / 60)
+    assert reg[0]["clock"] == costs.WHOLE
+    cost_plots.figS_cpu_scaling(d, d / "figures")
+    named = [lab for pair in seen for lab in pair if lab]
+    for want in ("Minutes", "Speed-up", "CPU-hours", "Peak memory"):
+        (lab,) = [x for x in named if want in x]
+        assert costs.WHOLE in lab, lab

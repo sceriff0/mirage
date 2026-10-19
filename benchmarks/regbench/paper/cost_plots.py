@@ -271,13 +271,15 @@ def fig3e_peak_rss_best(paper_dir, fig_dir):
             continue
         ax.scatter([i + 0.22], [float(np.median(vals))], marker="D", s=14, facecolor="none",
                    edgecolor=colors[fam], zorder=6,
-                   label=None if marked else "STARE: memory its jobs of one round held at once (median)")
+                   label=None if marked else "STARE: memory its jobs of one round held at "
+                                             "once (median, 95% interval)")
         marked = True
+        low, high = _ci_bar(ax, i + 0.22 - 0.34, vals, colors[fam])  # rule 5 (T31 fix M4)
         for p, v in drawn:
             data.append({"panel": "peak", "quantity": "peak_concurrent_gb", "unit": "patient",
                          "clock": "", "family": fam, "row": row, "row_kind": kind,
-                         "unit_id": p.get("unit_id"), "value": v, "ci_low": None,
-                         "ci_high": None, "lower_bound": ""})
+                         "unit_id": p.get("unit_id"), "value": v, "ci_low": low,
+                         "ci_high": high, "lower_bound": ""})
     if marked:
         ax.legend(loc="upper left", fontsize=ps.TICK_PT)
     return _done(fig, fig_dir, name, data, n, losses)
@@ -341,12 +343,14 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
     data, losses, n = [], [], {}
     cpu_rows, gpu_left = _cpu_entries(cost, best)
 
-    def put(panel, fam, row, kind, rows):
+    def put(panel, fam, row, kind, rows, ci=(None, None)):
+        """``ci``: the drawn median's interval, on the rows of the drawn quantity."""
         for p, q, val in rows:
+            mine = ci if q == rows[0][1] else (None, None)
             data.append({"panel": panel, "quantity": q, "unit": "patient",
                          "clock": p.get("clock"), "family": fam, "row": row,
                          "row_kind": kind, "unit_id": p.get("unit_id"), "value": val,
-                         "ci_low": None, "ci_high": None,
+                         "ci_low": mine[0], "ci_high": mine[1],
                          "lower_bound": p.get("lower_bound") or ""})
 
     # (a) CPU-hours: reserved bar, used inside it, total (good + wasted) marker (R8, R10)
@@ -360,11 +364,11 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
               costs.median(p.get("cpu_h_reserved") for p in pts),
               costs.median(p.get("total_cpu_h_reserved") for p in pts), colors[fam],
               kind == costs.BEST)
-        _ci_bar(axes[0], i, used, colors[fam])
+        ci = _ci_bar(axes[0], i, used, colors[fam])
         labels.append(tick(_label(fam, kind, extra), counts))
         n[f"cpu_h:{fam}:{kind}"] = counts["common"]
         put("cpu_h", fam, row, kind,
-            _patient_rows(drawn, ("cpu_h_used", "cpu_h_reserved", "total_cpu_h_reserved")))
+            _patient_rows(drawn, ("cpu_h_used", "cpu_h_reserved", "total_cpu_h_reserved")), ci)
     P._group_axes(axes[0], labels)
     _log_axis(axes[0], "CPU-hours per patient (log10)\nbar: reserved; inside: used; ^: total "
                        "with wasted attempts")
@@ -385,12 +389,13 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
                             hatch="//", edgecolor=colors[fam], lw=0.5)
         if math.isfinite(asked):
             axes[1].plot([i - 0.3, i + 0.3], [asked, asked], color=ps.GREY, lw=1.0)
+        ci = _ci_bar(axes[1], i, [v for _, v in drawn], colors[fam])  # rule 5 (T31 fix M4)
         labels.append(tick(_label(fam, kind, extra), counts))
         n[f"gb_h:{fam}:{kind}"] = counts["common"]
         put("gb_h", fam, row, kind,
-            _patient_rows(drawn, ("gb_h_used", "wasted_gb_h_reserved", "gb_h_reserved")))
+            _patient_rows(drawn, ("gb_h_used", "wasted_gb_h_reserved", "gb_h_reserved")), ci)
     P._group_axes(axes[1], labels)
-    _log_axis(axes[1], "GB-hours per patient (log10)\nbar: used (peak x time); hatched: "
+    _log_axis(axes[1], "GB-hours per patient (log10)\nbar: used (peak x time, 95% interval); hatched: "
                        "wasted request;\nline: the request (STARE: the pipeline's, others: "
                        "the 16 GB-floor ladder)")
     # (c) GPU-hours, GPU rows only (R11, P7)
@@ -427,11 +432,12 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
                     continue
                 axes[3].scatter([i + 0.25], [float(np.median(vals))], marker=mark, s=16,
                                 facecolor="none", edgecolor=colors[fam], zorder=6, label=text)
+                low, high = _ci_bar(axes[3], i + 0.25 - 0.34, vals, colors[fam])
                 for p, v in drawn:
                     data.append({"panel": "wall", "quantity": key, "unit": "patient",
                                  "clock": costs.QUEUE if key == "elapsed_with_queue_s" else costs.CRITICAL,
                                  "family": fam, "row": r, "row_kind": kind, "unit_id": p.get("unit_id"),
-                                 "value": v, "ci_low": None, "ci_high": None, "lower_bound": ""})
+                                 "value": v, "ci_low": low, "ci_high": high, "lower_bound": ""})
     handles, texts = axes[3].get_legend_handles_labels()
     if handles:
         seen = dict(zip(texts, handles))
@@ -559,9 +565,12 @@ def figS_cpu_scaling(paper_dir, fig_dir):
     colors = P._colors(fig_dir, extra=fams)
     fig, axes = ps.figure(width="double", nrows=1, ncols=3, aspect=0.45)
     data, n, losses = [], {}, []
-    for ax, key, ylab in ((axes[0], "speedup_vs_4", "Speed-up against 4 CPUs"),
-                          (axes[1], "cpu_h_used", "CPU-hours per patient"),
-                          (axes[2], "peak_rss_gb", "Peak memory (GB) per patient")):
+    # rule 4 (T31 fix M6): every axis names its clock (a table before I5: wall_clock)
+    clocks = ", ".join(sorted({r.get("clock") or r.get("wall_clock") for r in got["cs"]}
+                              - {None, "", "NA"})) or "not recorded"
+    for ax, key, ylab in ((axes[0], "speedup_vs_4", f"Speed-up against 4 CPUs\n(wall on {clocks})"),
+                          (axes[1], "cpu_h_used", f"CPU-hours per patient\n(clock: {clocks})"),
+                          (axes[2], "peak_rss_gb", f"Peak memory (GB) per patient\n(clock: {clocks})")):
         lines = {}
         for r in got["cs"]:
             v, c = P._num(r.get(key)), P._num(r.get("cpus"))
@@ -633,23 +642,32 @@ def figS_end_to_end(paper_dir, fig_dir):
                 continue
             ax.barh(i, v / 60.0, left=left, color=col, alpha=0.35 if hatch else 0.8,
                     hatch=hatch or None, edgecolor=col, lw=0.5, label=text if i == 0 else None)
+            # rule 5 (T31 fix M4): the part's own interval, drawn where its median ends
+            stem = key[: -len("_med")]
+            lo, hi = P._num(r.get(f"{stem}_ci_low")), P._num(r.get(f"{stem}_ci_high"))
+            if math.isfinite(lo) and math.isfinite(hi):
+                ax.plot([left + lo / 60.0, left + hi / 60.0], [i - 0.3, i - 0.3], color=col, lw=0.8)
             data.append({"row": r.get("row"), "family": r.get("family"), "part": key,
-                         "minutes": v / 60.0, "unit": "patient",
+                         "minutes": v / 60.0, "ci_low_min": lo / 60.0, "ci_high_min": hi / 60.0,
+                         "clock": r.get("clock"), "unit": "patient",
                          "n_patients": r.get("n_patients")})
             left += v / 60.0
         labels.append(f"{P._label(r.get('family'))}: {r.get('row')}\n"
-                      f"n={r.get('n_patients')} common patients")
+                      f"n={r.get('n_patients')} common patients; {r.get('clock')}")
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels(labels)
     ax.set_ylim(len(rows) - 0.4, -0.6)
+    clocks = ", ".join(sorted({str(r.get("clock")) for r in rows if r.get("clock")})) or "not recorded"
     ax.set_xlabel("Minutes per patient, median over the common patients (each part's own "
-                  "median, stacked)")
+                  "median, stacked; line: its 95% interval)\nregistration on its row's clock "
+                  f"({clocks}); conversion, writer and anchor timed apart")
     handles, texts = ax.get_legend_handles_labels()
     if handles:
         seen = dict(zip(texts, handles))
         ax.legend(seen.values(), seen.keys(), loc="lower right", fontsize=ps.TICK_PT)
     files = P._save(fig, fig_dir, name, P._Table(
-        ["row", "family", "part", "minutes", "unit", "n_patients"], data))
+        ["row", "family", "part", "minutes", "ci_low_min", "ci_high_min", "clock", "unit",
+         "n_patients"], data))
     return P._result(files, {r.get("row"): 1 for r in rows})
 
 
