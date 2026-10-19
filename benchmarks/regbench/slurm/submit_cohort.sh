@@ -804,6 +804,10 @@ feed_s="$(seconds "$REGBENCH_STAGE_FEED_TIME")"
 score_s="$(seconds "${REGBENCH_SCORE_TIME:-24:00:00}")"
 nuclei_s="$(seconds "${REGBENCH_NUCLEI_TIME:-08:00:00}")"
 settle_s="$(seconds "$REGBENCH_SETTLE_TIME")"
+# the synthetic set's steps (--prepare --datasets synthetic): plan, each array task, finish
+synth_plan_s="$(seconds 04:00:00)"
+synth_s="$(seconds "${REGBENCH_SYNTH_TIME:-04:00:00}")"
+synth_finish_s="$(seconds 01:00:00)"
 # shellcheck disable=SC2206  # the site's GPU request is several words on purpose
 GPU_ARGS=(${REGBENCH_SBATCH_GPU:-})
 
@@ -1444,7 +1448,7 @@ if [ "$prepare" = 1 ]; then
                         syn_plan=(--source "$REGBENCH_SYNTH_SOURCE" --grid "$syn_grid" --seed "${REGBENCH_SYNTH_SEED:-0}")
                         [ -z "${REGBENCH_SYNTH_CHANNEL:-}" ] || syn_plan+=(--channel "$REGBENCH_SYNTH_CHANNEL")
                         submit "rb-synth-plan" "${COMMON[@]}" "$LOG_ONE" --cpus-per-task=1 --mem=16G \
-                            --time="$(limit "$(seconds 04:00:00)")" "$HERE/synth.sbatch" plan "$syn_to" "${syn_plan[@]}"
+                            --time="$(limit "$synth_plan_s")" "$HERE/synth.sbatch" plan "$syn_to" "${syn_plan[@]}"
                         syn_after=(--dependency="afterany:$JOB_ID")
                         ;;
                     *) die "--prepare --datasets synthetic: synth --status said '$syn_state'. Nothing more was submitted." ;;
@@ -1457,10 +1461,10 @@ if [ "$prepare" = 1 ]; then
                 # and a few tiles
                 submit "rb-synth" "${COMMON[@]}" "$LOG_ARRAY" ${syn_after[@]+"${syn_after[@]}"} \
                     --array="0-$((syn_n - 1))%$REGBENCH_ARRAY_LIMIT" --cpus-per-task=1 \
-                    --mem="${REGBENCH_SYNTH_MEM:-8G}" --time="$(limit "$(seconds "${REGBENCH_SYNTH_TIME:-04:00:00}")")" \
+                    --mem="${REGBENCH_SYNTH_MEM:-8G}" --time="$(limit "$synth_s")" \
                     "$HERE/synth.sbatch" unit "$syn_to"
                 submit "rb-synth-finish" "${COMMON[@]}" "$LOG_ONE" --dependency="afterany:$JOB_ID" \
-                    --cpus-per-task=1 --mem=4G --time="$(limit "$(seconds 01:00:00)")" \
+                    --cpus-per-task=1 --mem=4G --time="$(limit "$synth_finish_s")" \
                     "$HERE/synth.sbatch" finish "$syn_to"
                 continue
                 ;;

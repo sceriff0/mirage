@@ -22,7 +22,7 @@ step="$1" to="$2"; shift 2
 case "$step" in
     plan) what=(--plan "$@") ;;
     unit)
-        : "${SLURM_ARRAY_TASK_ID:?synth.sbatch unit runs as an array task (sbatch --array=0-N)}"
+        : "${SLURM_ARRAY_TASK_ID:?the unit step runs as an array task (--array=0-N)}"
         what=(--unit "$SLURM_ARRAY_TASK_ID" "$@")
         ;;
     finish) what=(--finish "$@") ;;

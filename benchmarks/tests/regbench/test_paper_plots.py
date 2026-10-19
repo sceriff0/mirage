@@ -129,7 +129,10 @@ def test_every_plot_writes_all_formats_or_a_placeholder(paper):
         assert res.get("placeholder", False) == (name in MISSING), name
 
 
-MISSING = {"figS_cpu_scaling", "figS_end_to_end", "public_dice_best", "public_landmarks_best"}
+# the synthetic set's figures (T32) are placeholders without tables/synthetic/, which the
+# cohort fixture does not have (test_synthetic_set.py draws them from the set's tables)
+MISSING = {"figS_cpu_scaling", "figS_end_to_end", "public_dice_best", "public_landmarks_best",
+           "figS_synth_cost_scaling", "figS_synth_cross_scaling", "figS_synth_vs_cohort"}
 
 
 def test_a_missing_input_is_a_placeholder_that_names_the_table_and_path(paper):
