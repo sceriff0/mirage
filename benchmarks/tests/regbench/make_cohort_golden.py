@@ -69,11 +69,20 @@ _VALUES = (
     "pair_fraction pair_fraction_excess dice_matched iou_p50 frac_iou_ge_0.5 "
     "displacement_um_p50 displacement_um_p90 within_1um within_3um count_ratio "
     "fold_pct sd_log_jac n_unmapped coverage nn_distance fallback_frac "
-    "imputed_initial excluded_from_summaries"
+    "imputed_initial excluded_from_summaries "
+    # T29: the two other pair fractions, each with its excess
+    "pair_fraction_max pair_fraction_max_excess pair_fraction_sym pair_fraction_sym_excess"
+).split()
+# T29 (fix round 1): the summaries' headline medians, so the golden pins the values the
+# paper reads (dice_matched_med is the zero-filled one, the headline) and not only the
+# per-case cells and the paired differences
+SUMMARY_MEDS = (
+    "dice_matched_med dice_matched_zero_med dice_matched_skip_med "
+    "pair_fraction_med pair_fraction_max_med pair_fraction_sym_med"
 ).split()
 VALUE_COLUMNS = tuple(
     name + suffix for name in _VALUES for suffix in ("", "_shared", "_ranked", "_exact")
-)
+) + tuple(SUMMARY_MEDS)
 _BASE = (
     "cells summary_cells common_block paired_vs_primary paired_summary "
     "nonband_cells nonband_summary"

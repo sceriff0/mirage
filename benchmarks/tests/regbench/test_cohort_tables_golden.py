@@ -130,13 +130,16 @@ T31_COLUMNS = (
 # other value moved (measured: the old `d_dice_matched*` equal the new `_skip` ones in
 # every row; 61 cells of `d_dice_matched*` moved to the zero-filled rule).
 T29_ADDED = ("d_pair_fraction_max", "d_pair_fraction_sym")
+# fix round 1: the generator also keeps the other two pair fractions (with excess) and the
+# summaries' headline medians (make_cohort_golden.SUMMARY_MEDS): none is in the T7 golden
+T29_F1_ADDED = ("pair_fraction_max", "pair_fraction_sym")
 T29_SKIP = "d_dice_matched_skip"
 
 
 def _before_t29(row):
     out = {}
     for k, v in row.items():
-        if k.startswith(T29_ADDED):
+        if k.startswith(T29_ADDED + T29_F1_ADDED) or k in make_cohort_golden.SUMMARY_MEDS:
             continue
         if k.startswith(T29_SKIP):
             out["d_dice_matched" + k[len(T29_SKIP):]] = v
