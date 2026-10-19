@@ -1252,8 +1252,40 @@ def _copied(out, dataset, name):
     return rows
 
 
+NOT_RECORDED = "not recorded"
+LAUNCHER = Path(__file__).resolve().parents[1] / "slurm" / "launch.sbatch"
+
+
+def launcher_images():
+    """``{image key: reference}`` of the launcher's ``IMAGES`` block (the image each
+    ``REGBENCH_SIF_<key>`` is pulled from)."""
+    text = LAUNCHER.read_text()
+    start = text.index('IMAGES="') + len('IMAGES="')
+    block = text[start:text.index('"', start)]
+    return dict(line.split(None, 1) for line in block.strip().splitlines() if line.strip())
+
+
+def _recorded(recs, *paths):
+    """The distinct values a record gives at any of ``paths`` (dotted), '|'-joined;
+    ``NOT_RECORDED`` when none does."""
+    seen = []
+    for rec in recs:
+        for path in paths:
+            v = rec
+            for part in path.split("."):
+                v = v.get(part) if isinstance(v, dict) else None
+            if not _missing(v) and str(v) not in seen:
+                seen.append(str(v))
+    return "|".join(seen) if seen else NOT_RECORDED
+
+
 def versions(out, dataset):
-    """Per run: the tool and the distinct ``info.version`` values over its records."""
+    """Per run: the tool and the distinct ``info.version`` values over its records, the
+    image tag the launcher pins, and the digest, Python and StarDist version as far as a
+    record gives them (T29, M7: ``not recorded`` where none does)."""
+    from .. import nuclei
+
+    images = launcher_images()
     rows = []
     for name, final in terminal_rows(dataset).items():
         run = _run(name)
@@ -1278,6 +1310,14 @@ def versions(out, dataset):
                 tool_version=_most_common(vers),
                 versions_seen=_distinct(vers),
                 image=f"REGBENCH_SIF_{run.image}" if run is not None else None,
+                image_tag=images.get(run.image, NOT_RECORDED) if run is not None
+                else NOT_RECORDED,
+                image_digest=_recorded(recs, "image_digest", "info.image_digest",
+                                       "host.image_digest"),
+                python=_recorded(recs, "info.python", "info.libraries.python",
+                                 "host.python", "python"),
+                stardist_image=nuclei.PIPELINE_IMAGE,
+                stardist_version=_recorded(recs, "info.stardist", "stardist"),
                 n_results=len(mine),
                 n_unreadable=len(bad),
             )
@@ -1300,9 +1340,87 @@ def _value(v):
     return v if isinstance(v, str) else json.dumps(v, sort_keys=True)
 
 
+VALIS_PRESETS = Path(__file__).resolve().parents[3] / "bin" / "utils" / "valis_config.py"
+_VALIS_SIZES = ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px")
+
+
+def _valis_presets():
+    """``{tier: {size key: px}}`` of ``bin/utils/valis_config.py`` ``MEMORY_PRESETS``,
+    READ from its source (``ast``): importing it builds VALIS's matchers (torch)."""
+    import ast
+
+    tree = ast.parse(VALIS_PRESETS.read_text())
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and getattr(node.targets[0], "id", None) == "MEMORY_PRESETS"):
+            out = {}
+            for k, v in zip(node.value.keys, node.value.values):
+                row = {}
+                for kk, vv in zip(v.keys, v.values):
+                    key = getattr(kk, "value", None)
+                    if key in _VALIS_SIZES and isinstance(vv, ast.Constant):
+                        row[key] = vv.value
+                out[k.value] = row
+            return out
+    raise KeyError(f"{VALIS_PRESETS}: no MEMORY_PRESETS")
+
+
+def module_parameters(run):
+    """``[(key, value, from)]``: a run's settings as its method module resolves them
+    (T29, M6), from the module's own constants and resolvers, imported read-only (the
+    method files are frozen; nothing here changes what they do). ``[]`` for a method with
+    no settings (``initial``) or a toy row."""
+    if run is None:
+        return []
+    from ..methods import ashlar, deeperhistreg, palom, stare, valis, valis_mirage
+
+    opts = {**run.opts, **({"label": run.label} if run.label else {})}
+    m = run.method
+    if m == "stare":
+        src = "benchmarks.regbench.methods.stare (TIERS, tier_of, stride_of; sprep)"
+        tier = stare.tier_of(opts)
+        values = {**stare.TIERS[tier], "stride": stare.stride_of(opts)}
+        values.update({k: opts[k] for k in stare._FLAGS if k in opts and k != "stride"})
+        out = [("tier", tier, src)] + [(k, v, src) for k, v in values.items()]
+        out.append(("sprep", str(opts.get("sprep", "none")), src))
+        if "proxy" in opts:
+            out.append(("proxy", opts["proxy"], src))
+        return out
+    if m == "valis_mirage":
+        src = "benchmarks.regbench.methods.valis_mirage (ARGS, call_args)"
+        args = valis_mirage.call_args(opts)
+        out = [(k, v, src) for k, v in args.items() if v is not None]
+        sizes = _valis_presets().get(args["memory_mode"], {})
+        psrc = f"bin/utils/valis_config.py MEMORY_PRESETS[{args['memory_mode']!r}] (its source)"
+        return out + [(k, sizes[k], psrc) for k in _VALIS_SIZES if k in sizes]
+    if m == "valis":
+        src = "benchmarks.regbench.methods.valis (MICRO_REG_FRACTION, CHANNEL; hires)"
+        return [("hires", str(opts.get("hires", 0)) in ("1", "true", "True"), src),
+                ("micro_reg_fraction", valis.MICRO_REG_FRACTION, src),
+                ("channel", valis.CHANNEL, src)]
+    if m == "palom":
+        src = "benchmarks.regbench.methods.palom (THUMBNAIL_SIZE, N_KEYPOINTS, LEVEL)"
+        return [("thumbnail_size", palom.THUMBNAIL_SIZE, src),
+                ("n_keypoints", palom.N_KEYPOINTS, src), ("level", palom.LEVEL, src),
+                ("preread", str(opts.get("preread", "auto")), src)]
+    if m == "ashlar":
+        src = "benchmarks.regbench.methods.ashlar (settings, TILE, OVERLAP, SEED)"
+        frac, affine, shift = ashlar.settings(opts)
+        return [("max_shift_um", shift, src), ("noise_frac", frac, src),
+                ("affine", affine, src), ("tile", ashlar.TILE, src),
+                ("overlap", ashlar.OVERLAP, src), ("seed", ashlar.SEED, src)]
+    if m == "deeperhistreg":
+        src = "benchmarks.regbench.methods.deeperhistreg (settings, CONFIGS)"
+        config, device, fluo = deeperhistreg.settings(opts)
+        return [("config", config, src), ("paper_resolution_px", deeperhistreg.CONFIGS[config], src),
+                ("device", device, src), ("fluo", fluo, src)]
+    return []
+
+
 def run_parameters(out, dataset):
-    """Per run: every key of ``info.implementation.parameters`` when the run recorded a
-    dict there (Table S6), else the run's options."""
+    """Per run: its settings as its method module resolves them (``module_parameters``,
+    T29), then every key of ``info.implementation.parameters`` when the run recorded a
+    dict there (Table S6), else the run's options, that the module rows do not name."""
     rows = []
     for name, final in terminal_rows(dataset).items():
         run = _run(name)
@@ -1322,6 +1440,24 @@ def run_parameters(out, dataset):
             items, src = opts.items(), "the run's options"
             if not opts:
                 items, src = [(None, None)], "the run's options (none: the method's defaults)"
+        mod = module_parameters(run)
+        named = {k for k, _, _ in mod}
+        for k, v, msrc in mod:
+            rows.append(
+                schema.empty_row(
+                    "run_parameters",
+                    source=SOURCE,
+                    row=final,
+                    method=method,
+                    key=k,
+                    value=_value(v),
+                    n_unreadable=len(bad),
+                    **{"from": msrc},
+                )
+            )
+        if mod and items and list(items)[0][0] is None:
+            items = []  # the module rows ARE the defaults
+        items = [(k, v) for k, v in items if k not in named and k != "label"]
         for k, v in items:
             rows.append(
                 schema.empty_row(
@@ -1509,6 +1645,61 @@ def build_best(pp, dataset, cpu):
     }
 
 
+def excluded_runs(out, dataset):
+    """``[(run, reason)]`` of the dataset's ``excluded_runs.csv`` (the scorer's record;
+    ``[]`` when it is absent or a header alone)."""
+    return [(r["run"], r.get("reason") or schema.NA)
+            for r in _csv(_tables(out, dataset) / "excluded_runs.csv") if r.get("run")]
+
+
+def _excluded_final(name):
+    """``(final result name, family, method)`` of a run left out (its own name when it
+    names no run)."""
+    run = _run(name)
+    final = list(variants.variants_of(run))[-1] if run is not None else name
+    return final, family_of(final) or family_of(name), run.method if run is not None else None
+
+
+def add_excluded(built, excluded, dataset, summary_keys=None):
+    """T29 (M8), in place: each run of ``excluded`` (``excluded_runs``) as a row of NA
+    with its reason in ``method_summary`` (``which = excluded``) and ``versions``, and in
+    ``method_best`` the family's ``excluded_runs`` (a family with no run left: a row of NA).
+    ``summary_keys``: ``{table: extra values}`` of a landmark dataset's summary instead."""
+    if not excluded:
+        return built
+    by_family = {}
+    for name, reason in excluded:
+        final, fam, method = _excluded_final(name)
+        by_family.setdefault(fam, []).append(f"{name}: {reason}")
+        if "method_summary" in built:
+            built["method_summary"].append(schema.empty_row(
+                "method_summary", source=SOURCE, dataset=dataset, family=fam, row=final,
+                which="excluded", row_kind="excluded", set=OUTLINES, pooling=COMMON_POOL,
+                excluded_reason=reason))
+        for table, extra in (summary_keys or {}).items():
+            built[table].append(schema.empty_row(
+                table, source=SOURCE, dataset=dataset, family=fam, row=final,
+                excluded_reason=reason, **extra))
+        if "versions" in built:
+            built["versions"].append(schema.empty_row(
+                "versions", source=SOURCE, row=final, method=method, image_tag=NOT_RECORDED,
+                image_digest=NOT_RECORDED, python=NOT_RECORDED, stardist_version=NOT_RECORDED,
+                excluded_reason=reason))
+    best = built.get("method_best")
+    if best is not None:
+        have = {r["family"] for r in best}
+        for fam, said in by_family.items():
+            text = " | ".join(said)
+            for r in best:
+                if r["family"] == fam:
+                    r["excluded_runs"] = text
+            if fam not in have:
+                best.append(schema.empty_row(
+                    "method_best", source=SOURCE, dataset=dataset, family=fam, set=OUTLINES,
+                    excluded_runs=text))
+    return built
+
+
 def build(out, dataset=COHORT, cases_root=None):
     """``{table name: rows}`` for every table of ``WRITTEN``."""
     every = per_pair(out, dataset)  # the cost tables and local4_differs read these
@@ -1526,7 +1717,7 @@ def build(out, dataset=COHORT, cases_root=None):
     sets = accuracy_sets(pp, dataset, best)
     counted = [r for r in dict.fromkeys(r["row"] for r in summary) if not is_cost_only(r)]
     e2e = _csv(_tables(out, dataset) / "cost_end_to_end.csv")
-    return {
+    return add_excluded({
         # every row: local4_differs reads the cost row's pairs; per_pair.csv is written
         # without it (write_all: accuracy_pairs, T31 fix C1)
         "per_pair": every,
@@ -1549,7 +1740,7 @@ def build(out, dataset=COHORT, cases_root=None):
         "cost_fits": fits.method_fits(points),
         "pipeline_cost_fits": fits.pipeline_fits(out),
         "laptop": laptop(out, dataset, pp),
-    }
+    }, excluded_runs(out, dataset), dataset)
 
 
 LOCAL4_TOLERANCE = 1e-6  # the same registration scores the same dice, to round-off

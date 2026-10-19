@@ -9,6 +9,7 @@ imputed failure is KEPT. No row of the cohort is excluded from the summaries, so
 that needs one marks it in ``cells.csv``.
 """
 import csv
+import json
 
 import pytest
 
@@ -673,3 +674,77 @@ def test_deeperhistregs_primary_is_its_best_as_drawn_row():
     assert "user 2026-10-18" in tables.BEST_IS_PRIMARY["deeperhistreg"]
     # without a best row it falls back to variants' placeholder, never to nothing
     assert tables.primary_row("deeperhistreg", "multiplex", []) == variants.PRIMARY_DEEPERHISTREG
+
+
+def test_versions_hold_the_image_tag_digest_python_and_stardist(scored):
+    """T29 (M7): what ran, as far as anything records it; `not recorded` where nothing
+    does (never a guess)."""
+    built = tables.build(scored, "multiplex")
+    v = {r["row"]: r for r in built["versions"]}
+    assert v["stare"]["image_tag"] == "docker://bolt3x/mirage-stare-regbench:1.0.0"
+    assert v["stare"]["image_digest"] == tables.NOT_RECORDED
+    assert v["stare"]["python"] == tables.NOT_RECORDED
+    assert v["stare"]["stardist_image"] == "bolt3x/mirage-stardist:1.0.0"
+    assert v["stare"]["stardist_version"] == tables.NOT_RECORDED
+    assert v["crash"]["image_tag"] == tables.NOT_RECORDED  # a toy row: no launcher pin
+    # a record that says them is read
+    for path in sorted((scored / "stare" / "multiplex").glob("*/run.json")):
+        rec = json.loads(path.read_text())
+        rec.setdefault("info", {})["python"] = "3.11.9"
+        rec["image_digest"] = "sha256:abc"
+        path.write_text(json.dumps(rec))
+    v = {r["row"]: r for r in tables.build(scored, "multiplex")["versions"]}
+    assert v["stare"]["python"] == "3.11.9" and v["stare"]["image_digest"] == "sha256:abc"
+
+
+def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
+    """T29 (M8): a run of excluded_runs.csv is in the dataset's paper tables as a row of
+    NA with the reason, never silently absent."""
+    monkeypatch.setattr(tables, "family_of",
+                        lambda v: {**FAMILY, "stare_gone": "stare", "palom_x": "palom"}.get(v))
+    with open(scored / "tables" / "excluded_runs.csv", "w", newline="") as fh:
+        fh.write("run,reason\nstare_gone,not on this regime\npalom_x,defaults only\n")
+    built = tables.build(scored, "multiplex")
+    s = {r["row"]: r for r in built["method_summary"] if r["which"] == "excluded"}
+    assert set(s) == {"stare_gone", "palom_x"}
+    assert s["stare_gone"]["excluded_reason"] == "not on this regime"
+    assert s["stare_gone"]["family"] == "stare" and s["stare_gone"]["dice_med"] in (None, schema.NA)
+    v = {r["row"]: r for r in built["versions"]}
+    assert v["palom_x"]["excluded_reason"] == "defaults only"
+    assert v["palom_x"]["image_tag"] == tables.NOT_RECORDED
+    best = {(r["family"], r["set"]): r for r in built["method_best"]}
+    # a family with other runs keeps its best row and names what was left out
+    assert best[("stare", "outlines")]["best_row"] not in (None, schema.NA, "stare_gone")
+    assert "stare_gone: not on this regime" in best[("stare", "outlines")]["excluded_runs"]
+    # a family with no run left is a row of NA with the reason
+    assert best[("palom", "outlines")]["best_row"] in (None, schema.NA)
+    assert best[("palom", "outlines")]["excluded_runs"] == "palom_x: defaults only"
+    # every table still has the schema's columns
+    tables.write_all(scored, "multiplex")
+
+
+def test_a_landmark_datasets_excluded_runs_are_na_rows_too(tmp_path):
+    """T29 (M8) on a landmark dataset: the runs its excluded_runs.csv names (a public
+    dataset's list: variants.excluded_for) are NA rows with the reason."""
+    from benchmarks.regbench.paper import landmarks
+
+    t = tmp_path / "tables" / "hyreco"
+    t.mkdir(parents=True)
+    (t / "hyreco_pairs.csv").write_text("method,pair_id\n")
+    ex = variants.excluded_for("hyreco")
+    assert ex  # the ruling of 2026-10-19: every method but STARE runs its defaults only
+    with open(t / "excluded_runs.csv", "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["run", "reason"])
+        w.writerows(ex)
+    built = landmarks.build(tmp_path, "hyreco")
+    got = {r["row"]: r for r in built["public_landmarks"]}
+    name, reason = ex[0]
+    final = list(variants.variants_of(variants.run_of(name)))[-1]
+    assert got[final]["excluded_reason"] == reason and got[final]["set"] == "all_pairs"
+    assert len(got) == len(ex)
+    fams = {r["family"] for r in built["method_best"]}
+    assert tables.family_of(final) in fams
+    for name in landmarks.LANDMARK_WRITTEN:
+        for r in built[name]:
+            assert set(r) == set(schema.columns(name)), name

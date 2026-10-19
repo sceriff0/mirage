@@ -265,7 +265,9 @@ _TABLE_LIST = [
        ("tie_break", "", "the name (device-blind: no cost decides a tie)"),
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
-       ("common_block", "", "strict (the headline) or per_method (B2)")),
+       ("common_block", "", "strict (the headline) or per_method (B2)"),
+       ("excluded_runs", "", "the family's runs left out of this dataset (excluded_runs.csv), "
+        "'run: reason' joined by ' | '; a family with no run left is a row of NA (T29)")),
     _t("method_best_per_method", ("dataset", "family", "set"),
        "method_best on the per-method common set (B2): beside the strict one, never the headline",
        ("dataset", "", ""), ("family", "", ""), ("best_row", "", "the chosen result name"),
@@ -284,12 +286,17 @@ _TABLE_LIST = [
        ("tie_break", "", "the name (device-blind: no cost decides a tie)"),
        ("in_sample_selection", "bool", "chosen on this cohort with this metric"),
        ("rule", "", "the rule, in words"),
-       ("common_block", "", "strict (the headline) or per_method (B2)")),
+       ("common_block", "", "strict (the headline) or per_method (B2)"),
+       ("excluded_runs", "", "the family's runs left out of this dataset (excluded_runs.csv), "
+        "'run: reason' joined by ' | '; a family with no run left is a row of NA (T29)")),
     _t("method_summary", ("dataset", "family", "row", "which", "set", "pooling"),
        "per method: accuracy over panel pairs, the paired difference against STARE, cost "
        "(paper.costs: per patient, the common patients first, clock and unit named)",
        ("dataset", "", ""), ("family", "", ""), ("row", "", ""),
-       ("which", "", "DEPRECATED (one release): the old name of row_kind"),
+       ("which", "", "DEPRECATED (one release): the old name of row_kind; `excluded` for "
+        "a run left out of this dataset (a row of NA, excluded_reason)"),
+       ("excluded_reason", "", "why the run is not on this dataset (excluded_runs.csv); NA "
+        "for a run that is"),
        ("row_kind", "", "primary (drawn filled), best (the best-Dice row: drawn hollow, "
         "'best (ceiling)'), local_4cpu (STARE in one 4-CPU job) or cpu_twin (a GPU row's "
         "CPU twin)"),
@@ -546,8 +553,21 @@ _TABLE_LIST = [
     _t("versions", ("row",), "what ran, per run",
        ("row", "", ""), ("method", "", ""), ("tool", "", ""), ("tool_version", "", ""),
        ("versions_seen", "", "every distinct version in the run's records, '|'-joined"),
-       ("image", "", "REGBENCH_SIF_<image>"), ("n_results", "count", ""),
-       ("n_unreadable", "count", "run.json files of the run that could not be read")),
+       ("image", "", "REGBENCH_SIF_<image>"),
+       ("image_tag", "", "the image the launcher pins for it (slurm/launch.sbatch IMAGES); "
+        "'not recorded' for a row of no run"),
+       ("image_digest", "", "as the run's records give it (image_digest); 'not recorded' "
+        "where none does"),
+       ("python", "", "the Python of the method's process, as its records give it; "
+        "'not recorded' where none does"),
+       ("stardist_image", "", "the image the nuclei (outlines) were segmented with "
+        "(nuclei.PIPELINE_IMAGE)"),
+       ("stardist_version", "", "the StarDist package version, as a record gives it; 'not "
+        "recorded' where none does"),
+       ("n_results", "count", ""),
+       ("n_unreadable", "count", "run.json files of the run that could not be read"),
+       ("excluded_reason", "", "why the run is not on this dataset (excluded_runs.csv); NA "
+        "for a run that is")),
     _t("run_parameters", ("row", "key"), "the parameters each run recorded (Table S6)",
        ("row", "", ""), ("method", "", ""), ("key", "", ""), ("value", "", ""),
        ("from", "", "run.json info.implementation.parameters, or the run's options"),
@@ -603,7 +623,9 @@ _TABLE_LIST = [
         "(every terminal row of the family a candidate)"),
        ("in_sample_selection", "bool", "the best row is chosen on these same pairs"),
        ("frame", "", ""),
-       ("aggregation", "", "the dataset's own definition")),
+       ("aggregation", "", "the dataset's own definition"),
+       ("excluded_reason", "", "why the run is not on this dataset (excluded_runs.csv): a "
+        "row of NA (T29); NA for a run that is")),
     _t("public_landmark_pairs", ("dataset", "case_id", "row"),
        "one row per landmark pair and row (the terminal rows and initial) of a public "
        "landmark dataset",

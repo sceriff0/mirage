@@ -2062,6 +2062,21 @@ per patient (`paired_unit`), a tie counted as STARE at least as good. DeeperHist
 primary is its best row ("primary = best", user 2026-10-18; flagged in-sample);
 ASHLAR's primary is unchanged.
 
+**What ran, with which settings (T29).** `run_parameters` names each run's settings
+as its method module resolves them (`tables.module_parameters`: the module's own
+constants and resolvers, imported read-only, never a list restated here): STARE's tier,
+stride, tile/halo/out_tile/max_dim and `sprep`; VALIS's `ARGS` at the run's tier and
+micro depth, with the tier's sizes from `bin/utils/valis_config.py` `MEMORY_PRESETS`
+(read from its source: importing it builds VALIS's matchers); PALOM's thumbnail size and
+keypoints; ASHLAR's max shift, noise and affine prior; DeeperHistReg's preset, device and
+`fluo`. The recorded or optional keys they do not name follow. `versions` gives the image
+tag the launcher pins (`slurm/launch.sbatch` `IMAGES`), and the image digest, the Python
+and the StarDist version as far as a record gives them: **no result records any of the
+three today**, so they read `not recorded`. A run of a dataset's `excluded_runs.csv` is a
+row of NA with its reason in `method_summary` (`which = excluded`, `excluded_reason`),
+`versions` and, on a landmark dataset, `public_landmarks`; `method_best` names the
+family's left-out runs (`excluded_runs`), and a family with no run left is a row of NA.
+
 ### The paper's cost: the rules every number obeys (`paper/costs.py`)
 
 The paper tables (`method_summary`, `cost_points`, `cost_fits`, `end_to_end`) and the

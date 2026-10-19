@@ -225,11 +225,14 @@ def build(out, dataset):
     rows = _rows(out, dataset)
     summary = landmarks_table(rows, dataset, _pooled(out, dataset))
     best = best_rows(summary, dataset)
-    return {
+    built = {
         "public_landmarks": summary,
         "public_landmark_pairs": pairs_table(rows, dataset),
         "method_best": best,
     }
+    # T29 (M8): a run of excluded_runs.csv is a row of NA with its reason
+    return T.add_excluded(built, T.excluded_runs(out, dataset), dataset,
+                          summary_keys={"public_landmarks": {"set": "all_pairs"}})
 
 
 def write_all(out, dataset):
