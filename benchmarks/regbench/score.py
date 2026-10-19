@@ -114,6 +114,7 @@ from . import (
     telemetry,
     tissue,
 )
+from . import variants as _variants
 from .cases import (
     NUCLEI,
     OUTLINES,
@@ -2893,9 +2894,19 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
                 both = {r["case_id"] for r in mine} & {r["case_id"] for r in ref}
                 mine = [r for r in mine if r["case_id"] in both]
                 theirs = [r for r in ref if r["case_id"] in both]
-                # the headline Dice zero-filled; ``d_dice_matched_skip`` beside (WD3)
+                # the headline Dice zero-filled; ``d_dice_matched_skip`` beside (WD3).
+                # Under zero-fill a case where BOTH rows have no finite Dice carries no
+                # comparison and is left out of the Dice difference (T29 fix 4: the
+                # paper's rule, ``paper/tables._paired``)
                 per = {h: _per_patient(_dice_rule(mine, "zero"), h) for h in HEADLINES}
                 base = {h: _per_patient(_dice_rule(theirs, "zero"), h) for h in HEADLINES}
+                fin = {(r["case_id"], r["method"]) for r in mine + theirs
+                       if math.isfinite(_f(r.get(DICE)))}
+                compared = {c for c in both if (c, m) in fin or (c, against) in fin}
+                per[DICE] = _per_patient(
+                    _dice_rule([r for r in mine if r["case_id"] in compared], "zero"), DICE)
+                base[DICE] = _per_patient(
+                    _dice_rule([r for r in theirs if r["case_id"] in compared], "zero"), DICE)
                 per[PAIRED_SKIP] = _per_patient(mine, DICE)
                 base[PAIRED_SKIP] = _per_patient(theirs, DICE)
                 for g in dict.fromkeys(_unit(r) for r in mine):
@@ -2908,7 +2919,8 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
                     }
                     rec["n_rounds"] = sum(_unit(r) == g for r in mine)
                     for h in PAIRED_HEADLINES:
-                        rec[f"d_{h}"] = per[h][g] - base[h][g]
+                        rec[f"d_{h}"] = (per[h].get(g, math.nan)
+                                         - base[h].get(g, math.nan))
                     out.append(rec)
     return out
 
@@ -3610,6 +3622,18 @@ PAIRING_RULE = (
     "over units like the headline, beside it, in no ranking.\n"
 )
 
+
+# T29 fix 1 (ruling 2026-10-19): the scorer pairs against variants.PRIMARY, fixed before
+# scoring. The paper's DeeperHistReg primary is its best row, which is chosen FROM these
+# tables, so the scorer cannot use it without a cycle.
+PRIMARY_ANCHOR_RULE = (
+    "**The primary rows here are fixed before scoring** (`variants.PRIMARY`): "
+    "`paired_vs_primary`, `common_block` and every `*_shared` column pair against them. "
+    f"For DeeperHistReg that is `{_variants.PRIMARY_DEEPERHISTREG}`. The paper's "
+    "DeeperHistReg primary is instead its best row as drawn (user ruling 2026-10-18; "
+    "in-sample, chosen from these tables, `paper/tables.py` `BEST_IS_PRIMARY`), so this "
+    "summary's common case set and the paper's `common` pooling can differ.\n"
+)
 
 SETS_RULE = (
     "Every overlap number exists on two polygon sets. The tables below are the "
@@ -4319,6 +4343,7 @@ def summary_markdown(
     parts.append(SUBSET_RULE)
     parts.append(PAIRING_RULE)
     parts.append(SETS_RULE)
+    parts.append(PRIMARY_ANCHOR_RULE)
     parts += _nuclei_missing_lines(nuclei_missing, n_cases, bool(nuc_summary))
     parts.append(
         "`selfcheck of this row` is what the selfcheck measured for THAT row, not for "

@@ -377,6 +377,14 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
+- **DeeperHistReg's primary is stated two ways, on purpose** (ruling 2026-10-19). The
+  SCORER pairs against `variants.PRIMARY`, fixed before any scoring:
+  `deeperhistreg_hr_gpu` is the anchor of `paired_vs_primary`, `common_block` and every
+  `*_shared` column. The PAPER's DeeperHistReg primary is its best row as drawn (user
+  ruling 2026-10-18, flagged in-sample: `paper/tables.py` `BEST_IS_PRIMARY`). That row is
+  chosen from the scorer's tables, so the scorer cannot use it without a cycle. The
+  scorer's common case set and the paper's `common` pooling can therefore differ;
+  `summary.md` says so in its header (`score.PRIMARY_ANCHOR_RULE`).
 - **DeeperHistReg keeps one row per run, the image its writer draws** (user instruction
   of 2026-10-17, which replaced option A of 2026-10-15). The row is named after the run
   (`deeperhistreg_hr_gpu`); no row of the estimated field is written.
@@ -571,7 +579,7 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
-| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
+| `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row in the scorer** (the user's ruling of 2026-10-11; the 4096 px set is the package's default); the paper's DeeperHistReg primary is its best row (2026-10-18; see "stated two ways" above). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
 | `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame | refused, with the reason (the README's recipe reads one channel by index; which of its colour modes is the input rule is not decided) |
 | `initial` | none | | identity | |  |
@@ -1086,8 +1094,11 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   `_min_case`, `_null_med`, and the paired `d_dice_matched`) zero-fill it (a failure
   scores 0, the paper's rule: the headline), `dice_matched_zero_*` says so explicitly,
   and `dice_matched_skip_*` (and `d_dice_matched_skip`) leave it out (finite values only,
-  the rule before). Both are printed. `dice_matched` is the only headline a failure can
-  make NaN (`within_*um` is NaN only without a pixel size).
+  the rule before). Both are printed. In a PAIRED difference (`d_dice_matched` in
+  `paired_vs_primary`, and the paper's `d_dice_vs_stare_*`) a case where BOTH rows have
+  no pair carries no comparison and is left out under both rules (the same rule in the
+  scorer and the paper since T29's fix round 1). `dice_matched` is the only headline a
+  failure can make NaN (`within_*um` is NaN only without a pixel size).
 - **No pixel size:** µm columns and the curve are NaN, not zero.
 
 A failed, killed or never-started run is a row scored at the unregistered pose

@@ -303,8 +303,11 @@ _TABLE_LIST = [
        _SET, _POOLING, _N_UNITS,
        ("selection", "", "how the row was chosen: a best row is the best of n_candidates "
         "by Dice on this dataset (an in-sample ceiling); a primary row is fixed before "
-        "scoring (variants.PRIMARY), except DeeperHistReg's (primary = best, user "
-        "2026-10-18: in-sample)"),
+        "scoring (variants.PRIMARY), except DeeperHistReg's paper primary, which is its "
+        "best row as drawn (user 2026-10-18: in-sample). The scorer's paired_vs_primary, "
+        "common_block and *_shared columns still pair against variants.PRIMARY "
+        "(deeperhistreg_hr_gpu), so its common case set and this table's `common` pooling "
+        "can differ"),
        ("n_candidates", "count", "a best row: the family's terminal rows that competed "
         "(method_best); NA on a row that was not selected"),
        ("in_sample_selection", "bool", "the row was chosen on this dataset with this metric"),
@@ -329,7 +332,9 @@ _TABLE_LIST = [
        ("n_readable_common", "count", "this row's cases among the common readable ones"),
        *_FULL,
        ("d_dice_vs_stare_med", "1", "row minus STARE's best, per unit (paired_unit: a case, "
-        "or a patient's median over the cases both have), median over units"),
+        "or a patient's median over the cases both have), median over units; a missing "
+        "Dice counts as 0, and a case where BOTH rows have none is left out (no "
+        "comparison; the scorer's paired_vs_primary has the same rule)"),
        ("d_dice_vs_stare_q25", "1", ""), ("d_dice_vs_stare_q75", "1", ""),
        ("d_dice_skip_vs_stare_med", "1", "the same with a missing Dice left out, not 0"),
        ("paired_unit", "", "case (pooling=case) or patient"),

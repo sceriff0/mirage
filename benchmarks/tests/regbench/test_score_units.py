@@ -128,6 +128,27 @@ def test_the_paired_difference_reads_both_dice_rules():
     assert s["d_dice_matched_skip_med"] == pytest.approx(0.3)
 
 
+def test_a_case_with_no_pair_on_both_rows_leaves_the_zero_filled_difference():
+    """T29 fix 4 (the paper's rule, ``tables._paired``): under zero-fill, a case where
+    BOTH rows have no finite Dice carries no comparison and is left out of the paired
+    difference; the skipping difference leaves it out anyway."""
+    rows = [
+        cell("stare", "P1_r1", "P1", dice_matched=math.nan),
+        cell("stare", "P1_r2", "P1", dice_matched=0.6),
+        cell("b", "P1_r1", "P1", dice_matched=math.nan),
+        cell("b", "P1_r2", "P1", dice_matched=0.8),
+    ]
+    (got,) = score.paired_vs_primary(rows)
+    # not median(0, .8) - median(0, .6) = 0.1: P1_r1 is no comparison
+    assert got["d_dice_matched"] == pytest.approx(0.8 - 0.6)
+    assert got["d_dice_matched_skip"] == pytest.approx(0.8 - 0.6)
+    # a patient whose only case has no pair on either row has no Dice difference
+    only = [cell("stare", "P2_r1", "P2", dice_matched=math.nan),
+            cell("b", "P2_r1", "P2", dice_matched=math.nan)]
+    (none,) = score.paired_vs_primary(only)
+    assert math.isnan(none["d_dice_matched"])
+
+
 def test_the_three_pair_fractions_are_computed_from_the_recorded_counts():
     """T29 (WD10): beside ``pair_fraction`` (pairs / min n, unchanged, the headline),
     ``pair_fraction_max`` (pairs / max n) and ``pair_fraction_sym`` (2 pairs /
@@ -768,3 +789,18 @@ def test_a_ref_to_mov_row_and_a_mov_to_ref_row_share_one_summary(tmp_path):
     assert rows["back"]["pair_fraction_med"] == rows["good"]["pair_fraction_med"] == 1.0
     assert rows["back"]["unmapped_frac_max"] == 0.0
     assert MOV_TO_REF != REF_TO_MOV
+
+
+def test_summary_says_score_pairs_against_the_fixed_primary_not_the_papers():
+    """T29 fix 1: score keeps variants.PRIMARY (DeeperHistReg: hr_gpu) as the pairing
+    anchor fixed before scoring; the paper's DeeperHistReg primary is its best row. The
+    summary's header says so, and that the two common sets can differ."""
+    from benchmarks.regbench import variants
+
+    rule = score.PRIMARY_ANCHOR_RULE
+    assert variants.PRIMARY_DEEPERHISTREG in rule
+    for words in ("paired_vs_primary", "common_block", "_shared", "best",
+                  "2026-10-18", "can differ"):
+        assert words in rule, words
+    text = score.summary_markdown([], [], [])
+    assert rule in text
