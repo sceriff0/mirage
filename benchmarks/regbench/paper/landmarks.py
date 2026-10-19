@@ -4,8 +4,8 @@ computes no error itself.
 
 ``public_landmark_pairs``  one row per (pair, row): the terminal row of every run of the
                            dataset's list (``tables.terminal_rows``) and ``initial``.
-``public_landmarks``       one row per (set, row): the pairs' statistics aggregated the
-                           challenge's way (BIRL ``compute_scores``: per-pair median /
+``public_landmarks``       one row per (set, row): the pairs' statistics aggregated as
+                           BIRL's ``compute_scores`` defines them (per-pair median /
                            maximum rTRE and robustness, then the median and the mean over
                            pairs; the robust subset, robustness above 0.5) and the
                            micrometre medians.

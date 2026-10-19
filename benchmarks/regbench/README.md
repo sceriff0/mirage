@@ -355,7 +355,7 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-55 runs, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
+56 runs on the cohort, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the brightfield
