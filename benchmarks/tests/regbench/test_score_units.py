@@ -94,12 +94,75 @@ def test_ranked_dice_is_read_on_the_cases_every_compared_row_clears():
 
 
 def test_a_case_without_a_value_is_counted_not_dropped_in_silence():
-    rows = [cell("a", f"P{k}_r1", f"P{k}") for k in range(3)]
+    """WT1 (T29, WD3): a case with no pair is counted AND scored both ways: the
+    headline zero-fills it (a failure scores 0, as the paper does), ``_skip`` leaves
+    it out (finite values only), and both are printed."""
+    rows = [cell("a", f"P{k}_r1", f"P{k}", dice_matched=0.6 + 0.1 * k) for k in range(3)]
     rows[1]["dice_matched"] = math.nan  # no pair at all
     (rec,) = [r for r in score.summarise_cells(rows) if r["subset"] == "all"]
     assert rec["dice_matched_n_nan"] == 1 and rec["pair_fraction_n_nan"] == 0
+    # units P0 0.6, P1 0 (zero-filled) or absent (skipped), P2 0.8
+    assert rec["dice_matched_med"] == pytest.approx(0.6)  # the headline: zero-fill
+    assert rec["dice_matched_zero_med"] == pytest.approx(0.6)
+    assert rec["dice_matched_skip_med"] == pytest.approx(0.7)
+    assert rec["dice_matched_min_case"] == 0.0
+    assert rec["dice_matched_skip_mean"] == pytest.approx(0.7)
     table = score._summary_table([rec], None)
     assert "dice NaN cases" in table.splitlines()[0]
+    assert "dice_matched_skip" in table.splitlines()[0]
+
+
+def test_the_paired_difference_reads_both_dice_rules():
+    """T29 (WD3): ``d_dice_matched`` is on zero-filled Dice (the headline);
+    ``d_dice_matched_skip`` on the finite values only."""
+    rows = [
+        cell("stare", "P1_r1", "P1", dice_matched=0.5),
+        cell("stare", "P1_r2", "P1", dice_matched=0.7),
+        cell("b", "P1_r1", "P1", dice_matched=math.nan),
+        cell("b", "P1_r2", "P1", dice_matched=0.9),
+    ]
+    (got,) = score.paired_vs_primary(rows)
+    assert got["d_dice_matched"] == pytest.approx(0.45 - 0.6)  # median(0, .9) - .6
+    assert got["d_dice_matched_skip"] == pytest.approx(0.9 - 0.6)
+    (s,) = score.summarise_paired([got])
+    assert s["d_dice_matched_skip_med"] == pytest.approx(0.3)
+
+
+def test_the_three_pair_fractions_are_computed_from_the_recorded_counts():
+    """T29 (WD10): beside ``pair_fraction`` (pairs / min n, unchanged, the headline),
+    ``pair_fraction_max`` (pairs / max n) and ``pair_fraction_sym`` (2 pairs /
+    (n_ref + n_mov)), each with its null, null max and excess, from the recorded
+    ``n_pairs`` / ``n_ref`` / ``n_moving`` (the pair records are untouched)."""
+    row = cell("a", "P1_r1", "P1", n_pairs=60, n_ref=100, n_moving=80,
+               pair_fraction=0.75, n_pairs_null=8.0, pair_fraction_null=0.1,
+               pair_fraction_null_max=0.15)
+    score.add_pair_fractions([row])
+    assert row["pair_fraction"] == 0.75  # unchanged
+    assert row["pair_fraction_max"] == pytest.approx(0.6)
+    assert row["pair_fraction_sym"] == pytest.approx(120 / 180)
+    assert row["pair_fraction_max_null"] == pytest.approx(0.08)
+    assert row["pair_fraction_sym_null"] == pytest.approx(16 / 180)
+    # the null's largest placement had 0.15 x min(n) = 12 pairs
+    assert row["pair_fraction_max_null_max"] == pytest.approx(12 / 100)
+    assert row["pair_fraction_sym_null_max"] == pytest.approx(24 / 180)
+    assert row["pair_fraction_max_excess"] == pytest.approx((0.6 - 0.08) / 0.92)
+    assert row["pair_fraction_sym_excess"] == pytest.approx(
+        (120 / 180 - 16 / 180) / (1 - 16 / 180))
+    # no cell on one side: 0, as the record's own pair_fraction
+    empty = cell("a", "P1_r2", "P1", n_pairs=0, n_ref=0, n_moving=5, n_pairs_null=0.0,
+                 pair_fraction=0.0, pair_fraction_null=0.0, pair_fraction_null_max=0.0)
+    score.add_pair_fractions([empty])
+    assert empty["pair_fraction_max"] == 0.0 and empty["pair_fraction_sym"] == 0.0
+    # a row without the counts (an old table) has none, never a made-up one
+    bare = cell("a", "P1_r3", "P1")
+    score.add_pair_fractions([bare])
+    assert math.isnan(bare["pair_fraction_sym"])
+    rec = by(score.summarise_cells([row]), method="a", subset="all")
+    assert rec["pair_fraction_max_med"] == pytest.approx(0.6)
+    assert rec["pair_fraction_sym_null_med"] == pytest.approx(16 / 180)
+    assert "pair_fraction_sym_excess_med" in rec
+    assert set(score.PAIR_FRACTIONS) == {"pair_fraction", "pair_fraction_max",
+                                         "pair_fraction_sym"}
 
 
 # ── item 7: the common block is among the primary rows that ran ──────────────────────

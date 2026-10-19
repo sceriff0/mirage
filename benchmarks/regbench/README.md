@@ -1053,6 +1053,13 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   nuclei) and `nn_distance_um_p50` beside these numbers.
 - **`pair_fraction_excess`** = (pair fraction - null) / (1 - null). It is density-dependent
   too: where nuclei touch, a perfect registration scores near zero.
+- **Three pair fractions, side by side** (Task 29, user 2026-10-18 "fix both, report
+  all"): `pair_fraction` (pairs / min n: the headline, unchanged), `pair_fraction_max`
+  (pairs / max n: a loss on the LARGER side lowers it) and `pair_fraction_sym`
+  (2 pairs / (n_ref + n_mov)), each with its `_null`, `_null_max` and `_excess`. The two
+  new ones are computed by `score.add_pair_fractions` at table time from the recorded
+  `n_pairs`, `n_ref`, `n_moving`, `n_pairs_null` and `pair_fraction_null_max` (the null
+  moves the moving side only, so its counts are the record's): no pair record changes.
 - **A folding map is rewarded by the paired numbers.** Snapping each moving nucleus onto its
   nearest reference nucleus from a failed pose pairs well and has zero displacement; only
   the two-sided curve objects. So `fold_pct` and `sd_log_jac` (forward evaluation of the
@@ -1073,8 +1080,14 @@ on any method's output. Pairing and IoU are `bin/utils/cell_pairs.py`, imported
   per-row versions (`dice_matched_ranked` with `n_dice_ranked`, `displacement_um_p50` with
   `n_readable`: the cases where that row alone qualifies) stay beside them and are NOT
   comparable between rows: a method that fails its hard cases is read there on its easy
-  ones. A case with no pair has no Dice; it cannot enter a median and is counted
-  (`<headline>_n_nan`, "dice NaN cases" in `summary.md`) instead of vanishing.
+  ones. A case with no pair has no Dice; it is counted (`<headline>_n_nan`, "dice NaN
+  cases" in `summary.md`) instead of vanishing, and read BOTH ways (Task 29, user
+  2026-10-18 "report both ways"): `dice_matched_med` (and `_mean`, `_min`, `_max`,
+  `_min_case`, `_null_med`, and the paired `d_dice_matched`) zero-fill it (a failure
+  scores 0, the paper's rule: the headline), `dice_matched_zero_*` says so explicitly,
+  and `dice_matched_skip_*` (and `d_dice_matched_skip`) leave it out (finite values only,
+  the rule before). Both are printed. `dice_matched` is the only headline a failure can
+  make NaN (`within_*um` is NaN only without a pixel size).
 - **No pixel size:** µm columns and the curve are NaN, not zero.
 
 A failed, killed or never-started run is a row scored at the unregistered pose

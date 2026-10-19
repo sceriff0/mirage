@@ -232,15 +232,43 @@ NO_NUCLEI_IN_RESULT = (
     "this result holds no bare nuclei: it was made before the case had them. "
     "Run it again (REGBENCH_FORCE=1) to score it on nuclei; its outline rows stand"
 )
+# T29 (WD10, user 2026-10-18 "fix both, report all"): three pair fractions side by
+# side, all from the recorded counts at table time (``add_pair_fractions``; the pair
+# records are untouched): ``pair_fraction`` (pairs / min n: the headline, unchanged),
+# ``pair_fraction_max`` (pairs / max n: a loss on the LARGER side shows) and
+# ``pair_fraction_sym`` (2 pairs / (n_ref + n_mov)).
+PAIR_FRACTIONS = ("pair_fraction", "pair_fraction_max", "pair_fraction_sym")
 # pair_fraction_excess is already "above the null", so it has no null column of its own
 HEADLINES = (
     "pair_fraction",
     "pair_fraction_excess",
+    "pair_fraction_max",
+    "pair_fraction_max_excess",
+    "pair_fraction_sym",
+    "pair_fraction_sym_excess",
     "dice_matched",
     "within_1um",
     "within_3um",
 )
-HAS_NULL = ("pair_fraction", "dice_matched", "within_1um", "within_3um")
+HAS_NULL = (
+    "pair_fraction",
+    "pair_fraction_max",
+    "pair_fraction_sym",
+    "dice_matched",
+    "within_1um",
+    "within_3um",
+)
+# T29 (WD3, user 2026-10-18 "report both ways"): a case with no matched pair has no
+# dice_matched (NaN). ``zero``: it counts as 0.0 (a failure scores 0; the paper's rule,
+# and the headline: ``dice_matched_med`` and ``d_dice_matched`` are zero-filled);
+# ``skip``: finite values only (the rule before). Both are written, with
+# ``dice_matched_n_nan`` beside. dice_matched is the only headline a failure can make
+# NaN: within_<x>um is NaN only without a pixel size, and pair_fraction is 0 then.
+DICE = "dice_matched"
+DICE_RULES = ("zero", "skip")
+# the paired differences: every headline (Dice zero-filled) and the skip-rule Dice
+PAIRED_SKIP = f"{DICE}_skip"
+PAIRED_HEADLINES = (*HEADLINES, PAIRED_SKIP)
 # the headlines that depend on which cells are paired: the ones the exact assignment
 # (``pairs.exact_pairs``) has a value of its own for. Shown beside the headline, in
 # no ranking, no shared subset and no paired difference.
@@ -2497,6 +2525,68 @@ def _methods(rows):
     return list(dict.fromkeys(r["method"] for r in rows))
 
 
+def _dice_rule(rows, rule):
+    """``rows`` with ``dice_matched`` (and its null) read by one of ``DICE_RULES``:
+    ``zero`` gives a NaN 0.0 (copies; the rows are untouched), ``skip`` leaves the rows
+    as they are (a NaN is left out of every statistic)."""
+    if rule == "skip":
+        return rows
+    if rule != "zero":
+        raise ValueError(f"dice rule {rule!r}: one of {DICE_RULES}")
+    out = []
+    for r in rows:
+        fixed = {}
+        for k in (DICE, f"{DICE}_null"):
+            if k in r and not math.isfinite(_f(r.get(k))):
+                fixed[k] = 0.0
+        out.append({**r, **fixed} if fixed else r)
+    return out
+
+
+def dice_rule_columns(rows):
+    """``dice_matched_<rule>_{med,mean,min,max}`` of ``rows`` (one value per unit, the
+    median of its rounds, then over units) for both ``DICE_RULES`` (T29, WD3)."""
+    out = {}
+    for rule in DICE_RULES:
+        ruled = _dice_rule(rows, rule)
+        per = list(_per_patient(ruled, DICE).values())
+        out[f"{DICE}_{rule}_med"] = _stat(per, np.median)
+        out[f"{DICE}_{rule}_mean"] = _stat(per, np.mean)
+        out[f"{DICE}_{rule}_min"] = _stat(per, np.min)
+        out[f"{DICE}_{rule}_max"] = _stat(per, np.max)
+        out[f"{DICE}_{rule}_min_case"] = _stat(_values(ruled, DICE), np.min)
+        null = list(_per_patient(ruled, f"{DICE}_null").values())
+        out[f"{DICE}_{rule}_null_med"] = _stat(null, np.median)
+    return out
+
+
+def add_pair_fractions(rows):
+    """Set, in place, ``pair_fraction_max`` and ``pair_fraction_sym`` (``PAIR_FRACTIONS``)
+    with their ``_null``, ``_null_max`` and ``_excess`` on cell rows, from what the
+    pair record recorded: ``n_pairs``, ``n_ref``, ``n_moving``, the null's mean pair
+    count ``n_pairs_null`` and ``pair_fraction_null_max`` (the null's largest
+    placement had ``pair_fraction_null_max x min(n)`` pairs: the null moves the moving
+    side only, so the counts are the same in every placement). A side with no cell
+    gives 0, as the record's own ``pair_fraction``; a row without the counts gets NaN.
+    The pair records and ``pair_fraction`` itself are untouched (T29, WD10)."""
+    for r in rows:
+        n_r, n_m, n_p = _f(r.get("n_ref")), _f(r.get("n_moving")), _f(r.get("n_pairs"))
+        null_p = _f(r.get("n_pairs_null"))
+        null_top = _f(r.get("pair_fraction_null_max")) * min(n_r, n_m)
+        dens = {"pair_fraction_max": max(n_r, n_m), "pair_fraction_sym": (n_r + n_m) / 2.0}
+        for name, den in dens.items():
+            if not (math.isfinite(n_r) and math.isfinite(n_m)):
+                vals = (math.nan, math.nan, math.nan)
+            elif not min(n_r, n_m) > 0:
+                vals = (0.0, 0.0, 0.0)
+            else:
+                vals = (n_p / den, null_p / den, null_top / den)
+            r[name], r[f"{name}_null"], r[f"{name}_null_max"] = vals
+            pf, null = vals[0], vals[1]
+            r[f"{name}_excess"] = (pf - null) / (1.0 - null) if null < 1.0 else math.nan
+    return rows
+
+
 NOT_LAUNCHED = "not launched by this submission (it has no result on this dataset)"
 NO_ROW = "it has no row on this dataset (not expected here)"
 
@@ -2695,18 +2785,21 @@ def summarise_cells(rows, primary=None, rule=STRICT):
                         ),
                     }
                     for h in HEADLINES:
-                        per = list(_per_patient(mine, h).values())
+                        # the headline Dice zero-fills a case with no pair (DICE_RULES)
+                        src = _dice_rule(mine, "zero") if h == DICE else mine
+                        per = list(_per_patient(src, h).values())
                         rec[f"{h}_med"] = _stat(per, np.median)
                         # over the same units: where it leaves the median, some
                         # units are far from the others (a method failing on a few)
                         rec[f"{h}_mean"] = _stat(per, np.mean)
                         rec[f"{h}_min"] = _stat(per, np.min)
                         rec[f"{h}_max"] = _stat(per, np.max)
-                        rec[f"{h}_min_case"] = _stat(_values(mine, h), np.min)
+                        rec[f"{h}_min_case"] = _stat(_values(src, h), np.min)
                         rec[f"{h}_n_nan"] = int(np.isnan(_values(mine, h)).sum())
                         if h in HAS_NULL:
-                            null = list(_per_patient(mine, f"{h}_null").values())
+                            null = list(_per_patient(src, f"{h}_null").values())
                             rec[f"{h}_null_med"] = _stat(null, np.median)
+                    rec.update(dice_rule_columns(mine))
                     # Dice where pair fraction clears the null's maximum: this method's
                     # own cases, then the cases every compared row clears
                     clear = [r for r in mine if _clears_null(r)]
@@ -2797,8 +2890,11 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
                 both = {r["case_id"] for r in mine} & {r["case_id"] for r in ref}
                 mine = [r for r in mine if r["case_id"] in both]
                 theirs = [r for r in ref if r["case_id"] in both]
-                per = {h: _per_patient(mine, h) for h in HEADLINES}
-                base = {h: _per_patient(theirs, h) for h in HEADLINES}
+                # the headline Dice zero-filled; ``d_dice_matched_skip`` beside (WD3)
+                per = {h: _per_patient(_dice_rule(mine, "zero"), h) for h in HEADLINES}
+                base = {h: _per_patient(_dice_rule(theirs, "zero"), h) for h in HEADLINES}
+                per[PAIRED_SKIP] = _per_patient(mine, DICE)
+                base[PAIRED_SKIP] = _per_patient(theirs, DICE)
                 for g in dict.fromkeys(_unit(r) for r in mine):
                     rec = {
                         "dataset": ds,
@@ -2808,7 +2904,7 @@ def paired_vs_primary(rows, against=PAIRED_AGAINST):
                         "against": against,
                     }
                     rec["n_rounds"] = sum(_unit(r) == g for r in mine)
-                    for h in HEADLINES:
+                    for h in PAIRED_HEADLINES:
                         rec[f"d_{h}"] = per[h][g] - base[h][g]
                     out.append(rec)
     return out
@@ -2851,7 +2947,7 @@ def summarise_paired(paired):
             "against": mine[0]["against"],
             "n_patients": len(mine),
         }
-        for h in HEADLINES:
+        for h in PAIRED_HEADLINES:
             d = _values(mine, f"d_{h}")
             low, high = bootstrap_interval(d)
             rec[f"d_{h}_med"] = _stat(d, np.median)
@@ -3432,6 +3528,8 @@ def _summary_table(rows, primary, run_fails=None):
             f"{_fmt(r['dice_matched_ranked_med'])} ({r['n_dice_ranked']})"
         )
         line["dice NaN cases"] = r["dice_matched_n_nan"]
+        # both Dice rules printed (WD3): the headline above is zero-filled
+        line["dice_matched_skip (NaN left out)"] = r.get("dice_matched_skip_med", math.nan)
         line["displacement_um_p50 shared (n)"] = (
             f"{_fmt(r['displacement_um_p50_shared_med'])} ({r['n_readable_shared']})"
         )
@@ -3655,7 +3753,7 @@ def _paired_markdown(summary, ds):
     for r in mine:
         line = {"family": r["family"]} if families else {}
         line.update({"method": r["method"], "units": r["n_patients"]})
-        for h in HEADLINES:
+        for h in PAIRED_HEADLINES:
             interval = (
                 "no interval: one unit"
                 if math.isnan(r[f"d_{h}_lo"])
@@ -4947,6 +5045,8 @@ def _score_cells(
         flagged = (*rows[0], *rows[2], *rows[4]["cells"], *rows[4]["non_cells"])
         for r in flagged:
             r.update(flags)
+        # the three pair fractions, from the recorded counts (T29, WD10)
+        add_pair_fractions(flagged)
         set_selfcheck_row((*flagged, *rows[1]), job[4] if len(job) > 4 else {})
     cells = [r for rows in done for r in rows[0]]
     res = [r for rows in done for r in rows[1]]
