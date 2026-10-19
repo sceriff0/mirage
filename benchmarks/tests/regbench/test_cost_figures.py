@@ -169,20 +169,38 @@ def test_fold_peak_vs_stare_is_gone():
 
 
 # ── end to end: the scored cohort, tables then figures ───────────────────────
-FAM = {"stare": "stare", "dropme": "stare", "rtm": "rtm", "crash": "rtm"}
+# the toy rows, as the paper's families (the palette is the paper's); "gpu" registers
+# on a GPU (its run.json says cuda) and "gpu_cpu" is its CPU twin (T31 fix M1)
+FAM = {"stare": "stare", "dropme": "stare", variants.STARE_LOCAL4: "stare", "rtm": "palom",
+       "crash": "palom", "gpu": "deeperhistreg", "gpu_cpu": "deeperhistreg"}
+PRIMARY = {"stare": "stare", "palom": "rtm", "deeperhistreg": "gpu"}
 
 
 def test_the_scored_cohort_draws_every_cost_figure_on_patients(tmp_path, monkeypatch, capsys):
-    from benchmarks.regbench import cli
+    """End to end (M1): the scored cohort with a GPU row, its CPU twin and stare_local4,
+    tables then figures: the GPU row is on no CPU-hours axis (its twin is), stare_local4
+    is a 4-CPU point, and every tick reads the n=<common>/<all> of method_summary."""
+    from benchmarks.regbench import cli, methods
 
-    root, out, _ = scored_cohort.build(tmp_path)
+    root, out, made = scored_cohort.build(tmp_path)
+    for case in made:
+        methods.run_case(scored_cohort.forward(
+            "gpu", 0.4, info=lambda c: {"device": "cuda:0"}), case, out)
+        methods.run_case(scored_cohort.forward("gpu_cpu", 0.4), case, out)
+        methods.run_case(scored_cohort.forward(variants.STARE_LOCAL4, 0.4), case, out)
     score.score(root, out, **scored_cohort.SCORE_KW)
     monkeypatch.setattr(tables, "family_of", lambda v: FAM.get(v))
-    monkeypatch.setattr(tables, "terminal_rows", lambda ds: {k: k for k in FAM})
+    monkeypatch.setattr(tables, "terminal_rows", lambda ds: {
+        k: k for k in FAM if k != variants.STARE_LOCAL4})  # terminal_rows' own filter
+    monkeypatch.setattr(tables, "primary_of", lambda f, ds: PRIMARY.get(f))
+    monkeypatch.setattr(variants, "cpu_twin", lambda r: "gpu_cpu" if r == "gpu" else None)
     tables.write_all(out, "multiplex")
     pts = schema.read(out / "paper" / "cost_points.csv")
     assert pts and {p["unit_kind"] for p in pts} <= {"patient", "round"}
     assert all(p["row_kind"] in costs.ROW_KINDS for p in pts)
+    mine = {p["row"]: p for p in pts if p["unit_kind"] == "patient"}
+    assert mine["gpu"]["device"] == "gpu" and mine["gpu_cpu"]["row_kind"] == costs.CPU_TWIN
+    assert mine[variants.STARE_LOCAL4]["clock"] == costs.LOCAL4
     ticks = _ticks(monkeypatch)
     assert cli.main(["plots", "--out", str(out), "--only",
                      "fig3e_peak_rss_best,fig3f_cpu_wall_best,fig2c_cost_vs_input"]) == 0
@@ -194,10 +212,19 @@ def test_the_scored_cohort_draws_every_cost_figure_on_patients(tmp_path, monkeyp
         assert src and {r["unit"] for r in src} == {"patient"}, name
         drawn = {r["unit_id"] for r in src}
         assert drawn <= {p["unit_id"] for p in pts if p["unit_kind"] == "patient"}
-    assert ticks and all("n=" in t and "/" in t for group in ticks for t in group)
+    f3f = list(csv.DictReader(open(figs / "fig3f_cpu_wall_best_source_data.csv")))
+    on_cpu = {r["row"] for r in f3f if r["panel"] in ("cpu_h", "gb_h")}
+    assert "gpu" not in on_cpu and "gpu_cpu" in on_cpu, on_cpu
+    assert "gpu" in {r["row"] for r in f3f if r["panel"] == "gpu_h"}
+    # every tick's count is method_summary's, exactly
+    summary = schema.read(out / "paper" / "method_summary.csv")
+    want = {f"n={int(float(r['n_patients_common']))}/{int(float(r['n_patients_all']))}"
+            for r in summary}
+    said = {line for group in ticks for t in group for line in t.split("\n") for line in
+            [line.split(" (")[0]] if line.startswith("n=")}
+    assert said and said <= want, (said, want)
     assert (out / "paper" / "losses.csv").is_file() and not (figs / "losses.csv").exists()
     assert "fold_peak_vs_stare," not in (out / "paper" / "method_summary.csv").read_text()
-    summary = schema.read(out / "paper" / "method_summary.csv")
     assert summary and all(not math.isnan(float(r["n_patients_common"]))
                            for r in summary if r.get("n_patients_common") is not None)
 
