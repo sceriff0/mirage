@@ -123,8 +123,33 @@ T31_COLUMNS = (
 )
 
 
+# Task 29: the paired tables' Dice difference is the ZERO-FILLED one (the headline rule);
+# the old NaN-skipping difference is kept beside it as `d_dice_matched_skip*`, and the
+# three pair fractions' differences were added. Read back: the T29 columns dropped and
+# `d_dice_matched*` taken from `d_dice_matched_skip*`, the golden is the T7 golden, so no
+# other value moved (measured: the old `d_dice_matched*` equal the new `_skip` ones in
+# every row; 61 cells of `d_dice_matched*` moved to the zero-filled rule).
+T29_ADDED = ("d_pair_fraction_max", "d_pair_fraction_sym")
+T29_SKIP = "d_dice_matched_skip"
+
+
+def _before_t29(row):
+    out = {}
+    for k, v in row.items():
+        if k.startswith(T29_ADDED):
+            continue
+        if k.startswith(T29_SKIP):
+            out["d_dice_matched" + k[len(T29_SKIP):]] = v
+        elif k.startswith("d_dice_matched") and T29_SKIP + k[len("d_dice_matched"):] in row:
+            continue  # the zero-filled value; the skipping one is read back above
+        else:
+            out[k] = v
+    return out
+
+
 def test_the_golden_minus_dropme_is_the_t7_golden():
-    want = json.loads(GOLDEN.read_text())
+    want = {t: [_before_t29(r) for r in rows]
+            for t, rows in json.loads(GOLDEN.read_text()).items()}
     back = {
         table: [
             {
