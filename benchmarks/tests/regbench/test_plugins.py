@@ -105,8 +105,11 @@ def public_counts():
     other_names = (
         9 * 3 + 3 + 3 + 8 + 2
     )  # valis_mirage x 9, valis120, valis120_hires, dhr (one row per run), palom
+    # STARE's FULL cross on the cohort (user ruling 2026-10-20): every tier x stride x
+    # level cell of the cohort regime (the stride-64 baseline of a tier is its tier run)
     cohort = {
-        variants.stare_cell(s_, k, lv)[0]
+        variants.stare_tier_cell(t, s_, k, lv)[0]
+        for t in ("high", *variants.STARE_TIERS)
         for k, lv in rg.stare_levels(rg.COHORT_REGIME)
         for s_ in variants.STARE_STRIDES
     } | tiers

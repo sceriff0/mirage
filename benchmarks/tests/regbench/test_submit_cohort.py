@@ -93,14 +93,15 @@ THREADS = (
 
 
 # every fixture slide: 2 x 3 tiles of 2048 px, so a round is six REG-TILE jobs at the
-# high tier (`TILES_PER_ROUND` for a run at another tier)
+# high tier (`TILES_PER_TIER` for a run at another tier)
 REF_HW = (4096, 6144)
 TILES = 6
 
 
-# the tier runs' REG-TILE jobs per round on that slide, written out (STARE's tile plan
-# at 1024 / 192 and 512 / 128 px): every other STARE run is the high tier's TILES
-TILES_PER_ROUND = {"stare": TILES, "stare_medium": 24, "stare_low": 96}
+# REG-TILE jobs per round on that slide, by TIER, written out (STARE's tile plan at
+# 1024 / 192 and 512 / 128 px): a run's tier is its `tier` option, high when it has none
+# (every cell of the cohort's full cross, 2026-10-20, has its tier's count)
+TILES_PER_TIER = {"high": TILES, "medium": 24, "low": 96}
 
 
 def _case(root, dataset, case_id, group, ref_hw=REF_HW):
@@ -1933,7 +1934,7 @@ def test_stare_is_the_pipelines_four_stages_as_jobs_of_their_own(dry):
                     # four rounds of six tiles (high; more at a smaller tier), this
                     # link, and the pipeline's allocation of a tile job at each of its
                     # four attempts
-                    n_tiles = TILES_PER_ROUND.get(run, TILES)
+                    n_tiles = TILES_PER_TIER[spec.opts.get("tier", "high")]
                     assert job.args[7:10] == ["4", str(4 * n_tiles), str(link)]
                     assert job.args[10:] == [
                         "{cpus}:{mem_gb}:{time}".format(**stages.allocation("tile", a))
