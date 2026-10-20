@@ -75,10 +75,11 @@ only ever added at the end, so a position never changes.
 
 The STARE runs of a set are its regime's levels x the three strides
 (``regimes.DATASET_REGIME``; a baseline cell, STARE unchanged, is one run in every regime),
-and for the cohort two tier runs, ``stare_medium`` and ``stare_low``
-(``STARE_TIERS``: stride 64, no preprocessing); ``runs --dataset multiplex`` prints the list.
+and the medium and low tiers. On the cohort (user ruling 2026-10-20) STARE runs the FULL
+cross, tier x stride x level (27 runs: none, clahe, percentile), plus its cost row
+``stare_local4``; ``runs --dataset multiplex`` prints the list.
 On the landmark set (``LANDMARK_REGIMES``: HyReCo's ``bf_same``) STARE runs the FULL
-cross, tier x stride x level (45 runs: ``bf_same``'s five levels;
+cross too, tier x stride x level (45 runs: ``bf_same``'s five levels;
 ``stare_<tier>[_s<stride>]_<level>``, ``stare_tier_cell``), and every other method its
 defaults only (50 runs; rulings 2026-10-19). The manuscript's HyReCo STARE row (Fig. 3f)
 is ``stare_haem_none``: haematoxylin, high tier, stride 64, no intensity preprocessing.
@@ -240,13 +241,21 @@ def stare_tier_cell(tier, stride, key, level):
     return f"stare_{tier}{rest}", {"tier": tier, **opts}
 
 
+# The regimes on which STARE runs its FULL cross, tier x stride x level: the cohort's
+# (user ruling 2026-10-20: "stride x level x preproc" on multiplex) and the landmark sets'
+# (ruling 2026-10-19). Every other regime keeps the high tier's stride x level runs.
+FULL_CROSS_REGIMES = (regimes.COHORT_REGIME, *LANDMARK_REGIMES)
+
+
 def _stare_landmark_tier_runs():
-    """The medium and low cells of the tier cross on the landmark sets' regimes, less the
-    two that ``_stare_tier_runs`` already lists (``stare_medium``, ``stare_low``); the
-    high cells are ``_stare_regime_runs``'. A run lists the regimes whose levels make it."""
+    """The medium and low cells of the tier cross on ``FULL_CROSS_REGIMES`` (the cohort's
+    and the landmark sets'), less the two that ``_stare_tier_runs`` already lists
+    (``stare_medium``, ``stare_low``); the high cells are ``_stare_regime_runs``'. A run
+    lists the regimes whose levels make it, so a cell two regimes share (the ``none``
+    baselines, ``stare_medium_s128_none``) is one run of both."""
     found = {}
     for tier in STARE_TIERS:
-        for reg in LANDMARK_REGIMES:
+        for reg in FULL_CROSS_REGIMES:
             for key, level in regimes.stare_levels(reg):
                 for s in STARE_STRIDES:
                     name, opts = stare_tier_cell(tier, s, key, level)

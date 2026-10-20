@@ -649,7 +649,8 @@ def test_a_best_row_carries_its_candidates_and_says_it_is_a_ceiling(scored):
 def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
     """WT4: the real family map, not a toy one: every terminal row of a family that has
     a row competes (the audit's counts, WD1)."""
-    want = {"ashlar": 12, "affine_ashlar": 12, "stare": 11, "valis_mirage": 9,
+    # stare: 27 since the full cross on the cohort (tier x stride x level, 2026-10-20)
+    want = {"ashlar": 12, "affine_ashlar": 12, "stare": 27, "valis_mirage": 9,
             "deeperhistreg": 8, "valis120": 2, "palom": 1}
     rows = tables.terminal_rows("multiplex").values()
     pp = [_hand(t, "c1", "p1", 0.5) for t in rows]

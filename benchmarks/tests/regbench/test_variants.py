@@ -42,6 +42,22 @@ def _stare_names():
             for s_ in variants.STARE_STRIDES
         ),
         *STARE_TIER_RUNS,
+        *_cohort_cross_names(),
+    ]
+
+
+def _cohort_cross_names():
+    """STARE's full cross on the cohort (user ruling 2026-10-20): the medium and low
+    cells of every stride x level of the cohort's regime, less the two tier runs
+    (``STARE_TIER_RUNS``), in the order of ``RUNS``."""
+    from benchmarks.regbench import regimes as rg_
+
+    return [
+        n
+        for t in variants.STARE_TIERS
+        for k, lv in rg_.stare_levels(rg_.COHORT_REGIME)
+        for s_ in variants.STARE_STRIDES
+        if (n := variants.stare_tier_cell(t, s_, k, lv)[0]) != f"stare_{t}"
     ]
 
 
@@ -65,10 +81,12 @@ def _brightfield_stare_names():
 def _landmark_tier_names():
     """The medium and low tier of STARE's cross on the landmark sets' regimes (ruling
     2026-10-19): ``stare_<tier>`` in the place of ``stare`` in every stride x level name,
-    less ``stare_<tier>`` itself (a cohort tier run) and names already listed. In
+    less ``stare_<tier>`` itself (a cohort tier run), the cells the cohort's own full
+    cross already has (``_cohort_cross_names``, 2026-10-20) and names already listed. In
     ``RUNS``, never in the cohort's list."""
     from benchmarks.regbench import regimes as rg_
 
+    cohort = set(_cohort_cross_names())
     out = []
     for reg in ("bf_same",):
         for k, lv in rg_.stare_levels(reg):
@@ -76,7 +94,7 @@ def _landmark_tier_names():
                 high = variants.stare_cell(s_, k, lv)[0]
                 for tier in ("medium", "low"):
                     name = f"stare_{tier}" + high[len("stare"):]
-                    if name != f"stare_{tier}" and name not in out:
+                    if name != f"stare_{tier}" and name not in out and name not in cohort:
                         out.append(name)
     return out
 
@@ -160,7 +178,7 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 # 45 as before, the paused row never counted; 47 since STARE's medium and low tiers were
 # added beside high on 2026-10-17; 55 since the pipeline's VALIS runs at three tiers x
 # micro-registration depth 0, 1, 2, the same day)
-N_RUNS = 56  # T31: + stare_local4
+N_RUNS = 72  # T31: + stare_local4; 2026-10-20: + 16 cells of STARE's full cross
 
 
 def test_counts():
@@ -171,8 +189,8 @@ def test_counts():
     # RUNS also holds the brightfield regime's STARE runs, which the cohort never takes,
     # and their medium and low tiers (rulings 2026-10-19: STARE's whole cross on HyReCo,
     # bf_same's five levels; the other brightfield regime went with its only dataset)
-    assert len(_brightfield_stare_names()) == 12 and len(_landmark_tier_names()) == 28
-    assert len(variants.RUNS) == N_RUNS + 12 + 28 == 96
+    assert len(_brightfield_stare_names()) == 12 and len(_landmark_tier_names()) == 24
+    assert len(variants.RUNS) == N_RUNS + 12 + 24 == 108  # 4 HyReCo tier cells are now the cohort's too
     assert {variants.run_name(r) for r in cohort if r.gpu} == GPU
     per_patient = {
         variants.run_name(r) for r in cohort if variants.scope(r.method) == "group"
@@ -956,7 +974,7 @@ def _generated_stare():
     tiers = [variants.run_name(r) for r in _stare_runs()]
     others = [n for n in tiers if n not in {variants.run_name(r) for r in got}]
     assert others[:2] == STARE_TIER_RUNS
-    assert sorted(others[2:]) == sorted(_landmark_tier_names())
+    assert sorted(others[2:]) == sorted(_cohort_cross_names() + _landmark_tier_names())
     return got
 
 
@@ -1004,6 +1022,9 @@ def test_every_run_but_stare_takes_every_regime_and_the_tiers_are_the_cohorts():
             name = variants.run_name(r)
             if name in STARE_TIER_RUNS:  # the baseline cell: one run of every regime
                 assert r.regimes == (rg.COHORT_REGIME, *landmark), name
+            elif name in _cohort_cross_names():  # the cohort's full cross (2026-10-20)
+                assert rg.COHORT_REGIME in r.regimes, name
+                assert set(r.regimes) <= {rg.COHORT_REGIME, *landmark}, name
             else:
                 assert r.regimes and set(r.regimes) <= set(landmark), name
         elif r.method != "stare":
@@ -1171,7 +1192,15 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
 COHORT_RUNS = [
     "stare", "stare_s128_none", "stare_s256_none", "stare_clahe", "stare_s128_clahe",
     "stare_s256_clahe", "stare_percentile", "stare_s128_percentile",
-    "stare_s256_percentile", "stare_medium", "stare_low", "stare_local4", "valis_mirage",
+    "stare_s256_percentile", "stare_medium", "stare_low",
+    # STARE's full cross on the cohort (user ruling 2026-10-20): 16 lines ADDED, every
+    # other line byte-identical (the old sha below is of the table without them)
+    "stare_medium_s128_none", "stare_medium_s256_none", "stare_medium_clahe",
+    "stare_medium_s128_clahe", "stare_medium_s256_clahe", "stare_medium_percentile",
+    "stare_medium_s128_percentile", "stare_medium_s256_percentile",
+    "stare_low_s128_none", "stare_low_s256_none", "stare_low_clahe",
+    "stare_low_s128_clahe", "stare_low_s256_clahe", "stare_low_percentile",
+    "stare_low_s128_percentile", "stare_low_s256_percentile", "stare_local4", "valis_mirage",
     "valis_mirage_high_m0", "valis_mirage_high_m1", "valis_mirage_medium_m0",
     "valis_mirage_medium_m1", "valis_mirage_medium_m2", "valis_mirage_low_m0",
     "valis_mirage_low_m1", "valis_mirage_low_m2", "valis120", "valis120_hires",
@@ -1189,7 +1218,12 @@ COHORT_RUNS = [
 ]  # fmt: skip
 # T31 R2 adds ONE line, stare_local4's: the sha is of the lines without it, so every
 # other run's line is byte-identical to before
-COHORT_RUNS_SHA256 = "2a608b13030e81da52113e422501023a820118605eb0fc9fc81820a2681b67a4"
+COHORT_RUNS_SHA256 = "b079ac2288f9ac60ea75ab6417f44fbcbdd5d2fcad2eaf32c86260cfd84bfe57"
+# before the full cross (2026-10-20): the table without its 16 new lines still hashes to
+# this, so no existing run's line moved (test_the_full_cross_only_adds_lines)
+COHORT_RUNS_SHA256_BEFORE_CROSS = (
+    "2a608b13030e81da52113e422501023a820118605eb0fc9fc81820a2681b67a4"
+)
 
 
 def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
@@ -1221,7 +1255,8 @@ def test_the_stare_tiers_are_runs_checked_by_stare():
     assert variants.STARE_TIERS == ("medium", "low")
     tiered = [variants.run_name(r) for r in variants.RUNS if "tier" in r.opts]
     assert tiered[:2] == STARE_TIER_RUNS
-    assert sorted(tiered[2:]) == sorted(_landmark_tier_names())  # ruling 2026-10-19
+    # rulings 2026-10-19 (HyReCo) and 2026-10-20 (the cohort's full cross)
+    assert sorted(tiered[2:]) == sorted(_cohort_cross_names() + _landmark_tier_names())
     for name in tiered[2:]:
         assert variants.checked_by(name) == "stare" and variants.family(name) == "stare"
     # neither is a primary row: `stare` stays STARE's primary
@@ -1347,8 +1382,8 @@ def test_the_new_level_runs_on_no_other_dataset():
 
 
 @pytest.mark.parametrize("ds", ["mcmicro", "phenocycler", "rashid", None])
-def test_the_cohort_and_the_fluorescence_sets_keep_their_56(ds):
-    assert len(variants.runs_for(ds)) == N_RUNS == 56
+def test_the_cohort_and_the_fluorescence_sets_keep_their_72(ds):
+    assert len(variants.runs_for(ds)) == N_RUNS == 72
 
 
 def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
@@ -1362,3 +1397,41 @@ def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
         first_other = next(i for i, r in enumerate(listed) if variants.family(r[0]) != "stare")
         assert first_other == 45
     assert variants.default_order("mcmicro")[0] == "stare"
+
+
+def test_the_cohort_runs_stare_full_cross():
+    """User ruling 2026-10-20: on the cohort STARE runs the FULL cross, tier {high,
+    medium, low} x stride {64, 128, 256} x every cohort level (none, clahe, percentile):
+    27 cells, as HyReCo's landmark regime does, plus the cost row stare_local4. A cell
+    shared with another regime keeps one name and one set of options."""
+    from benchmarks.regbench import regimes
+
+    names = {variants.run_name(r) for r in variants.runs_for(None)}
+    want = set()
+    for tier in ("high", *variants.STARE_TIERS):
+        for key, level in regimes.stare_levels(regimes.COHORT_REGIME):
+            for s in variants.STARE_STRIDES:
+                name, _ = variants.stare_tier_cell(tier, s, key, level)
+                want.add(f"stare_{tier}" if name == f"stare_{tier}_none" else name)
+    assert len(want) == 27
+    stare = {n for n in names if variants.family(n) == "stare"}
+    assert stare == want | {variants.STARE_LOCAL4}
+    assert {"stare_medium_s128_clahe", "stare_low_s256_percentile", "stare_low_s128_none"} <= names
+    by = {variants.run_name(r): r for r in variants.RUNS}
+    assert by["stare_low_s256_percentile"].opts["tier"] == "low"
+    assert by["stare_low_s256_percentile"].opts["stride"] == "256"
+
+
+def test_the_full_cross_only_adds_lines():
+    """The cohort's full STARE cross (2026-10-20) ADDS 16 runs and moves no other: the
+    cohort's table without them is byte-identical to the one before."""
+    import hashlib
+
+    new = set(_cohort_cross_names())
+    assert len(new) == 16
+    lines = "\n".join(
+        "\t".join(r)
+        for r in variants.runs_table(dataset=None)
+        if r[0] not in LOCAL_4CPU and r[0] not in new
+    )
+    assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256_BEFORE_CROSS

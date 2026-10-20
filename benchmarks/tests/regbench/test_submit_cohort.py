@@ -2327,7 +2327,7 @@ def test_the_tile_queue_is_split_over_the_runs_that_feed_at_once(site, lanes):
         for r in variants.runs_for(None)
         if "tile" in variants.stages_of(r)
     ]
-    assert len(fed) == 11  # the cohort's STARE runs: 9 of the cross, 2 tiers
+    assert len(fed) == 27  # the cohort's STARE runs: the full cross (2026-10-20)
     total = 100
     env = {"REGBENCH_STAGE_QUEUE_MAX": str(total), "REGBENCH_RUN_LANES": str(lanes)}
     done, _, _ = launch(site, env=env, log=f"lanes-share-{lanes}")

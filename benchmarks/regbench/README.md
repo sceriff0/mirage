@@ -101,7 +101,7 @@ jobs of the first are still queued, and says which ones.
 `slurm/launch.sbatch`, with what it bounds and when to change it. An exported variable wins
 over the file (`--export=ALL`). At the launch stage the head prints `# peak: ...` from the
 actual settings and run list before its first `sbatch`, and the launcher's dry run gives the
-exact queue figure. With the shipped settings, on the cohort's list (56 runs, 4 of them on a
+exact queue figure. With the shipped settings, on the cohort's list (72 runs, 4 of them on a
 GPU, 2 with a realcheck):
 
 | knob | launch.sbatch | bounds | change it when |
@@ -355,7 +355,7 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-56 runs on the cohort, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
+72 runs on the cohort, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the brightfield
@@ -1711,9 +1711,12 @@ manuscript. Rulings 2026-10-19:
   STARE unchanged), `haem_clahe`, `grey_clahe`, `haem_percentile` and `haem_none`), 45
   runs. The other methods run their defaults only: `valis_mirage`, `valis120`,
   `valis120_hires`, `deeperhistreg_gpu`, `deeperhistreg_hr_gpu`; every other run is listed
-  in `excluded_runs.csv` with the ruling as its reason. The cohort keeps its 56 runs and
-  the fluorescence sets theirs; `RUNS` holds 96 (the cohort's 56, `bf_same`'s 12 high-tier
-  cells and its 28 medium and low cells). On a public set `runs --order default` puts
+  in `excluded_runs.csv` with the ruling as its reason. The cohort keeps its 72 runs and
+  the fluorescence sets theirs; `RUNS` holds 108 (the cohort's 72, `bf_same`'s 12 high-tier
+  cells and its 24 medium and low cells not shared with the cohort). Since 2026-10-20 the
+  cohort runs STARE's FULL cross too (user ruling): tier {high, medium, low} x stride
+  {64, 128, 256} x level {none, clahe, percentile}, 27 cells plus `stare_local4`; the four
+  `none` cells of medium and low at stride 128 and 256 are one run of both regimes. On a public set `runs --order default` puts
   STARE first; on the cohort ASHLAR stays first.
 - **The manuscript's HyReCo STARE row** (Fig. 3f) is `stare_haem_none`: haematoxylin from
   colour deconvolution, high tier, stride 64, NO intensity preprocessing (`--opt
