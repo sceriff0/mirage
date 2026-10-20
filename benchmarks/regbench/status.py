@@ -81,7 +81,8 @@ def tally(out, cases_root, dataset="multiplex", submission="", runs=None):
         )
 
     rows, todo = [], {}
-    for run in variants.runs_for(None):
+    # the dataset's OWN run list (the cohort's for multiplex), as the launcher submits it
+    for run in variants.runs_for(None if dataset == "multiplex" else dataset):
         name = variants.run_name(run)
         if runs and name not in runs:
             continue
@@ -270,10 +271,17 @@ def main(a):
             with open(a.summary_to, "a") as fh:
                 fh.write("\n" + "\n".join(lines) + "\n")
         return 0
-    cases_root = a.cases or os.environ.get("REGBENCH_CASES") or ""
+    # the dataset's own folder, as the launcher's regbench_cases_of: REGBENCH_CASES for
+    # the cohort, REGBENCH_CASES_<NAME> for another set
+    var = (
+        "REGBENCH_CASES"
+        if (a.dataset or "multiplex") == "multiplex"
+        else f"REGBENCH_CASES_{a.dataset.upper()}"
+    )
+    cases_root = a.cases or os.environ.get(var) or ""
     if not cases_root or not Path(cases_root).is_dir():
         print(
-            f"status: no cases folder ({cases_root or 'neither --cases nor REGBENCH_CASES'}"
+            f"status: no cases folder ({cases_root or f'neither --cases nor {var}'}"
             "): the expected results are read off the case list",
             file=sys.stderr,
         )

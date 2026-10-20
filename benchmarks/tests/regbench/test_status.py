@@ -162,3 +162,33 @@ def test_status_finds_queued_jobs_by_their_ids_not_their_names(tmp_path, monkeyp
     monkeypatch.setenv("PATH", f"{bin_}:{os.environ['PATH']}")
     jobs, note = status.queued(out)
     assert note == "" and jobs == [("50_3", "rb-palom-multiplex-16g", "RUNNING")]
+
+
+def test_status_of_another_dataset_reads_its_own_runs_and_cases(tmp_path, monkeypatch):
+    """2026-10-20 on the cluster: `status --dataset synthetic` walked the COHORT's run list
+    (stare_clahe listed, stare_medium_s128_none never counted) against REGBENCH_CASES (the
+    cohort's folder), so every row said expected 0. A dataset is tallied against its own
+    run list (variants.runs_for) and, without --cases, its own folder
+    (REGBENCH_CASES_<NAME>, as the launcher's regbench_cases_of)."""
+    from benchmarks.regbench import variants
+
+    empty = tmp_path / "cases"
+    empty.mkdir()
+    rows, _ = status.tally(tmp_path / "out", empty, dataset="synthetic")
+    want = {variants.run_name(r) for r in variants.runs_for("synthetic")}
+    assert {r["run"] for r in rows} == want
+    assert "stare_medium_s128_none" in want and "stare_clahe" not in want
+    rows, _ = status.tally(tmp_path / "out", empty)  # the cohort: unchanged
+    assert {r["run"] for r in rows} == {variants.run_name(r) for r in variants.runs_for(None)}
+
+    cohort, synth = tmp_path / "c", tmp_path / "s"
+    cohort.mkdir()
+    synth.mkdir()
+    monkeypatch.setenv("REGBENCH_CASES", str(cohort))
+    monkeypatch.setenv("REGBENCH_CASES_SYNTHETIC", str(synth))
+    monkeypatch.setenv("PATH", "/nonexistent")
+    seen = []
+    monkeypatch.setattr(status, "report", lambda out, root, *a, **k: seen.append(root) or "")
+    assert cli.main(["status", "--out", str(tmp_path / "out"), "--dataset", "synthetic"]) == 0
+    assert cli.main(["status", "--out", str(tmp_path / "out")]) == 0
+    assert seen == [str(synth), str(cohort)]
