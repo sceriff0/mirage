@@ -180,3 +180,25 @@ def test_the_scorers_image_is_checked_for_what_the_scorer_imports(monkeypatch, c
     said = capsys.readouterr()
     assert said.err == ""
     assert said.out.splitlines()[-1] == "preflight [STARE_REGBENCH the scorer] ok"
+
+
+def test_a_stare_older_than_the_pin_is_a_failure(monkeypatch):
+    """2026-10-20 on the cluster: bolt3x/mirage-stare-regbench:1.0.0 had been pushed on
+    2026-10-11 with STARE 1.2.1, and requirements/stare.txt pins 1.3.0 (whose `--prep`
+    the adapter passes). Every STARE unit failed with "unrecognized arguments: --prep
+    none" while the preflight said ok. methods/stare.py is frozen and declares no
+    VERSION, so the preflight compares STARE with the ONE pin, requirements/stare.txt."""
+    pin = preflight.pinned_stare()
+    assert pin == "1.3.0"
+    for name in ("stare", *preflight.NEEDS["stare"], "stare.slide_io"):
+        fake = types.ModuleType(name)
+        fake.__file__ = f"/image/site-packages/{name.replace('.', '/')}.py"
+        monkeypatch.setitem(sys.modules, name, fake)
+    sys.modules["stare"].__version__ = "1.2.1"
+    notes, failures = preflight.check("stare")
+    (line,) = failures
+    assert "stare says its version is '1.2.1'" in line
+    assert "requirements/stare.txt pins '1.3.0'" in line
+    sys.modules["stare"].__version__ = pin
+    notes, failures = preflight.check("stare")
+    assert failures == [] and "stare 1.3.0 (the version requirements/stare.txt pins)" in notes

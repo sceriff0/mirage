@@ -79,6 +79,21 @@ def outside_the_image(path):
     return any(here == u or here.startswith(u + os.sep) for u in _user_sites())
 
 
+def pinned_stare():
+    """The STARE release ``requirements/stare.txt`` pins (its ONE pin, ``.../tags/vX.tar.gz``),
+    or None. ``methods/stare.py`` is frozen and declares no ``VERSION``: an image built
+    before the pin moved (bolt3x/mirage-stare-regbench:1.0.0 of 2026-10-11, STARE 1.2.1)
+    passed the preflight and failed every unit on ``--prep`` (2026-10-20)."""
+    import re
+
+    pin = Path(__file__).resolve().parents[2] / "requirements" / "stare.txt"
+    try:
+        found = re.search(r"/tags/v([^/\s]+)\.tar\.gz", pin.read_text())
+    except OSError:
+        return None
+    return found[1] if found else None
+
+
 def installed_version(method, package):
     """The installed package's version, read the way the method's adapter reads it."""
     adapter = importlib.import_module(f"benchmarks.regbench.methods.{method}")
@@ -169,16 +184,25 @@ def check(method=None, writable=(), scorer=False, cases=None, datasets=()):
         try:
             found, adapter = installed_version(method, loaded[package_name])
             enforced = getattr(adapter, "VERSION", None)
+            pinned = pinned_stare() if method == "stare" and enforced is None else None
             if enforced is not None and found != str(enforced):
                 failures.append(
                     f"{package_name} says its version is {found!r}; the adapter "
                     f"(methods/{method}.py) runs {enforced!r} and nothing else, so "
                     "every unit of this run would fail with that message"
                 )
+            elif pinned is not None and found != pinned:
+                failures.append(
+                    f"{package_name} says its version is {found!r}; "
+                    f"requirements/stare.txt pins {pinned!r}, whose arguments the "
+                    "adapter passes: an image built before the pin moved (pull it "
+                    "again after it is rebuilt)"
+                )
             else:
                 notes.append(
                     f"{package_name} {found}"
                     + (" (the version the adapter enforces)" if enforced else "")
+                    + (" (the version requirements/stare.txt pins)" if pinned else "")
                 )
         except BaseException as exc:
             failures.append(
