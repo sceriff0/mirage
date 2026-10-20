@@ -316,6 +316,10 @@
 #                                     redone by itself when its settings no longer
 #                                     resolve to the same values, or when its slide is
 #                                     no longer the file it was computed from.)
+#   REGBENCH_STARDIST_MODEL_DIR_WAS   the folder the site's models were MOVED from: a
+#                                     kept re-run recorded with that folder is compared
+#                                     as if made in the one that resolves now (said in
+#                                     the log). Any other folder is still a change
 #   REGBENCH_NUCLEI_FALLBACK=shrink   for a slide still without nuclei, use its outline
 #                                     shrunk by 10 px (labelled, never exact). Off unless set
 #   REGBENCH_NUCLEI_CPUS (8), REGBENCH_NUCLEI_MEM (128G), REGBENCH_NUCLEI_TIME (08:00:00)

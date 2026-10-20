@@ -2957,6 +2957,19 @@ def test_no_package_of_the_host_can_shadow_one_inside_an_image(tmp_path):
     assert 'PYTHONNOUSERSITE=1 PATH="$venv/bin:$PATH" "$@"' in code
 
 
+def test_the_moved_model_folder_reaches_the_image(tmp_path):
+    """REGBENCH_STARDIST_MODEL_DIR_WAS (the folder the site's models were moved from,
+    2026-10-20) is read by nuclei.settings_changed INSIDE the image, which starts with
+    --cleanenv: it must be passed through like the model's own folder."""
+    _, inside = _inside(
+        tmp_path, "STARE_REGBENCH",
+        REGBENCH_STARDIST_MODEL_DIR_WAS="/hpc/models",
+        REGBENCH_STARDIST_MODEL_DIR="/hpc/users/v/models",
+    )  # fmt: skip
+    assert inside["REGBENCH_STARDIST_MODEL_DIR_WAS"] == "/hpc/models"
+    assert inside["REGBENCH_STARDIST_MODEL_DIR"] == "/hpc/users/v/models"
+
+
 def test_the_work_folder_the_temp_folder_and_the_plugin_switch_reach_the_image(
     tmp_path,
 ):

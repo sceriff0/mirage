@@ -766,6 +766,19 @@ def settings_changed(rec):
     now = _values(_settings_or_none())
     if not old or not now:
         return []
+    # REGBENCH_STARDIST_MODEL_DIR_WAS: the folder the site's models were MOVED from
+    # (2026-10-20). A record made there is compared as if made in the folder that
+    # resolves now; any other folder is still another model folder (F8)
+    was = os.environ.get("REGBENCH_STARDIST_MODEL_DIR_WAS", "").strip()
+    key = "segmentation_model_dir"
+    if was and key in old and key in now and old[key] != now[key] \
+            and _same_value(key, old[key]) == _same_value(key, was):
+        print(
+            f"# model folder moved: {old[key]!r} is read as {now[key]!r} "
+            "(REGBENCH_STARDIST_MODEL_DIR_WAS)",
+            flush=True,
+        )
+        old[key] = now[key]
     return [
         f"{k}: {old.get(k, '')!r} -> {now.get(k, '')!r}"
         for k in sorted(set(old) | set(now))

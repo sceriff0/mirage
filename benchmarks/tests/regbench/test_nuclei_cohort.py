@@ -562,6 +562,51 @@ def test_a_setting_spelled_another_way_is_not_a_change(monkeypatch):
     ]
 
 
+def test_a_model_folder_declared_moved_is_not_a_change(monkeypatch, capsys):
+    """The site moved its models (2026-10-20: /hpcnfs/scratch/P_DIMA_ATTEND/models ->
+    .../users/vfassi/models). REGBENCH_STARDIST_MODEL_DIR_WAS names the folder the model
+    was moved FROM: a record made there is compared as if made in the folder that
+    resolves now, and that is said. Only that folder: another one is still a change, and
+    so is another model name or setting."""
+    rec = {
+        "source": "stardist_rerun",
+        "settings": {
+            "values": {
+                "segmentation_model_dir": {"value": "/hpc/models/"},
+                "segmentation_model": {"value": "site_model"},
+                "seg_prob_thresh": {"value": "0.5"},
+            }
+        },
+    }
+    now = {
+        "values": {
+            "segmentation_model_dir": {"value": "/hpc/users/v/models/"},
+            "segmentation_model": {"value": "site_model"},
+            "seg_prob_thresh": {"value": "0.5"},
+        }
+    }
+    monkeypatch.setattr(nuclei, "_settings_or_none", lambda: now)
+    monkeypatch.delenv("REGBENCH_STARDIST_MODEL_DIR_WAS", raising=False)
+    assert nuclei.settings_changed(rec) == [
+        "segmentation_model_dir: '/hpc/models/' -> '/hpc/users/v/models/'"
+    ]
+    monkeypatch.setenv("REGBENCH_STARDIST_MODEL_DIR_WAS", "/hpc/models")
+    capsys.readouterr()
+    assert nuclei.settings_changed(rec) == []
+    assert "REGBENCH_STARDIST_MODEL_DIR_WAS" in capsys.readouterr().out
+    # another model name in the moved folder is still another model
+    now["values"]["segmentation_model"]["value"] = "other_model"
+    assert nuclei.settings_changed(rec) == [
+        "segmentation_model: 'site_model' -> 'other_model'"
+    ]
+    # a record made in a folder that is NOT the declared one is still a change
+    now["values"]["segmentation_model"]["value"] = "site_model"
+    rec["settings"]["values"]["segmentation_model_dir"]["value"] = "/hpc/elsewhere"
+    assert nuclei.settings_changed(rec) == [
+        "segmentation_model_dir: '/hpc/elsewhere' -> '/hpc/users/v/models/'"
+    ]
+
+
 def _one_slide(cohort, monkeypatch, labels, cells_from=None):
     """The first slide of the cohort, segmented by the stand-in with ``labels``."""
     tmp, _, row = cohort
