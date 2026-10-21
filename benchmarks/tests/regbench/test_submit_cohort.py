@@ -636,7 +636,13 @@ def test_every_rung_is_tried_again_once_at_the_same_memory(dry):
         for a, b in zip(first, again):
             assert b.opt("--mem") == a.opt("--mem") and b.args[7:9] == a.args[7:9]
             assert b.args[11] == "again"
-            assert b.opt("--time") == a.opt("--time") == a.args[12] == b.args[12]
+            # the `again` task has TIME_FACTOR x the rung's time, capped at the site's
+            # longest job (ruling 2026-10-21: a timeout is run again with more time)
+            assert a.opt("--time") == a.args[12] and b.opt("--time") == b.args[12]
+            assert ladder._seconds(b.opt("--time")) == min(
+                ladder.TIME_FACTOR * ladder._seconds(a.opt("--time")),
+                ladder.MAX_HOURS * 3600,
+            )
         seq = chain(jobs, run)
         # ONE array of the ladder is submitted. Every other one is a step of the plan:
         # no array (the watcher names the units that failed), no dependency (the
@@ -4279,6 +4285,15 @@ def test_the_explicit_defaults_are_the_default_launch(site, dry):
 BEFORE_CROSS = "275edda0"
 
 
+def _again_time_free(ln):
+    """An `again` step's time (``--time`` and its own argument) blanked: since 2026-10-21
+    it is TIME_FACTOR x the rung's (test_every_rung_is_tried_again_once_at_the_same_memory
+    holds it to that), the one difference from the launchers these tests compare with."""
+    if "-again " not in ln:
+        return ln
+    return re.sub(r" again \S+", " again @T@", re.sub(r"--time=\S+", "--time=@T@", ln))
+
+
 def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     site, dry, tmp_path
 ):
@@ -4309,7 +4324,9 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
     assert done.returncode == 0, done.stderr
     then = [
-        ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        _again_time_free(
+            ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        )
         for ln in _sbatch_lines(done.stdout)
     ]
     # Task 28, B5, the one change to the default graph: the settle job no longer
@@ -4325,7 +4342,7 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
             ln = re.sub(rf":<rb-{r}-[^>]*>", "", ln)
         return ln
 
-    every_line = _sbatch_lines(dry[1].stdout)
+    every_line = [_again_time_free(ln) for ln in _sbatch_lines(dry[1].stdout)]
     assert any(own(ln) for ln in every_line)  # it IS in the default launch
     now_lines = [without(ln) for ln in every_line if not own(ln)]
     rescore = [ln for ln in now_lines if Job(ln).name == "rb-rescore"]
@@ -4336,10 +4353,12 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     ]
     assert then and then == [ln for ln in now_lines if ln not in rescore]
     later = [ln for ln in done.stdout.splitlines() if ln.startswith(LATER)]
-    now = [without(ln) for ln in dry[1].stdout.splitlines()
+    now = [_again_time_free(without(ln)) for ln in dry[1].stdout.splitlines()
            if ln.startswith(LATER) and not own(ln[len(LATER):])]
     assert [
-        ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        _again_time_free(
+            ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
+        )
         for ln in later
     ] == now
 
@@ -4653,7 +4672,9 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_synthet
 
     def norm(text):
         return [
-            ln.replace(str(old_slurm), str(SLURM)).replace("out-before-syn", "out-calls")
+            _again_time_free(
+                ln.replace(str(old_slurm), str(SLURM)).replace("out-before-syn", "out-calls")
+            )
             for ln in text.splitlines()
             if ln.startswith(("sbatch ", LATER))
         ]

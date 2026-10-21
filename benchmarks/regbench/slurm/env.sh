@@ -409,6 +409,30 @@ regbench_end() {
 
 # regbench_exec <image> <command...>: run any command in that image, from the repository
 # root (in a subshell: the caller's directory and environment are left alone).
+# The identity of an image: sha256:<hex> of the .sif file. A tag (docker://...:1.0.0) is
+# republished, so the tag alone does not say what ran. Hashed once and kept beside the
+# image (<sif>.sha256, written atomically) for every later job; an image newer than its
+# record is hashed again. Prints nothing when the file is not there or no hasher is.
+_regbench_image_digest() {
+    local sif="$1" rec hex
+    [ -f "$sif" ] || return 0
+    rec="$sif.sha256"
+    if [ -s "$rec" ] && [ "$rec" -nt "$sif" ]; then
+        head -n 1 "$rec"
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        hex="$(sha256sum "$sif" | cut -d' ' -f1)"
+    elif command -v shasum >/dev/null 2>&1; then
+        hex="$(shasum -a 256 "$sif" | cut -d' ' -f1)"
+    fi
+    [ -n "${hex:-}" ] || return 0
+    printf 'sha256:%s\n' "$hex"
+    { printf 'sha256:%s\n' "$hex" > "$rec.$$" && mv -f "$rec.$$" "$rec"; } 2>/dev/null \
+        || rm -f "$rec.$$" 2>/dev/null
+    return 0
+}
+
 regbench_exec() (
     local method="$1"; shift
     local sif conda venv upper
@@ -463,11 +487,14 @@ regbench_exec() (
         case " $REGBENCH_STARE_SRC_IMAGES " in *" $upper "*) inside="$inside:$(regbench_stare_src)" ;; esac
         export "SINGULARITYENV_PYTHONPATH=$inside" "APPTAINERENV_PYTHONPATH=$inside"
         export SINGULARITYENV_PYTHONNOUSERSITE=1 APPTAINERENV_PYTHONNOUSERSITE=1
+        # the image this run ran in (resources.host_info -> run.json host.image_digest)
+        REGBENCH_IMAGE_DIGEST="$(_regbench_image_digest "$sif")"
+        REGBENCH_IMAGE_FILE="$(basename "$sif")"
         # <PREFIX>ENV_X sets X inside --cleanenv on every Singularity 3.x and Apptainer.
         for v in TMPDIR REGBENCH_WORK REGBENCH_PRIVATE REGBENCH_PRIVATE_DIR SLURM_CPUS_PER_TASK SLURM_MEM_PER_NODE SLURM_JOB_ID SLURM_ARRAY_JOB_ID \
                  SLURM_ARRAY_TASK_ID REGBENCH_ATTEMPT REGBENCH_MEM_GB \
                  REGBENCH_RETRY REGBENCH_SUBMISSION REGBENCH_TIME_LIMIT REGBENCH_FORCE \
-                 REGBENCH_STAGES \
+                 REGBENCH_STAGES REGBENCH_IMAGE_DIGEST REGBENCH_IMAGE_FILE \
                  REGBENCH_LOG REGBENCH_END_FILE \
                  REGBENCH_STARDIST_MODEL_DIR REGBENCH_STARDIST_MODEL REGBENCH_STARDIST_MODEL_DIR_WAS \
                  REGBENCH_STARDIST_PROB_THRESH REGBENCH_STARDIST_CPU REGBENCH_SITE_CONFIG \

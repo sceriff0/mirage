@@ -85,6 +85,18 @@ def test_the_dropme_rows_move_no_other_row(tmp_path):
 # minus its `dropme` rows with `n_not_run_or_lost` renamed back to `n_not_run_or_blocked`
 # before this constant was written; the golden holds no summary header to rename.
 T7_GOLDEN_SHA256 = "3fd78aea36cb84e7d1f731049d671835a35e8fa2a4fa04c279ab21b99928b731"
+# Ruling 2026-10-21: `not_run` is not the method's loss, so a round never run is EXCLUDED
+# from the summaries instead of imputed. That is the first change since T7 that MOVES
+# values, so the read-back below is re-pinned. Measured against HEAD 9bb04bb2 (whose
+# read-back was still T7_GOLDEN_SHA256): `excluded_from_summaries` flipped on exactly the
+# never-run rows (ghost on every case, rtm on P2_r1, tiles on P3_r1, and their non_* sets;
+# crash, a real failure, stays imputed), `rounds_lost_not_method` moved in 3 failures rows,
+# and the paired tables lost the pairs against those rounds (paired_vs_primary 18 -> 13,
+# _nuclei 12 -> 9, one paired_summary group each) with their summaries recomputed. No other
+# table and no other column moved. `launches_failed_jvm_heap` is a column the same ruling
+# added (the VALIS fixed heap), stripped like the T28/T31 ones.
+R1021_COLUMNS = ("launches_failed_jvm_heap",)
+NOT_RUN_RULING_SHA256 = "1584ec64a585a6d89adaa7045bfa1026f25db62da220a864e2ee539323992930"
 
 
 # the three columns T10 added (patient_id, panel, tool_version): not in the T7 golden
@@ -162,6 +174,7 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
                 ("n_not_run_or_blocked" if k == "n_not_run_or_lost" else k): v
                 for k, v in row.items()
                 if k not in T10_COLUMNS and k not in T28_COLUMNS and k not in T31_COLUMNS
+                and k not in R1021_COLUMNS
             }
             for row in rows
             if not _dropme(row)
@@ -169,7 +182,7 @@ def test_the_golden_minus_dropme_is_the_t7_golden():
         for table, rows in want.items()
     }
     blob = json.dumps(back, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(blob).hexdigest() == T7_GOLDEN_SHA256
+    assert hashlib.sha256(blob).hexdigest() == NOT_RUN_RULING_SHA256
 
 
 # ── WT9 (T29): golden cells computed by hand, not by the scorer ───────────────────

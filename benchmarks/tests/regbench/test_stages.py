@@ -1378,10 +1378,11 @@ def test_what_is_due_and_a_tile_that_was_never_submitted(staged, tmp_path, monke
 
     assert failure_log.classify(run["cause"]) == failure_log.LAUNCHER
     assert run["cause"] in resources.NOT_THE_METHOD and run["cause"] in score.CAUSES
-    # Task 28 adds the causes the frozen writers cannot say (losses.NOT_THE_METHOD_EXTRA)
+    # Task 28 adds the causes the frozen writers cannot say (losses.NOT_THE_METHOD_EXTRA),
+    # and the ruling of 2026-10-21 `not_run` (a round nobody ran: no attempt to bill)
     assert set(score.NOT_THE_METHOD) == set(resources.NOT_THE_METHOD) | set(
         losses.NOT_THE_METHOD_EXTRA
-    )
+    ) | {"not_run"}
     # the submitter finished: the tile's job was in the queue and left no record
     state = stages.feed_state(out, "S-2", "stare", case.dataset)
     state.parent.mkdir(parents=True)
@@ -1869,15 +1870,18 @@ def test_a_stitch_that_fails_after_a_good_registration_is_the_writers(
     assert done == ["stare_rigid"] and len(calls) == attempts
     case = staged["case"]
     run, rigid = run_json(out, "stare", case), run_json(out, "stare_rigid", case)
-    assert (run["ok"], run["cause"], run["no_rerun"]) == (False, cause, True)
+    # retried in the job as the pipeline retries it: final, except for memory, which goes
+    # up a rung (the job's cgroup is the rung's; ruling 2026-10-21)
+    assert (run["ok"], run["cause"]) == (False, cause)
+    assert run.get("no_rerun", False) is (cause != "writer_oom")
     assert run["registered"] is True and rigid["ok"] is True
     assert f"stare stitch failed at attempt {attempts}" in run["error"]
     assert failure_log.classify(cause) == failure_log.METHOD
     assert failure_log.stage_of(cause) == "writer"
-    # no rung of the benchmark's ladder runs the round again for it
+    # the ladder runs the round again only for memory, and only up a rung
     paths = [result_dir(out, v, case) / "run.json" for v in ("stare_rigid", "stare")]
-    for task in (ladder.CLIMB, ladder.AGAIN):
-        assert ladder.unit_decision(paths, task, 2)[0] is False
+    assert ladder.unit_decision(paths, ladder.CLIMB, 2)[0] is (cause == "writer_oom")
+    assert ladder.unit_decision(paths, ladder.AGAIN, 1)[0] is False  # not the same rung
     # the registration is not a wasted attempt: it was done, and the rigid row has it
     base = {"dataset": "multiplex", "group": "P1"}
     rows = [

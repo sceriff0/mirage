@@ -104,9 +104,11 @@ def test_scored_as_a_row_never_compared(cohort, monkeypatch):
     mine = [r for r in cells if r["method"] == "stare_laptop" and r["case_id"] == CASE]
     assert mine and all(r["excluded_from_summaries"] in ("False", "") for r in mine)
     assert all(r["cause"] != "not_run" for r in mine)
+    # every other row is not_run in S7 and excluded (ruling 2026-10-21), so a paired
+    # table may have no row at all and is then not written
     for name in ("common_block.csv", "paired_vs_primary.csv"):
-        text = (out / "tables" / name).read_text()
-        assert "stare_laptop" not in text, name
+        path = out / "tables" / name
+        assert not path.exists() or "stare_laptop" not in path.read_text(), name
     built = tables.build(out, "multiplex")
     rows = built["laptop"]
     assert [r["row"] for r in rows] == ["stare_laptop"] and rows[0]["case_id"] == CASE

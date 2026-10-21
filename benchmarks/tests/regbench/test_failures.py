@@ -527,9 +527,10 @@ def test_the_failure_table_counts_infrastructure_apart():
     assert rec["launches_failed"] == 4
     assert rec["launches_failed_method"] == 2 and rec["launches_lost_not_method"] == 2
     assert rec["launches_failed_infrastructure"] == 1
-    assert rec["launches_failed_writer"] == 1 and rec["rounds_lost_not_method"] == 2
+    # the never-run round is lost too, not the method's (ruling 2026-10-21)
+    assert rec["launches_failed_writer"] == 1 and rec["rounds_lost_not_method"] == 3
     text = score.summary_markdown([], [rec], [])
-    assert "2 round(s) are lost for a reason that is not the method's" in text
+    assert "3 round(s) are lost for a reason that is not the method's" in text
     clean = score.failures(rows[:3])
     assert "No round is lost for a reason" in score.summary_markdown([], clean, [])
     # resources.py is frozen: score's extra causes are Task 28's (regbench.losses)
@@ -537,7 +538,7 @@ def test_the_failure_table_counts_infrastructure_apart():
         "capped", *losses.NOT_THE_METHOD_EXTRA,
     } - {"score_error"}
     assert set(score.NOT_THE_METHOD) == {
-        *resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA,
+        *resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA, "not_run",
     }
 
 

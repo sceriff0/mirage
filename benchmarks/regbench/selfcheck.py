@@ -365,7 +365,7 @@ WORST_FIRST = (INCONSISTENT, CRASHED, NOT_CHECKED, OK)
 NOT_OK = (INCONSISTENT, CRASHED, NOT_CHECKED)
 EXIT_CODE = {OK: 0, INCONSISTENT: 1, NOT_CHECKED: 2, CRASHED: 3}
 # run.json causes that say the run could not be measured, not that the method is wrong
-_RESOURCE_CAUSES = ("oom", "gpu_oom", "killed", "timeout")
+_RESOURCE_CAUSES = ("oom", "jvm_heap", "gpu_oom", "killed", "timeout")
 
 # ── realcheck (frozen) ────────────────────────────────────────────────────────
 REAL_CROP = 2048

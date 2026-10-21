@@ -323,7 +323,8 @@ def test_a_failed_method_is_scored_at_the_initial_pose(
         for a in res["summary_cells"]
         if a["method"] == "stare" and a["subset"] == "all"
     ]
-    assert sum(a["n_cases"] for a in agg) == 4 and not any(a["n_ok"] for a in agg)
+    # the three never-run cases are excluded (not_run, ruling 2026-10-21): one case left
+    assert sum(a["n_cases"] for a in agg) == 1 and not any(a["n_ok"] for a in agg)
     assert len({a["family"] for a in agg}) == len(agg)
     assert not [a for a in res["summary_cells"] if a["subset"] == "common"]
     (f,) = [f for f in res["failures"] if f["method"] == "stare"]

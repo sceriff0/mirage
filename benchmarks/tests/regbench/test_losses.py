@@ -582,7 +582,9 @@ def test_a_not_the_methods_loss_shrinks_strict_for_all_but_per_method_for_its_ow
         assert lost[table] and {r["common_block"] for r in lost[table]} == {rule}
     pm = {r["method"]: r["n_patients_common"] for r in lost["cost_summary_per_method"]}
     st = {r["method"]: r["n_patients_common"] for r in lost["cost_summary"]}
-    assert st["stare"] == st["rtm"] == pm["rtm"] and pm["stare"] == st["stare"] + 1
+    # two patients leave the strict block only: rtm's infrastructure round, and a
+    # `tiles` round nobody ran (`not_run` is not the method's: ruling 2026-10-21)
+    assert st["stare"] == st["rtm"] == pm["rtm"] and pm["stare"] == st["stare"] + 2
     # each per-method table is published wherever its strict one is
     for name in ("cost_summary", "cost_end_to_end_summary"):
         strict = (out / "tables" / f"{name}.csv").is_file()

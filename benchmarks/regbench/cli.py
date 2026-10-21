@@ -1093,6 +1093,7 @@ def _run(a):
             exits,
             a.accounting_waited,
             host["mem_requested_gb"],
+            time_limit=host.get("time_limit"),
         )
         print(
             f"{a.dataset}/{ids} [{a.label or a.method}] {task}, rung "

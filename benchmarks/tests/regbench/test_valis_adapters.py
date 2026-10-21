@@ -776,16 +776,18 @@ NUMPY_OOM = (
 @pytest.mark.parametrize(
     "text,cause",
     [
-        (JAVA_OOM, "oom"),
-        ("java.lang.OutOfMemoryError: GC overhead limit exceeded", "oom"),
+        # the heap is VALIS's fixed 10 GB (ruling 2026-10-21): more memory cannot help
+        (JAVA_OOM, "jvm_heap"),
+        ("java.lang.OutOfMemoryError: GC overhead limit exceeded", "jvm_heap"),
         (NUMPY_OOM, "oom"),
         ("RuntimeError: DefaultCPUAllocator: not enough memory", "oom"),
         ("need at least one array to concatenate", "exception"),
     ],
 )
 def test_what_valis_swallowed_decides_the_cause(tmp_path, pair, text, cause):
-    """VALIS prints its exception and returns None. A memory failure must come out as
-    `oom` (the ladder climbs on nothing else), and any other as `exception`."""
+    """VALIS prints its exception and returns None. A host memory failure must come out
+    as `oom` (the ladder climbs on nothing else), a JVM heap failure as `jvm_heap` (the
+    heap does not grow with the rung), and any other as `exception`."""
     fv.configure(fail_register=text)
     cases = patient(tmp_path, pair)
     methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
@@ -804,13 +806,13 @@ def test_the_capture_leaves_valtils_as_it_was(tmp_path, pair):
     assert sys.modules["valis.valtils"].print_warning is before
 
 
-def test_a_memory_error_in_the_micro_pass_of_valis_120_is_oom(tmp_path, pair):
+def test_a_java_heap_error_in_the_micro_pass_of_valis_120_is_jvm_heap(tmp_path, pair):
     fv.configure(micro_raises=JAVA_OOM)
     cases = patient(tmp_path, pair, rounds=1)
     done = methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
     assert done == {"P1_r1": ["valis120_rigid", "valis120"]}
     run = run_json(tmp_path / "o", "valis120_micro", cases[0])
-    assert run["ok"] is False and run["cause"] == "oom"
+    assert run["ok"] is False and run["cause"] == "jvm_heap"
 
 
 @pytest.mark.parametrize(
@@ -838,11 +840,12 @@ def test_a_failed_capture_of_valis_120_is_the_benchmarks(
         assert "the benchmark's capture failed" in run["error"]
 
 
-def test_valis_120_gets_a_heap_that_follows_the_rung(tmp_path, pair, monkeypatch):
-    """VALIS 1.2.0 starts its JVM at 10 GB whatever it is asked; the adapter starts it
-    first, through VALIS's own slide_io.init_jvm, with the module's formula."""
-    want = {(16, 1): 12, (64, 2): 48, (256, 3): 80, (512, 4): 96, (700, 5): 96}
-    for (mem, attempt), heap in want.items():
+def test_valis_120_keeps_valis_own_heap_at_every_rung(tmp_path, pair, monkeypatch):
+    """User ruling 2026-10-21: VALIS runs with the heap it ships, 10 GB
+    (registration.init_jvm passes the literal 10), at every rung. The adapter still
+    starts the JVM itself through slide_io.init_jvm, so the heap is recorded, never
+    scaled with the rung, and is no departure from the package."""
+    for mem, attempt in ((16, 1), (64, 2), (256, 3), (512, 4), (700, 5)):
         fv.configure()
         monkeypatch.setenv("REGBENCH_MEM_GB", str(mem))
         monkeypatch.setenv("REGBENCH_ATTEMPT", str(attempt))
@@ -851,10 +854,12 @@ def test_valis_120_gets_a_heap_that_follows_the_rung(tmp_path, pair, monkeypatch
         out = tmp_path / f"o{mem}"
         methods.run_group("valis", cases, out, {}, label="valis120")
         order = [c["call"] for c in fv.CALLS]
-        assert [c["mem_gb"] for c in fv.calls("slide_io.init_jvm")] == [heap], mem
+        assert [c["mem_gb"] for c in fv.calls("slide_io.init_jvm")] == [10], mem
         assert order.index("slide_io.init_jvm") < order.index("Valis")
         info = run_json(out, "valis120", cases[0])["info"]
-        assert info["jvm_heap_gb"] == heap and f"-Xmx{heap}G" in info["jvm_heap"]
+        assert info["jvm_heap_gb"] == 10 and "-Xmx10G" in info["jvm_heap"]
+        changed = info["implementation"]["changed_from_defaults"]
+        assert "JVM heap" not in changed, mem
 
 
 def test_off_the_ladder_valis_120_keeps_its_own_heap(tmp_path, pair, monkeypatch):
@@ -862,9 +867,22 @@ def test_off_the_ladder_valis_120_keeps_its_own_heap(tmp_path, pair, monkeypatch
     monkeypatch.delenv("SLURM_MEM_PER_NODE", raising=False)
     cases = patient(tmp_path, pair, rounds=1)
     methods.run_group("valis", cases, tmp_path / "o", {}, label="valis120")
-    assert not fv.calls("slide_io.init_jvm")
+    assert [c["mem_gb"] for c in fv.calls("slide_io.init_jvm")] == [10]
     info = run_json(tmp_path / "o", "valis120", cases[0])["info"]
-    assert info["jvm_heap_gb"] is None and "10 GB" in info["jvm_heap"]
+    assert info["jvm_heap_gb"] == 10 and "-Xmx10G" in info["jvm_heap"]
+
+
+def test_an_explicit_heap_is_a_recorded_departure(tmp_path, pair, monkeypatch):
+    monkeypatch.setenv("REGBENCH_MEM_GB", "64")
+    cases = patient(tmp_path, pair, rounds=1)
+    methods.run_group(
+        "valis", cases, tmp_path / "o", {"jvm_heap_gb": "20"}, label="valis120"
+    )
+    assert [c["mem_gb"] for c in fv.calls("slide_io.init_jvm")] == [20]
+    info = run_json(tmp_path / "o", "valis120", cases[0])["info"]
+    assert info["implementation"]["changed_from_defaults"]["JVM heap"].startswith(
+        "-Xmx20G"
+    )
 
 
 def test_a_failed_micro_pass_leaves_the_default_row(tmp_path, pair):
@@ -1032,27 +1050,13 @@ def test_shipped_arguments_match_the_function_signature():
         assert needle in config, needle
 
 
-def test_the_jvm_heap_follows_the_modules_formula():
-    module = (ROOT / "modules" / "local" / "register.nf").read_text()
-    assert "(32 + 16 * task.attempt)" in module
-    assert "Math.min(heap_request, task.memory.toGiga() - 4)" in module
+def test_the_jvm_heap_is_valis_own_at_every_rung():
+    """User ruling 2026-10-21: not the module's scaled formula, VALIS's literal 10."""
     heap = valis_mirage.jvm_heap_gb
-    # F17: the attempt is the one the PIPELINE would be on with this memory (64 GB
-    # doubling per attempt: conf/modules.config), whatever the ladder's rung
-    config = (ROOT / "conf" / "modules.config").read_text()
-    assert "64.GB * (2 ** (task.attempt - 1))" in config
-    for mem, attempt, want in (
-        (16, 1, 12),
-        (64, 2, 48),  # the pipeline's first attempt at 64 GB: 32 + 16, not 60
-        (128, 3, 64),
-        (256, 3, 80),
-        (512, 4, 96),
-        (700, 5, 96),  # the pipeline's attempt 4 (512 GB) is the largest that fits
-    ):
+    for mem, attempt in ((16, 1), (64, 2), (128, 3), (256, 3), (512, 4), (700, 5)):
         host = {"mem_requested_gb": float(mem), "attempt": attempt}
-        assert heap({}, host) == want, mem
-        assert want <= mem - 4
-    assert heap({}, {"mem_requested_gb": None, "attempt": 1}) is None
+        assert heap({}, host) == 10, mem
+    assert heap({}, {"mem_requested_gb": None, "attempt": 1}) == 10
     assert heap({"jvm_heap_gb": "20"}, {"mem_requested_gb": 64.0, "attempt": 2}) == 20
 
 
@@ -1200,9 +1204,8 @@ def test_the_pipelines_settings_reach_valis(mirage):
             "tile_wh": 2048,
         }
     ]
-    # 64 GB at the ladder's second rung is the pipeline's FIRST attempt (F17):
-    # min(32 + 16 * 1, 64 - 4)
-    assert [c["mem_gb"] for c in named(mirage.calls, "init_jvm")] == [48]
+    # VALIS's own heap at every rung, not the module's formula (ruling 2026-10-21)
+    assert [c["mem_gb"] for c in named(mirage.calls, "init_jvm")] == [10]
     assert mirage.answer["cpu_count"] == 4  # what VALIS's pools were left with
     assert not named(mirage.calls, "get_inverse_field")
 
@@ -1242,7 +1245,7 @@ def test_valis_mirage_records_what_ran(mirage):
     info = run["info"]
     assert info["version"] == "1.0.0" and info["points"] == "image"
     assert info["ARGS"] == valis_mirage.ARGS
-    assert info["run_args"]["jvm_heap_gb"] == 48 and info["run_args"]["n_cpus"] == 4
+    assert info["run_args"]["jvm_heap_gb"] == 10 and info["run_args"]["n_cpus"] == 4
     assert info["run_args"]["reference"] == "reference.ome.tif"
     assert info["workers_seen"] == 4 and info["cpus"]["valis_pool_threads"] == 3
     assert info["micro_called"] and info["micro_ran"] and not info["repair_fired"]
@@ -1285,11 +1288,12 @@ def test_a_micro_pass_the_pipeline_swallowed_is_reported(tmp_path):
 
 def test_a_register_the_pipelines_valis_swallowed_keeps_its_cause(tmp_path):
     """Valis.register() swallows, bin/register.py raises a fixed text: the memory cause
-    VALIS printed must still reach run.json, or the pipeline's VALIS never climbs."""
+    VALIS printed must still reach run.json: a Java heap error is jvm_heap (the heap is
+    VALIS's fixed 10 GB, ruling 2026-10-21), never the method's plain exception."""
     _, done = run_mirage(tmp_path / "w", fake={"fail_register": JAVA_OOM})
     for variant in MIRAGE:
         run = mirage_run_json(tmp_path / "w", variant)
-        assert run["ok"] is False and run["cause"] == "oom", done.stdout[-2000:]
+        assert run["ok"] is False and run["cause"] == "jvm_heap", done.stdout[-2000:]
         assert JAVA_OOM in run["error"] and "swallowed" in run["error"]
 
 
@@ -1302,11 +1306,11 @@ def test_another_swallowed_register_of_the_pipeline_stays_an_exception(tmp_path)
 
 def test_a_micro_pass_that_ran_out_of_memory_fails_the_full_row(tmp_path):
     """bin/register.py catches a Java out-of-memory inside the micro pass and writes the
-    non-rigid result. That is not the full method: the row fails with `oom`, so the
-    patient goes up a rung, and the non-rigid row keeps its own result."""
+    non-rigid result. That is not the full method: the row fails with `jvm_heap` (the
+    heap is fixed: final), and the non-rigid row keeps its own result."""
     run_mirage(tmp_path / "w", fake={"micro_raises": JAVA_OOM})
     final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert final["ok"] is False and final["cause"] == "oom"
+    assert final["ok"] is False and final["cause"] == "jvm_heap"
     assert (
         "micro pass ran out of memory" in final["error"] and JAVA_OOM in final["error"]
     )
@@ -1328,30 +1332,31 @@ def test_a_slide_the_pipeline_did_not_write_fails_its_round(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "fake",
+    "fake, cause",
     [
-        {"write_error": "MemoryError"},
-        # VALIS 1.0.0's tile worker: the Java heap error printed, another raised (F16)
-        {"printed": JAVA_OOM},
+        ({"write_error": "MemoryError"}, "writer_oom"),
+        # VALIS 1.0.0's tile worker: the Java heap error printed, another raised (F16).
+        # The heap is VALIS's fixed 10 GB (ruling 2026-10-21): no climb, the writer's
+        ({"printed": JAVA_OOM}, "writer"),
     ],
 )
-def test_a_writer_that_ran_out_of_memory_on_a_slide_climbs(tmp_path, fake):
-    """F15, F16: a memory failure of the pipeline's writer is writer_oom, the unit goes
-    up a rung."""
+def test_a_writer_that_ran_out_of_memory_on_a_slide(tmp_path, fake, cause):
+    """F15, F16: a host memory failure of the pipeline's writer is writer_oom, the unit
+    goes up a rung; a Java heap failure is the writer's, final."""
     run_mirage(tmp_path / "w", fake={"skip_write": ["moving"], **fake})
     run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["ok"] is False and run["cause"] == "writer_oom"
+    assert run["ok"] is False and run["cause"] == cause
 
 
-def test_a_java_heap_error_valis_printed_inside_register_is_oom(tmp_path):
+def test_a_java_heap_error_valis_printed_inside_register_is_jvm_heap(tmp_path):
     """F16: VALIS 1.0.0 hands print_warning only the UnboundLocalError; the Java heap
-    error went to stdout. The row is oom, as the module docstring says."""
+    error went to stdout. The row is jvm_heap: the heap is fixed, a rung cannot help."""
     unbound = "local variable 'tile' referenced before assignment"
     _, done = run_mirage(
         tmp_path / "w", fake={"fail_register": unbound, "printed": JAVA_OOM}
     )
     run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["ok"] is False and run["cause"] == "oom", done.stdout[-2000:]
+    assert run["ok"] is False and run["cause"] == "jvm_heap", done.stdout[-2000:]
     assert JAVA_OOM in run["error"] and unbound in run["error"]
     assert JAVA_OOM in done.stdout  # still printed: the tee passes everything on
 
@@ -1363,7 +1368,7 @@ def test_a_micro_pass_whose_memory_error_valis_printed_fails_the_full_row(tmp_pa
         fake={"micro_raises": "UnboundLocalError: tile", "printed": JAVA_OOM},
     )
     final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert final["ok"] is False and final["cause"] == "oom"
+    assert final["ok"] is False and final["cause"] == "jvm_heap"
 
 
 def test_a_capture_of_the_benchmark_that_failed_is_the_benchmarks(monkeypatch):
@@ -1710,4 +1715,4 @@ def test_the_shipped_run_records_its_four_stages(mirage):
 def test_the_jvm_heap_at_the_fifth_rung():
     from benchmarks.regbench.methods import _valis_points as vp
 
-    assert vp.jvm_heap_gb({}, {"mem_requested_gb": 700, "attempt": 5}) == 96
+    assert vp.jvm_heap_gb({}, {"mem_requested_gb": 700, "attempt": 5}) == 10

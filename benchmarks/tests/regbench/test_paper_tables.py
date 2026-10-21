@@ -4,9 +4,10 @@
 ``scored_cohort`` has the rows ``stare``, ``rtm``, ``tiles``, ``blocks``, ``crash`` and
 ``dropme`` (and ``ghost``, expected and never run). They are put in two toy families:
 ``stare`` (``stare``, ``dropme``) and ``rtm`` (``rtm``, ``crash``). ``crash`` raised on
-every case and ``rtm`` was never run on ``P2_r1``: both are imputed failures, and an
-imputed failure is KEPT. No row of the cohort is excluded from the summaries, so the test
-that needs one marks it in ``cells.csv``.
+every case: an imputed failure, and an imputed failure is KEPT. ``rtm`` was never run on
+``P2_r1``: ``not_run`` is not the method's loss, so that round is EXCLUDED from the
+summaries (ruling 2026-10-21). The test that needs a further excluded row marks it in
+``cells.csv``.
 """
 import csv
 import json
@@ -91,12 +92,15 @@ def test_an_excluded_row_is_left_out_and_an_imputed_one_kept(scored):
     assert rows[("stare", "best")]["row"] == "dropme"
     assert rows[("stare", "best")]["n_pairs"] == 3  # P1_r1 left out
     assert rows[("stare", "primary")]["n_pairs"] == 4
-    # rtm's imputed (never-run) P2_r1 is KEPT: four cases, three registered
+    # rtm's never-run P2_r1 is EXCLUDED (not_run, ruling 2026-10-21): three cases
     rtm = rows[("rtm", "best")]
-    assert rtm["row"] == "rtm" and rtm["n_pairs"] == 4 and rtm["n_ok"] == 3
-    imputed = [r for r in pp if r["row"] == "rtm" and r["case_id"] == "P2_r1"]
-    assert imputed[0]["imputed_initial"] is True
-    assert imputed[0]["excluded_from_summaries"] is False
+    assert rtm["row"] == "rtm" and rtm["n_pairs"] == 3 and rtm["n_ok"] == 3
+    never = [r for r in pp if r["row"] == "rtm" and r["case_id"] == "P2_r1"]
+    assert never[0]["cause"] == "not_run" and never[0]["excluded_from_summaries"] is True
+    # crash's raised rounds are imputed and KEPT
+    crashed = [r for r in pp if r["row"] == "crash"]
+    assert crashed and all(r["imputed_initial"] is True for r in crashed)
+    assert not any(r["excluded_from_summaries"] for r in crashed)
 
 
 def test_best_of_on_hand_rows_excluded_never_decides():
@@ -352,13 +356,14 @@ def test_summary_zeroes_nan_dice_and_counts_complete_patients(scored):
     rtm = by_case[("rtm", "best")]
     pp = {r["case_id"]: r["dice_matched"] for r in built["per_pair"]
           if r["row"] == "rtm" and r["set"] == "outlines"}
-    want = sorted([pp["P1_r1"], pp["P1_r2"], pp["P3_r1"], 0.0])
-    assert rtm["n_dice_zeroed"] == 1 and rtm["dice_med"] == pytest.approx((want[1] + want[2]) / 2)
-    # per patient first (the headline pools so, on the common cases): P1's median, P2's 0
-    # (its one round has no pair), P3's
+    # P2_r1 was never run: excluded (ruling 2026-10-21), so nothing is zeroed
+    want = sorted([pp["P1_r1"], pp["P1_r2"], pp["P3_r1"]])
+    assert rtm["n_dice_zeroed"] == 0 and rtm["dice_med"] == pytest.approx(want[1])
+    # per patient first (the headline pools so, on the common cases): P1's median, P3's;
+    # P2 has no round left
     head = rows[("rtm", "best")]
-    per = sorted([(pp["P1_r1"] + pp["P1_r2"]) / 2, 0.0, pp["P3_r1"]])
-    assert head["pooling"] == "common" and head["dice_med"] == pytest.approx(per[1])
+    per = [(pp["P1_r1"] + pp["P1_r2"]) / 2, pp["P3_r1"]]
+    assert head["pooling"] == "common" and head["dice_med"] == pytest.approx(sum(per) / 2)
     rtm = head
     assert rtm["n_patients_complete"] == 2 and rows[("stare", "best")]["n_patients_complete"] == 3
     cost = [r for r in tables._cost_rows(scored, "multiplex")
@@ -380,7 +385,8 @@ def test_cohort_counts_numbers(scored):
     c = {(r["patient_id"], r["row"]): r for r in built["cohort_counts"]}
     assert (c[("P1", "stare")]["n_pairs_min"], c[("P1", "stare")]["n_pairs_max"]) == (81, 81)
     assert c[("P1", "stare")]["n_pairs_med"] == 81.0
-    assert c[("P2", "rtm")]["n_panels"] == 1 and c[("P2", "rtm")]["n_pairs_max"] == 0
+    # rtm's only P2 round was never run: excluded, so P2 has no rtm count (ruling 2026-10-21)
+    assert ("P2", "rtm") not in c and ("P2", "stare") in c
 
 
 def test_stare_tiers_defaults_and_options(scored, monkeypatch):
@@ -688,9 +694,11 @@ def test_versions_hold_the_image_tag_digest_python_and_stardist(scored):
     assert v["stare"]["stardist_image"] == "bolt3x/mirage-stardist:1.0.0"
     assert v["stare"]["stardist_version"] == tables.NOT_RECORDED
     assert v["crash"]["image_tag"] == tables.NOT_RECORDED  # a toy row: no launcher pin
-    # a record that says them is read
+    # a record that says them is read; `image_digest` is the top-level key host_info
+    # writes (REGBENCH_IMAGE_DIGEST from slurm/env.sh), blank outside an image
     for path in sorted((scored / "stare" / "multiplex").glob("*/run.json")):
         rec = json.loads(path.read_text())
+        assert rec["image_digest"] == "" and "image_file" in rec
         rec.setdefault("info", {})["python"] = "3.11.9"
         rec["image_digest"] = "sha256:abc"
         path.write_text(json.dumps(rec))

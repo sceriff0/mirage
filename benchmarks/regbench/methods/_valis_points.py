@@ -188,33 +188,46 @@ def reported(caught):
     return text[-3000:]
 
 
-def pipeline_attempt(mem_gb):
-    """The attempt the pipeline's REGISTER would be on with ``mem_gb`` of memory: it asks
-    64 GB doubling per attempt (``conf/modules.config``: ``64.GB * (2 ** (task.attempt -
-    1))``), so the largest attempt whose request fits, and 1 below 64 GB."""
-    import math
-
-    mem = float(mem_gb)
-    return 1 if mem < 64 else 1 + int(math.floor(math.log2(mem / 64.0) + 1e-9))
+# VALIS's own heap: registration.init_jvm(jar=None, mem_gb=10) passes the literal 10 on
+# to slide_io.init_jvm (1.2.0 registration.py:132-135, 1.0.0 registration.py:115-118
+# `[PARTIAL: those lines and slide_io.init_jvm]`). The benchmark keeps it at every rung
+# (user ruling 2026-10-21): it is how VALIS ships, and a heap scaled with the rung is a
+# departure no other method gets. A JVM heap failure is therefore ``jvm_heap``, final.
+VALIS_JVM_HEAP_GB = 10
 
 
 def jvm_heap_gb(opts, host=None):
-    """``modules/local/register.nf``'s formula, ``min(32 + 16 * attempt, memory in GiB -
-    4)``, with the attempt the PIPELINE would be on at this memory (``pipeline_attempt``;
-    not the ladder's rung, which climbs 16/64/256/512/700 GB where the pipeline doubles
-    from 64): 12 GiB at 16 GB, 48 at 64 GB, 80 at 256 GB, 96 at 512 GB and 96 at 700 GB.
-    Never above memory - 4. None when the memory request is unknown (outside a
-    scheduler). ``--opt jvm_heap_gb=N`` overrides it."""
-    from .. import resources
-
+    """The JVM heap VALIS runs with: ``VALIS_JVM_HEAP_GB`` (10 GiB) at every rung, never
+    scaled with the memory. ``--opt jvm_heap_gb=N`` overrides it, a recorded departure.
+    ``host`` is accepted and ignored (the heap does not depend on it)."""
+    del host
     if opts.get("jvm_heap_gb"):
         return int(opts["jvm_heap_gb"])
-    host = host or resources.host_info()
-    mem = host.get("mem_requested_gb")
-    if not mem:
-        return None
-    attempt = pipeline_attempt(mem)
-    return max(1, int(min(32 + 16 * attempt, float(mem) - 4)))
+    return VALIS_JVM_HEAP_GB
+
+
+def mark_jvm_heap(exc, *texts):
+    """``exc`` with the cause ``jvm_heap`` when it, or what VALIS printed (``texts``),
+    says the JVM ran out of its fixed heap and it declares no cause of its own; else
+    ``exc`` as it is. ``resources.classify_error`` reads the declared cause first. A
+    JPype Java exception refuses new attributes (its setter raises AttributeError for
+    any name without a leading underscore), so it comes back wrapped: a RuntimeError
+    with its text, the cause, and the Java exception as ``__cause__``."""
+    from .. import resources
+
+    text = f"{type(exc).__name__}: {exc}"
+    if getattr(exc, "regbench_cause", None) is not None or not resources.names_jvm_heap(
+        text, *texts
+    ):
+        return exc
+    try:
+        exc.regbench_cause = "jvm_heap"
+        return exc
+    except (AttributeError, TypeError):
+        wrapped = RuntimeError(text)
+        wrapped.regbench_cause = "jvm_heap"
+        wrapped.__cause__ = exc
+        return wrapped
 
 
 def jvm_max_heap_gb():

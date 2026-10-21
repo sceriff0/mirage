@@ -752,6 +752,15 @@ limit() {
     [ "$s" -gt "$MAX_SECONDS" ] && s="$MAX_SECONDS"
     printf '%d-%02d:%02d:%02d' $((s / 86400)) $((s % 86400 / 3600)) $((s % 3600 / 60)) $((s % 60))
 }
+# twice <D-HH:MM:SS>: twice a time limit() made, never above the site's maximum: the
+# `again` task's time (ladder.TIME_FACTOR, ruling 2026-10-21). Its input is always
+# limit()'s own output, so it parses without refusing anything (no `die`).
+twice() {
+    local t="$1" d=0 h m s
+    case "$t" in *-*) d="${t%%-*}"; t="${t#*-}" ;; esac
+    IFS=: read -r h m s <<< "$t"
+    limit $(( (((10#$d * 24 + 10#$h) * 60 + 10#$m) * 60 + 10#$s) * 2 ))
+}
 
 # submit <job name> <sbatch arguments...>: sets JOB_ID. Dry: prints the command.
 N_JOBS=0
@@ -2059,12 +2068,16 @@ ladder() {
                 continue
             fi
             # every other one is a step of the plan: submitted by the chain's watcher,
-            # after a failure, for the units that failed
+            # after a failure, for the units that failed. An `again` task has
+            # TIME_FACTOR (2) x the time, capped at the site's longest job: it retries
+            # a unit that ran out of time too (ladder.py, ruling 2026-10-21)
+            local step_time="$time"
+            [ "$task" != again ] || step_time="$(twice "$time")"
             plan_step "$task" "$jobname" "${COMMON[@]}" "$LOG_ARRAY" \
                 --cpus-per-task="$cpus" --mem="${gb}G" \
-                --time="$time" ${gres[@]+"${gres[@]}"} \
+                --time="$step_time" ${gres[@]+"${gres[@]}"} \
                 "$HERE/run_rung.sbatch" "$name" "$method" "$label" "$opts" "$image" "$gpu" \
-                "$ds" "$attempt" "$gb" "$real" "@EARLIER@" "$task" "$time" "$staged"
+                "$ds" "$attempt" "$gb" "$real" "@EARLIER@" "$task" "$step_time" "$staged"
         done
     done
     plan_watch "$prefix" "$first_id" "$first_name" "$range" "$base"

@@ -284,7 +284,9 @@ def test_a_lost_attempt_is_tried_again_at_the_same_rung_once(tmp_path):
     assert not ladder.unit_decision([path], ladder.CLIMB, 3)[0]
 
 
-@pytest.mark.parametrize("cause", ["oom", "exception", "timeout", "writer", "killed"])
+# `timeout` is run again with more time since 2026-10-21:
+# test_a_unit_that_ran_out_of_time_runs_again_only_with_more_time
+@pytest.mark.parametrize("cause", ["oom", "exception", "writer", "killed"])
 def test_again_runs_nothing_the_scheduler_did_not_lose(tmp_path, cause):
     path = record(tmp_path / "v" / "run.json", cause=cause, attempt=1)
     assert not ladder.unit_decision([path], ladder.AGAIN, 1, "COMPLETED")[0]
@@ -1142,3 +1144,75 @@ def test_a_result_set_aside_keeps_its_image_with_its_record(tmp_path):
     assert (kept / "run.json").exists() and (kept / "warped.npz").exists()
     assert not (d / "native").exists() and not (d / "run.json").exists()
     assert (d / "other.txt").read_text() == "stays"
+
+
+# ── one retry for every method (ruling 2026-10-21) ────────────────────────────
+def test_a_unit_that_ran_out_of_time_runs_again_only_with_more_time(tmp_path):
+    path = record(tmp_path / "v" / "run.json", cause="timeout", time_limit="1-00:00:00")
+    go, why, lost = ladder.unit_decision([path], ladder.AGAIN, 1, time_limit="2-00:00:00")
+    assert go and not lost and "ran out of time" in why
+    # at the site's cap the `again` task has no more time: it would be the same attempt
+    go, _, _ = ladder.unit_decision([path], ladder.AGAIN, 1, time_limit="1-00:00:00")
+    assert not go
+    # unknown on either side: it runs (the launcher gives `again` twice the time)
+    assert ladder.unit_decision([path], ladder.AGAIN, 1)[0]
+    # tried again already: final
+    retried = record(tmp_path / "w" / "run.json", cause="timeout", retry=1)
+    assert not ladder.unit_decision([retried], ladder.AGAIN, 1, time_limit="9-0:0:0")[0]
+    # never a climb: more memory is not what it lacked
+    assert not ladder.unit_decision([path], ladder.CLIMB, 2)[0]
+
+
+def test_a_unit_that_also_ran_out_of_memory_climbs_instead_of_again(tmp_path):
+    """One round ran out of time (or died by a signal) and another ran out of memory: the
+    same rung again would only run out of memory once more, so the unit goes up whole."""
+    oom = record(tmp_path / "a" / "run.json", cause="oom")
+    for name, rec in (
+        ("t", {"cause": "timeout", "time_limit": "1-00:00:00"}),
+        ("k", {"cause": "killed", "scheduler": {"state": "FAILED"}}),
+    ):
+        other = record(tmp_path / name / "run.json", **rec)
+        assert not ladder.unit_decision([other, oom], ladder.AGAIN, 1, time_limit="9-0:0:0")[0]
+        assert ladder.unit_decision([other, oom], ladder.CLIMB, 2)[0]
+        assert ladder.unit_decision([other], ladder.AGAIN, 1, time_limit="9-0:0:0")[0]
+
+
+def test_a_process_killed_by_a_signal_runs_again_once(tmp_path):
+    """A record still `killed` whose task the scheduler ended FAILED (no cause named):
+    the process died with no error of its own (segfault, abort, bus error)."""
+    path = record(
+        tmp_path / "v" / "run.json", cause="killed", scheduler={"state": "FAILED"}
+    )
+    go, why, _ = ladder.unit_decision([path], ladder.AGAIN, 1)
+    assert go and "no error of their own" in why
+    retried = record(
+        tmp_path / "w" / "run.json",
+        cause="killed",
+        retry=1,
+        scheduler={"state": "FAILED"},
+    )
+    assert not ladder.unit_decision([retried], ladder.AGAIN, 1)[0]
+
+
+@pytest.mark.parametrize("cause", ["exception", "gpu_oom", "jvm_heap", "writer"])
+def test_an_error_of_the_method_is_never_run_again(tmp_path, cause):
+    path = record(tmp_path / "v" / "run.json", cause=cause)
+    assert not ladder.unit_decision([path], ladder.AGAIN, 1, time_limit="9-0:0:0")[0]
+    assert not ladder.unit_decision([path], ladder.CLIMB, 2)[0]
+
+
+@pytest.mark.parametrize(
+    "rec, wants",
+    [
+        ({"cause": "timeout"}, ("again",)),
+        ({"cause": "timeout", "retry": 1}, ()),
+        ({"cause": "killed", "scheduler": {"state": "FAILED"}}, ("again",)),
+        ({"cause": "killed", "retry": 1, "scheduler": {"state": "FAILED"}}, ()),
+        ({"cause": "exception"}, ()),
+        ({"cause": "jvm_heap"}, ()),
+    ],
+)
+def test_the_watchers_filter_takes_what_the_ladder_retries(rec, wants):
+    from benchmarks.regbench import failure_log
+
+    assert failure_log.chain_wants([{"ok": False, "attempt": 1, **rec}]) == wants

@@ -45,7 +45,7 @@ def test_every_cause_has_exactly_one_owner():
         "unreadable_record",
         *losses.CAUSES,
     }
-    assert "oom" in _literal_causes()  # the scan reads something
+    assert "benchmark_oom" in _literal_causes()  # the scan reads something
     # the gate's causes are gone with the gate: reported, never a gate
     assert "gate_blocked" not in fl.WHOSE and "dropped_row" not in fl.WHOSE
     assert "gate" not in fl.STAGES
@@ -66,9 +66,10 @@ def test_the_two_tables_of_what_is_not_the_methods_agree():
         assert (fl.classify(cause) != fl.METHOD) == (
             cause in resources.NOT_THE_METHOD
         ), cause
-    # resources.py is frozen: the causes Task 28 added are losses.NOT_THE_METHOD_EXTRA
+    # resources.py is frozen: the causes Task 28 added are losses.NOT_THE_METHOD_EXTRA;
+    # `not_run` (nobody ran it) joined on 2026-10-21
     assert tuple(sorted(score.NOT_THE_METHOD)) == tuple(
-        sorted({*resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA})
+        sorted({*resources.NOT_THE_METHOD, *losses.NOT_THE_METHOD_EXTRA, "not_run"})
     )
     for cause in losses.NOT_THE_METHOD_EXTRA:
         assert fl.classify(cause) != fl.METHOD, cause
@@ -111,6 +112,7 @@ EXPECTED = {
     "exception": ("register", "method", "failed"),
     "killed": ("register", "method", "failed"),
     "oom": ("register", "method", "failed"),
+    "jvm_heap": ("register", "method", "failed"),
     "timeout": ("register", "method", "failed"),
     "gpu_oom": ("register", "method", "failed"),
     "writer": ("writer", "method", "failed"),
@@ -428,7 +430,10 @@ def test_the_scorer_logs_failures_of_every_kind_and_names_whose(tmp_path, monkey
     assert "/out/logs/rb-task-9.log" in text
     assert "unit(s) ended for a reason that is NOT the method's" in text
     # and the lost round is out of `good`'s summary, named
-    assert [e["case_id"] for e in res["excluded_rounds"]] == ["P2_r1"]
+    excluded = res["excluded_rounds"]
+    assert [e["case_id"] for e in excluded if e["method"] == "good"] == ["P2_r1"]
+    # rounds nobody ran are named too, never imputed (ruling 2026-10-21)
+    assert {e["cause"] for e in excluded if e["method"] != "good"} <= {"not_run"}
 
 
 def test_an_earlier_attempt_carries_its_error_and_log_into_the_next(
@@ -521,9 +526,10 @@ SITUATIONS = {
 def test_the_watcher_takes_a_unit_whenever_one_of_its_records_climbs():
     """F3: a unit goes up as a whole when ANY of its records ran out of memory
     (ladder.unit_decision), whatever cause the first failed record has. F4: a unit no
-    later task can run (killed with an end state, lost twice, a cause of the method's
-    own) is taken by no step: a task for it would only exit at once, after days of
-    queueing for a large slot."""
+    later task can run (lost twice, a cause of the method's own) is taken by no step: a
+    task for it would only exit at once, after days of queueing for a large slot. Since
+    2026-10-21 a timeout, and a kill whose end state names no cause (a signal), are run
+    once more at the same rung (`again`), unless the unit also ran out of memory."""
     wants = {k: fl.chain_wants(v) for k, v in SITUATIONS.items()}
     assert wants["writer, then writer_oom"] == ("climb",)
     assert wants["exception, then oom"] == ("climb",)
@@ -532,9 +538,11 @@ def test_the_watcher_takes_a_unit_whenever_one_of_its_records_climbs():
         assert wants[memory] == ("climb",)
     assert wants["killed, no end state yet"] == ("again", "climb")
     assert wants["lost once"] == ("again", "climb")
+    assert wants["killed, ended COMPLETED"] == ("again",)
+    assert wants["timeout"] == ("again",)
     for final in (
-        "ok", "killed, ended COMPLETED", "lost twice", "exception", "writer",
-        "timeout", "gpu_oom", "stage oom retried where it ran", "ok, then lost twice",
+        "ok", "lost twice", "exception", "writer",
+        "gpu_oom", "stage oom retried where it ran", "ok, then lost twice",
     ):  # fmt: skip
         assert wants[final] == (), final
     # no record of this submission: the task never started; every step may need it

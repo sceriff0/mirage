@@ -92,6 +92,12 @@ CAUSES = {
         "the process died and the scheduler's accounting names no cause",
     ),
     "oom": (METHOD, "run", "out of memory"),
+    "jvm_heap": (
+        METHOD,
+        "run",
+        "VALIS's JVM ran out of its fixed 10 GB heap (never a climb: the heap does not "
+        "grow with the rung)",
+    ),
     "gpu_oom": (METHOD, "run", "out of GPU memory"),
     "timeout": (METHOD, "run", "out of time"),
     "writer": (METHOD, "run", "the method's writer failed"),

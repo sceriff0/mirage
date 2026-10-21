@@ -61,6 +61,7 @@ WHOSE = {
     "exception": METHOD,
     "killed": METHOD,  # the process died and nobody said why; `settle` may rename it
     "oom": METHOD,
+    "jvm_heap": METHOD,
     "gpu_oom": METHOD,
     "timeout": METHOD,
     "writer": METHOD,
@@ -778,9 +779,13 @@ def chain_wants(records):
     * a memory cause (``resources.MEMORY_CAUSES``): ``climb``; never ``again``, which
       retries an attempt lost to the scheduler and not one that ran out of memory
     * ``infrastructure`` not yet tried again (``retry`` 0): both; tried again: neither
+    * ``timeout`` not yet tried again: ``again`` (with more time, ruling 2026-10-21),
+      unless a record of the unit ran out of memory (it goes up whole instead)
     * ``killed`` with no end state recorded: both (the accounting may still say memory,
       a lost node or nothing); with one (``scheduler.state``, written when it was
-      settled): neither, the process died on its own and that is final
+      settled) that names no cause, not yet tried again: ``again`` (a process killed by
+      a signal, ruling 2026-10-21; not when the unit goes up for memory); tried again:
+      neither
     * a record already retried where it failed (``no_rerun``) and any other cause:
       neither
     """
@@ -790,18 +795,27 @@ def chain_wants(records):
     if not records:
         return (ladder.AGAIN, ladder.CLIMB)
     wants = set()
+    retry_here = memory = False  # a timeout or a signal: again, unless memory climbs it
     for r in records:
         if r.get("ok") or r.get("no_rerun"):
             continue
         cause = r.get("cause") or "exception"
         if cause in resources.MEMORY_CAUSES:
             wants.add(ladder.CLIMB)
+            memory = True
         elif cause == ladder.INFRASTRUCTURE:
             if int(r.get("retry") or 0) < ladder.RETRIES_PER_RUNG:
                 wants.update((ladder.AGAIN, ladder.CLIMB))
+        elif cause == ladder.TIMEOUT:
+            if int(r.get("retry") or 0) < ladder.RETRIES_PER_RUNG:
+                retry_here = True
         elif cause == ladder.KILLED:
             if not ladder.ended((r.get("scheduler") or {}).get("state")):
                 wants.update((ladder.AGAIN, ladder.CLIMB))
+            elif int(r.get("retry") or 0) < ladder.RETRIES_PER_RUNG:
+                retry_here = True
+    if retry_here and not memory:  # as ladder.unit_decision: memory goes up instead
+        wants.add(ladder.AGAIN)
     return tuple(k for k in (ladder.AGAIN, ladder.CLIMB) if k in wants)
 
 

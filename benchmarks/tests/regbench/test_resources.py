@@ -374,3 +374,146 @@ def test_the_sampler_alone_is_named_as_what_it_is():
     mon.stop()
     assert got["cpu_instrument"] == "polled (may undercount)"
     assert got["cpu_s"] > 0.5  # a child that lives for seconds is seen
+
+
+# ── the fixed JVM heap (ruling 2026-10-21) ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text, heap",
+    [
+        ("java.lang.OutOfMemoryError: Java heap space", True),
+        ("java.lang.OutOfMemoryError: GC overhead limit exceeded", True),
+        # not bounded by -Xmx: host memory, still oom
+        ("java.lang.OutOfMemoryError: unable to create native thread", False),
+        ("java.lang.OutOfMemoryError: Metaspace", False),
+        ("MemoryError: Unable to allocate 4.0 GiB", False),
+    ],
+)
+def test_only_heap_bound_java_errors_are_jvm_heap(text, heap):
+    assert resources.names_jvm_heap(text) is heap
+    # classify_text is unchanged for every method: a Java error is still memory
+    assert resources.classify_text(text) == "oom"
+
+
+def test_a_jvm_heap_exception_that_refuses_attributes_is_wrapped():
+    """A JPype Java exception refuses new attributes: it comes back wrapped."""
+    from benchmarks.regbench.methods import _valis_points as vp
+
+    class JavaLike(Exception):
+        def __setattr__(self, name, value):
+            if not name.startswith("_"):
+                raise AttributeError(name)
+            super().__setattr__(name, value)
+
+    java = JavaLike("java.lang.OutOfMemoryError: Java heap space")
+    got = vp.mark_jvm_heap(java)
+    assert got is not java and got.__cause__ is java
+    assert resources.classify_error(got) == "jvm_heap"
+    plain = RuntimeError("register() returned None")
+    assert vp.mark_jvm_heap(plain, "Java heap space") is plain
+    assert resources.classify_error(plain) == "jvm_heap"
+    other = RuntimeError("no matches")
+    assert vp.mark_jvm_heap(other) is other
+    assert resources.classify_error(other) == "exception"
+
+
+def test_a_writer_jvm_heap_error_climbs_only_without_a_fixed_heap():
+    from benchmarks.regbench import methods
+
+    heap = "java.lang.OutOfMemoryError: Java heap space"
+    # VALIS's fixed 10 GB: a higher rung would not grow the heap, final
+    assert methods.writer_cause(heap, fixed_heap=True) == "writer"
+    # a JVM with no -Xmx (ASHLAR's) sizes its heap from the job: it climbs
+    assert methods.writer_cause(heap) == "writer_oom"
+    assert methods.writer_cause("MemoryError: Unable to allocate") == "writer_oom"
+    from benchmarks.regbench.methods import ashlar, valis, valis_mirage
+
+    assert valis.FIXED_JVM_HEAP and valis_mirage.FIXED_JVM_HEAP
+    assert not getattr(ashlar, "FIXED_JVM_HEAP", False)
+
+
+# ── the image a run ran in ────────────────────────────────────────────────────
+
+
+def test_the_image_digest_is_the_launchers(monkeypatch):
+    """`regbench_exec` hands the image's sha256 in (REGBENCH_IMAGE_DIGEST); outside an
+    image it is blank, never invented."""
+    monkeypatch.setenv("REGBENCH_IMAGE_DIGEST", "sha256:" + "a" * 64)
+    monkeypatch.setenv("REGBENCH_IMAGE_FILE", "mirage-stare-regbench_1.0.0.sif")
+    info = resources.host_info()
+    assert info["image_digest"] == "sha256:" + "a" * 64
+    assert info["image_file"] == "mirage-stare-regbench_1.0.0.sif"
+    monkeypatch.delenv("REGBENCH_IMAGE_DIGEST")
+    monkeypatch.delenv("REGBENCH_IMAGE_FILE")
+    info = resources.host_info()
+    assert info["image_digest"] == "" and info["image_file"] == ""
+
+
+def _env_sh():
+    from pathlib import Path
+
+    return Path(resources.__file__).parent / "slurm" / "env.sh"
+
+
+def test_the_shell_helper_hashes_an_image_once(tmp_path):
+    """`_regbench_image_digest` prints sha256:<hex> of the file and keeps it beside the
+    image (`<sif>.sha256`), so later jobs read it instead of hashing GBs again; a file
+    newer than its record is hashed again."""
+    import hashlib
+
+    sif = tmp_path / "x.sif"
+    sif.write_bytes(b"an image")
+    want = "sha256:" + hashlib.sha256(b"an image").hexdigest()
+    script = f'. "{_env_sh()}" >/dev/null 2>&1; _regbench_image_digest "{sif}"'
+
+    def digest():
+        return subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    assert digest() == want
+    assert (tmp_path / "x.sif.sha256").read_text().strip() == want
+    (tmp_path / "x.sif.sha256").write_text("sha256:cached\n")
+    os.utime(tmp_path / "x.sif.sha256", (time.time() + 60, time.time() + 60))
+    assert digest() == "sha256:cached"  # the record is read, not the image
+    sif.write_bytes(b"another image")
+    os.utime(sif, (time.time() + 120, time.time() + 120))
+    assert digest() == "sha256:" + hashlib.sha256(b"another image").hexdigest()
+    # an image that is not there: blank, never invented
+    gone = f'. "{_env_sh()}" >/dev/null 2>&1; _regbench_image_digest "{tmp_path}/no.sif"'
+    out = subprocess.run(["bash", "-c", gone], capture_output=True, text=True)
+    assert out.stdout.strip() == ""
+
+
+# ── transient failures of the node or storage (ruling 2026-10-21) ─────────────
+@pytest.mark.parametrize(
+    "exc, cause",
+    [
+        (OSError(116, "Stale file handle"), "infrastructure"),
+        (OSError(5, "Input/output error"), "infrastructure"),
+        (OSError(110, "Connection timed out"), "infrastructure"),
+        (TimeoutError("the registration did not finish"), "timeout"),
+        (OSError(28, "No space left on device"), "exception"),
+        (RuntimeError("device=cuda:0 was asked for and torch sees no CUDA device"),
+         "exception"),
+        (subprocess.TimeoutExpired("x", 1), "timeout"),
+        (RuntimeError("CUDA error: uncorrectable ECC error encountered"), "infrastructure"),
+        (RuntimeError("CUBLAS_STATUS_ALLOC_FAILED"), "gpu_oom"),
+        (RuntimeError("vips: out of memory --- size == 4096MB"), "oom"),
+        (OSError(2, "No such file or directory"), "exception"),
+        (ValueError("no matches"), "exception"),
+    ],
+)
+def test_a_failure_of_the_node_is_infrastructure(exc, cause):
+    assert resources.classify_error(exc) == cause
+
+
+def test_a_transient_failure_is_found_through_the_chain():
+    try:
+        try:
+            raise OSError(116, "Stale file handle")
+        except OSError as inner:
+            raise RuntimeError("reading the slide failed") from inner
+    except RuntimeError as outer:
+        assert resources.classify_error(outer) == "infrastructure"

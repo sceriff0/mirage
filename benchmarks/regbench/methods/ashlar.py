@@ -946,8 +946,15 @@ def register_group(cases, work, opts):
             )
         except Exception as exc:
             # a memory error keeps its cause (the ladder reads it); anything else, the
-            # clean tiles' RuntimeError first of all, fails the patient with its message
-            if resources.classify_error(exc) != "exception":
+            # clean tiles' RuntimeError first of all, fails the patient with its message.
+            # After the last aligner the command is in ASHLAR's writer (after_aligner):
+            # its failure is `writer`, or `writer_oom` for memory, as every method's
+            # writer (ruling 2026-10-21; it was `exception` / `oom`)
+            writing = "write_t0" in seen
+            cause = resources.classify_error(exc)
+            if writing and cause == "oom":
+                exc.regbench_cause = "writer_oom"
+            if cause != "exception":
                 raise
             ready = failed(
                 _error(exc),
@@ -955,7 +962,9 @@ def register_group(cases, work, opts):
                 # pixel-identical overlaps exist only on noise-free tiles: with noise
                 # on the reference the same raise is ASHLAR's own (`exception`)
                 **(
-                    {"cause": "identical_overlap"}
+                    {"cause": "writer"}
+                    if writing
+                    else {"cause": "identical_overlap"}
                     if _identical_overlap(exc) and frac == 0
                     else {}
                 ),

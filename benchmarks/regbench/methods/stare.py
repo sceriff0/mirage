@@ -1258,8 +1258,10 @@ def write_native(state, case_id, dest_dir):
     its allocation plus this process's own memory was more than the job had is the
     job's limit, not STITCH's (``benchmark_oom``, and the job goes up a rung); else it
     is run again as the pipeline retries it, and a STITCH that fails after its attempts
-    fails the row as the writer's (``writer`` / ``writer_oom``) with no rung running
-    it again."""
+    fails the row as the writer's: ``writer`` with no rung running it again, or
+    ``writer_oom``, which goes up a rung (ruling 2026-10-21: every attempt ran in this
+    job's cgroup, so the pipeline's per-attempt memory never grew what STITCH had; only
+    the next rung does)."""
     from stare.slide_io import open_lazy
 
     out = Path(dest_dir) / "registered.ome.tif"
@@ -1304,8 +1306,10 @@ def write_native(state, case_id, dest_dir):
             f"({rec.get('cause')}): {str(rec['error'])[-600:]}",
             "writer_oom" if rec.get("cause") == "oom" else "writer",
         )
-        # retried here as the pipeline retries it: no rung runs the round again
-        err.regbench_no_rerun = jobs
+        # retried here as the pipeline retries it: no rung runs the round again, except
+        # for memory: the job's own limit is the rung's, and the next rung has more
+        # (writer_oom climbs like every method's writer, ruling 2026-10-21)
+        err.regbench_no_rerun = jobs and rec.get("cause") != "oom"
         err.failed_attempts = failed
         raise err
     arr, dtype, close = open_lazy(out)

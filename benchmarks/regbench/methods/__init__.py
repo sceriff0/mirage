@@ -178,8 +178,14 @@ def writer_holding():
     return {"ok": False, "error": WRITER_KILLED, "cause": "killed", "phase": "writer"}
 
 
-def writer_cause(error):
-    """``writer_oom`` when a writer's error text names memory, else ``writer``."""
+def writer_cause(error, fixed_heap=False):
+    """``writer_oom`` when a writer's error text names host memory, else ``writer``. A
+    JVM heap error (``resources.JVM_HEAP_ERRORS``) is ``writer`` only for a method whose
+    JVM heap is FIXED (``FIXED_JVM_HEAP``: VALIS's 10 GB), where a higher rung would not
+    grow it; a JVM with no -Xmx (ASHLAR's) sizes its heap from the job's memory, so there
+    it is ``writer_oom`` and climbs."""
+    if fixed_heap and resources.names_jvm_heap(error):
+        return "writer"
     return "writer_oom" if resources.classify_text(error) == "oom" else "writer"
 
 
@@ -993,7 +999,8 @@ def _run(
                         case,
                         variant,
                         f"the method's own writer failed: {native['error']}",
-                        writer_cause(native["error"]),
+                        writer_cause(native["error"],
+                                     getattr(mod, "FIXED_JVM_HEAP", False)),
                         cost,
                         info=info,
                     )

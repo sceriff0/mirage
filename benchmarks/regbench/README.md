@@ -526,6 +526,7 @@ failed row; `realcheck.json` of an earlier attempt is removed at the same moment
 |---|---|---|---|
 | `exception` | the method raised, or reported a failed round; or its own point mapping raised, or returned something that is not one X, Y pair per point | no | the method's |
 | `oom` | the method ran out of host memory while registering or inside its own point mapping (its own error text, `resources.MEMORY_ERRORS`; the cgroup counter; the scheduler's `OUT_OF_MEMORY`; the task's script noting that Python ended by signal 9) | yes | the method's |
+| `jvm_heap` | VALIS's JVM ran out of its heap (`resources.JVM_HEAP_ERRORS`): the heap is VALIS's own fixed 10 GB at every rung (user ruling 2026-10-21), so a higher rung cannot help | no | the method's |
 | `writer_oom` | the method's own writer ran out of memory: no image | yes | the method's |
 | `writer` | the method's own writer failed for another reason: no image | no | the method's |
 | `gpu_oom`, `timeout` | as named | no | the method's |
@@ -1948,6 +1949,7 @@ Every cause, once (`losses.CAUSES`; a test walks it against `failure_log.WHOSE`)
 | `exception` | method | run | the method raised |
 | `killed` | method | run | the process died and the scheduler's accounting names no cause |
 | `oom` | method | run | out of memory |
+| `jvm_heap` | method | run | VALIS's JVM ran out of its fixed 10 GB heap (never a climb: the heap does not grow with the rung) |
 | `gpu_oom` | method | run | out of GPU memory |
 | `timeout` | method | run | out of time |
 | `writer` | method | run | the method's writer failed |
@@ -4125,18 +4127,17 @@ failure of the benchmark's own capture (the crop probe, the field load) is `benc
 (`benchmark_oom`), not the method's `exception`; the same holds for `valis120`'s capture.
 
 - `valis120`, `valis120_hires`: the JVM is started by the adapter through VALIS's own
-  `slide_io.init_jvm(mem_gb=...)` before `Valis(...)` is built, with
-  `min(32 + 16 x attempt, GiB - 4)`, attempt being the pipeline's attempt for that
-  memory (REGISTER asks `64 GB x 2^(attempt-1)`: attempt 1 below 64 GB): 12, 48, 80, 96,
-  96 GiB at 16, 64, 256, 512 and 700 GB, the pipeline module's formula, because VALIS's `registration.init_jvm` passes the literal 10 on
-  whatever it is given. This is the ONE thing besides the reference slide that the
-  benchmark sets for those rows, and it is not a registration parameter. Off the ladder
-  (no memory request known) nothing is started and VALIS's 10 GB stands. What each run
+  `slide_io.init_jvm(mem_gb=10)` before `Valis(...)` is built: VALIS's own shipped heap,
+  at every rung (user ruling 2026-10-21; it was `min(32 + 16 x attempt, GiB - 4)`, the
+  pipeline module's former formula). It is started there only so that the heap is known
+  and recorded; it is the heap VALIS's `registration.init_jvm` would give anyway (it passes
+  the literal 10 on whatever it is given), so it is no departure. A Java heap error is
+  `jvm_heap`, final: a higher rung would not change the heap. What each run
   really had is in the tables as the JVM reported it: `jvm_max_heap_gb` beside
   `jvm_heap_asked_gb` in `resources.csv` and `summary_resources.csv`, and one line above
   the resources table of `summary.md` per row of a JVM method.
-- `valis_mirage`: the pipeline's call is run as it is, with `jvm_heap_gb` from the same
-  formula. Whether that value reaches the JVM is recorded, not assumed
+- `valis_mirage`: the pipeline's call is run as it is, with `jvm_heap_gb` = 10, as
+  `modules/local/register.nf` now passes it (ruling 2026-10-21). Whether that value reaches the JVM is recorded, not assumed
   (`info.jvm_max_heap_gb`, column `jvm_max_heap_gb`; "Not verified"): where the column
   reads 10 while `jvm_heap_asked_gb` reads more, the request did not arrive, and the
   row ran with VALIS's own 10 GB.

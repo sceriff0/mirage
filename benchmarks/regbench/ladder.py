@@ -11,8 +11,15 @@ decision is here, in Python, so that it can be tested without a scheduler.
 
 ``first``  (rung 1) / ``climb`` (rungs 2-5)   the attempt at that rung
 ``again``                                      the SAME rung once more, and only when the
-                                               attempt before it was lost to the
-                                               scheduler, not to the method
+                                               attempt before it ended in a way a second
+                                               try can change (:data:`AGAIN_CAUSES`):
+                                               lost to the scheduler, out of time (the
+                                               ``again`` task has TIME_FACTOR x the time),
+                                               or a process that died with no error of
+                                               its own (a signal: segfault, abort, bus
+                                               error). Ruling 2026-10-21: every method
+                                               gets this one retry; an error the method
+                                               raised (exit 1) is final
 
 **Evidence** is the driver's own record, ``run.json: cause``, of THIS submission
 (``run.json: submissions`` holds the launcher's id; a record another submission left is
@@ -61,8 +68,15 @@ no record of this submission   the task that should have written it never starte
              both is written down as ``infrastructure`` by the next ``climb`` task
              (:func:`mark_lost`), so that it is never read as "not run" or as failed.
              A record another submission left there is set aside, not destroyed.
-anything else (``ok``, ``exception``, ``timeout``, ``gpu_oom``, ``writer``): the unit is
-             never re-run.
+``timeout``  the ``again`` task of the same rung runs the unit once more, with
+             TIME_FACTOR x the time (capped at the site's longest job). Only when that
+             task has more time than the attempt that ran out: at the cap it would be
+             the same attempt again (ruling 2026-10-21).
+``killed`` settled with an end state that names no cause (``FAILED``: the process died
+             by a signal, with no error of its own): the ``again`` task runs it once
+             more (ruling 2026-10-21; before, final).
+anything else (``ok``, ``exception``, ``gpu_oom``, ``jvm_heap``, ``writer``): the unit is
+             never re-run: the method's own error would repeat.
 ``no_rerun: true``  whatever its cause, the record is of a failure that was already
              retried where it happened: a stage job of a registration that runs as
              several jobs (``regbench.stages``). No rung runs the unit again.
@@ -76,7 +90,9 @@ when the earlier one ended for memory or left no record of this submission
 ``not_checked``.
 
 Frozen: the rungs, the CPUs, the one retry per rung and the site's longest job. Changing
-one after a cohort run is a post hoc change.
+one after a cohort run is a post hoc change. Ruling 2026-10-21 (before the rerun):
+the one retry per rung now covers a timeout (with TIME_FACTOR x the time) and a process
+killed by a signal, for every method, as the pipeline retries signal exits.
 """
 
 from __future__ import annotations
@@ -91,9 +107,11 @@ MAX_RUNG_GB = RUNGS_GB[-1]  # the site's largest node (user ruling 2026-10-16)
 SELFCHECK_RUNGS_GB = (64, 256, 512)
 CPUS = 4  # every method, every rung
 MAX_HOURS = 168  # the site's longest job: 7 days
-RETRIES_PER_RUNG = 1  # a rung is tried again once when the scheduler lost the attempt
+RETRIES_PER_RUNG = 1  # a rung is tried again once (AGAIN_CAUSES)
+TIME_FACTOR = 2  # the `again` task's time: this x the rung's (capped at MAX_HOURS)
 
 OOM = "oom"
+TIMEOUT = "timeout"
 KILLED = "killed"
 INFRASTRUCTURE = "infrastructure"
 FIRST, CLIMB, AGAIN = "first", "climb", "again"
@@ -102,7 +120,7 @@ TASKS = (FIRST, CLIMB, AGAIN)
 # SUBMITS a step for it: a filter, never the decision (the task decides, unit_decision).
 # A unit whose last cause is in neither list is not put in the queue again; a unit with
 # no end line at all (its task died or never started) is taken by every step.
-AGAIN_CAUSES = (KILLED, INFRASTRUCTURE)
+AGAIN_CAUSES = (KILLED, INFRASTRUCTURE, TIMEOUT)
 CLIMB_CAUSES = (OOM, "writer_oom", "benchmark_oom", KILLED, INFRASTRUCTURE)
 # sacct's State, matched by its first word ("CANCELLED by 123", "OUT_OF_MEMORY+" are
 # seen: the manual says a state too long for its column is followed by "+"). The names
@@ -145,7 +163,7 @@ def scheduler_cause(state):
     if state.startswith(STATE_OOM):
         return OOM
     if state.startswith(STATE_TIMEOUT):
-        return "timeout"
+        return TIMEOUT
     if state.startswith(STATES_INFRASTRUCTURE):
         return INFRASTRUCTURE
     return None
@@ -447,8 +465,13 @@ def unit_decision(
     waited=False,
     mem_gb=None,
     late=True,
+    time_limit=None,
 ):
     """``(run the unit now?, why, lost?)`` for one array task of the chain.
+
+    ``time_limit``: this task's own time limit (``[D-]HH:MM:SS``). An ``again`` task
+    runs a unit that ran out of time only when it has more time than the attempt that
+    did (the record's ``time_limit``); unknown on either side, it runs it.
 
     ``late``: a ``climb`` task also runs a unit whose attempt at the rung below the
     accounting named as lost only after that rung's retry had decided (module
@@ -478,18 +501,45 @@ def unit_decision(
     memory = [r for r in again if r.get("cause") in resources.MEMORY_CAUSES]
     here = [r for r in recs if int(r.get("attempt") or 1) >= attempt]
     if task == AGAIN:
-        lost = [
+        this = [
             r
             for r in again
-            if r.get("cause") == INFRASTRUCTURE
-            and int(r.get("attempt") or 1) == attempt
+            if int(r.get("attempt") or 1) == attempt
             and int(r.get("retry") or 0) < RETRIES_PER_RUNG
         ]
+        lost = [r for r in this if r.get("cause") == INFRASTRUCTURE]
         if lost:
             return (
                 True,
                 f"{len(lost)} result(s) of this rung were lost to the scheduler "
                 f"({lost[0].get('cause_from') or INFRASTRUCTURE}): the same rung again",
+                False,
+            )
+        # a unit that also ran out of memory goes up (CLIMB), where it runs again whole:
+        # the same rung again would only run out of memory once more
+        late_time = [
+            r
+            for r in this
+            if not memory
+            and r.get("cause") == TIMEOUT
+            and _more_time(time_limit, r.get("time_limit"))
+        ]
+        if late_time:
+            return (
+                True,
+                f"{len(late_time)} result(s) of this rung ran out of time "
+                f"({late_time[0].get('time_limit') or '?'}): the same rung again with "
+                f"{time_limit or 'more time'}",
+                False,
+            )
+        crashed = [r for r in this if not memory and _died_by_signal(r)]
+        if crashed:
+            return (
+                True,
+                f"{len(crashed)} result(s) of this rung were killed with no error of "
+                "their own (the scheduler says "
+                f"{(crashed[0].get('scheduler') or {}).get('state')}): the same rung "
+                "again",
                 False,
             )
         if not recs and attempt == 1:
@@ -545,6 +595,20 @@ def unit_decision(
             False,
         )
     return False, "every result is ok", False
+
+
+def _more_time(task_limit, record_limit):
+    """Has this task more time than the attempt that ran out of it? True when either
+    is unknown (the launcher gives every ``again`` task TIME_FACTOR x the time)."""
+    mine, theirs = _seconds(task_limit), _seconds(record_limit)
+    return not (mine and theirs) or mine > theirs
+
+
+def _died_by_signal(rec):
+    """A ``killed`` record settled with an end state that names no cause: the process
+    died with no error of its own (a signal), which a second try can change."""
+    state = (rec.get("scheduler") or {}).get("state")
+    return rec.get("cause") == KILLED and ended(state) and not scheduler_cause(state)
 
 
 def unit_retry(

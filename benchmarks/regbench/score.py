@@ -302,6 +302,7 @@ CAUSES = (
     "exception",
     "killed",
     "oom",
+    "jvm_heap",
     "timeout",
     "gpu_oom",
     "writer",
@@ -328,6 +329,10 @@ NOT_THE_METHOD = (
     "benchmark",
     "identical_overlap",
     *losses.NOT_THE_METHOD_EXTRA,
+    # nobody ran it (losses.CAUSES: blame infrastructure): an unregistered copy scored
+    # as a failure would be imputed against a method that never had the attempt
+    # (ruling 2026-10-21)
+    "not_run",
 )
 # What becomes of a round lost for a cause in NOT_THE_METHOD. "exclude": it is left out
 # of that method's summaries and, being unregistered, of the common block for every

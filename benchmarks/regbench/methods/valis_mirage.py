@@ -82,10 +82,11 @@ SimpleElastix) is kept as shipped, with ``problem``.
 ``n_cpus`` is the allocation (``opts["workers"]``); the pipeline's ``bound_cpu_count``
 rebinds ``multiprocessing.cpu_count`` to it, so VALIS 1.0.0's pools, each sized
 ``cpu_count() - 1`` (``serial_rigid.py:578, 643`` and four other places in the 1.0.0
-sdist), run on one thread fewer. ``jvm_heap_gb`` follows the module's own formula,
-``min(32 + 16 * attempt, memory in GiB - 4)``, with the attempt the pipeline would be on
-at the rung's memory (``_valis_points.pipeline_attempt``: 64 GB doubling per attempt);
-outside a scheduler it is left to the pipeline's estimate. As read in the VALIS 1.0.0
+sdist), run on one thread fewer. ``jvm_heap_gb`` is VALIS's own 10 GiB at every rung
+(``_valis_points.VALIS_JVM_HEAP_GB``, user ruling 2026-10-21), as the pipeline's
+``modules/local/register.nf`` now gives it too (it was ``min(32 + 16 * attempt, memory
+in GiB - 4)``): every VALIS runs with the heap VALIS ships, so a Java heap error is
+``jvm_heap``, final, never a climb. As read in the VALIS 1.0.0
 sdist, ``registration.init_jvm(jar=None, mem_gb=10)`` passes the literal 10 on
 (``registration.py:115-118`` `[PARTIAL: those lines and slide_io.py:183-211]`), so the
 value the pipeline hands it may never reach the JVM; ``info["jvm_max_heap_gb"]`` is the
@@ -158,6 +159,7 @@ VARIANTS = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
 RIGID, NONRIGID, FINAL = VARIANTS
 SELFCHECK_SUBPROCESS = True  # valis_registration kills the JVM, which cannot restart
 VERSION = "1.0.0"
+FIXED_JVM_HEAP = True  # 10 GB at every rung: a heap error is final (2026-10-21)
 # the `--opt` keys this adapter reads (methods.known_options): any other is refused
 OPTIONS = (
     "points",
@@ -263,28 +265,31 @@ def pipeline():
 
 
 def jvm_heap_gb(opts, host=None):
-    """``modules/local/register.nf``'s formula at the attempt the pipeline would be on
-    with the rung's memory: 12 GiB at 16 GB, 48 at 64 GB, 80 at 256 GB, 96 at 512 GB,
-    96 at 700 GB. None (the pipeline's own estimate from the input size) when the memory
-    request is unknown."""
+    """VALIS's own 10 GiB at every rung (``_valis_points.jvm_heap_gb``; user ruling
+    2026-10-21), not ``modules/local/register.nf``'s scaled formula."""
     return vp.jvm_heap_gb(opts, host)
 
 
 MICRO_OOM = (
     "the micro pass ran out of memory and the pipeline carried on without it "
     "(bin/register.py catches the error and writes the non-rigid result): this row "
-    "would be the non-rigid result under the full method's name, so it is failed and "
-    "the patient goes up a rung"
+    "would be the non-rigid result under the full method's name, so it is failed (a "
+    "host memory failure sends the patient up a rung; a JVM heap failure is final, "
+    "the heap being VALIS's fixed 10 GB)"
 )
 
 
 def micro_ran_out_of_memory(state, caught=()):
     """Did ``register_micro`` end for memory? From the exception the pipeline caught
-    (``state["micro_error"]``) and from what VALIS printed while the micro pass ran."""
+    (``state["micro_error"]``) and from what VALIS printed while the micro pass ran.
+    The cause, ``jvm_heap`` (the fixed JVM heap: final) or ``oom`` (host memory: a
+    climb), or None."""
     if state.get("micro_ran"):
-        return False
+        return None
     texts = [state.get("micro_error", ""), *caught]
-    return any(resources.classify_text(t) == "oom" for t in texts)
+    if resources.names_jvm_heap(*texts):
+        return "jvm_heap"
+    return "oom" if any(resources.classify_text(t) == "oom" for t in texts) else None
 
 
 def _error(exc):
@@ -571,8 +576,10 @@ def register_group(cases, work, opts):
         except Exception as exc:
             said = vp.reported([*state["caught"], *state["printed"]])
             if said and resources.classify_error(exc) == "exception":
-                raise RuntimeError(f"{_error(exc)} VALIS reported: {said}") from exc
-            raise
+                raise vp.mark_jvm_heap(
+                    RuntimeError(f"{_error(exc)} VALIS reported: {said}")
+                ) from exc
+            raise vp.mark_jvm_heap(exc, said)
     # Everything below is the benchmark's own work (the point path, moving files): the
     # clock stays paused until every result is ready, so each carries the call's cost.
     mon.pause()
@@ -599,8 +606,10 @@ def _not_written(info, state, name, written):
     failed = state.get("write_errors", {}).get(name)
     if written is None and failed:
         texts = [failed["error"], *failed.get("printed", ())]
-        memory = failed["cause"] == "oom" or any(
-            resources.classify_text(t) == "oom" for t in texts
+        # the fixed JVM heap is not host memory: the writer's failure, final
+        memory = not resources.names_jvm_heap(*texts) and (
+            failed["cause"] == "oom"
+            or any(resources.classify_text(t) == "oom" for t in texts)
         )
         said = "; ".join(failed.get("printed", ()))
         error = (
@@ -635,9 +644,11 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
     points = str(opts.get("points", "image"))
     if rc:
         said = vp.reported([*state.get("caught", ()), *state.get("printed", ())])
-        raise RuntimeError(
-            f"valis_registration returned {rc}: no slide was warped (its log is on "
-            "stdout)" + (f". VALIS reported: {said}" if said else "")
+        raise vp.mark_jvm_heap(
+            RuntimeError(
+                f"valis_registration returned {rc}: no slide was warped (its log is on "
+                "stdout)" + (f". VALIS reported: {said}" if said else "")
+            )
         )
     micro_oom = micro_ran_out_of_memory(state, state.get("micro_caught", ()))
 
@@ -757,9 +768,10 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                 continue
             if variant == FINAL and micro_oom:
                 # not the full method: failed with a memory cause, so that it climbs
-                # like any other method's memory failure (module docstring)
+                # like any other method's memory failure (module docstring); a JVM
+                # heap failure is final (jvm_heap: the heap is fixed)
                 why = f"{MICRO_OOM}. {state.get('micro_error', '')}".strip()
-                yield cid, variant, None, {**info, "error": why, "cause": "oom"}
+                yield cid, variant, None, {**info, "error": why, "cause": micro_oom}
                 continue
             # M is not touched after register() returns, and without a captured
             # pre-micro stage nothing ran after the first non-rigid pass

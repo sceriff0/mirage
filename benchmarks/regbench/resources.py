@@ -385,6 +385,10 @@ def host_info():
         "retry": retry,
         # the submission this launch belongs to (the cohort launcher's id); "" outside
         "submission": os.environ.get("REGBENCH_SUBMISSION") or "",
+        # the image the run ran in: the sha256 of its .sif and its file name, handed in
+        # by `regbench_exec` (slurm/env.sh); blank outside an image, never invented
+        "image_digest": os.environ.get("REGBENCH_IMAGE_DIGEST") or "",
+        "image_file": os.environ.get("REGBENCH_IMAGE_FILE") or "",
         "time_limit": os.environ.get("REGBENCH_TIME_LIMIT") or "",
         # the scheduler's log of this task (set by the batch scripts): where a human
         # reads what the failure log's row is about; "" outside the launcher
@@ -416,6 +420,10 @@ def host_info():
 #   "Cannot allocate memory"  strerror(ENOMEM): a failed fork or mmap (`errno(3)`
 #                           `[MEMORY]`)
 #   "std::bad_alloc"        a C++ allocation failure surfacing through a binding
+#   "out of memory --- size =="  libvips' tracked allocator (vips_tracked_malloc), which
+#                           the pyvips writers raise through (ruling 2026-10-21; the
+#                           wording `[MEMORY]`, not re-read from the libvips source).
+#                           After GPU_MEMORY_ERRORS, which "CUDA out of memory" matches
 MEMORY_ERRORS = (
     "Java heap space",
     "MemoryError",
@@ -423,13 +431,54 @@ MEMORY_ERRORS = (
     "DefaultCPUAllocator",
     "Cannot allocate memory",
     "std::bad_alloc",
+    "out of memory --- size ==",
 )
 # torch's allocator says the first; the CUDA runtime itself (a kernel launch, cudaMalloc
-# outside torch's caching allocator) says the second
-GPU_MEMORY_ERRORS = ("CUDA out of memory", "CUDA error: out of memory")
+# outside torch's caching allocator) says the second; cuBLAS and cuDNN the last two
+# (ruling 2026-10-21; their status names `[MEMORY]`)
+GPU_MEMORY_ERRORS = (
+    "CUDA out of memory",
+    "CUDA error: out of memory",
+    "CUBLAS_STATUS_ALLOC_FAILED",
+    "CUDNN_STATUS_ALLOC_FAILED",
+)
+# A failure of the node or of shared storage, not of the method: ``infrastructure``, so
+# the same rung runs the unit once more (ladder.AGAIN). Ruling 2026-10-21. By errno on
+# the exception or anything it was raised from (EIO 5, ECONNRESET 104, ENOTCONN 107,
+# ETIMEDOUT 110, EHOSTDOWN 112, ESTALE 116, ENOSPC 28: the work folder is node-local),
+# or by text where only the text survives. `[MEMORY]`: the Linux errno numbers and the
+# CUDA runtime's wording were not re-read from a source this session.
+TRANSIENT_ERRNOS = (5, 104, 107, 110, 112, 116)
+TRANSIENT_ERRORS = (
+    "Stale file handle",
+    "Input/output error",
+    "Transport endpoint is not connected",
+    "uncorrectable ECC error",
+    "CUDA-capable device(s) is/are busy or unavailable",
+)
+# NOT transient, each a rule a test pins: a full disk (ENOSPC, 28) fails again and in the
+# tile cutting is the benchmark's; a bare TimeoutError a method raises is its own
+# ``timeout``; an adapter refusing a GPU row on a host torch sees no CUDA device on is
+# ``exception`` (the submission asked for no GPU, a retry would land the same).
+# A JVM that ran out of its OWN heap (the -Xmx bound). Read by the VALIS adapters and
+# by ``methods.writer_cause`` for a method declaring ``FIXED_JVM_HEAP``: VALIS starts its JVM
+# with a fixed 10 GB (registration.init_jvm passes the literal 10), and the benchmark
+# keeps that heap at every rung (user ruling 2026-10-21), so more host memory cannot
+# help and the row is ``jvm_heap``, final, never a climb. Only the -Xmx-bound messages:
+# "unable to create native thread" and "Metaspace" are OutOfMemoryErrors the heap does
+# not bound, and stay ``oom`` (MEMORY_ERRORS: "MemoryError"). `[MEMORY]`: the JDK's
+# OutOfMemoryError messages were not re-read from a JDK source this session.
+JVM_HEAP_ERRORS = (
+    "Java heap space",
+    "GC overhead limit exceeded",
+    "Requested array size exceeds VM limit",
+    "Direct buffer memory",
+)
 # Every cause a run.json can end with (the scorer adds ``not_run``):
 #   exception      the method raised, or reported a failed round
 #   oom            the method ran out of host memory while registering
+#   jvm_heap       VALIS's JVM ran out of its fixed 10 GB heap (ruling 2026-10-21): the
+#                  method's, final, never a climb (JVM_HEAP_ERRORS)
 #   writer_oom     the method's own writer ran out of memory (no image: a failed row)
 #   writer         the method's own writer failed for another reason (no image)
 #   gpu_oom, timeout
@@ -446,6 +495,7 @@ CAUSES = (
     "killed",
     "not_run",
     "oom",
+    "jvm_heap",
     "timeout",
     "gpu_oom",
     "writer",
@@ -483,6 +533,25 @@ def classify_text(text):
     return "exception"
 
 
+def names_jvm_heap(*texts):
+    """Does any of ``texts`` say a JVM ran out of its own heap (``JVM_HEAP_ERRORS``)?"""
+    return any(s in str(t or "") for t in texts for s in JVM_HEAP_ERRORS)
+
+
+def _transient(exc):
+    """Did the node or shared storage fail (``TRANSIENT_ERRNOS``, ``TRANSIENT_ERRORS``),
+    by the exception or anything in its ``__cause__`` / ``__context__`` chain?"""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, OSError) and exc.errno in TRANSIENT_ERRNOS:
+            return True
+        if any(s in f"{exc}" for s in TRANSIENT_ERRORS):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
 class InputUnreadable(OSError):
     """A file the case names cannot be read from where the run is (a folder that is
     not bound into the container, a path of another machine). The method never saw
@@ -492,7 +561,8 @@ class InputUnreadable(OSError):
 
 
 def classify_error(exc):
-    """The ``cause`` of a method's own failure: ``gpu_oom``, ``oom``, ``timeout`` or ``exception``.
+    """The ``cause`` of a method's own failure: ``gpu_oom``, ``infrastructure`` (the
+    node or shared storage failed: ``_transient``), ``timeout``, ``oom`` or ``exception``.
 
     A GPU out-of-memory is looked for first: ``torch.cuda.OutOfMemoryError`` contains the
     text ``MemoryError`` and must not be read as a host out-of-memory, which would move the
@@ -506,6 +576,10 @@ def classify_error(exc):
     text = f"{type(exc).__name__}: {exc}"
     if any(s in text for s in GPU_MEMORY_ERRORS):
         return "gpu_oom"
+    if _transient(exc):
+        return "infrastructure"
+    # the method ran out of its own time limit (a subprocess's, or a TimeoutError it
+    # raised); a socket's or file system's ETIMEDOUT (errno 110) `_transient` took above
     if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
         return "timeout"
     if isinstance(exc, MemoryError) or any(s in text for s in MEMORY_ERRORS):
