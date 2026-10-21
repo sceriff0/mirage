@@ -617,9 +617,9 @@
           <b>channels_manifest.json</b> · <b>size_log</b> · <b>versions</b><br>
           <span class="nul">transform_by_slide — empty: the registrar is one group-wide object, not decomposable per slide</span></div>
         <div class="callout" style="margin-top:11px"><b>JVM heap.</b> <code>REGISTER</code> always passes an explicit
-          value: <code>min(reg_jvm_heap_gb ?: 32 + 16·task.attempt, task.memory − 4&nbsp;GiB)</code>. So the heap
-          <b>climbs with the retry ramp</b> — 48 / 64 / 80&nbsp;GiB — which is the fix for the OOMs seen on merged,
-          high-LZW multi-channel references. The older <code>max(8, min(0.75·sysGB, 3·inputGB + 8))</code> heuristic
+          value: <code>min(reg_jvm_heap_gb ?: 10, task.memory − 4&nbsp;GiB)</code>: VALIS's own shipped
+          10&nbsp;GiB at every attempt (ruling 2026-10-21). The heap <b>does not climb</b> with the retry ramp;
+          only the task's memory does. The older <code>max(8, min(0.75·sysGB, 3·inputGB + 8))</code> heuristic
           survives only as <code>valis_config.init_jvm</code>'s fallback for callers that pass nothing, and
           <code>WARP_SEG_QC</code> pins itself at 8&nbsp;GB rather than use it.</div>
         <div class="callout" style="margin-top:11px"><b>Disk.</b> The process deletes its working copies and VALIS's
@@ -974,7 +974,7 @@
           <tr><td class="k">reg_max_image_dim</td><td class="val">4000</td><td class="d">max_image_dim_px — cached image cap</td></tr>
           <tr><td class="k">reg_micro_reg</td><td class="val">2</td><td class="d">0 none · 1 micro-rigid · 2 +micro non-rigid (default)</td></tr>
           <tr><td class="k">reg_micro_reg_fraction</td><td class="val">0.125</td><td class="d">micro non-rigid crop fraction</td></tr>
-          <tr><td class="k">reg_jvm_heap_gb</td><td class="val nul">null</td><td class="d">null → 32 + 16·attempt, capped at task.memory − 4</td></tr>
+          <tr><td class="k">reg_jvm_heap_gb</td><td class="val nul">null</td><td class="d">null → VALIS's 10 GiB at every attempt, capped at task.memory − 4</td></tr>
         </table>
       </div>
       <div class="pcol">

@@ -118,9 +118,10 @@ real slide. Changing either number changes an unguarded figure, so change it her
 
 The `tma` profile overrides only `REGISTER`'s memory, to `64 GB × attempt`: tissue-microarray
 cores are ~2800 px on a side, and the doubling ramp's upper rungs are sized for whole slides. Cpus and time
-stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`)
-instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a small
-request. `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
+stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`).
+It was written against `register.nf`'s former `32 + 16 × attempt` ramp, which would hand Java
+most of a small request; since 2026-10-21 the default is VALIS's own 10 GiB at every attempt,
+never scaled (`REGISTER`'s memory still climbs). `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
 image pair at once, and — in VALIS 1.0.0 — with autograd ON, so every attention layer's
 activations are retained for a backward pass nobody runs. `bin/utils/valis_config.py` wraps
 the SuperPoint/SuperGlue methods in `torch.no_grad()` (grad mode is thread-local, so a global

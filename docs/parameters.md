@@ -104,7 +104,7 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
 | `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
 | `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
 | `reg_micro_reg` | `2` | Micro-registration depth (nested, default `2`): `0` = none, `1` = micro-rigid only (refines `slide.M`), `2` = + micro non-rigid (`register_micro`) — default. At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
-| `reg_jvm_heap_gb` | `null` | Explicit JVM heap (GB) for VALIS. `null` auto-estimates from input size. |
+| `reg_jvm_heap_gb` | `null` | Explicit JVM heap (GiB) for VALIS. `null` uses VALIS's own 10 GiB at every attempt (never scaled with the retry ramp), clamped to `task.memory - 4`. |
 | `reg_qc` | `2` | Registration QC depth: `0` = none, `1` = the [before/after DAPI overlay](registration_qc.md#the-reg_qc-1-overlay-is-a-beforeafter-pair) only, `2` = that overlay + [staged segmentation-overlap metrics](registration_qc.md). |
 
 At `reg_qc = 2` the pipeline segments each slide's DAPI on its **native** image, pairs the

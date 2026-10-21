@@ -232,7 +232,7 @@
                         "integer",
                         "null"
                     ],
-                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = derive from task.memory at runtime.",
+                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = VALIS's own 10 GiB at every attempt, clamped to task.memory - 4.",
                     "default": null,
                     "minimum": 1
                 },

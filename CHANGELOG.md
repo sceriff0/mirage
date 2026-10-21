@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **REGISTER gives VALIS's JVM VALIS's own 10 GiB heap at every attempt** (was
+  `32 + 16 × attempt`, capped at `task.memory - 4`). The heap no longer climbs with the
+  retry ramp; `REGISTER`'s memory still does. `reg_jvm_heap_gb` still overrides it (the
+  `tma` profile pins 16). VALIS 1.0.0's `registration.init_jvm` passes the literal 10 on to
+  `slide_io.init_jvm` whatever it is given, so the scaled value may never have reached the
+  JVM. Guarded by `tests/test_jvm_heap_contract.py`.
 - **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
   on each axis: one displacement vector every 64 px from a 128 px window. That is four
   times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows

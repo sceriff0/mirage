@@ -76,12 +76,15 @@ process REGISTER {
     // registration.nf/add_cycle.nf so this process can't drift from the rest of the pipeline.
     def reg_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
     def stage_ckpt = reg_qc_level >= 2 ? '--stage-checkpoint-dir reg_stage_checkpoint' : ''
-    // JVM heap scales with retry attempts: base 32GB + 16GB per attempt.
+    // JVM heap: VALIS's own shipped 10 GB (registration.init_jvm passes the literal 10),
+    // at every attempt -- user ruling 2026-10-21; it was 32 + 16 * task.attempt. The task's
+    // MEMORY still climbs with the attempt; only the heap is pinned. reg_jvm_heap_gb
+    // overrides it (the tma profile pins 16). Guarded by tests/test_jvm_heap_contract.py.
     // Explicit null test, NOT `?:` -- Elvis treats 0 as unset, so an explicit
-    // `--reg_jvm_heap_gb 0` would silently become the derived ramp instead of being honoured
+    // `--reg_jvm_heap_gb 0` would silently become the default instead of being honoured
     // or refused. The schema's `minimum: 1` refuses it up front; this keeps the code correct
     // without depending on that. Guarded by tests/test_nullable_numeric_params_no_elvis.py.
-    def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : (32 + 16 * task.attempt)
+    def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : 10
     def jvm_heap_gb = Math.min(heap_request, task.memory.toGiga() - 4)
 
     """

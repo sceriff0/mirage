@@ -1,39 +1,22 @@
-"""JVM heap: a diagnosable failure and a real retry ramp.
+"""JVM heap: VALIS's own fixed 10 GB, and a diagnosable failure.
 
-`conf/modules.config` gives REGISTER the `retry-exit1-then-fail` policy on the
-premise that "a VALIS tile read failure and a JVM OOM inside the wrapper both
-come back as a plain exit 1, so the cause selector cannot be narrowed" (see
-tests/test_error_strategy_policy.py's CANONICAL table). Two things follow from
-that premise and neither was tested until now:
+User ruling 2026-10-21: the heap REGISTER gives VALIS's Bio-Formats JVM is VALIS's own
+shipped 10 GB (``registration.init_jvm`` passes the literal 10 on to
+``slide_io.init_jvm``), at every attempt. It is no longer scaled with the retry ramp
+(it was ``32 + 16 * task.attempt``): the benchmark runs VALIS with the heap VALIS ships,
+and the pipeline runs it the same way. ``reg_jvm_heap_gb`` still overrides it (the
+``tma`` profile pins 16), and the task's memory still clamps it:
 
-  1. The heap actually has to SCALE with task.attempt, or retrying an
-     OOM'd attempt just repeats it with the identical heap.
-  2. When the JVM dies, the log has to say so in words distinguishable from
-     a tile-read failure, since the exit code cannot do that job.
-
-The derivation lives at modules/local/register.nf:78-79:
-
-    def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : (32 + 16 * task.attempt)
+    def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : 10
     def jvm_heap_gb  = Math.min(heap_request, task.memory.toGiga() - 4)
 
-`heap_for_attempt()` below reads the base/per-attempt/headroom constants live
-out of that text via tests.nfmodel (never a private regex over the raw .nf
-file -- see tests/test_nfmodel.py::test_no_guard_parses_nextflow_source_privately),
-so a change to the ramp itself -- not just this file's memory of it -- shows
-up directly in the ramp assertions below.
+REGISTER's MEMORY still climbs with the attempt; only the heap is pinned. A heap-bound
+JVM OOM retried is therefore handed the same heap: retrying it cannot help, which the
+log message below must make diagnosable.
 
-Measured 2026-08-30 (params.reg_jvm_heap_gb unset, the default path):
-
-    task.memory=  6 GB -> heap by attempt 1/2/3: [2, 2, 2]      INERT
-    task.memory= 32 GB -> heap by attempt 1/2/3: [28, 28, 28]   INERT
-    task.memory= 64 GB -> heap by attempt 1/2/3: [48, 60, 60]
-    task.memory=128 GB -> heap by attempt 1/2/3: [48, 64, 80]
-
-Attempt 1 already requests min(48, mem-4), so the ramp only moves once
-task.memory > 52 GB. A test asserting "strictly increasing" unconditionally
-would fail against correct current behaviour -- the two heap tests below
-assert the increasing case AND the flat-clamp case, deliberately, as two
-separate properties.
+``heap_for_attempt()`` reads the constants live out of the script via tests.nfmodel
+(never a private regex over the raw .nf file -- see
+tests/test_nfmodel.py::test_no_guard_parses_nextflow_source_privately).
 """
 
 from __future__ import annotations
@@ -54,8 +37,11 @@ REGISTER_PY = REPO_ROOT / "bin" / "register.py"
 # does the same thing against with_name_blocks() bodies).
 _HEAP_REQUEST_RE = re.compile(
     r"def heap_request = params\.reg_jvm_heap_gb != null \? params\.reg_jvm_heap_gb : "
-    r"\((\d+) \+ (\d+) \* task\.attempt\)"
+    r"(\d+)\s*$",
+    re.MULTILINE,
 )
+# VALIS's own heap: registration.init_jvm(jar=None, mem_gb=10) (user ruling 2026-10-21)
+VALIS_HEAP_GB = 10
 _JVM_HEAP_RE = re.compile(
     r"def jvm_heap_gb = Math\.min\(heap_request, task\.memory\.toGiga\(\) - (\d+)\)"
 )
@@ -65,18 +51,17 @@ def _register_script_body() -> str:
     return processes()["REGISTER"].script_body
 
 
-def _ramp_params() -> tuple[int, int]:
-    """(base_gb, per_attempt_gb) read live out of register.nf's
-    `def heap_request = ... : (32 + 16 * task.attempt)` line. If the shape of
-    that line changes (not just its two numbers), this match fails loudly
-    rather than silently mirroring a stale formula."""
+def _default_heap_gb() -> int:
+    """The default heap read live out of register.nf's
+    `def heap_request = ... : 10` line. If the shape of that line changes (a ramp
+    comes back), this match fails loudly rather than mirroring a stale formula."""
     m = _HEAP_REQUEST_RE.search(_register_script_body())
     assert m, (
-        "modules/local/register.nf's heap_request derivation no longer matches "
-        "the expected `base + per_attempt * task.attempt` shape -- read the new "
-        "derivation and update this test's regex/expectations before trusting it."
+        "modules/local/register.nf's heap_request is no longer a fixed default "
+        "(`... : <GiB>`) -- read the new derivation and update this test before "
+        "trusting it (user ruling 2026-10-21: VALIS's own 10 GB, never scaled)."
     )
-    return int(m.group(1)), int(m.group(2))
+    return int(m.group(1))
 
 
 def _mem_headroom_gb() -> int:
@@ -92,66 +77,37 @@ def _mem_headroom_gb() -> int:
 
 
 def heap_for_attempt(task_memory_gb: int, attempt: int, reg_jvm_heap_gb=None) -> int:
-    """Mirrors modules/local/register.nf:78-79's derivation, but reads its two
-    tunable constants (base, per-attempt increment, memory headroom) live out
-    of the .nf source via tests.nfmodel rather than hardcoding them -- so a
-    change to the ramp itself (not just this test's memory of it) is visible
-    in the assertions below, not just in a separate anchor check."""
-    base, per_attempt = _ramp_params()
-    headroom = _mem_headroom_gb()
-    heap_request = (
-        reg_jvm_heap_gb
-        if reg_jvm_heap_gb is not None
-        else (base + per_attempt * attempt)
-    )
-    return min(heap_request, task_memory_gb - headroom)
+    """Mirrors register.nf's derivation with its constants read live from the script.
+    ``attempt`` is taken and ignored: that the heap does not depend on it is the rule."""
+    del attempt
+    heap_request = reg_jvm_heap_gb if reg_jvm_heap_gb is not None else _default_heap_gb()
+    return min(heap_request, task_memory_gb - _mem_headroom_gb())
 
 
 def test_derivation_matches_register_nf():
-    """The exact two-line derivation this file's arithmetic mirrors is
-    readable, in the expected shape, straight out of REGISTER's script: body
-    -- and with today's actual constants (base=32, per_attempt=16,
-    headroom=4), matching modules/local/register.nf:78-79 as read on
-    2026-08-30. Read via tests.nfmodel.processes(), never a private regex
-    over the raw register.nf file."""
-    assert _ramp_params() == (32, 16)
+    """The default heap is VALIS's own 10 GB and the headroom 4 GB, read via
+    tests.nfmodel.processes(), never a private regex over the raw register.nf file."""
+    assert _default_heap_gb() == VALIS_HEAP_GB
     assert _mem_headroom_gb() == 4
+    assert "task.attempt" not in _HEAP_REQUEST_RE.search(_register_script_body())[0]
 
 
-def test_heap_ramp_strictly_increases_at_large_memory():
-    """At 128 GB (well above the ~52 GB point where attempt 1's min(48, ...)
-    stops being the binding constraint), the heap must strictly increase
-    across attempts 1->2->3, and never exceed task.memory - 4 -- the ramp
-    that fixed the REG_WARP_REF OOM is only real if this holds."""
-    mem = 128
-    by_attempt = [heap_for_attempt(mem, a) for a in (1, 2, 3)]
-    assert by_attempt == [48, 64, 80], by_attempt
-    assert by_attempt[0] < by_attempt[1] < by_attempt[2], (
-        f"heap ramp did not strictly increase at {mem} GB: {by_attempt}"
-    )
-    for heap in by_attempt:
-        assert heap <= mem - 4, f"heap {heap} GB exceeded task.memory-4 ({mem - 4} GB)"
+def test_the_heap_is_flat_across_attempts_at_every_memory():
+    """REGISTER's memory climbs (64 GB x 2^(attempt-1)); the heap does not."""
+    for mem in (64, 128, 256, 512):
+        by_attempt = [heap_for_attempt(mem, a) for a in (1, 2, 3)]
+        assert by_attempt == [VALIS_HEAP_GB] * 3, (mem, by_attempt)
 
 
-def test_heap_ramp_clamped_flat_at_small_memory():
-    """At 6 GB -- the test profile's task.memory -- attempt 1 already
-    requests min(32+16, mem-4) = min(48, 2) = 2, and every later attempt's
-    larger heap_request is clamped to the exact same task.memory-4 ceiling.
-    The ramp is INERT below ~52 GB.
+def test_the_heap_is_clamped_at_small_memory():
+    """At 6 GB -- the test profile's task.memory -- the heap is min(10, 6 - 4) = 2."""
+    assert [heap_for_attempt(6, a) for a in (1, 2, 3)] == [2, 2, 2]
 
-    This is deliberately pinned, not incidental: REGISTER's errorStrategy is
-    retry-exit1-then-fail on the premise that retrying helps. Below ~52 GB, a
-    heap-driven OOM that gets retried is handed EXACTLY the heap it just died
-    on -- the retry cannot possibly change the outcome. That is a real
-    property of the current pipeline; pin it so a future ramp change (e.g.
-    lowering the base or the per-attempt increment) is a conscious decision,
-    not an accidental one discovered in production."""
-    mem = 6
-    by_attempt = [heap_for_attempt(mem, a) for a in (1, 2, 3)]
-    assert by_attempt == [2, 2, 2], by_attempt
-    assert len(set(by_attempt)) == 1, (
-        f"expected the ramp clamped flat at {mem} GB, got {by_attempt}"
-    )
+
+def test_an_explicit_heap_still_overrides():
+    """`reg_jvm_heap_gb` (the tma profile pins 16) wins over the default."""
+    assert heap_for_attempt(64, 1, reg_jvm_heap_gb=16) == 16
+    assert heap_for_attempt(64, 3, reg_jvm_heap_gb=16) == 16
 
 
 def test_jvm_death_message_names_the_jvm_and_a_remedy():
