@@ -35,8 +35,9 @@ SUMMARY_TABLE = {"hyreco": "hyreco_summary"}
 AGGREGATION = {
     "hyreco": "per-pair median TRE, then the median over pairs (tre_um_med); "
     "tre_um_pooled_med is one median over all landmarks of all pairs (Lotz et al. 2023's "
-    "MTRE); rTRE (TRE over the target image's diagonal) and robustness as BIRL "
-    "compute_scores defines them",
+    "MTRE); rTRE (TRE over the target image's diagonal: the side the error is measured "
+    "on) and robustness as BIRL compute_scores defines them; all_pairs counts an id "
+    "both subsets list once (subset A's copy)",
 }
 CRITERION = "median over pairs of the per-pair median rTRE (lowest wins), every pair"
 RULE = (
@@ -49,9 +50,13 @@ RULE = (
 
 
 def _sets(dataset, r):
-    """The sets a pair row belongs to: HyReCo ``all_pairs`` and its subset."""
+    """The sets a pair row belongs to: HyReCo ``all_pairs`` and its subset. An id both
+    subsets list is in ``all_pairs`` once, subset A's copy (ruling 2026-10-21)."""
     sub = str(r.get("subset") or "").lower()
-    return ["all_pairs"] + ([f"subset_{sub}"] if sub in ("a", "b") else [])
+    own = [f"subset_{sub}"] if sub in ("a", "b") else []
+    if sub == "b" and _bool(r.get("shared_id")) is True:
+        return own
+    return ["all_pairs"] + own
 
 
 def _bool(v):

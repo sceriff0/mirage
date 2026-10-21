@@ -197,8 +197,10 @@ def test_three_sets_and_the_shared_ids_counted(scored):
         "subset_a",
         "subset_b",
     }
+    # all_pairs counts a shared id once: subset A's copy (ruling 2026-10-21); each
+    # subset's own set keeps its copy, as the published numbers were computed on it
     for name, n, shared in (
-        ("all_pairs", 4, 2),
+        ("all_pairs", 3, 1),
         ("subset_a", 2, 1),
         ("subset_b", 2, 1),
     ):
@@ -245,3 +247,37 @@ def test_a_flagged_pair_is_scored_and_a_loss_row(tmp_path):
     assert _line(result, "all_pairs", "exact")["n_flagged"] == 1
     flagged = [r for r in result["losses"] if r["cause"] == "landmark_flagged"]
     assert [r["case_id"] for r in flagged] == ["a_533"]
+
+
+def test_all_pairs_keeps_subset_a_copy_of_a_shared_id():
+    """2026-10-21: an id both subsets list is one section pair in ``all_pairs``."""
+    from benchmarks.regbench.paper import landmarks as paper_landmarks
+
+    keep = dict(landmarks.sets_of("hyreco"))["all_pairs"]
+    assert keep({"subset": "A", "shared_id": True})
+    assert not keep({"subset": "B", "shared_id": True})
+    assert keep({"subset": "B", "shared_id": False})
+    row_b = {"subset": "B", "shared_id": "True"}
+    assert paper_landmarks._sets("hyreco", row_b) == ["subset_b"]
+    row_a = {"subset": "A", "shared_id": "True"}
+    assert paper_landmarks._sets("hyreco", row_a) == ["all_pairs", "subset_a"]
+
+
+def test_the_error_is_scaled_on_the_side_it_is_measured_on():
+    """rTRE over the TARGET image's diagonal and TRE in the target's micrometres: the
+    reference under mov_to_ref, the moving slide under ref_to_mov (2026-10-21)."""
+    from types import SimpleNamespace
+
+    from benchmarks.regbench.mapping import REF_TO_MOV
+
+    case = SimpleNamespace(
+        diagonal=math.hypot(300.0, 400.0),
+        pixel_size_um=0.25,
+        ref_hw=[300, 400],
+        mov_hw=[600, 800],
+        extra={"pixel_size_mov_um": 0.5},
+    )
+    assert landmarks.target_scale(case, MOV_TO_REF) == (500.0, 0.25)
+    assert landmarks.target_scale(case, REF_TO_MOV) == (1000.0, 0.5)
+    # an unregistered pose is measured mov -> ref
+    assert landmarks.target_scale(case, "") == (500.0, 0.25)

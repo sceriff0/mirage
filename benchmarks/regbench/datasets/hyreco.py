@@ -14,7 +14,9 @@ cases folder, scored together.
 A case id is the file's id prefixed by its subset (``a_29``, ``b_29``): four ids (29,
 108, 361, 464) are in both lists, whether they are the same slides is not stated by any
 source read, so both are kept, distinct, and flagged (``extra.shared_id``; a column of
-the pair table and a count in the summary). Nothing is dropped for it.
+the pair table and a count in the summary). Nothing is dropped for it at preparation;
+the scorer's ``all_pairs`` set counts each such id once, subset A's copy (ruling
+2026-10-21, ``landmarks.sets_of``).
 
 Nothing is tuned (no lock): every run of the list runs with its own fixed settings, and
 the proxy settings below (``--proxy``, ``--reduce``, default luminance at native

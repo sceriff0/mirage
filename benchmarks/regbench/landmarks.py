@@ -43,15 +43,18 @@ definitions are BIRL's (Borda/BIRL at ``f1648b29`` ``[PARTIAL: read
 birl/utilities/evaluate.py:1-123 (compute_tre, compute_target_regist_error_statistic,
 compute_tre_robustness) and the repository's evaluate_submission.py:225-345
 (compute_scores); the rest of the repository not read; read for Task 21, not re-read
-since]``): rTRE is TRE over the diagonal of the target (reference) image, robustness the
-share of a pair's landmarks whose TRE after registration is strictly below their initial
-TRE.
+since]``): rTRE is TRE over the diagonal of the target image, robustness the share of
+a pair's landmarks whose TRE after registration is strictly below their initial TRE. The
+target is the side the error is measured on: the reference under ``mov_to_ref``, the
+moving slide under ``ref_to_mov``, whose pixel size also gives the micrometres
+(``target_scale``; until 2026-10-21 always the reference's).
 
 **Sets** (column ``set``). ``all_pairs`` (every prepared pair), ``subset_a`` and
 ``subset_b`` (each subset's pairs: the sets the published numbers were computed on). The
 four ids both subsets list (29, 108, 361, 464) are in both subsets' sets, flagged
 (``shared_id``, ``n_shared_id``): whether they are the same slides is stated by no
-source read.
+source read. ``all_pairs`` counts each of them ONCE, subset A's copy (ruling
+2026-10-21: before it, both copies entered it, a pair weighed twice).
 
 **Published numbers** (``PUBLISHED``, ``hyreco_published.csv``) are quoted, not
 reproduced: neither method was run here. Only a number whose aggregation is defined and
@@ -72,7 +75,7 @@ import numpy as np
 from . import landmark_io, losses, truth, variants
 from . import score as cohort
 from .cases import list_cases
-from .mapping import FRAME, MOV_TO_REF
+from .mapping import FRAME, MOV_TO_REF, REF_TO_MOV
 from .notrun import (
     NOT_RUN_CAUSES,
     STALE_TRUTH,
@@ -199,6 +202,19 @@ def landmark_errors(case, truth_pts, warped):
     return err, init, mapped, source, target, direction
 
 
+def target_scale(case, direction):
+    """``(diagonal px, pixel size um)`` of the TARGET image, the side a landmark error
+    is measured on: the reference under ``mov_to_ref`` (and for an unregistered pose,
+    measured mov -> ref), the moving slide under ``ref_to_mov``. Until 2026-10-21 every
+    error was scaled by the reference's, whatever the direction (BIRL's rTRE is over
+    the target image's diagonal)."""
+    if direction == REF_TO_MOV:
+        mov_px = case.extra.get("pixel_size_mov_um") or case.pixel_size_um
+        return math.hypot(*case.mov_hw), (float(mov_px) if mov_px else None)
+    px = float(case.pixel_size_um) if case.pixel_size_um else None
+    return float(case.diagonal), px
+
+
 def pair_stats(err, init, diagonal):
     """The per-pair statistics from the errors of one pair's landmarks, in pixels (BIRL
     ``compute_scores``' definitions): ``err`` after registration (a
@@ -240,7 +256,6 @@ def _score_case(job):
     pts = landmark_io.read_truth(case)
     if pts is None or pts["ref"] is None or not len(pts["mov"]):
         raise ValueError(f"{case.dataset}/{case.case_id}: {NO_LANDMARKS}")
-    px = float(case.pixel_size_um) if case.pixel_size_um else None
     base = {
         "dataset": case.dataset,
         "case_id": case.case_id,
@@ -267,6 +282,8 @@ def _score_case(job):
             err, init, mapped, source, target, direction = landmark_errors(
                 case, pts, None
             )
+        # the scale of the side the errors were just measured on (target_scale)
+        diagonal, px = target_scale(case, direction)
         imputed = v != "initial" and warped is None
         if imputed and not cause:
             cause = "exception"
@@ -276,7 +293,7 @@ def _score_case(job):
             # other pairs; never a default
             declared = str((run or {}).get("direction") or "")
             direction = declared if declared in FRAME else ""
-        stats = pair_stats(err, init, case.diagonal)
+        stats = pair_stats(err, init, diagonal)
         not_run = imputed and cause in NOT_RUN_CAUSES
         pairs.append(
             {
@@ -336,11 +353,16 @@ def _p90(values):
     return truth._percentile(v, 90) if len(v) else math.nan
 
 
+def _flag(v):
+    return v is True or str(v).strip().lower() == "true"
+
+
 def sets_of(dataset):
     """``[(set name, keep(pair row))]`` of a dataset: all pairs, then each subset (a set
     with no pair has no row)."""
     return [
-        ("all_pairs", lambda r: True),
+        # an id both subsets list counts once: subset A's copy (ruling 2026-10-21)
+        ("all_pairs", lambda r: not (_flag(r.get("shared_id")) and r["subset"] == "B")),
         ("subset_a", lambda r: r["subset"] == "A"),
         ("subset_b", lambda r: r["subset"] == "B"),
     ]
@@ -492,8 +514,9 @@ def markdown(dataset, cases, summary, fails, primary, lost=(), frames=None):
         "(subset B is downloaded by default; HYRECO_ADDITIONAL=0 skips it). Nothing "
         "was tuned on "
         "it: every run of the list runs with its own fixed settings. **Pairs whose id "
-        f"both subsets list: {len(shared)}** (column `shared_id`; kept in both, "
-        "whether they are the same slides is stated by no source read).\n"
+        f"both subsets list: {len(shared)}** (column `shared_id`; kept in both "
+        "subsets' sets, once in `all_pairs` (subset A's copy); whether they are the "
+        "same slides is stated by no source read).\n"
     )
     proxies = sorted(
         {str((c.extra.get("settings") or {}).get("proxy", "")) for c in cases}
