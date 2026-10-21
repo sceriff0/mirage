@@ -15,7 +15,7 @@
       "bin/utils/tiled_io.py",
       "bin/utils/tiled_manifest.py"
     ],
-    "fingerprint": "732cd186da4ab0129aab57f6b684c54f0069a70a57c6e6c8e2c2e1ab6d43dafd"
+    "fingerprint": "bcd0db7e8dcd6edaa45465dfa4e62da984b6c070ec97ffafedec7958eb293dca"
   },
   "deeperhistreg": {
     "files": [
@@ -28,7 +28,7 @@
       "benchmarks/regbench/methods/deeperhistreg.py",
       "benchmarks/regbench/resources.py"
     ],
-    "fingerprint": "43d6536bf8bc58344f815c11d5b6f9f221400cdb7c2cf0d39e3639d42294eab7"
+    "fingerprint": "f9d7eb37cfef860087e821e0cb23433295004ec3a7d8d438e3adbb723fa41208"
   },
   "initial": {
     "files": [
@@ -39,7 +39,7 @@
       "benchmarks/regbench/methods/initial.py",
       "benchmarks/regbench/resources.py"
     ],
-    "fingerprint": "ebd15b17dda98c00497fb261ad2e1c3614406ce2efd22eb21963ad22d353bbfd"
+    "fingerprint": "23db07e14737fbbaf7549b861f618500781802be0f8608b8219b54f0ebfe4b3e"
   },
   "palom": {
     "files": [
@@ -51,7 +51,7 @@
       "benchmarks/regbench/methods/palom.py",
       "benchmarks/regbench/resources.py"
     ],
-    "fingerprint": "ec212c1ab8a20178d4216437efe11c14a3fc8bfd3d694a9ce51f3d68ee4240c7"
+    "fingerprint": "c1c1c8672bcf03d7479f4ad975637067dc7876f84c3d0cd677f01cde100c47a0"
   },
   "stare": {
     "files": [
@@ -67,7 +67,7 @@
       "benchmarks/regbench/resources.py",
       "benchmarks/regbench/stages.py"
     ],
-    "fingerprint": "835e3b8dadea7eaaf0b09594d8e860cd8216d488ccab303ff150b1419fb6398d"
+    "fingerprint": "b3456d121a8b8285c8be71af8c5478c1e97e88bf511bab7950c95a74196d5d90"
   },
   "valis": {
     "files": [
@@ -80,7 +80,7 @@
       "benchmarks/regbench/resources.py",
       "bin/utils/jvm_cache.py"
     ],
-    "fingerprint": "d494f493d2354c9567013f132043d323bbd2cc2a169bdb35da20c338e2b91c9a"
+    "fingerprint": "2856cb0593ca9a85a57e4936018ac37f458562e6fbea2f14124ddc287e945c48"
   },
   "valis_mirage": {
     "files": [
@@ -104,6 +104,6 @@
       "bin/utils/valis_micro_rigid.py",
       "bin/utils/valis_preflight.py"
     ],
-    "fingerprint": "16263ec4eb98dc90d0991fafbfdcde40b3a8ae78cbeb4ef99312f6673e40d95f"
+    "fingerprint": "3e54c7bfd2d5e6d1fd33bc6825e0bf0c797d9f4db7cf7ef1e35b2dd0dd43f703"
   }
 }
