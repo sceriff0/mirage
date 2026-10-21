@@ -4749,3 +4749,36 @@ def test_the_plan_job_is_handed_the_sources_realpath(site, tmp_path):
     plan = jobs_of(done)["rb-synth-plan"]
     got = plan.args[plan.args.index("--source") + 1]
     assert got == os.path.realpath(src) and got != str(bound / "link.ome.tif")
+
+
+def test_a_run_named_in_first_rung_starts_its_ladder_there(site):
+    """REGBENCH_FIRST_RUNG: the named run's first array asks for that rung and its
+    ladder never plans the rungs below; a run not named keeps the first rung."""
+    env = {"REGBENCH_FIRST_RUNG": "valis_mirage=256"}
+    done, _, _ = launch(site, "--runs", "valis_mirage palom", env=env, log="first-rung")
+    jobs = jobs_of(done)
+    first = jobs["rb-valis_mirage-multiplex-256g"]
+    assert first.opt("--mem") == "256G"
+    every = {**jobs, **jobs.later}
+    mine = [n for n in every if n.startswith("rb-valis_mirage-multiplex-")]
+    assert not [n for n in mine if "-16g" in n or "-64g" in n], mine
+    assert any("-512g" in n for n in mine) and any("-700g" in n for n in mine), mine
+    assert "rb-palom-multiplex-16g" in jobs
+    assert "# memory ladder: valis_mirage starts at 256 GB" in done.stdout
+
+
+def test_first_rung_refuses_a_gb_that_is_not_a_rung(site):
+    done, log, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis_mirage=200"}, log="first-rung-bad")
+    assert done.returncode != 0
+    assert "200 GB is not a rung" in done.stderr
+    assert not log.exists() or "sbatch" not in log.read_text()
+    done, _, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis_mirage"}, log="first-rung-form")
+    assert done.returncode != 0 and "is not <run>=<GB>" in done.stderr
+
+
+def test_first_rung_says_and_ignores_a_run_the_launch_does_not_list(site):
+    env = {"REGBENCH_FIRST_RUNG": "no_such_run=256"}
+    done, _, _ = launch(site, "--runs", "palom", env=env, log="first-rung-unknown")
+    jobs = jobs_of(done)
+    assert "rb-palom-multiplex-16g" in jobs
+    assert "'no_such_run' is in no run list of this launch: not used" in done.stdout

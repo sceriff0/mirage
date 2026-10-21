@@ -255,6 +255,17 @@
 #                                     as the launcher's (not_submitted, ladder_cut_gb),
 #                                     never left at the rung below as the method's
 #                                     out-of-memory. 0: not asked
+#   REGBENCH_FIRST_RUNG               "<run>=<GB> ...": the ladder of each named run starts
+#                                     at that rung (one of the rungs, 16 64 256 512 700)
+#                                     and never tries the ones below it; e.g.
+#                                     "valis_mirage=256 valis120=256 valis120_hires=256".
+#                                     A run not named starts at the first; one in no run
+#                                     list of the launch is said and ignored. A GB that
+#                                     is not a rung, or one no node can grant,
+#                                     stops the launch before any sbatch. Neither this
+#                                     file nor ladder.py is in a result's reuse key: what
+#                                     is ok stays ok; the rung a result ran at is billed
+#                                     as reserved memory (the GB*h columns)
 #   REGBENCH_FORCE=1                  run every unit again, also those already ok
 #   REGBENCH_SUBMISSION               this call's id (default: time and process id).
 #                                     Records of another submission are evidence of
@@ -351,6 +362,21 @@ unset REGBENCH_STAGES
 source "$HERE/env.sh"
 
 RUNGS_GB="16 64 256 512 700"
+# first_rung_of <run>: its REGBENCH_FIRST_RUNG, else the first rung; rungs_of <run>:
+# the rungs its ladder climbs, from there up
+first_rung_of() {
+    local pair
+    for pair in ${REGBENCH_FIRST_RUNG:-}; do
+        [ "${pair%%=*}" = "$1" ] && { printf '%s\n' "${pair#*=}"; return 0; }
+    done
+    printf '%s\n' "${RUNGS_GB%% *}"
+}
+rungs_of() {
+    local from gb out=""
+    from="$(first_rung_of "$1")"
+    for gb in $RUNGS_GB; do [ "$gb" -ge "$from" ] && out="$out $gb"; done
+    printf '%s\n' "${out# }"
+}
 # the nuclei step's rungs above its first request (REGBENCH_NUCLEI_MEM, 128G): the
 # pipeline's SEGMENT is 128 GB x task.attempt
 NUCLEI_RUNGS_GB="256 512"
@@ -1053,6 +1079,11 @@ for r in $only_runs; do has "$all_names" "$r" || die "--runs: no run named '$r' 
 for r in $all_names; do
     if [ -z "$only_runs" ] || has "$only_runs" "$r"; then selected="$selected $r"; fi
 done
+for pair in ${REGBENCH_FIRST_RUNG:-}; do
+    case "$pair" in *=*) ;; *) die "REGBENCH_FIRST_RUNG: '$pair' is not <run>=<GB>. Nothing was submitted." ;; esac
+    has "$all_names" "${pair%%=*}" || echo "# REGBENCH_FIRST_RUNG: '${pair%%=*}' is in no run list of this launch: not used"
+    has "$RUNGS_GB" "${pair#*=}" || die "REGBENCH_FIRST_RUNG: ${pair#*=} GB is not a rung ($RUNGS_GB). Nothing was submitted."
+done
 # a submission that runs anything writes its own submit_dropped.csv (header alone when
 # no run is dropped); --score-only leaves the scored submission's as it is
 if [ "$scoring_earlier" != 1 ] && [ "$preflight_only" != 1 ] && [ "$prepare" != 1 ] && [ -n "${selected// /}" ]; then
@@ -1723,6 +1754,14 @@ else
 fi
 # a dry run asks too: it reads the scheduler and submits nothing
 rung_check
+# a run's own first rung (REGBENCH_FIRST_RUNG) must be one a node can grant: a ladder
+# whose first rung is cut would submit nothing for that run
+for r in $selected; do
+    gb="$(first_rung_of "$r")"
+    [ "$gb" = "${RUNGS_GB%% *}" ] && continue
+    grantable "$gb" || die "REGBENCH_FIRST_RUNG: $r starts at $gb GB, more than $GRANT_SAID. Nothing was submitted."
+    echo "# memory ladder: $r starts at $gb GB (REGBENCH_FIRST_RUNG): $(rungs_of "$r") GB"
+done
 
 # ── everything else that can stop this script, read before the first sbatch ───────────
 # the pipeline's allocation per stage and attempt, for the runs that are several jobs
@@ -1978,7 +2017,8 @@ deps_and() {
 # local`), with a plain round's time.
 ladder() {
     local prefix="$1" range="$2" real="$3" base="$4" time="$5" staged="${6:--}"
-    local attempt=0 gb task jobname cpus="$LADDER_CPUS" rungs="$RUNGS_GB" first_id="" first_name=""
+    local attempt=0 gb task jobname cpus="$LADDER_CPUS" rungs first_id="" first_name=""
+    rungs="$(rungs_of "$name")"
     # a run that asks for a GPU: every task holds one, so its arrays have the GPU limit
     local limit="$REGBENCH_ARRAY_LIMIT"
     [ "$gpu" != 1 ] || limit="$REGBENCH_GPU_ARRAY_LIMIT"
