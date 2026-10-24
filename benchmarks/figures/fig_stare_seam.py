@@ -366,6 +366,61 @@ def from_pipeline(a):
     )
 
 
+def _ome(path):
+    """``(channel names, µm per px)`` from a slide's OME header."""
+    import tifffile
+
+    with tifffile.TiffFile(str(path)) as tf:
+        ome = tf.ome_metadata or ""
+    names = re.findall(r'<Channel[^>]*\bName="([^"]*)"', ome)
+    m = re.search(r'PhysicalSizeX="([0-9.eE+-]+)"', ome)
+    return names, float(m.group(1)) if m else 0.0
+
+
+def _slide(spec):
+    path, _, chan = spec.partition("@")
+    if not Path(path).is_file():
+        raise SystemExit(f"{path}: not found")
+    names, um = _ome(path)
+    if chan.isdigit():
+        ci = int(chan)
+    elif chan:
+        hit = [i for i, n in enumerate(names) if n.lower() == chan.lower()]
+        if not hit:
+            raise SystemExit(f"{path}: no channel {chan!r}; it has {names}")
+        ci = hit[0]
+    else:
+        ci = _nuclear(names)
+    print(
+        f"{Path(path).name}: channel {ci} ({names[ci] if ci < len(names) else '?'}) of {names}"
+    )
+    return path, ci, um
+
+
+def from_files(a):
+    """Two slides given directly, the moving one already on the reference canvas."""
+    ref, rc, um = _slide(a.ref_image)
+    mov, mc, um2 = _slide(a.mov_image)
+    um = a.pixel_um or um or um2
+    if not um:
+        raise SystemExit("no pixel size in either OME header")
+    name = (
+        f"{a.patient}_{Path(mov).name.split('.')[0]}"
+        if a.patient
+        else Path(mov).name.split(".")[0]
+    )
+    return dict(
+        name=name,
+        um_px=um,
+        ref_path=ref,
+        ref_ch=rc,
+        mov_path=mov,
+        mov_ch=mc,
+        origin=(0.0, 0.0),
+        centroids=None,
+    )
+
+
 def corners_by_tissue(hw, tile, ov, factor, win):
     """Every interior tile corner and the tissue fraction (Otsu on the overview) of the
     inset around it."""
@@ -424,6 +479,19 @@ def main(argv=None):
     )
     ap.add_argument("--patient", help="pipeline mode: the patient_id")
     ap.add_argument(
+        "--ref-image",
+        help="instead of registered.csv: the reference slide, PATH[@CHANNEL] (CHANNEL "
+        "an index or a name; default the DAPI/Hoechst channel by OME name)",
+    )
+    ap.add_argument(
+        "--pixel-um", type=float, help="µm per px, if the slides do not say"
+    )
+    ap.add_argument(
+        "--mov-image",
+        help="with --ref-image: the registered moving slide on the reference canvas, "
+        "PATH[@CHANNEL]",
+    )
+    ap.add_argument(
         "--moving",
         help="pipeline mode: the moving slide, a substring of its id or channels "
         "(omitted: the slides are listed)",
@@ -459,7 +527,9 @@ def main(argv=None):
     from stare.slide_io import decimation_factor, open_lazy, read_decimated
 
     ps.apply_style()
-    if a.pipeline:
+    if a.ref_image and a.mov_image:
+        src = from_files(a)
+    elif a.pipeline:
         src = from_pipeline(a)
     elif a.cases and a.out and a.case_id:
         src = from_regbench(a)
