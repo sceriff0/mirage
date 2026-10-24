@@ -287,6 +287,75 @@ def compose(ov, factor, zooms, zones, win, um_px, label, connectors=False):
     return fig
 
 
+def compose_grid(grid, zones, win, um_px):
+    """Every zoom side by side: a row per kind, a column per side (Before, then each
+    result), the same windows and display everywhere."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.patheffects import withStroke
+
+    labels = list(grid)
+    n = len(labels)
+    width, gap, left, top = 180.0, 1.5, 6.0, 5.0
+    z = (width - left - gap * (n - 1)) / n
+    h = top + 3 * z + 2 * gap
+    if h > ps.MAX_HEIGHT_MM:
+        z = (ps.MAX_HEIGHT_MM - top - 2 * gap) / 3
+        h = ps.MAX_HEIGHT_MM
+    fig = C.fixed_figure(width, h)
+    stroke = [withStroke(linewidth=1.2, foreground="black")]
+    for j, lab in enumerate(labels):
+        x = left + j * (z + gap)
+        fig.text(
+            (x + z / 2) / width,
+            1 - 1.0 / h,
+            lab,
+            ha="center",
+            va="top",
+            fontsize=ps.BASE_PT,
+        )
+        for k, kind in enumerate(KINDS):
+            y = top + k * (z + gap)
+            ax = fig.add_axes((x / width, 1 - (y + z) / h, z / width, z / h))
+            rgb = grid[lab][kind]
+            ax.imshow(rgb, interpolation="none")
+            ax.set_axis_off()
+            ax.add_patch(
+                Rectangle(
+                    (0, 0), 1, 1, transform=ax.transAxes, fill=False, ec="white", lw=0.6
+                )
+            )
+            if j == 0:
+                C.scale_bar(ax, rgb.shape[1], um_px * win / rgb.shape[1], frac=0.3)
+                fig.text(
+                    (left - 1.5) / width,
+                    1 - (y + z / 2) / h,
+                    f"{k + 1}  {TITLES[kind]}",
+                    rotation=90,
+                    ha="right",
+                    va="center",
+                    fontsize=ps.BASE_PT,
+                )
+            if lab == "Before":
+                zn = zones[kind]
+                val = (
+                    f"{abs(zn['angle_deg']):.1f}°"
+                    if kind == "rotation"
+                    else f"{zn['T_px' if kind == 'translation' else 'D_px'] * um_px:.1f} µm"
+                )
+                ax.text(
+                    0.04,
+                    0.96,
+                    val,
+                    color="white",
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=ps.TICK_PT,
+                    path_effects=stroke,
+                )
+    return fig
+
+
 def pick_case(a, cases):
     if a.case_id:
         case = next((c for c in cases if str(c.case_id) == a.case_id), None)
@@ -323,7 +392,12 @@ def main(argv=None):
         default="valis120_hires",
         help="the result whose moved nuclei give the misalignment field",
     )
-    ap.add_argument("--after", help="also draw the pair after this result")
+    ap.add_argument(
+        "--after",
+        help="also draw the pair after these results, comma-separated "
+        "[LABEL=]variant[@OUT] (OUT: another results folder); with more than one "
+        "side, a grid of every zoom side by side is drawn too",
+    )
     ap.add_argument("--zoom-um", type=float, default=150.0, help="zoom side (µm)")
     ap.add_argument("--min-cells", type=int, default=40)
     ap.add_argument("--zone", action="append", default=[], help="KIND=X,Y (ref px)")
@@ -405,11 +479,21 @@ def main(argv=None):
             )
 
         sides = [("Before", case.mov_nuclear, 0, (0.0, 0.0), stem0)]
-        if a.after:
-            path, ch, origin = C.written_nuclear(a.out, a.after, case)
-            sides.append(
-                (f"After ({a.after})", path, ch, origin, f"{stem0}_after_{a.after}")
-            )
+        for spec in [v.strip() for v in (a.after or "").split(",") if v.strip()]:
+            name, _, variant = spec.rpartition("=")
+            variant, _, other = variant.partition("@")
+            try:
+                path, ch, origin = C.written_nuclear(other or a.out, variant, case)
+            except SystemExit as e:
+                print(f"skipped {spec}: {e}")
+                continue
+            stem = f"{stem0}_after_{variant}"
+            if any(
+                stem == sd[4] for sd in sides
+            ):  # the same variant from another folder
+                stem = f"{stem}_{name or len(sides)}"
+            sides.append((name or variant, path, ch, origin, stem))
+        grid = {}
         for label, path, ch, (ox, oy), stem in sides:
             mov_arr, _, close_mov = open_lazy(path)
             try:
@@ -443,12 +527,22 @@ def main(argv=None):
             for k, kind in enumerate(KINDS):
                 ps.plt.imsave(outdir / f"{stem}_zoom{k + 1}_{kind}.png", zooms[kind])
             ps.plt.imsave(outdir / f"{stem}_overview.png", ov)
-            fig = compose(ov, f, zooms, zones, win, um_px, label, a.connectors)
+            grid[label] = zooms
+            title = label if label == "Before" else f"After ({label})"
+            fig = compose(ov, f, zooms, zones, win, um_px, title, a.connectors)
             ps.save(fig, str(outdir / stem), data=pd.DataFrame(rows))
             print(
                 f"-> {outdir / stem}.pdf/.png/.svg, _source_data.csv, _overview.png, "
                 "_zoom*.png"
             )
+        if len(grid) > 1:
+            stem = outdir / f"{stem0}_zoomgrid"
+            ps.save(
+                compose_grid(grid, zones, win, um_px),
+                str(stem),
+                data=pd.DataFrame(rows),
+            )
+            print(f"-> {stem}.pdf/.png/.svg: every zoom, {' | '.join(grid)}")
     finally:
         close_ref()
 

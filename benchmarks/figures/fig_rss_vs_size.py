@@ -165,8 +165,12 @@ def pick(folders, dataset, names, cases=None):
     return out
 
 
-def points(rows, design_sizes):
-    """One row per point: per round, or per launch for a per-patient launch."""
+def points(rows, design_sizes, unit_of="patient"):
+    """One row per point. ``unit_of="patient"`` (the default): one per patient, its peak
+    the LARGEST any one job of it needed (VALIS: the launch that registered it; STARE:
+    its largest stage job over all its rounds), at its largest moving slide; on the
+    synthetic set a patient is also split by design size, so a family never pools sizes.
+    ``"round"``: one per round, or per launch for a per-patient launch."""
     d = rows.copy()
     d["ok"] = d["ok"].map(C.truthy)
     d["peak_rss_gb"] = pd.to_numeric(d["peak_rss_gb"], errors="coerce")
@@ -184,6 +188,10 @@ def points(rows, design_sizes):
     d["key"] = np.where(
         (unit == "patient") & (launch != ""), "L:" + launch, "R:" + d["case_id"]
     )
+    if unit_of == "patient":
+        d["key"] = "P:" + d["group"].astype(str)
+        if design_sizes:
+            d["key"] = d["key"] + "|" + d["side_px"].round().astype("Int64").astype(str)
     agg = d.groupby("key").agg(
         label=("label", "first"),
         variant=("variant", "first"),
@@ -223,7 +231,7 @@ def caption_numbers(syn, node_gb):
         )
     st = syn[(syn["label"] == "STARE") & syn["ok"]]["peak_rss_gb"].dropna()
     if len(st):
-        lines.append(f"STARE peak RSS per task: {st.min():.2f}-{st.max():.2f} GB")
+        lines.append(f"STARE peak RSS (largest single job): {st.min():.2f}-{st.max():.2f} GB")
     va = syn[syn["label"] == "VALIS"]
     if len(va):
         bad = va[~va["ok"]]
@@ -243,7 +251,7 @@ def caption_numbers(syn, node_gb):
     return lines
 
 
-def draw(syn, coh, colors, node_gb, out, logy):
+def draw(syn, coh, colors, node_gb, out, logy, unit_of="patient"):
     fig, axes = ps.figure(width="single", aspect=0.85)
     ax = axes[0]
     col = {"STARE": colors["STARE"], "VALIS": ps.GREY}
@@ -329,7 +337,10 @@ def draw(syn, coh, colors, node_gb, out, logy):
         lo, hi = ax.get_ylim()
         ax.set_ylim(lo, max(hi, node_gb * (1.6 if logy else 1.1)))
     ax.set_xlabel("Slide size (px per side)")
-    ax.set_ylabel("Peak RSS (GB" + (", log10)" if logy else ")"))
+    ax.set_ylabel(
+        ("Peak RSS per patient (GB" if unit_of == "patient" else "Peak RSS (GB")
+        + (", log10)" if logy else ")")
+    )
     L = ps.plt.Line2D
     handles = [
         L([], [], ls="-", marker="o", ms=3, lw=0.8, color=col["STARE"]),
@@ -337,7 +348,11 @@ def draw(syn, coh, colors, node_gb, out, logy):
         L([], [], ls="", marker="D", ms=3, mfc="none", mec=ps.GREY, mew=0.7),
         L([], [], ls="", marker="x", ms=4, color=ps.GREY, mew=0.8),
     ]
-    names = ["STARE (per task)", "VALIS (per slide)", "cohort slides", "failed run"]
+    names = (
+        ["STARE", "VALIS", "cohort patients", "failed run"]
+        if unit_of == "patient"
+        else ["STARE (per task)", "VALIS (per slide)", "cohort slides", "failed run"]
+    )
     ax.legend(
         handles,
         names,
@@ -387,6 +402,12 @@ def main(argv=None):
     ap.add_argument("--min-px", type=float, default=4096)
     ap.add_argument("--max-px", type=float, default=65536)
     ap.add_argument("--failed-at", choices=("node", "peak"), default="node")
+    ap.add_argument(
+        "--unit",
+        choices=("patient", "round"),
+        default="patient",
+        help="one point per patient (both methods: the largest single job) or per round",
+    )
     ap.add_argument("--linear-y", action="store_true")
     ap.add_argument("--outdir", default="figures/cost")
     a = ap.parse_args(argv)
@@ -397,7 +418,7 @@ def main(argv=None):
     syn = pick(a.synthetic, a.synthetic_dataset, names, a.synthetic_cases)
     if not syn:
         raise SystemExit("no synthetic rows for either method")
-    syn = pd.concat([points(r, True) for r in syn.values()], ignore_index=True)
+    syn = pd.concat([points(r, True, a.unit) for r in syn.values()], ignore_index=True)
     scale = syn["case_id"].str.contains(r"(?:^|;)scale_\d+", regex=True)
     if scale.any() and not a.all_synthetic:
         if (~scale).any():
@@ -419,7 +440,9 @@ def main(argv=None):
         c = pick(a.cohort, a.cohort_dataset, names, a.cohort_cases)
         if c:
             coh = place_failed(
-                pd.concat([points(r, False) for r in c.values()], ignore_index=True),
+                pd.concat(
+                    [points(r, False, a.unit) for r in c.values()], ignore_index=True
+                ),
                 a.node_gb,
                 a.failed_at,
             )
@@ -430,7 +453,7 @@ def main(argv=None):
         )
     out = Path(a.outdir) / "rss_vs_size"
     out.parent.mkdir(parents=True, exist_ok=True)
-    draw(syn, coh, colors, a.node_gb, str(out), not a.linear_y)
+    draw(syn, coh, colors, a.node_gb, str(out), not a.linear_y, a.unit)
     lines = caption_numbers(syn, a.node_gb)
     if len(coh):
         lines.append(
