@@ -174,8 +174,8 @@ def compose(
         for y in np.arange(tile, H * factor, tile) / factor:
             ax.axhline(y, color="white", lw=0.25, ls=":", alpha=0.6)
     for txt, col, yy in (
-        ("reference DAPI", C.CYAN, 0.06),
-        (f"moving DAPI after {a.label}", C.MAGENTA, 0.02),
+        (f"reference {a.ref_name}", C.CYAN, 0.06),
+        (f"moving {a.mov_name} after {a.label}", C.MAGENTA, 0.02),
     ):
         ax.text(
             0.985,
@@ -482,6 +482,12 @@ def main(argv=None):
         "--ref-image",
         help="instead of registered.csv: the reference slide, PATH[@CHANNEL] (CHANNEL "
         "an index or a name; default the DAPI/Hoechst channel by OME name)",
+    )
+    ap.add_argument(
+        "--ref-name", default="DAPI", help="reference channel's name on the figure"
+    )
+    ap.add_argument(
+        "--mov-name", default="DAPI", help="moving channel's name on the figure"
     )
     ap.add_argument(
         "--pixel-um", type=float, help="µm per px, if the slides do not say"
