@@ -152,6 +152,7 @@ from pathlib import Path
 
 from .. import resources
 from . import _valis_points as vp
+from . import _valis_writer_field as wf
 from . import require_fluorescence
 
 SCOPE = "group"
@@ -718,7 +719,8 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                 "n_cpus": "the allocation (4 on every rung; the pipeline's REGISTER "
                 "asks for 8)",
             },
-            "point_warp": "valis.warp_tools.warp_xy_inv on the writer's crop"
+            "point_warp": "the writer's field (pyvips affine, as warp_img), then "
+            "valis.warp_tools.warp_xy_inv's rigid chain, on the writer's crop"
             if points == "image"
             else "valis.warp_tools.warp_xy_from_to as Slide.warp_xy_from_to calls it",
             "benchmark_side": [
@@ -729,10 +731,12 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                 "wrapped for the duration of the call: fields and matrices are copied "
                 "out, the writer runs with the clock paused; no argument or result is "
                 "changed",
-                "points: the reference-grid pixel plus the writer's crop origin, then "
-                "valis.warp_tools.warp_xy_inv with the slide's own M, shapes and "
-                "bk_dxdy; the rounding of the crop origin is measured on the installed "
-                "warp_tools.warp_img",
+                "points: the reference-grid pixel plus the writer's crop origin; the "
+                "non-rigid field read as warp_img reads it (scaled onto the canvas by "
+                "pyvips affine with the writer's bicubic interpolator, "
+                "methods/_valis_writer_field.py), then valis.warp_tools.warp_xy_inv's "
+                "rigid chain with the slide's own M and shapes; the rounding of the "
+                "crop origin is measured on the installed warp_tools.warp_img",
                 "a stored (pyvips) field is loaded whole as NumPy (VALIS's vectorised "
                 "branch instead of its per-point loop; the field is the same)",
                 "the written image moved from registered_slides/ to the result's "
@@ -815,10 +819,10 @@ def _results(cases, moving, placed, how, call, state, opts, rc, host):
                     "writer_kwargs": source.get("kwargs", {}),
                     "fill": FILL,
                     "valid_box": vp.footprint_box(
-                        vp.image_map(snap, warp_tools).fn,
+                        wf.image_map(snap, warp_tools).fn,
                         snap["ref"]["src_rc"],
                         snap["src_rc"],
                     ),
                     **vp.describe_file(path),
                 }
-            yield cid, variant, vp.point_map(snap, warp_tools, points), own
+            yield cid, variant, wf.point_map(snap, warp_tools, points), own

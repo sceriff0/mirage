@@ -36,6 +36,7 @@ from benchmarks.regbench import selfcheck as sc
 from benchmarks.regbench.cases import Case, load_case, result_dir, write_case
 from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 from benchmarks.regbench.methods import _valis_points as vp
+from benchmarks.regbench.methods import _valis_writer_field as wf
 from benchmarks.regbench.methods import valis as valis120
 from benchmarks.regbench.methods import valis_mirage
 
@@ -336,6 +337,69 @@ def test_the_image_map_follows_the_emulated_writer(pair, stage, rounding):
     res = sc.compare(vp.image_map(snap, warp_tools()), pair["dots_mov_xy"], image)
     assert res["status"] == sc.OK, res["failed"]
     assert res["err_px_p95"] < 0.25 and res["n_found"] >= 0.99 * res["n_dots"]
+
+
+# ── the field as the writer reads it (methods/_valis_writer_field.py) ─────────
+# A field about 25 canvas px per sample, zero outside the tissue box, as VALIS's is: the
+# step where the point path's spline and the writer's libvips bicubic part.
+STEP = {"tissue_step": True, "field_scale": 0.1}
+
+
+@pytest.mark.parametrize("stored", [False, True])
+def test_at_a_tissue_step_only_the_writers_reading_of_the_field_follows_its_image(
+    pair, stored
+):
+    """The cluster's selfcheck of 2026-10-24: every non-rigid VALIS row passed on the
+    whole image (p95 <= 0.18 px) and failed in the 512 px blocks on the tissue boundary
+    (0.4 to 1.9 px), every rigid row passed. The spline reading must be seen to fail
+    here, or this fake could not have caught it; the writer's reading must pass."""
+    fv.configure(**STEP)
+    reg, ref, mov = registrar(pair)
+    mov.stored_dxdy = stored
+    snap = vp.snapshot(mov, ref, warp_tools(), True)
+    image = dots_image(pair, mov, True)
+    dots = pair["dots_mov_xy"]
+    new = sc.compare(wf.image_map(snap, warp_tools()), dots, image)
+    assert new["status"] == sc.OK, new["failed"]
+    old = sc.compare(vp.image_map(snap, warp_tools()), dots, image)
+    assert old["status"] == sc.INCONSISTENT
+    assert [c["how"] for c in fv.calls("interpolate")] == ["bicubic"] * len(
+        fv.calls("interpolate")
+    )
+
+
+def test_a_rigid_stage_is_the_point_path_unchanged(pair):
+    fv.configure(**STEP)
+    reg, ref, mov = registrar(pair)
+    snap = vp.snapshot(mov, ref, warp_tools(), False)
+    xy = np.array([[3.5, 7.25], [400.0, 300.0], [639.0, 511.0]])
+    assert np.array_equal(
+        wf.image_map(snap, warp_tools()).fn(xy), vp.image_map(snap, warp_tools()).fn(xy)
+    )
+    assert not fv.calls("affine")
+
+
+def test_the_writers_field_is_read_in_windows_and_nan_stays_nan(pair):
+    fv.configure(**STEP)
+    reg, ref, mov = registrar(pair)
+    snap = vp.snapshot(mov, ref, warp_tools(), True)
+    vips_dxdy, matrix = wf.writer_field(snap, warp_tools())
+    xy = np.array([[1.0, 2.0], [300.5, 200.25], [np.nan, 4.0], [511.0, 400.0]])
+    whole = wf.displacement(xy, vips_dxdy, matrix, warp_tools(), window=4096)
+    small = wf.displacement(xy, vips_dxdy, matrix, warp_tools(), window=64)
+    assert np.allclose(whole, small, equal_nan=True)
+    assert np.isnan(whole[2]).all() and np.isfinite(whole[[0, 1, 3]]).all()
+    assert len(fv.calls("affine")) == 1 + 3  # one window, then one per block
+    assert len(wf.displacement(np.empty((0, 2)), vips_dxdy, matrix, warp_tools())) == 0
+
+
+def test_only_the_valis_adapters_carry_the_writers_field():
+    """It is a module of its own so that no other method's reuse_key moves with it."""
+    for name in METHODS:
+        files = {p.name for p in methods.code_files(name)}
+        assert ("_valis_writer_field.py" in files) == (
+            name in ("valis", "valis_mirage")
+        )
 
 
 WRONG = {

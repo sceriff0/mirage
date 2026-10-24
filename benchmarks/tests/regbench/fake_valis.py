@@ -46,7 +46,14 @@ CONFIG = {
     "stored": False,  # first pass hands fields over as pyvips images (the tiler)
     "micro_stored": False,  # so does the micro pass
     "mutate_in_place": True,  # the micro pass also scribbles over the old arrays
-    "field_order": 3,  # the writer's interpolation of the field
+    "field_order": 3,  # the writer's interpolation of the field, with "spline"
+    # how the writer reads the field: "libvips" (warp_img: the field scaled onto the canvas
+    # by pyvips affine, bicubic = Catmull-Rom, zero beyond its edge) or "spline" (the old
+    # emulation: the point path's own reading, so it could never tell the two apart)
+    "field_reader": "libvips",
+    # the field is zero outside a tissue box, as VALIS's is: the step where the two
+    # readings part (methods/_valis_writer_field.py)
+    "tissue_step": False,
     "fail_register": False,
     "micro_raises": False,
     "skip_write": (),  # slide names the writer raises on
@@ -106,6 +113,62 @@ class VipsImage:
     def stats(self):
         raise RuntimeError("the fake pyvips image has no stats")
 
+    def affine(self, matrix, oarea=None, interpolate=None, premultiplied=False):
+        """``pyvips.Image.affine`` for a pure scale, no offsets: output pixel ``(X, Y)``
+        is the input read at ``(X / sx, Y / sy)`` by libvips' bicubic (Catmull-Rom),
+        zero beyond the input's edge (measured against libvips 8.17, 2026-10-24)."""
+        record("affine", matrix=[float(v) for v in matrix], oarea=list(oarea))
+        sx, b, c, sy = (float(v) for v in matrix)
+        if b or c:
+            raise AssertionError("the fake affine is a scale only")
+        x0, y0, w, h = (int(v) for v in oarea)
+        yy, xx = np.mgrid[y0 : y0 + h, x0 : x0 + w].astype(float)
+        a = self.array.reshape(self.height, self.width, -1)
+        bands = [
+            catmull_rom(a[..., i], xx.ravel() / sx, yy.ravel() / sy).reshape(h, w)
+            for i in range(a.shape[2])
+        ]
+        return VipsImage(np.dstack(bands))
+
+
+def catmull_rom(plane, x, y):
+    """``plane`` read at ``(x, y)`` (its own pixels) by libvips' bicubic interpolator,
+    Catmull-Rom, a sample outside the plane being 0 (measured against libvips 8.17's
+    ``affine``, 2026-10-24: equal to 1e-12 everywhere)."""
+    plane = np.asarray(plane, float)
+    h, w = plane.shape
+    ix, iy = np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
+    tx, ty = x - ix, y - iy
+
+    def weights(t):
+        return [
+            (-(t**3) + 2 * t**2 - t) / 2,
+            (3 * t**3 - 5 * t**2 + 2) / 2,
+            (-3 * t**3 + 4 * t**2 + t) / 2,
+            (t**3 - t**2) / 2,
+        ]
+
+    wx, wy = weights(tx), weights(ty)
+    out = np.zeros(len(x))
+    for j in range(4):
+        r = iy + j - 1
+        for i in range(4):
+            q = ix + i - 1
+            inside = (r >= 0) & (r < h) & (q >= 0) & (q < w)
+            v = np.zeros(len(x))
+            v[inside] = plane[r[inside], q[inside]]
+            out += wy[j] * wx[i] * v
+    # more than one pixel beyond the plane, libvips draws the background, 0 (measured)
+    out[(x < -1) | (x > w) | (y < -1) | (y > h)] = 0.0
+    return out
+
+
+class Interpolate:
+    @staticmethod
+    def new(name):
+        record("interpolate", how=name)
+        return name
+
 
 def round_origin(xy, how=None):
     how = how or CONFIG["rounding"]
@@ -117,6 +180,11 @@ def round_origin(xy, how=None):
 def vips2numpy(vi):
     record("vips2numpy")
     return np.asarray(vi.array)
+
+
+def numpy2vips(a):
+    record("numpy2vips")
+    return VipsImage(np.asarray(a))
 
 
 def get_warp_scaling_factors(
@@ -312,14 +380,22 @@ def canvas_points(slide, xy_out, non_rigid=True, rounding=None):
         field = np.array([field.array[..., 0], field.array[..., 1]])
     if field is not None:
         k = canvas / np.asarray(field[0].shape, float)[::-1]
-        at = [x[:, 1] / k[1], x[:, 0] / k[0]]
-        order = CONFIG["field_order"]
-        d = np.column_stack(
-            [
-                map_coordinates(np.asarray(f, float), at, order=order, mode="nearest")
-                for f in field
-            ]
-        )
+        if CONFIG["field_reader"] == "libvips":
+            # the writer reads the field at integer canvas pixels: the drawn grid is one
+            d = np.column_stack(
+                [catmull_rom(f, x[:, 0] / k[0], x[:, 1] / k[1]) for f in field]
+            )
+        else:
+            at = [x[:, 1] / k[1], x[:, 0] / k[0]]
+            order = CONFIG["field_order"]
+            d = np.column_stack(
+                [
+                    map_coordinates(
+                        np.asarray(f, float), at, order=order, mode="nearest"
+                    )
+                    for f in field
+                ]
+            )
         x = x + k * d
     r = x * (np.asarray(slide.reg_img_shape_rc, float)[::-1] / canvas)
     src = np.column_stack([r, np.ones(len(r))]) @ np.asarray(slide.M, float).T
@@ -356,6 +432,15 @@ def _name(path):
         if name.lower().endswith(suffix):
             return name[: -len(suffix)]
     return os.path.splitext(name)[0]
+
+
+def _tissue(shape_rc):
+    """1 inside the tissue box (the selfcheck pair's, ``selfcheck.pair_spec``), else 0."""
+    h, w = shape_rc
+    yy, xx = np.mgrid[0:h, 0:w].astype(float)
+    return (
+        (xx > 0.08 * w) & (xx < 0.97 * w) & (yy > 0.06 * h) & (yy < 0.96 * h)
+    ).astype(float)
 
 
 def _smooth_field(shape_rc, amp, seed):
@@ -629,6 +714,8 @@ class Valis:
                 s._bk, s._fwd = np.zeros((2, *shape)), np.zeros((2, *shape))
             else:
                 s._bk = _smooth_field(shape, 2.0, 1.0 + i)
+                if CONFIG["tissue_step"]:
+                    s._bk = s._bk * _tissue(shape)
                 s._fwd = -s._bk
         self.error_df = ErrorTable()
         return object(), object(), self.error_df
@@ -768,6 +855,7 @@ def modules(version):
         "valis.warp_tools": _module(
             "valis.warp_tools",
             vips2numpy=vips2numpy,
+            numpy2vips=numpy2vips,
             get_warp_scaling_factors=get_warp_scaling_factors,
             warp_xy_rigid=warp_xy_rigid,
             warp_xy=warp_xy,
@@ -803,7 +891,7 @@ def modules(version):
     return {
         "valis": pkg,
         **mods,
-        "pyvips": _module("pyvips", Image=VipsImage),
+        "pyvips": _module("pyvips", Image=VipsImage, Interpolate=Interpolate),
         "jpype": _module("jpype", isJVMStarted=lambda: True),
     }
 
