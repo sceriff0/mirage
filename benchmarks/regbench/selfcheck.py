@@ -845,6 +845,7 @@ def compare(
     valid_box=None,
     mask_max=None,
     mask=None,
+    view=None,
 ):
     """Does ``point_map`` follow the dots drawn in ``native_dots_image``?
 
@@ -1100,7 +1101,75 @@ def compare(
         )
         for cap in MASK_CAPS.get(mask, (None,))
     }
+    if view is not None:
+        partner = det_px[j[found]] if forward else where[found] - resid
+        _write_view(view, plane, out, where, found, resid, partner, det_px)
     return out
+
+
+VIEW_CROP = 8  # px each side of a dot in the view's crops: 17 px, a 1 px error visible
+VIEW_N = 12  # crops of the worst dots, and as many of dots picked at random
+
+
+def _write_view(path, plane, out, where, found, resid, partner, det_px):
+    """What ``compare`` measured, as one ``.npz`` to draw (``selfcheck_view.py``): the
+    starting points in the output's own pixels, which were found and their residuals,
+    where their partner sits, every detection, the blocks the gate objected to, and
+    crops of the written image around the worst dots, the dots not found and dots
+    picked at random. Never fails the comparison: a view that cannot be written is
+    skipped."""
+    try:
+        err = np.full(len(where), np.nan)
+        err[found] = np.hypot(*resid.T) if len(resid) else []
+        part = np.full((len(where), 2), np.nan)
+        part[found] = partner
+        rng = np.random.default_rng(0)
+        worst = np.argsort(-np.nan_to_num(err, nan=-1.0))[:VIEW_N][: int(found.sum())]
+        missed = np.flatnonzero(~found)[:VIEW_N]
+        pool = np.setdiff1d(np.flatnonzero(found), worst)
+        rand = rng.choice(pool, min(VIEW_N, len(pool)), replace=False)
+        picks = np.concatenate([worst, missed, rand]).astype(np.int64)
+        kinds = np.array(
+            ["worst"] * len(worst) + ["missed"] * len(missed) + ["random"] * len(rand)
+        )
+        h, w = plane.shape
+        r = VIEW_CROP
+        crops = np.full((len(picks), 2 * r + 1, 2 * r + 1), np.nan, np.float32)
+        corner = np.zeros((len(picks), 2), np.int64)
+        for n, i in enumerate(picks):
+            cx, cy = (int(round(v)) for v in where[i])
+            x0, y0 = max(cx - r, 0), max(cy - r, 0)
+            x1, y1 = min(cx + r + 1, w), min(cy + r + 1, h)
+            corner[n] = cx - r, cy - r
+            if x1 > x0 and y1 > y0:
+                crops[n, y0 - cy + r : y1 - cy + r, x0 - cx + r : x1 - cx + r] = (
+                    plane.read(y0, y1, x0, x1)
+                )
+        bad = [b for b in out.get("blocks", []) if b["judged"] and not b["passes"]]
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            path,
+            direction=out["direction"],
+            image_hw=np.asarray(plane.shape),
+            block=BLOCK,
+            where=where,
+            found=found,
+            err=err,
+            partner=part,
+            detections=det_px,
+            failed_blocks=np.asarray(
+                [(b["block_x"], b["block_y"]) for b in bad], np.int64
+            ).reshape(-1, 2),
+            status=out["status"],
+            failed="; ".join(out["failed"]),
+            picks=picks,
+            kinds=kinds,
+            crops=crops,
+            corner=corner,
+        )
+    except Exception as exc:  # a picture is never a reason to lose the numbers
+        out["view_error"] = f"{type(exc).__name__}: {exc}"
 
 
 def over_cap(record):
@@ -1307,7 +1376,7 @@ def _proxy(mod, name, by_case, extras):
     return ns
 
 
-def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
+def _check_variant(mod, variant, final, rec, got, extras, pair, mask, view=None):
     """One variant's selfcheck record."""
     if rec is None or not rec.get("ok"):
         rec = rec or {}
@@ -1362,6 +1431,7 @@ def _check_variant(mod, variant, final, rec, got, extras, pair, mask):
             native.get("valid_box"),
             mask_cap(mod, info, mask),
             mask,
+            view,
         )
     except MemoryError as exc:
         return {"status": NOT_CHECKED, "cause": "oom", "error": str(exc)}
@@ -1547,6 +1617,7 @@ def run_case(
                     extras.get(cid, {}),
                     pair,
                     mask,
+                    work / "view" / f"{cid}_{labelled[variant]}.npz",
                 )
             if rec:
                 res["register_s"] = rec.get("register_s")
