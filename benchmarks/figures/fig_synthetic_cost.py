@@ -1,11 +1,15 @@
-"""Peak memory and CPU time against input size on the synthetic set: VALIS vs STARE.
+"""Peak memory and CPU time against input size, per patient: VALIS vs STARE.
 
 Two panels in the style of Fig. 3d-e: at each input size one box per method (black
 outline, every patient a jittered point, STARE in its colour, VALIS grey, the median under
 the box), log y.
 
     python -m benchmarks.figures.fig_synthetic_cost <REGBENCH_OUT>/tables \
-        --valis valis120_hires --stare stare --outdir figures/synthetic
+        --valis valis120_hires --stare stare --outdir figures/cost
+
+The benchmark has no synthetic set any more (``regbench/paper/collect.py``: the synthetic
+sweep is removed from the paper), so the default ``--dataset`` is the cohort, ``multiplex``:
+its patients differ in size by nature, and are log-binned below.
 
 READS the scorer's own tables, nothing re-derived:
 
@@ -17,13 +21,14 @@ READS the scorer's own tables, nothing re-derived:
                          patient that failed still has a size
 
 x = the patient's whole workload: the sum of its rounds' moving pixels (fig. 2c's
-``input_gpx``), at the synthetic set's design sizes (log-binned past ``--max-levels``).
+``input_gpx``): each distinct size its own box when there are at most ``--max-levels`` of
+them (a designed size series), otherwise ``--max-levels`` log-spaced bins (a cohort).
 
 ONLY COMPLETE PATIENTS ARE DRAWN: the peak of a run that died is where it died, not what
 the registration needs. The others are COUNTED at the top of their size ("3 failed"),
-with their causes on stdout and in synthetic_cost_failed.csv: never hidden.
+with their causes on stdout and in <stem>_failed.csv: never hidden.
 
-Outputs: <outdir>/synthetic_cost.pdf/.png/.svg, _source_data.csv, synthetic_cost_failed.csv.
+Outputs: <outdir>/cost_vs_size_<dataset>.pdf/.png/.svg, _source_data.csv, _failed.csv.
 """
 
 from __future__ import annotations
@@ -100,7 +105,10 @@ def levels(df, max_levels):
     edges = np.geomspace(sizes.min(), sizes.max() * 1.0001, max_levels + 1)
     idx = np.clip(np.digitize(df["size_gpx"], edges) - 1, 0, max_levels - 1)
     names = [f"{edges[i]:.2g}–{edges[i + 1]:.2g} Gpx" for i in range(max_levels)]
-    df["level"] = [names[i] for i in idx]
+    # a patient without a size is in no bin (digitize would put NaN in the last one)
+    df["level"] = [
+        names[i] if np.isfinite(v) else None for i, v in zip(idx, df["size_gpx"])
+    ]
     return [n for n in names if (df["level"] == n).any()]
 
 
@@ -176,9 +184,9 @@ def main(argv=None):
         "--valis", required=True, help="the VALIS variant, e.g. valis120_hires"
     )
     ap.add_argument("--stare", default="stare")
-    ap.add_argument("--dataset", default="synthetic")
+    ap.add_argument("--dataset", default="multiplex")
     ap.add_argument("--max-levels", type=int, default=8)
-    ap.add_argument("--outdir", default="figures/synthetic")
+    ap.add_argument("--outdir", default="figures/cost")
     ap.add_argument("--seed", type=int, default=0, help="the jitter's seed")
     a = ap.parse_args(argv)
 
@@ -186,6 +194,12 @@ def main(argv=None):
     colors = C.palette(a.outdir)
     df = load(a.tables, a.dataset, {"VALIS": a.valis, "STARE": a.stare})
     order = levels(df, a.max_levels)
+    unsized = df[df["level"].isna()]
+    if len(unsized):
+        print(
+            f"{unsized['patient'].nunique()} patient(s) without a moving_gpx in "
+            f"resources.csv, in no size bin: {sorted(unsized['patient'].unique())}"
+        )
     for method in METHODS:
         m = df[df["method"] == method]
         bad = m[~m["complete"]]
@@ -195,7 +209,7 @@ def main(argv=None):
             f"{len(m) - len(bad)} complete, {len(bad)} failed"
             + (f" ({causes})" if causes else "")
         )
-    out = Path(a.outdir) / "synthetic_cost"
+    out = Path(a.outdir) / f"cost_vs_size_{a.dataset}"
     out.parent.mkdir(parents=True, exist_ok=True)
     df[~df["complete"]].to_csv(f"{out}_failed.csv", index=False)
     draw(df, order, str(out), colors, a.seed)

@@ -366,8 +366,9 @@ exactly the cohort's result names and opens its summary on the six primary rows:
 - **Two methods run at two settings, and the high-resolution one is primary** (the
   user's ruling of 2026-10-11, fixed before any cohort run). VALIS 1.2.0: `valis120` is
   upstream's default pipeline, `valis120_hires` upstream's own high-resolution example.
-  DeeperHistReg: the `deeperhistreg_{gpu,cpu}` rows are the package's default parameter
-  set (4096 px), the `_hr` rows its shipped 8192 px set. Both settings of both methods
+  DeeperHistReg: the `deeperhistreg_{gpu,cpu}` rows are the 4096 px preset its README's
+  library example uses (upstream names no single default), the `_hr` rows its shipped
+  8192 px set. Both settings of both methods
   are run, scored and shown; the default-setting rows are in the same family and are
   never hidden. `variants.PRIMARY_VALIS120` and `variants.PRIMARY_DEEPERHISTREG` are the
   one line that names each.
@@ -563,7 +564,7 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 |---|---|---|---|---|---|
 | `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame | registered on a one-channel proxy of each slide: the case's own grey proxy, or a haematoxylin / smoothed proxy the benchmark writes; STARE's own `--prep` on it; the image written is the registered proxy |
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
-| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same | same |
+| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0. **`valis120` is upstream's default** (`Valis(...).register()`, nothing more); `valis120_micro` adds upstream's OPTIONAL micro-registration (`register_micro()` with no argument, 4096 px), so it is the default plus an extra step, not the default. Run and shown; not primary | patient | same | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
@@ -3749,8 +3750,25 @@ example; both run, and `valis120_hires` is the primary row by the user's ruling 
 | run | call | what the benchmark sets |
 |---|---|---|
 | `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x attempt, GiB - 4)`, attempt being the pipeline's own attempt for that memory (REGISTER asks `64 GB x 2^(attempt-1)`; the module's formula: 12, 48, 80, 96, 96 GiB on the five rungs), `stage_checkpoint_dir=None` (files only) |
-| `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()`, `.register_micro()` with no argument | the reference slide. `align_to_reference` stays `False` |
+| `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()` (the row `valis120`: upstream's default), then `.register_micro()` with no argument (the row `valis120_micro`: upstream's optional extra step) | the reference slide; also `img_list`, the slides already placed in `src`, which upstream's basic example does not pass. `align_to_reference` stays `False` |
 | `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
+
+Upstream's default is `register()` alone: the basic example of `docs/examples.rst:22-30` at v1.2.0 calls `registration.Valis(src, dst)` and `.register()` and nothing more, `:122` calls that "the default pipeline" and says that after it "one can also perform" `register_micro`, and `README.rst:66` calls micro-registration optional (`docs/examples.rst` `[PARTIAL: lines 1-36 and 100-175]`, `README.rst` `[PARTIAL: lines 43-66]`). `registration.py:76-80` holds only the size constants (512, 1024, 512, 2048, 4096 px); 4096 is `register_micro`'s default ARGUMENT (`:4798`), not a call the default pipeline makes (`registration.py` `[PARTIAL: lines 55-100, 4593-4600, 4798-4805]`). So the row `valis120` is the default; `valis120_micro` is the default plus the optional micro step. (Corrected 2026-10-24: this section called the pair of calls the default.)
+
+**Adapter docstrings left wrong on purpose (audit of 2026-10-24).** Each adapter's bytes are
+in its `reuse_key` (`methods.code_fingerprint`), so editing even a docstring makes every
+finished unit of that method run again on the next resume. These corrections live here
+instead, and the sources stay byte-identical: `methods/valis.py`'s header calls the pair
+`register()` + `register_micro()` upstream's default (it is `register()` alone, above), cites
+`registration.py:76-80` for call defaults (they are the constants; the defaults are
+`Valis.__init__` `:1786-1787` and `register_micro` `:4803`), and says the reference slide is
+the one argument set (`img_list` is passed too). `methods/deeperhistreg.py:2` says nothing but
+the device is changed (`save_final_images` is too, its writer then run after the clock with
+`save_final`'s arguments; the `_fluo` rows change two more keys). `methods/ashlar.py`'s
+header says two flags are set (three are: `-o`, `-c`, `-m 15` = the default, plus the
+`filepattern` reader's `pattern`, `overlap`, `pixel_size`); `benchmarks/ashlar/original.py`
+says the tiles carry a stage error (regbench adds none, and noise only to the reference
+cycle's tiles when `noise_frac > 0`). None of these changes what any method computes.
 
 **The pipeline's VALIS at three tiers x micro-registration depth 0, 1, 2** (Plan F, the
 paper's tier / micro table). `--opt memory_mode=<high|medium|low>` and
@@ -4229,9 +4247,14 @@ writer is run afterwards, outside the clock, as the package's own example does).
   the authors' stated use and **the `_fluo` rows are the benchmark's**: brightfield after
   the flip is bright tissue on black, which is unflipped DAPI, so `flip_intensity = False`
   restores the polarity the method was built for. They are never primary.
-- **Which setting is upstream's default, and which row is primary.** The package's
-  default is the 4096 px set: `default_initial_nonrigid` is the factory its README's usage
-  example calls (the repository's `README.md:103` `[PARTIAL: lines 88-112 and 222-236]`), and the
+- **Which setting is upstream's default, and which row is primary.** Upstream names
+  no single default. `default_initial_nonrigid` (4096 px) is the factory its README's library
+  example calls (the repository's `README.md:103` `[PARTIAL: lines 88-112 and 222-236]`) and its
+  example notebook uses; its command line and Docker image, and the standalone
+  `deeperhistreg_examples/nonrigid_registration.py`, use `default_nonrigid` instead (no
+  initial alignment; per the 2026-10-24 audit of `run.py:80-81`, not re-read here). The
+  benchmark takes the README's library preset, the only full pipeline (initial alignment +
+  non-rigid) at 4096 px. The
   8192 px `default_initial_nonrigid_high_resolution` is another shipped factory, listed
   there as "High Resolution". Both are run,
   on the GPU and on the CPU, each with its own selfcheck. The primary row is the 8192 px

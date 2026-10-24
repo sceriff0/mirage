@@ -5,11 +5,23 @@ one pipeline run. Schematics are drawn by hand. The panels are composed in Affin
 Each script also writes every panel as its own PNG, plus a `_source_data.csv` holding
 the plotted values and every choice made.
 
+**Everything, start to end** (from the regbench root, `REGBENCH_INPUT` = the samplesheet):
+
+```bash
+bash <checkout>/benchmarks/figures/run_all.sh launch   # the benchmark: one sbatch chain
+bash <checkout>/benchmarks/figures/run_all.sh status   # done when nothing is queued
+bash <checkout>/benchmarks/figures/run_all.sh paper    # paper tables + every figure
+```
+
+Run `paper` before `keep_results.sh`, which frees the written images the crop and overlay
+figures read. The figures alone:
+
 ```bash
 pip install -r requirements/ci.txt        # matplotlib, pandas, scikit-image, STARE (pinned)
 cd <regbench root>                         # where regbench.env sets REGBENCH_CASES / _OUT
 bash <checkout>/benchmarks/figures/make_figures.sh             # all of them
 bash <checkout>/benchmarks/figures/make_figures.sh cohort crops # some of them
+# figures: cost cohort crops overlay segmentation
 ```
 
 Every choice (variants, cases, zoom sizes, display, seed) sits in one block at the top of
@@ -23,7 +35,7 @@ harness's own code.
 
 | Script | Reproduces | Reads |
 |---|---|---|
-| `fig_synthetic_cost.py` | Peak RSS and CPU time vs input size on the synthetic set, VALIS vs STARE | `tables/summary_resources.csv`, `tables/resources.csv` |
+| `fig_synthetic_cost.py` | Peak RSS and CPU time vs input size per patient, VALIS vs STARE (the cohort: the benchmark has no synthetic set any more) | `tables/summary_resources.csv`, `tables/resources.csv` |
 | `fig_cohort_scores.py` | Fig. 3b–e: Dice, centroid distance, peak RSS, CPU time per method; paired Wilcoxon vs STARE, Holm-corrected | `tables/cells.csv`, `tables/summary_resources.csv` |
 | `fig_crop_grid.py` | Fig. 3a: one patient's rounds, the same crop unregistered and after each method, Dice per crop | cases, results' written images, `warped.npz` |
 | `fig_overlay.py` | Fig. 4b: a case's DAPI before (and after) registration, three zooms: translation, rotation, deformation | cases, one result's `warped.npz` and images |

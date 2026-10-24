@@ -4,7 +4,7 @@
 #
 #   cd <regbench root> && bash <checkout>/benchmarks/figures/make_figures.sh [figure ...]
 #
-# figures: synthetic cohort crops overlay segmentation (default: all). Each figure writes
+# figures: cost cohort crops overlay segmentation (default: all). Each figure writes
 # its own _source_data.csv, which records what was chosen (case, patient, crop, zones) and
 # the display settings. benchmarks/figures/README.md says what each one reproduces.
 set -euo pipefail
@@ -18,8 +18,9 @@ SEED="${SEED-0}"                            # the jitter of every box plot
 # one variant per family; the box order is this order
 VALIS="${VALIS-valis120_hires}"             # VALIS as shown everywhere
 STARE="${STARE-stare}"                      # STARE at the shipped stride
-COHORT_METHODS="${COHORT_METHODS-Unregistered=initial,ASHLAR (anchored)=ashlar,DeeperHistReg=deeperhistreg_hr_gpu_asdrawn,PALOM=palom,VALIS=$VALIS,STARE=$STARE}"
+COHORT_METHODS="${COHORT_METHODS-Unregistered=initial,ASHLAR=ashlar,DeeperHistReg=deeperhistreg_hr_gpu_asdrawn,PALOM=palom,VALIS=$VALIS,STARE=$STARE}"
 SCORE_SET="${SCORE_SET-outlines}"           # outlines (the headline) or nuclei
+COST_DATASET="${COST_DATASET-multiplex}"         # peak RSS / CPU vs input size: the cohort
 
 # Fig. 3a: rows, the patient (empty = the one closest to the median Dice of the rows'
 # methods), how many rounds, the crop (empty = the densest window of reference nuclei)
@@ -68,13 +69,13 @@ fig() {
         "$FIG_PYTHON" -m "benchmarks.figures.$1" "${@:2}")
 }
 
-if [ $# -gt 0 ]; then want=("$@"); else want=(synthetic cohort crops overlay segmentation); fi
+if [ $# -gt 0 ]; then want=("$@"); else want=(cost cohort crops overlay segmentation); fi
 for f in "${want[@]}"; do
     echo "== $f"
     case "$f" in
-    synthetic)
+    cost)
         fig fig_synthetic_cost "$TABLES" --valis "$VALIS" --stare "$STARE" \
-            --seed "$SEED" --outdir "$OUTDIR/synthetic" ;;
+            --dataset "$COST_DATASET" --seed "$SEED" --outdir "$OUTDIR/cost" ;;
     cohort)
         fig fig_cohort_scores "$TABLES" --methods "$COHORT_METHODS" --set "$SCORE_SET" \
             --seed "$SEED" --outdir "$OUTDIR/cohort" ;;
@@ -101,7 +102,7 @@ for f in "${want[@]}"; do
               "${DISPLAY[@]}" --outdir "$OUTDIR/segmentation")
         [ -n "$SEG_ZOOM_AT" ] && args+=(--zoom "$SEG_ZOOM_AT")
         fig fig_segmentation "${args[@]}" ;;
-    *) echo "unknown figure $f (synthetic cohort crops overlay segmentation)"; exit 2 ;;
+    *) echo "unknown figure $f (cost cohort crops overlay segmentation)"; exit 2 ;;
     esac
 done
 echo "-> $OUTDIR"

@@ -2,7 +2,7 @@
 per method on the cohort, one box per method, every case (or patient) a point.
 
     python -m benchmarks.figures.fig_cohort_scores <REGBENCH_OUT>/tables \
-        --methods "Unregistered=initial,ASHLAR (anchored)=ashlar,...,VALIS=valis120_hires,STARE=stare" \
+        --methods "Unregistered=initial,ASHLAR=ashlar,...,VALIS=valis120_hires,STARE=stare" \
         --outdir figures/cohort
 
 Each panel is its own file (you compose them): <outdir>/cohort_{dice,distance,
