@@ -356,6 +356,135 @@ def compose_grid(grid, zones, win, um_px):
     return fig
 
 
+def choose_many(df, win, n, first):
+    """``n`` windows per kind, ranked: rank 1 is ``first`` (the main figure's zone), then
+    the kinds take turns, each its best tissue-rich window that overlaps no window
+    chosen so far (of any kind). ``{kind: [zone, ...]}``; a kind may get fewer when
+    the slide runs out of room."""
+    out = {k: [first[k]] for k in KINDS}
+    taken = list(first.values())
+    rich = df[df["tissue_rich"]]
+    order = {
+        k: rich.sort_values([f"score_{k}", "cy", "cx"], ascending=[False, True, True])
+        for k in KINDS
+    }
+    for _ in range(1, n):
+        for kind in KINDS:
+            for _, r in order[kind].iterrows():
+                if all(
+                    abs(r["cx"] - c["cx"]) >= win or abs(r["cy"] - c["cy"]) >= win
+                    for c in taken
+                ):
+                    z = {**r.to_dict(), "pinned": False}
+                    out[kind].append(z)
+                    taken.append(z)
+                    break
+    return out
+
+
+def value_text(kind, zn, um_px):
+    return (
+        f"{abs(zn['angle_deg']):.1f}°"
+        if kind == "rotation"
+        else f"{zn['T_px' if kind == 'translation' else 'D_px'] * um_px:.1f} µm"
+    )
+
+
+def compose_many(many, crops, ov, factor, win, um_px, label):
+    """The ranked windows: the overview with every window boxed and named (T1, R1, D1,
+    ...) on the left, a row per kind and a column per rank on the right."""
+    from matplotlib.patches import Rectangle
+    from matplotlib.patheffects import withStroke
+
+    n = max(len(v) for v in many.values())
+    width, gap, top = 180.0, 1.2, 4.0
+    aspect = ov.shape[0] / ov.shape[1]
+    # overview w wide beside a 3 x n grid of side z, as tall as the overview:
+    # w * aspect = 3 z + 2 gap and w + gap + lab + n z + (n - 1) gap = width
+    lab = 3.5  # mm for the row titles between the overview and the grid
+    w = (width - lab - n * gap + 2 * n * gap / 3) / (1 + n * aspect / 3)
+    z = (w * aspect - 2 * gap) / 3
+    h = top + 3 * z + 2 * gap
+    fig = C.fixed_figure(width, h)
+    stroke = [withStroke(linewidth=1.2, foreground="black")]
+    ax = fig.add_axes((0, 1 - (top + w * aspect) / h, w / width, w * aspect / h))
+    ax.imshow(ov, interpolation="lanczos")
+    ax.set_axis_off()
+    C.scale_bar(ax, ov.shape[1], um_px * factor)
+    ax.text(
+        0.015,
+        0.985,
+        label,
+        color="white",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=ps.BASE_PT,
+        fontweight="bold",
+    )
+    x0 = w + gap + lab
+    for k, kind in enumerate(KINDS):
+        tag = kind[0].upper()
+        y = top + k * (z + gap)
+        for j, zn in enumerate(many[kind]):
+            bx, by, bw = (
+                (zn["cx"] - win / 2) / factor,
+                (zn["cy"] - win / 2) / factor,
+                win / factor,
+            )
+            ax.add_patch(Rectangle((bx, by), bw, bw, fill=False, ec="white", lw=0.4))
+            ax.text(
+                bx,
+                by,
+                f"{tag}{j + 1}",
+                color="white",
+                ha="left",
+                va="bottom",
+                fontsize=4.5,
+                path_effects=stroke,
+            )
+            axz = fig.add_axes(
+                ((x0 + j * (z + gap)) / width, 1 - (y + z) / h, z / width, z / h)
+            )
+            rgb = crops[kind][j]
+            axz.imshow(rgb, interpolation="none")
+            axz.set_axis_off()
+            axz.add_patch(
+                Rectangle(
+                    (0, 0),
+                    1,
+                    1,
+                    transform=axz.transAxes,
+                    fill=False,
+                    ec="white",
+                    lw=0.5,
+                )
+            )
+            axz.text(
+                0.04,
+                0.96,
+                f"{tag}{j + 1}  {value_text(kind, zn, um_px)}",
+                color="white",
+                transform=axz.transAxes,
+                ha="left",
+                va="top",
+                fontsize=4.5,
+                path_effects=stroke,
+            )
+            if j == 0:
+                C.scale_bar(axz, rgb.shape[1], um_px * win / rgb.shape[1], frac=0.3)
+        fig.text(
+            (x0 - 0.3) / width,
+            1 - (y + z / 2) / h,
+            TITLES[kind],
+            rotation=90,
+            ha="right",
+            va="center",
+            fontsize=ps.TICK_PT,
+        )
+    return fig
+
+
 def pick_case(a, cases):
     if a.case_id:
         case = next((c for c in cases if str(c.case_id) == a.case_id), None)
@@ -401,6 +530,13 @@ def main(argv=None):
     ap.add_argument("--zoom-um", type=float, default=150.0, help="zoom side (µm)")
     ap.add_argument("--min-cells", type=int, default=40)
     ap.add_argument("--zone", action="append", default=[], help="KIND=X,Y (ref px)")
+    ap.add_argument(
+        "--per-kind",
+        type=int,
+        default=1,
+        help="also draw the N best non-overlapping windows of each kind (a kinds x N "
+        "grid beside an overview naming them), for every side",
+    )
     ap.add_argument("--overview-px", type=int, default=3000)
     ap.add_argument("--clip", default="1,99.8", help="zoom window, percentiles LO,HI")
     ap.add_argument("--clahe", type=float, default=0.01, help="0 = off")
@@ -449,6 +585,32 @@ def main(argv=None):
             pinned[kind] = tuple(float(v) for v in xy.split(","))
         zones = choose(cand, win, pinned)
         cand.to_csv(outdir / f"{stem0}_candidates.csv", index=False)
+        many = choose_many(cand, win, a.per_kind, zones) if a.per_kind > 1 else None
+        if many:
+            pd.DataFrame(
+                [
+                    {
+                        "window": f"{kind[0].upper()}{j + 1}",
+                        "kind": kind,
+                        "rank": j + 1,
+                        "centre_x_px": zn["cx"],
+                        "centre_y_px": zn["cy"],
+                        "side_um": a.zoom_um,
+                        "n_cells": zn["n_cells"],
+                        "shift_um": zn["T_px"] * um_px,
+                        "rotation_deg": zn["angle_deg"],
+                        "nonrigid_rms_um": zn["D_px"] * um_px,
+                        f"score_{kind}": zn[f"score_{kind}"],
+                    }
+                    for kind in KINDS
+                    for j, zn in enumerate(many[kind])
+                ]
+            ).to_csv(outdir / f"{stem0}_windows.csv", index=False)
+            short = [k for k in KINDS if len(many[k]) < a.per_kind]
+            if short:
+                print(
+                    f"fewer than {a.per_kind} non-overlapping windows for {short}: lower --zoom-um"
+                )
         rows = []
         for k, kind in enumerate(KINDS):
             zn = zones[kind]
@@ -522,8 +684,41 @@ def main(argv=None):
                         mov_arr, ch, y0 - int(round(oy)), x0 - int(round(ox)), win, win
                     )
                     zooms[kind] = C.composite(C.crisp(r, **show), C.crisp(m, **show))
+                crops = {}
+                for kind in KINDS if many else ():
+                    crops[kind] = []
+                    for zn in many[kind]:
+                        y0, x0 = int(zn["cy"]) - win // 2, int(zn["cx"]) - win // 2
+                        r = C.region(ref_arr, 0, y0, x0, win, win)
+                        m = C.region(
+                            mov_arr,
+                            ch,
+                            y0 - int(round(oy)),
+                            x0 - int(round(ox)),
+                            win,
+                            win,
+                        )
+                        crops[kind].append(
+                            C.composite(C.crisp(r, **show), C.crisp(m, **show))
+                        )
             finally:
                 close_mov()
+            if many:
+                for kind in KINDS:
+                    for j, rgb in enumerate(crops[kind]):
+                        ps.plt.imsave(
+                            outdir / f"{stem}_win_{kind[0].upper()}{j + 1}.png", rgb
+                        )
+                title = label if label == "Before" else f"After ({label})"
+                gfig = compose_many(many, crops, ov, f, win, um_px, title)
+                ps.save(
+                    gfig,
+                    str(outdir / f"{stem}_windows{a.per_kind}"),
+                    data=pd.read_csv(outdir / f"{stem0}_windows.csv"),
+                )
+                print(
+                    f"-> {outdir / stem}_windows{a.per_kind}.pdf/.png/.svg, _win_*.png"
+                )
             for k, kind in enumerate(KINDS):
                 ps.plt.imsave(outdir / f"{stem}_zoom{k + 1}_{kind}.png", zooms[kind])
             ps.plt.imsave(outdir / f"{stem}_overview.png", ov)
