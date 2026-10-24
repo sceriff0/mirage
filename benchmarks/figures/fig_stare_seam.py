@@ -404,11 +404,9 @@ def from_files(a):
     um = a.pixel_um or um or um2
     if not um:
         raise SystemExit("no pixel size in either OME header")
-    name = (
-        f"{a.patient}_{Path(mov).name.split('.')[0]}"
-        if a.patient
-        else Path(mov).name.split(".")[0]
-    )
+    base = Path(mov).name.split(".")[0]
+    tag = re.sub(r"[^A-Za-z0-9]+", "", a.mov_name or "") or f"c{mc}"
+    name = f"{a.patient}_{base}_{tag}" if a.patient else f"{base}_{tag}"
     return dict(
         name=name,
         um_px=um,
@@ -490,6 +488,12 @@ def main(argv=None):
         "--mov-name", default="DAPI", help="moving channel's name on the figure"
     )
     ap.add_argument(
+        "--mov-channels",
+        help="with --mov-image: one figure per channel of the moving slide, 'all' or a "
+        "comma list of indices/names (the reference's own channel is skipped); every "
+        "figure has the same corner and cells, so they compare directly",
+    )
+    ap.add_argument(
         "--pixel-um", type=float, help="µm per px, if the slides do not say"
     )
     ap.add_argument(
@@ -531,6 +535,48 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     from stare.slide_io import decimation_factor, open_lazy, read_decimated
+
+    if a.mov_channels and a.mov_image:
+        import sys
+
+        args = list(sys.argv[1:] if argv is None else argv)
+        i = args.index("--mov-channels")
+        del args[i : i + 2]
+        path = a.mov_image.partition("@")[0]
+        names, _ = _ome(path)
+        n = len(names) or 1
+        if a.mov_channels == "all":
+            want = list(range(n))
+        else:
+            want = []
+            for t in a.mov_channels.split(","):
+                t = t.strip()
+                hit = (
+                    [int(t)]
+                    if t.isdigit()
+                    else [k for k, nm in enumerate(names) if nm.lower() == t.lower()]
+                )
+                if not hit:
+                    raise SystemExit(f"{path}: no channel {t!r}; it has {names}")
+                want += hit
+        ref_path, _, ref_c = (a.ref_image or "").partition("@")
+        ref_ci = _slide(a.ref_image)[1] if a.ref_image else -1
+        for ci in want:
+            if ref_path == path and ci == ref_ci:
+                continue
+            nm = names[ci] if ci < len(names) else f"ch{ci}"
+            j = args.index("--mov-image")
+            sub = (
+                args[:j]
+                + args[j + 2 :]
+                + ["--mov-image", f"{path}@{ci}", "--mov-name", nm]
+            )
+            print(f"\n== channel {ci}: {nm}")
+            try:
+                main(sub)
+            except SystemExit as e:
+                print(f"   skipped {nm}: {e}")
+        return
 
     ps.apply_style()
     if a.ref_image and a.mov_image:

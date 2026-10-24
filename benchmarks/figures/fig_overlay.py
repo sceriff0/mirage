@@ -54,6 +54,7 @@ _zoom<k>_<kind>.png at their own resolution. Run in the regbench scorer's image.
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 from pathlib import Path
 
@@ -534,8 +535,20 @@ def main(argv=None):
         "--per-kind",
         type=int,
         default=1,
-        help="also draw the N best non-overlapping windows of each kind (a kinds x N "
-        "grid beside an overview naming them), for every side",
+        help="the N best non-overlapping windows of each kind; draws alternative "
+        "versions of the figure, each with ONE window per kind (see --combos)",
+    )
+    ap.add_argument(
+        "--combos",
+        choices=("rank", "cross"),
+        default="rank",
+        help="rank: version k = the k-th window of each kind (N versions); cross: "
+        "every combination of the N per kind (N^3 versions)",
+    )
+    ap.add_argument(
+        "--windows-grid",
+        action="store_true",
+        help="also the kinds x N grid of every window beside a named overview",
     )
     ap.add_argument("--overview-px", type=int, default=3000)
     ap.add_argument("--clip", default="1,99.8", help="zoom window, percentiles LO,HI")
@@ -710,15 +723,48 @@ def main(argv=None):
                             outdir / f"{stem}_win_{kind[0].upper()}{j + 1}.png", rgb
                         )
                 title = label if label == "Before" else f"After ({label})"
-                gfig = compose_many(many, crops, ov, f, win, um_px, title)
-                ps.save(
-                    gfig,
-                    str(outdir / f"{stem}_windows{a.per_kind}"),
-                    data=pd.read_csv(outdir / f"{stem0}_windows.csv"),
-                )
-                print(
-                    f"-> {outdir / stem}_windows{a.per_kind}.pdf/.png/.svg, _win_*.png"
-                )
+                if a.windows_grid:
+                    gfig = compose_many(many, crops, ov, f, win, um_px, title)
+                    ps.save(
+                        gfig,
+                        str(outdir / f"{stem}_windows{a.per_kind}"),
+                        data=pd.read_csv(outdir / f"{stem0}_windows.csv"),
+                    )
+                    print(f"-> {outdir / stem}_windows{a.per_kind}.pdf/.png/.svg")
+                n_of = {k: len(many[k]) for k in KINDS}
+                if a.combos == "rank":
+                    combos = [
+                        tuple(min(j, n_of[k] - 1) for k in KINDS)
+                        for j in range(max(n_of.values()))
+                    ]
+                else:
+                    combos = list(itertools.product(*(range(n_of[k]) for k in KINDS)))
+                vdir = outdir / f"{stem}_versions"
+                vdir.mkdir(exist_ok=True)
+                for combo in combos:
+                    name = "".join(
+                        f"{k[0].upper()}{j + 1}" for k, j in zip(KINDS, combo)
+                    )
+                    zz = {k: many[k][j] for k, j in zip(KINDS, combo)}
+                    cc = {k: crops[k][j] for k, j in zip(KINDS, combo)}
+                    vfig = compose(ov, f, cc, zz, win, um_px, title, a.connectors)
+                    vrows = [
+                        {
+                            "version": name,
+                            "kind": k,
+                            "window": f"{k[0].upper()}{j + 1}",
+                            "centre_x_px": zz[k]["cx"],
+                            "centre_y_px": zz[k]["cy"],
+                            "shift_um": zz[k]["T_px"] * um_px,
+                            "rotation_deg": zz[k]["angle_deg"],
+                            "nonrigid_rms_um": zz[k]["D_px"] * um_px,
+                        }
+                        for k, j in zip(KINDS, combo)
+                    ]
+                    ps.save(
+                        vfig, str(vdir / f"{stem}_{name}"), data=pd.DataFrame(vrows)
+                    )
+                print(f"-> {vdir}/: {len(combos)} versions ({a.combos}), _win_*.png")
             for k, kind in enumerate(KINDS):
                 ps.plt.imsave(outdir / f"{stem}_zoom{k + 1}_{kind}.png", zooms[kind])
             ps.plt.imsave(outdir / f"{stem}_overview.png", ov)
