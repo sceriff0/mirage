@@ -78,6 +78,7 @@ from pathlib import Path
 import numpy as np
 
 from . import _valis_points as vp
+from . import _valis_writer_field as wf
 from . import require_fluorescence
 
 SCOPE = "group"
@@ -207,7 +208,7 @@ def _stage_items(cases, variant, snaps, natives, warp_tools, info, points):
         if isinstance(snap, str) or snap is None:
             items.append((cid, variant, None, {**info, "error": snap or "no slide"}))
             continue
-        pmap = vp.point_map(snap, warp_tools, points)
+        pmap = wf.point_map(snap, warp_tools, points)
         own = {**info, "stage": vp.stage_info(snap, warp_tools, case.pixel_size_um)}
         native = (natives or {}).get(cid)
         if native is not None:
@@ -216,7 +217,7 @@ def _stage_items(cases, variant, snaps, natives, warp_tools, info, points):
             if native.get("files"):
                 # only the map's own direction: where it lands inside the moving slide
                 native["valid_box"] = vp.footprint_box(
-                    vp.image_map(snap, warp_tools).fn,
+                    wf.image_map(snap, warp_tools).fn,
                     snap["ref"]["src_rc"],
                     snap["src_rc"],
                 )
@@ -329,7 +330,8 @@ def register_group(cases, work, opts):
                     else {}
                 ),
             },
-            "point_warp": "valis.warp_tools.warp_xy_inv on the writer's crop"
+            "point_warp": "the writer's field (pyvips affine, as warp_img), then "
+            "valis.warp_tools.warp_xy_inv's rigid chain, on the writer's crop"
             if points == "image"
             else "valis.warp_tools.warp_xy_from_to as Slide.warp_xy_from_to calls it",
             "benchmark_side": [
@@ -338,10 +340,13 @@ def register_group(cases, work, opts):
                 "front where two slides share a basename, `info.slides_source`) and "
                 "listed through img_list",
                 "the reference slide fixed (reference_img_f)",
-                "points: the reference-grid pixel plus the writer's crop origin, then "
-                "valis.warp_tools.warp_xy_inv with the slide's own M, shapes and "
-                "bk_dxdy, all copied at the yield; the rounding of the crop origin is "
-                "measured on the installed warp_tools.warp_img",
+                "points: the reference-grid pixel plus the writer's crop origin; the "
+                "non-rigid field read as warp_img reads it (scaled onto the canvas by "
+                "pyvips affine with the writer's bicubic interpolator, "
+                "methods/_valis_writer_field.py), then valis.warp_tools.warp_xy_inv's "
+                "rigid chain with the slide's own M and shapes, all copied at the "
+                "yield; the rounding of the crop origin is measured on the installed "
+                "warp_tools.warp_img",
                 "a stored (pyvips) field is loaded whole as NumPy (VALIS's vectorised "
                 "branch instead of its per-point loop; the field is the same)",
                 "each result's image written by warp_and_save_slides(crop='reference') "
