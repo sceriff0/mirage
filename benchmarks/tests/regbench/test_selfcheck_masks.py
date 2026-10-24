@@ -585,3 +585,36 @@ def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(tmp_path, 
     assert score.MASK_FLAG not in res["cells"][0]
     assert not (tables / "selfcheck_masks.csv").exists()
     assert "Selfcheck masks" not in (tables / "summary.md").read_text()
+
+
+@pytest.mark.parametrize("direction", ["forward", "backward"])
+def test_the_view_shows_the_defect_where_the_gate_found_it(dots, tmp_path, direction):
+    """The view (``compare(view=...)``) puts the failing blocks, the worst residuals and
+    their crops where the image is wrong: dots right of x = 1024 drawn 1 px off."""
+    at = to_ref(dots)
+    bent = at + np.where(at[:, :1] >= 1024, [1.0, 0.0], [0.0, 0.0])
+    plane = sc.render_dots(bent, 0, 0, HW[1], HW[0])
+    path = tmp_path / "v.npz"
+    if direction == "forward":
+        res = sc.compare(FORWARD, dots, plane, view=path)
+    else:
+        res = sc.compare(BACKWARD, dots, plane, expect=to_ref, view=path)
+    assert res["status"] == sc.INCONSISTENT and "view_error" not in res
+    v = np.load(path)
+    assert str(v["status"]) == sc.INCONSISTENT
+    assert len(v["failed_blocks"]) and (v["failed_blocks"][:, 0] >= 2).all()
+    worst = v["picks"][v["kinds"] == "worst"]
+    assert (v["where"][worst, 0] >= 1024 - sc.MATCH_PX).all()
+    assert np.nanmin(v["err"][worst]) > 0.9
+    # the crop is the written image around the dot: its brightest pixel is the dot
+    c = v["crops"][0]
+    r = (c.shape[0] - 1) // 2
+    y, x = np.unravel_index(np.nanargmax(c[r - 3 : r + 4, r - 3 : r + 4]), (7, 7))
+    assert abs(x - 3) <= 2 and abs(y - 3) <= 2
+
+
+def test_a_view_that_cannot_be_written_keeps_the_numbers(dots, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    res = sc.compare(FORWARD, dots, image(to_ref(dots)), view=blocker / "v.npz")
+    assert res["status"] == sc.OK and "view_error" in res
