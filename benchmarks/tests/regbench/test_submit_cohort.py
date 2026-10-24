@@ -59,7 +59,9 @@ PAIR = 1 + LINKS  # a chain's first job and its watcher's links
 # per staged run the stages' extra jobs per dataset (two feeders, the last job's pair, and
 # the preprocessing's pair where it has one)
 COHORT_DATASETS = ("multiplex",)
-MORE = sum(PAIR + FEEDERS + PAIR + (PAIR if "prep" in st else 0) for st in STAGED.values())
+MORE = sum(
+    PAIR + FEEDERS + PAIR + (PAIR if "prep" in st else 0) for st in STAGED.values()
+)
 N_REALCHECKED = len([n for n in RUNS if variants.realcheck_row(n)])
 N_JOBS = (
     PAIR * len(CHECKERS)
@@ -618,7 +620,9 @@ def test_every_run_has_four_chained_arrays_at_four_cpus(dry):
         ], run
         # only the last job of a run in several jobs is told to collect them
         # (stare_local4: its stages inside its one job, T31 R2)
-        want = "jobs" if run in STAGED else "local" if run in variants.LOCAL_4CPU else "-"
+        want = (
+            "jobs" if run in STAGED else "local" if run in variants.LOCAL_4CPU else "-"
+        )
         assert {j.args[13] for j in got} == {want}, run
         assert [j.args[11] for j in got] == ["first"] + ["climb"] * 4, run
         assert got[0].args[10] == "-"
@@ -686,7 +690,9 @@ def test_the_default_is_the_multiplex_cohort_alone(dry):
     assert 'DEFAULT_DATASETS="multiplex"' in code
 
 
-@pytest.mark.parametrize("named", ["anhir_tune", "synthetic", "multiplex x", "mcmicro@raw"])
+@pytest.mark.parametrize(
+    "named", ["anhir_tune", "synthetic", "multiplex x", "mcmicro@raw"]
+)
 def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     """Neither the cohort nor a public dataset: refused before anything is read or
     submitted, in one line naming the allowed values, with no argparse usage and no
@@ -703,12 +709,16 @@ def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
 def test_the_launchers_public_datasets_are_regbench_public():
     from benchmarks.regbench import PUBLIC
 
-    (line,) = [x for x in code_of(SCRIPT).splitlines() if x.startswith("PUBLIC_DATASETS=")]
+    (line,) = [
+        x for x in code_of(SCRIPT).splitlines() if x.startswith("PUBLIC_DATASETS=")
+    ]
     assert line.split("=", 1)[1].strip('"').split() == list(PUBLIC)
 
 
 def test_a_public_dataset_needs_its_cases_folder(site, public_launcher):
-    done, _, _ = launch_public(site, public_launcher, "--datasets", "multiplex nucset", log="ds-nocases")
+    done, _, _ = launch_public(
+        site, public_launcher, "--datasets", "multiplex nucset", log="ds-nocases"
+    )
     assert done.returncode == 2
     assert "REGBENCH_CASES_NUCSET is not set" in done.stderr
     assert not _sbatch_lines(done.stdout)
@@ -724,7 +734,9 @@ def test_a_public_dataset_is_refused_by_prepare(site, public_launcher, tmp_path)
     assert not _sbatch_lines(done.stdout)
 
 
-def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, public_launcher, public_datasets, tmp_path):
+def test_a_public_dataset_runs_its_own_list_from_its_own_cases(
+    site, public_launcher, public_datasets, tmp_path
+):
     """``--datasets "multiplex tissueset"``: the tissue test set's runs are its own list (no ASHLAR, no
     PALOM: no input rule for a brightfield case), read from REGBENCH_CASES_TISSUESET, and
     the scorer is told both datasets (each public one is scored alone)."""
@@ -746,7 +758,10 @@ def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, public_laun
         n.startswith(("ashlar", "affine_ashlar", "palom")) for n in on["tissueset"]
     )
     # a run of the tissue test set's regime alone, never the cohort's: its own list, not the cohort's
-    assert "stare_grey_clahe" in on["tissueset"] and "stare_grey_clahe" not in on["multiplex"]
+    assert (
+        "stare_grey_clahe" in on["tissueset"]
+        and "stare_grey_clahe" not in on["multiplex"]
+    )
     assert "stare_clahe" in on["multiplex"] and "stare_clahe" not in on["tissueset"]
     assert jobs["rb-score"].args == ["score", "multiplex", "tissueset"]
     assert jobs["rb-tissue"].args == ["tissue", "multiplex", "tissueset"]
@@ -754,7 +769,9 @@ def test_a_public_dataset_runs_its_own_list_from_its_own_cases(site, public_laun
     assert "# tissueset: 2 case(s)" in done.stdout
 
 
-def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher, public_datasets, tmp_path):
+def test_a_public_dataset_alone_selects_no_cohort_only_run(
+    site, public_launcher, public_datasets, tmp_path
+):
     """``--datasets tissueset`` alone: the selected runs, their selfchecks and the stage
     sizing come from the tissue test set's list; no cohort-only run (ASHLAR, PALOM, ``stare_clahe``)
     is selected or checked, and the tissue test set's own runs are."""
@@ -766,7 +783,9 @@ def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher
     )  # fmt: skip
     jobs = jobs_of(done)
     names = set(jobs) | set(jobs.later)
-    checked = {n.split("-", 2)[2].rsplit("-", 1)[0] for n in names if n.startswith("rb-sc-")}
+    checked = {
+        n.split("-", 2)[2].rsplit("-", 1)[0] for n in names if n.startswith("rb-sc-")
+    }
     assert "stare" in checked
     assert not checked & {"ashlar", "affine_ashlar", "palom"}, checked
     ran = {j.args[0] for j in [*jobs.values(), *jobs.later.values()]
@@ -795,7 +814,9 @@ def test_hyreco_b_needs_hyreco_additional(site, tmp_path):
 def test_a_dataset_whose_kind_has_no_scorer_is_refused_up_front(site, tmp_path, named):
     """Methods never run ahead of their scorer: a landmark set is refused until Task 21."""
     env = {f"REGBENCH_CASES_{named.upper()}": str(tmp_path)}
-    done, _, _ = launch(site, "--datasets", f"multiplex {named}", env=env, log=f"k-{named}")
+    done, _, _ = launch(
+        site, "--datasets", f"multiplex {named}", env=env, log=f"k-{named}"
+    )
     assert done.returncode == 2
     lines = [x for x in done.stderr.splitlines() if x.strip()]
     assert len(lines) == 1 and named in lines[0] and "landmarks" in lines[0], lines
@@ -813,9 +834,13 @@ def test_the_launchers_kinds_are_regbench_public_and_scored_kinds():
     assert tuple(scored.split("=", 1)[1].strip('"').split()) == score.SCORED_KINDS
 
 
-def test_a_public_cases_folder_that_is_not_there_is_refused(site, public_launcher, tmp_path):
+def test_a_public_cases_folder_that_is_not_there_is_refused(
+    site, public_launcher, tmp_path
+):
     env = {"REGBENCH_CASES_NUCSET": str(tmp_path / "not_there")}
-    done, _, _ = launch_public(site, public_launcher, "--datasets", "nucset", env=env, log="ds-gone")
+    done, _, _ = launch_public(
+        site, public_launcher, "--datasets", "nucset", env=env, log="ds-gone"
+    )
     assert done.returncode == 2 and "not_there" in done.stderr
     assert "does not exist" in done.stderr and not _sbatch_lines(done.stdout)
 
@@ -952,6 +977,36 @@ def test_a_limit_on_runs_in_flight_chains_the_runs_onto_lanes(site, dry):
             own = {chain(plain, variants.run_name(r))[0].name}
             own.add(last_job(variants.run_name(r)))
             assert not (waits(head(plain, variants.run_name(r))) & (arrays - own)), r
+
+
+def test_selfcheck_first_holds_every_run_until_every_selfcheck_has_ended(site, dry):
+    """REGBENCH_SELFCHECK_FIRST=1: the first job of every run (its first rung, or the
+    first job of its first stage) waits for the LAST watcher link of EVERY selfcheck
+    (the one after its 256 and 512 GB retries), so no
+    registration starts before the selfchecks have ended. Off (the default), none does."""
+
+    def waits(job):
+        return {name.strip("<>") for _, name in job.deps}
+
+    def head(jobs, run, dataset="multiplex"):
+        if run in STAGED:
+            return jobs[f"rb-{run}-{dataset}-{STAGED[run][0]}-a1"]
+        return jobs.get(f"rb-{run}-{dataset}-first-16g") or rungs(jobs, run, dataset)[0]
+
+    done, _, _ = launch(site, env={"REGBENCH_SELFCHECK_FIRST": "1"}, log="scfirst")
+    jobs = jobs_of(done)
+    watchers = {links(jobs, f"rb-sc-{run}")[-1].name for run in CHECKERS}
+    names = [variants.run_name(r) for r in variants.runs_for(None)]
+    assert watchers and names
+    for name in names:
+        assert watchers <= waits(head(jobs, name)), name
+    plain, _, _ = dry
+    plain_watchers = {links(plain, f"rb-sc-{run}")[-1].name for run in CHECKERS}
+    for name in names:
+        assert not (plain_watchers & waits(head(plain, name))), name
+    bad, _, _ = launch(site, env={"REGBENCH_SELFCHECK_FIRST": "yes"}, log="scbad")
+    assert bad.returncode != 0
+    assert "REGBENCH_SELFCHECK_FIRST must be 0 or 1" in bad.stdout + bad.stderr
 
 
 def test_every_checking_run_has_a_selfcheck_that_climbs_in_memory(dry):
@@ -1215,7 +1270,11 @@ def test_the_settle_step_of_the_batch_script():
         code.index('if [ "$kind" = settle ]') : code.index('if [ "$kind" = case ]')
     ]
     assert "settle_killed" in job and "exit 0" in job  # never blocks the scoring
-    assert job.index("settle_killed") < job.index("settle_stages") < job.index("regbench_say_end")
+    assert (
+        job.index("settle_killed")
+        < job.index("settle_stages")
+        < job.index("regbench_say_end")
+    )
     assert "cause=settle_unfinished whose=benchmark" in job
     # it says for which submission it was done, and only after it was
     done = code[code.index("settle_killed() {") : code.index("already_settled() {")]
@@ -1274,7 +1333,6 @@ def test_the_settle_job_asks_the_accounting_of_this_submissions_run_tasks_only(
     assert asked.split()[asked.split().index("-j") + 1] == "11,13,14"
 
 
-
 # a stand-in for coreutils' timeout (absent on some build hosts): the same contract,
 # exit 124 when the command outlives its limit
 TIMEOUT_SHIM = """#!{py}
@@ -1318,23 +1376,33 @@ def _settle_folder(tmp_path, sacct_body):
     return out, calls, done
 
 
-def test_the_stage_accounting_is_this_submissions_after_the_run_tasks_and_bounded(tmp_path):
+def test_the_stage_accounting_is_this_submissions_after_the_run_tasks_and_bounded(
+    tmp_path,
+):
     """T31 fix I1: the stage jobs' accounting is asked AFTER the run tasks' (a killed
     rung is always settled first), for THIS submission's stage jobs only, with the
     same bound as the run tasks' query; it is never a reason for the settle to fail."""
     out, calls, done = _settle_folder(
-        tmp_path, 'case "$*" in *21,22*) echo "21|COMPLETED|10|00:00:05|1|4G|" ;; esac\n')
+        tmp_path,
+        'case "$*" in *21,22*) echo "21|COMPLETED|10|00:00:05|1|4G|" ;; esac\n',
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     asked = calls.read_text().splitlines()
     ids = [a.split()[a.split().index("-j") + 1] for a in asked]
-    assert ids == ["11", "21,22"]  # run tasks first; the earlier submission's job 8 is not asked
+    assert ids == [
+        "11",
+        "21,22",
+    ]  # run tasks first; the earlier submission's job 8 is not asked
     assert all(" -X" not in a for a in asked)
-    assert (out / "logs" / "accounting_stages.psv").read_text().startswith("21|COMPLETED")
+    assert (
+        (out / "logs" / "accounting_stages.psv").read_text().startswith("21|COMPLETED")
+    )
 
 
 def test_a_stage_accounting_that_outlives_its_bound_is_a_warning(tmp_path):
     out, calls, done = _settle_folder(
-        tmp_path, 'case "$*" in *21,22*) sleep 5 ;; esac\n')
+        tmp_path, 'case "$*" in *21,22*) sleep 5 ;; esac\n'
+    )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "settle: WARNING: the stage jobs' accounting" in done.stdout
     assert "did not end within 1 s" in done.stdout
@@ -1343,6 +1411,7 @@ def test_a_stage_accounting_that_outlives_its_bound_is_a_warning(tmp_path):
     first = calls.read_text().splitlines()[0].split()
     assert first[first.index("-j") + 1] == "11"
     assert "REGBENCH_END kind=settle" in done.stdout + done.stderr
+
 
 def test_tissue_then_score_run_last_in_the_scorers_image(dry):
     jobs, _, _ = dry
@@ -1413,8 +1482,11 @@ def test_every_case_is_scored_by_a_task_of_its_own_before_the_tables(dry):
     # watcher of COARSE and of SOLVE, its two tile submitters (the tile jobs are theirs
     # to submit), and the last job's first array and watcher (and 2 of its
     # preprocessing) where another run has the ladder's 2. No retry is submitted.
-    assert set(STAGED) == {n for n, r in RUNS.items()
-                           if r.method == "stare" and n not in variants.LOCAL_4CPU}
+    assert set(STAGED) == {
+        n
+        for n, r in RUNS.items()
+        if r.method == "stare" and n not in variants.LOCAL_4CPU
+    }
     assert len(sizes) == len(COHORT_DATASETS)
     assert (
         len(jobs)
@@ -1467,7 +1539,9 @@ def test_the_case_task_and_the_scorer_are_told_the_same_things():
     assert "cause=score_case_unfinished whose=benchmark" in case
     assert 'exit "$code"' in case
     # the case's tissue pieces first, and a failure there never stops its scoring
-    assert case.index('cases="$(regbench_cases_of "$dataset")"') < case.index("tissue --cases")
+    assert case.index('cases="$(regbench_cases_of "$dataset")"') < case.index(
+        "tissue --cases"
+    )
     tissue = case.index('tissue --cases "$cases"')
     assert tissue < case.index("|| echo") < case.index("score-case")
     assert '--index "$SLURM_ARRAY_TASK_ID"' in case[tissue : case.index("|| echo")]
@@ -2246,7 +2320,7 @@ def test_a_run_whose_tile_arrays_cannot_be_sized_is_dropped_not_the_launch(
     rows = _dropped(out)
     assert [(r["run"], r["reason"]) for r in rows] == [("stare", "run_config")]
     assert "cannot size its tile arrays on multiplex" in rows[0]["detail"]
-    tail = done.stdout[done.stdout.index("# DROPPED from this submission"):]
+    tail = done.stdout[done.stdout.index("# DROPPED from this submission") :]
     assert "stare,run_config," in tail
     # every run dropped: then, and only then, the launch stops
     alone, log, _ = launch(site, "--runs", "stare", env=env, dry=False,
@@ -2536,8 +2610,11 @@ def test_a_stray_statement_of_the_stage_launcher_reaches_no_job():
     assert "unset REGBENCH_STAGES\n" in rung[:stated]
     head = rung.split("retry=0")[0]
     assert stated < len(head)
-    for column, said in (("-", "[unset] []"), ("local", "[unset] [--stages local]"),
-                         ("jobs", "[jobs] []")):
+    for column, said in (
+        ("-", "[unset] []"),
+        ("local", "[unset] [--stages local]"),
+        ("jobs", "[jobs] []"),
+    ):
         done = subprocess.run(
             ["bash", "-c", f"set -- n m - - I 0 d 1 16 0 - first t {column}; {head}"
              'echo "[${REGBENCH_STAGES-unset}] [${stated[*]+${stated[*]}}]"'],
@@ -2847,7 +2924,10 @@ def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
                 assert not [n for _, n in job.deps if "-first-" in n], job.name
             assert rest[0].deps == first[0].deps
             # and what waits for the run waits for both
-            assert {last_job(run, dataset), f"rb-{run}-{dataset}-first-{retry_link(LINKS)}"} <= settle
+            assert {
+                last_job(run, dataset),
+                f"rb-{run}-{dataset}-first-{retry_link(LINKS)}",
+            } <= settle
     others = [
         j
         for j in jobs.values()
@@ -3750,9 +3830,7 @@ def test_a_step_an_earlier_link_was_submitting_is_looked_for_in_the_queue(tmp_pa
     successor finds the job by its name in the queue and does not submit it twice.
     Not in the queue, it is submitted again."""
     ends = {i: None for i in range(2)}
-    found = (
-        'case "$*" in *--name=rb-x-16g-again*) echo 77 ;; esac; exit 0'
-    )
+    found = 'case "$*" in *--name=rb-x-16g-again*) echo 77 ;; esac; exit 0'
     done, sent, out = _watch(
         tmp_path / "found", ends, STEPS, range_="0-1", link=2, squeue=found,
         plan_files={"submitting": "1 rb-x-16g-again\n"},
@@ -3832,7 +3910,8 @@ def test_a_rung_the_partition_cannot_grant_is_written_down_as_capped(tmp_path):
     steps = [
         STEPS[0],
         ["cut", "rb-x-64g", "the partition's largest node has 32000 MB", "--mem=64G"]
-        + RUNG + ["2", "64", "0", "@EARLIER@"],
+        + RUNG
+        + ["2", "64", "0", "@EARLIER@"],
         STEPS[2],
     ]
     ends = {
@@ -3965,9 +4044,10 @@ def test_a_watcher_that_gives_up_says_why_for_the_settle_job(tmp_path):
     )  # fmt: skip
     assert done.returncode == 1 and len(sent) == 1, done.stdout + done.stderr
     plan = tmp_path / "plan"
-    assert "the queue could not be read while waiting for step 2" in (
-        plan / "gave_up"
-    ).read_text()
+    assert (
+        "the queue could not be read while waiting for step 2"
+        in (plan / "gave_up").read_text()
+    )
     assert not (plan / "done").exists()
     assert "cause=watcher_gave_up whose=infrastructure" in done.stdout.splitlines()[-1]
     # M6: the watcher itself writes the units it was waiting for down first, so a
@@ -4058,7 +4138,9 @@ def test_a_rung_no_node_can_grant_is_not_planned_and_said_loudly(site, tmp_path)
     warn = "can NEVER be granted there"
     assert warn in done.stdout and warn in done.stderr
     assert "the rung(s) 512 GB, 700 GB can NEVER" in done.stdout
-    assert "# NOT PLANNED, no node of partition <the default> can grant it" in done.stdout
+    assert (
+        "# NOT PLANNED, no node of partition <the default> can grant it" in done.stdout
+    )
     # the 512 GB rung of every run is a cut step, and nothing above it is planned
     everything = {**jobs, **jobs.later}
     assert not [n for n in everything if "-700g" in n]
@@ -4346,8 +4428,11 @@ def test_the_default_launch_is_byte_identical_to_the_launcher_before_the_cross(
     ]
     assert then and then == [ln for ln in now_lines if ln not in rescore]
     later = [ln for ln in done.stdout.splitlines() if ln.startswith(LATER)]
-    now = [without(ln) for ln in dry[1].stdout.splitlines()
-           if ln.startswith(LATER) and not own(ln[len(LATER):])]
+    now = [
+        without(ln)
+        for ln in dry[1].stdout.splitlines()
+        if ln.startswith(LATER) and not own(ln[len(LATER) :])
+    ]
     assert [
         ln.replace(str(old_slurm), str(SLURM)).replace("out-before", "out-calls")
         for ln in later
@@ -4394,19 +4479,27 @@ def test_staged_and_local_launches_over_results_that_do_not_clash_go_on(site):
     # a staged launch over local results: allowed (the README's cross folders)
     out = tmp / "out-staged-over-local"
     shutil.rmtree(out, ignore_errors=True)
-    _stare_record(out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}})
+    _stare_record(
+        out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}}
+    )
     done, _, _ = launch(site, log="staged-over-local")
     assert done.returncode == 0, done.stderr
     # a local launch over local results, and over another method's staged-looking key
     out = tmp / "out-local-over-local"
     shutil.rmtree(out, ignore_errors=True)
-    _stare_record(out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}})
     _stare_record(
-        out, {"method": "palom", "ok": True, "reuse_key": {"execution": "jobs"}}, "palom"
+        out, {"method": "stare", "ok": True, "reuse_key": {"execution": "local"}}
+    )
+    _stare_record(
+        out,
+        {"method": "palom", "ok": True, "reuse_key": {"execution": "jobs"}},
+        "palom",
     )
     (out / "stare" / "multiplex" / "P2_a").mkdir(parents=True)
     (out / "stare" / "multiplex" / "P2_a" / "run.json").write_text("not json")
-    done, _, _ = launch(site, env={"REGBENCH_STARE_EXECUTION": "local"}, log="local-over-local")
+    done, _, _ = launch(
+        site, env={"REGBENCH_STARE_EXECUTION": "local"}, log="local-over-local"
+    )
     assert done.returncode == 0, done.stderr
 
 
@@ -4415,7 +4508,7 @@ def test_a_datasets_cases_folder_is_the_cohorts_or_its_own(tmp_path):
     for a public dataset by its base name, exit 1 when that is not set."""
     script = (
         f'source "{SLURM / "env.sh"}"; '
-        'regbench_cases_of multiplex; regbench_cases_of mcmicro@raw; '
+        "regbench_cases_of multiplex; regbench_cases_of mcmicro@raw; "
         'regbench_cases_of nucset || echo "nucset: none"'
     )
     env = {k: v for k, v in os.environ.items() if not k.startswith("REGBENCH_")}
@@ -4440,13 +4533,19 @@ def test_stare_local4_is_one_job_per_case_at_4_cpus_with_its_own_workers(dry):
         got = rungs(jobs, run)
         assert [j.opt("--cpus-per-task") for j in got] == ["4"] * 5
         assert {j.args[13] for j in got} == {"local"}
-        assert not [n for n in jobs if n.startswith(f"rb-{run}-") and ("-coarse-" in n or "-feed-" in n)]
+        assert not [
+            n
+            for n in jobs
+            if n.startswith(f"rb-{run}-") and ("-coarse-" in n or "-feed-" in n)
+        ]
 
 
 def test_stare_local4_is_dropped_at_another_cpu_count(site):
     done, _, _ = launch(site, env={"REGBENCH_CPUS": "8"}, log="local4-at-8")
     jobs = jobs_of(done)
-    assert not [n for n in jobs if any(n.startswith(f"rb-{r}-") for r in variants.LOCAL_4CPU)]
+    assert not [
+        n for n in jobs if any(n.startswith(f"rb-{r}-") for r in variants.LOCAL_4CPU)
+    ]
     assert "DROPPED stare_local4 (run_config)" in done.stdout
 
 
@@ -4469,12 +4568,18 @@ def test_waves_submit_one_method_after_the_other(site, dry):
     for prev, run in zip(runs, runs[1:]):
         if prev.method == run.method:
             continue
-        before = [variants.run_name(r) for r in runs[: runs.index(run)] if r.method == prev.method]
+        before = [
+            variants.run_name(r)
+            for r in runs[: runs.index(run)]
+            if r.method == prev.method
+        ]
         got = waits(head(jobs, variants.run_name(run)))
         # the wave waits for the last job of every run of the method before it
         assert {last_job(n) for n in before} <= got, variants.run_name(run)
         plain = waits(head(dry[0], variants.run_name(run)))
-        assert not ({last_job(n) for n in before} <= plain) or run.after, variants.run_name(run)
+        assert not ({last_job(n) for n in before} <= plain) or run.after, (
+            variants.run_name(run)
+        )
     bad, _, _ = launch(site, env={"REGBENCH_WAVES": "2"}, log="waves-bad")
     assert bad.returncode != 0 and "REGBENCH_WAVES='2'" in bad.stderr + bad.stdout
 
@@ -4498,7 +4603,10 @@ def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
     (each repeat its own results: no repeat reuses another's)."""
     done, _, out = launch(site, env={"REGBENCH_REPEAT": "2"}, log="repeat")
     assert done.returncode == 0, done.stderr
-    assert f"REGBENCH_OUT={out}/rep1" in done.stdout and f"REGBENCH_OUT={out}/rep2" in done.stdout
+    assert (
+        f"REGBENCH_OUT={out}/rep1" in done.stdout
+        and f"REGBENCH_OUT={out}/rep2" in done.stdout
+    )
     lines = _sbatch_lines(done.stdout)
     half = [ln for ln in lines if "/rep1" in ln]
     assert half and len(lines) == 2 * len(half)
@@ -4509,8 +4617,12 @@ def test_a_repeat_is_the_same_submission_into_its_own_folder(site):
     assert first
     after = " --dependency=afterany:<rb-tissue>:<rb-score>:<rb-rescore>"
     rep2 = [ln for ln in lines if "/rep2" in ln]
-    assert all(after in ln for ln in rep2 if ln.replace(after, "").replace("/rep2", "/rep1")
-               in first), rep2
+    assert all(
+        after in ln
+        for ln in rep2
+        if ln.replace(after, "").replace("/rep2", "/rep1") in first
+    ), rep2
     assert sum(after in ln for ln in rep2) == len(first)
     assert sorted(ln.replace("/rep1", "/rep2") for ln in half) == sorted(
-        ln.replace(after, "") for ln in rep2)
+        ln.replace(after, "") for ln in rep2
+    )
