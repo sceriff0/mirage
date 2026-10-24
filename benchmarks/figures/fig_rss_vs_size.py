@@ -5,7 +5,10 @@ series, with the cohort's slides at native size overlaid and the node's memory d
         --synthetic <SYNTH_OUT>/tables --cohort <REGBENCH_OUT>/tables \
         --valis valis120 --stare stare --node-gb 512 --outdir figures/cost
 
-READS ``resources.csv`` (one row per round), nothing re-derived:
+READS ``resources.csv`` (one row per round), nothing re-derived; where a folder's tables
+hold no row of the dataset (not scored yet), every result's own ``run.json`` instead,
+the same record the scorer tabulates (sizes then from ``--synthetic-cases`` /
+``--cohort-cases``, else from the ``scale_<n>`` name):
 
   peak_rss_gb  STARE: the peak of its LARGEST single stage job (COARSE, one REG_TILE per
                tile, SOLVE are separate scheduler jobs, so their peaks do not add;
@@ -51,21 +54,92 @@ from . import plotstyle as ps
 MEMORY = re.compile(r"oom|mem", re.I)
 
 
-def _resources(folder):
-    p = Path(folder)
-    p = p if p.suffix == ".csv" else p / "resources.csv"
-    df = pd.read_csv(p, low_memory=False)
-    for c in ("dataset", "method", "group", "case_id"):
-        if c in df:
-            df[c] = df[c].astype(str)
-    df["source"] = str(p)
+def _from_runs(out, dataset, cases):
+    """The rows ``resources.csv`` would hold, read from every result's own ``run.json``
+    (``<out>/<variant>/<dataset>/<case>/run.json``): for an out folder the scorer has not
+    tabulated. The moving slide's size comes from ``<cases>/<dataset>/<case>/case.json``
+    (``mov_hw``) when ``cases`` is given."""
+    import json
+
+    rows = []
+    for rj in sorted(Path(out).glob(f"*/{dataset}/*/run.json")):
+        try:
+            run = json.loads(rj.read_text())
+        except (OSError, ValueError):
+            continue
+        res = run.get("resources") or {}
+        case_id = rj.parent.name
+        gpx = math.nan
+        if cases:
+            cj = Path(cases) / dataset / case_id / "case.json"
+            try:
+                hw = json.loads(cj.read_text()).get("mov_hw") or []
+                gpx = float(np.prod([float(v) for v in hw])) / 1e9 if hw else math.nan
+            except (OSError, ValueError):
+                pass
+        peak = res.get("peak_rss_mb")
+        rows.append(
+            {
+                "dataset": dataset,
+                "group": str(run.get("group") or case_id),
+                "case_id": case_id,
+                "method": rj.parent.parent.parent.name,
+                "ok": bool(run.get("ok")),
+                "cause": run.get("cause") or "",
+                "moving_gpx": gpx,
+                "peak_rss_gb": float(peak) / 1024.0 if peak is not None else math.nan,
+                "unit": run.get("unit") or "",
+                "launch_id": run.get("launch_id") or "",
+                "largest_job": str(
+                    ((run.get("info") or {}).get("jobs") or {}).get("largest_job") or ""
+                ),
+            }
+        )
+    df = pd.DataFrame(rows)
+    df["source"] = f"{out} (run.json)"
     return df
 
 
-def pick(folders, dataset, names):
+def _resources(folder, dataset, cases=None):
+    """The rows of ``dataset``: ``resources.csv`` of a tables folder (or the CSV itself),
+    and for every method that CSV has no row of (not scored yet, or an out folder), the
+    results' own ``run.json`` records."""
+    p = Path(folder)
+    parts = []
+    for csv in (
+        p if p.suffix == ".csv" else p / "resources.csv",
+        p / "tables" / "resources.csv",
+    ):
+        if csv.is_file():
+            df = pd.read_csv(csv, low_memory=False)
+            for c in ("dataset", "method", "group", "case_id"):
+                if c in df:
+                    df[c] = df[c].astype(str)
+            df = df[df["dataset"] == dataset]
+            if len(df):
+                parts.append(df.assign(source=str(csv)))
+            break
+    if p.suffix != ".csv":
+        runs_root = p.parent if p.name == "tables" else p
+        have = set(parts[0]["method"]) if parts else set()
+        runs = _from_runs(runs_root, dataset, cases)
+        if len(runs):
+            runs = runs[~runs["method"].isin(have)]
+        if len(runs):
+            print(
+                f"{folder}: {sorted(set(runs['method']))[:6]}{'...' if runs['method'].nunique() > 6 else ''}"
+                f" not in resources.csv for {dataset}; read from {len(runs)} run.json under {runs_root}"
+            )
+            parts.append(runs)
+    if not parts:
+        return pd.DataFrame(columns=["dataset", "method"])
+    return pd.concat(parts, ignore_index=True)
+
+
+def pick(folders, dataset, names, cases=None):
     """``{label: rows}``: each variant's rows of ``dataset`` from the first folder with
     any; ``names`` maps a label to comma-separated alternatives, first found wins."""
-    read = [_resources(f) for f in folders]
+    read = [_resources(f, dataset, cases) for f in folders]
     out = {}
     for label, alts in names.items():
         for name in [n.strip() for n in alts.split(",") if n.strip()]:
@@ -288,6 +362,19 @@ def main(argv=None):
     ap.add_argument(
         "--cohort", nargs="*", default=[], help="tables folder(s) of the cohort"
     )
+    ap.add_argument(
+        "--synthetic-cases",
+        help="cases root of the synthetic set (sizes, when read from run.json)",
+    )
+    ap.add_argument(
+        "--cohort-cases",
+        help="cases root of the cohort (sizes, when read from run.json)",
+    )
+    ap.add_argument(
+        "--all-synthetic",
+        action="store_true",
+        help="keep every synthetic case, not only the scale_<n> size series",
+    )
     ap.add_argument("--synthetic-dataset", default="synthetic")
     ap.add_argument("--cohort-dataset", default="multiplex")
     ap.add_argument(
@@ -307,10 +394,20 @@ def main(argv=None):
     ps.apply_style()
     colors = C.palette(a.outdir)
     names = {"VALIS": a.valis, "STARE": a.stare}
-    syn = pick(a.synthetic, a.synthetic_dataset, names)
+    syn = pick(a.synthetic, a.synthetic_dataset, names, a.synthetic_cases)
     if not syn:
         raise SystemExit("no synthetic rows for either method")
     syn = pd.concat([points(r, True) for r in syn.values()], ignore_index=True)
+    scale = syn["case_id"].str.contains(r"(?:^|;)scale_\d+", regex=True)
+    if scale.any() and not a.all_synthetic:
+        if (~scale).any():
+            print(
+                f"kept the scale_<n> size series: {int(scale.sum())} point(s); left out "
+                f"{int((~scale).sum())} other synthetic case(s) (--all-synthetic keeps them)"
+            )
+        syn = syn[scale]
+    elif not scale.any():
+        print("no scale_<n> cases: every synthetic case at sqrt(moving pixels)")
     keep = syn["side_px"].between(a.min_px * 0.99, a.max_px * 1.01)
     if (~keep).any():
         print(
@@ -319,7 +416,7 @@ def main(argv=None):
     syn = place_failed(syn[keep].copy(), a.node_gb, a.failed_at)
     coh = pd.DataFrame()
     if a.cohort:
-        c = pick(a.cohort, a.cohort_dataset, names)
+        c = pick(a.cohort, a.cohort_dataset, names, a.cohort_cases)
         if c:
             coh = place_failed(
                 pd.concat([points(r, False) for r in c.values()], ignore_index=True),
