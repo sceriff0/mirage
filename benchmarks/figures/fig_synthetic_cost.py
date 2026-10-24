@@ -56,20 +56,38 @@ def size_label(gpx):
     return f"{side / 1024:.0f}k²" if side >= 1024 else f"{side:.0f}²"
 
 
-def load(tables, dataset, names):
-    summ = pd.read_csv(Path(tables) / "summary_resources.csv", low_memory=False)
-    res = pd.read_csv(Path(tables) / "resources.csv", low_memory=False)
+def _read(folder, dataset):
+    summ = pd.read_csv(Path(folder) / "summary_resources.csv", low_memory=False)
+    res = pd.read_csv(Path(folder) / "resources.csv", low_memory=False)
     for df in (summ, res):
         for c in ("dataset", "method", "group"):
             df[c] = df[c].astype(str)
-    summ, res = summ[summ["dataset"] == dataset], res[res["dataset"] == dataset]
-    have = set(summ["method"])
+    return summ[summ["dataset"] == dataset], res[res["dataset"] == dataset]
+
+
+def load(tables, dataset, names):
+    """Every method from the FIRST of ``tables`` that has it (its per-patient summary and
+    its per-round sizes from that one folder), so methods scored in different
+    submissions can share a figure."""
+    read = [
+        (str(t), *_read(t, dataset))
+        for t in ([tables] if isinstance(tables, str) else tables)
+    ]
+    parts_s, parts_r, have = [], [], {}
     for label, name in names.items():
-        if name not in have:
+        src = next(((t, s, r) for t, s, r in read if (s["method"] == name).any()), None)
+        if src is None:
+            seen = sorted({m for _, s, _ in read for m in s["method"]})
             raise SystemExit(
-                f"{label} = {name!r} has no {dataset} row in "
-                f"summary_resources.csv; there are: {sorted(have)}"
+                f"{label} = {name!r} has no {dataset} row in summary_resources.csv of "
+                f"{[t for t, _, _ in read]}; there are: {seen}"
             )
+        t, s, r = src
+        have[name] = t
+        parts_s.append(s[s["method"] == name])
+        parts_r.append(r[r["method"] == name])
+        print(f"{label} = {name}: {dataset} rows from {t}")
+    summ, res = pd.concat(parts_s), pd.concat(parts_r)
     res["moving_gpx"] = pd.to_numeric(res["moving_gpx"], errors="coerce")
     size = res.groupby(["method", "group"])["moving_gpx"].sum(min_count=1)
     cause = (
@@ -179,7 +197,11 @@ def draw(df, order, out, colors, seed):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("tables", help="<REGBENCH_OUT>/tables")
+    ap.add_argument(
+        "tables",
+        nargs="+",
+        help="<REGBENCH_OUT>/tables; several: each method from the first that has it",
+    )
     ap.add_argument(
         "--valis", required=True, help="the VALIS variant, e.g. valis120_hires"
     )
