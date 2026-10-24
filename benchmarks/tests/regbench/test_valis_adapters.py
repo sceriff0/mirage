@@ -671,7 +671,7 @@ def test_a_round_whose_image_is_another_rounds_is_inconsistent(tmp_path, monkeyp
     fv.configure()
     real = sc._check_variant
 
-    def swapped(mod, variant, final, rec, got, extras, pair, mask):
+    def swapped(mod, variant, final, rec, got, extras, pair, mask, view=None):
         if pair["round"] == 2 and rec and rec.get("native"):
             native = dict(rec["native"])
             native["files"] = [
@@ -680,7 +680,7 @@ def test_a_round_whose_image_is_another_rounds_is_inconsistent(tmp_path, monkeyp
             ]
             assert all(Path(f).exists() for f in native["files"])
             rec = {**rec, "native": native}
-        return real(mod, variant, final, rec, got, extras, pair, mask)
+        return real(mod, variant, final, rec, got, extras, pair, mask, view)
 
     monkeypatch.setattr(sc, "_check_variant", swapped)
     rec = sc.run(
