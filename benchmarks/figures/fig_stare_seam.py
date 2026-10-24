@@ -5,7 +5,16 @@ boundary and single-cell insets (reference cyan, registered moving magenta).
         --out <REGBENCH_OUT> --case-id <case> --variant stare --tile 2048 \
         --outdir figures/seam
 
-THE IMAGE is the result's own written slide on the reference canvas at its ``origin_xy``
+PIPELINE MODE (``--pipeline <results> --patient P --moving <id or channel>``): a Mirage
+run's own registered slides, from ``<results>/csv/registered.csv`` (the patient's
+reference row and one moving row, both already on the reference canvas; the nuclear
+channel by name in ``channels``; the pixel size from the CSV, else the OME header).
+Without a nuclei table the corner is the one with the most tissue (Otsu on the
+overview) and the cells are nuclei detected in the reference DAPI of the inset
+(1 µm Gaussian, local maxima 3 µm apart above Otsu). ``--moving`` omitted lists the
+slides.
+
+THE IMAGE (regbench mode) is the result's own written slide on the reference canvas at its ``origin_xy``
 (``common.written_nuclear``, as regbench's tissue scorer reads it), against the case's
 reference nuclear channel: the same placement as fig_overlay's "After".
 
@@ -40,6 +49,7 @@ _cell<k>.png at their own resolution.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import numpy as np
@@ -254,13 +264,169 @@ def compose(
     return fig
 
 
+NUCLEAR = re.compile(r"DAPI|HOECHST|CELLTOX", re.I)
+
+
+def from_regbench(a):
+    from benchmarks.regbench.cases import list_cases
+
+    case = next(
+        (c for c in list_cases(a.cases, a.dataset) if str(c.case_id) == a.case_id), None
+    )
+    if case is None:
+        raise SystemExit(f"no {a.dataset} case {a.case_id!r}")
+    um_px = float(case.pixel_size_um or 0)
+    if not um_px:
+        raise SystemExit(f"case {case.case_id} has no pixel size")
+    path, ch, origin = C.written_nuclear(a.out, a.variant, case)
+    return dict(
+        name=str(case.case_id),
+        um_px=um_px,
+        ref_path=case.ref_nuclear,
+        ref_ch=0,
+        mov_path=path,
+        mov_ch=ch,
+        origin=origin,
+        centroids=ref_centroids(case),
+    )
+
+
+def _nuclear(channels):
+    hit = [i for i, c in enumerate(channels) if NUCLEAR.search(c)]
+    return hit[0] if hit else 0
+
+
+def from_pipeline(a):
+    """A Mirage run's registered slides (``csv/registered.csv``): the patient's
+    reference and one moving slide, both on the reference canvas (origin 0, 0), the
+    nuclear channel found by name in the ``channels`` column."""
+    import csv
+
+    reg = Path(a.pipeline) / "csv" / "registered.csv"
+    if not reg.is_file():
+        raise SystemExit(f"no {reg}")
+    with reg.open(newline="") as fh:
+        rows = [
+            r for r in csv.DictReader(fh) if r["patient_id"].strip() == str(a.patient)
+        ]
+    if not rows:
+        raise SystemExit(f"{reg}: no rows for patient {a.patient!r}")
+    for r in rows:
+        r["chans"] = [c for c in r["channels"].split("|") if c]
+        r["path"] = Path(r["registered_image"].strip())
+        if not r["path"].is_absolute():
+            r["path"] = Path(a.pipeline) / r["path"]
+        if not r["path"].is_file():  # published under another root: look beside the csv
+            alt = list(Path(a.pipeline).rglob(r["path"].name))
+            r["path"] = alt[0] if alt else r["path"]
+    ref = [r for r in rows if r["is_reference"].strip().lower() in ("true", "1", "yes")]
+    mov = [r for r in rows if r not in ref]
+    listing = "\n".join(f"  {r['id']}  [{'|'.join(r['chans'])}]" for r in mov)
+    if len(ref) != 1:
+        raise SystemExit(f"patient {a.patient}: {len(ref)} reference rows")
+    if not a.moving:
+        raise SystemExit(
+            f"pick the moving slide with --moving; patient {a.patient} has:\n{listing}"
+        )
+    hit = [
+        r
+        for r in mov
+        if a.moving.lower() in (r["id"] + "|" + "|".join(r["chans"])).lower()
+    ]
+    if len(hit) != 1:
+        raise SystemExit(
+            f"--moving {a.moving!r} matches {len(hit)} slides of:\n{listing}"
+        )
+    ref, m = ref[0], hit[0]
+    for r in (ref, m):
+        if not r["path"].is_file():
+            raise SystemExit(f"{r['path']}: not found")
+    try:
+        um_px = float(ref.get("pixel_size") or 0)
+    except ValueError:
+        um_px = 0.0
+    if not um_px:
+        import tifffile
+
+        with tifffile.TiffFile(str(ref["path"])) as tf:
+            mm = re.search(r'PhysicalSizeX="([0-9.eE+-]+)"', tf.ome_metadata or "")
+        um_px = float(mm.group(1)) if mm else 0.0
+    if not um_px:
+        raise SystemExit(f"no pixel size for {ref['path']}")
+    print(f"reference {ref['id']}  moving {m['id']}  ({um_px:g} µm/px)")
+    return dict(
+        name=f"{a.patient}_{m['id']}",
+        um_px=um_px,
+        ref_path=str(ref["path"]),
+        ref_ch=_nuclear(ref["chans"]),
+        mov_path=str(m["path"]),
+        mov_ch=_nuclear(m["chans"]),
+        origin=(0.0, 0.0),
+        centroids=None,
+    )
+
+
+def corners_by_tissue(hw, tile, ov, factor, win):
+    """Every interior tile corner and the tissue fraction (Otsu on the overview) of the
+    inset around it."""
+    from skimage.filters import threshold_otsu
+
+    mask = ov > threshold_otsu(ov[ov > 0]) if (ov > 0).any() else ov > 0
+    H, W = hw
+    half = win / 2 / factor
+    rows = []
+    for y in range(tile, H, tile):
+        for x in range(tile, W, tile):
+            ys, xs = int(y / factor - half), int(x / factor - half)
+            sub = mask[max(ys, 0) : int(ys + 2 * half), max(xs, 0) : int(xs + 2 * half)]
+            rows.append(
+                {
+                    "corner_x": x,
+                    "corner_y": y,
+                    "tissue_fraction": float(sub.mean()) if sub.size else 0.0,
+                }
+            )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        raise SystemExit(
+            f"the slide ({W} x {H} px) has no interior corner of {tile} px tiles"
+        )
+    return df.sort_values(
+        ["tissue_fraction", "corner_y", "corner_x"], ascending=[False, True, True]
+    )
+
+
+def detect_nuclei(img, um_px):
+    """Nucleus centres (x, y px) in one DAPI window: Gaussian-smoothed at 1 µm, the local
+    maxima at least 3 µm apart above the window's Otsu threshold."""
+    from scipy.ndimage import gaussian_filter
+    from skimage.feature import peak_local_max
+    from skimage.filters import threshold_otsu
+
+    sm = gaussian_filter(img.astype(np.float32), 1.0 / um_px)
+    if not (sm > 0).any():
+        return np.zeros((0, 2))
+    pk = peak_local_max(
+        sm, min_distance=max(int(3.0 / um_px), 1), threshold_abs=threshold_otsu(sm)
+    )
+    return pk[:, ::-1].astype(float)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--cases", required=True, help="REGBENCH_CASES")
-    ap.add_argument("--out", required=True, help="REGBENCH_OUT (holds the results)")
+    ap.add_argument("--cases", help="REGBENCH_CASES (regbench mode)")
+    ap.add_argument("--out", help="REGBENCH_OUT, holds the results (regbench mode)")
     ap.add_argument("--dataset", default="multiplex")
+    ap.add_argument("--case-id", help="the round pair (regbench mode)")
     ap.add_argument(
-        "--case-id", required=True, help="the round pair (the panels of Fig. 1c)"
+        "--pipeline",
+        help="a Mirage run's results folder (pipeline mode): its csv/registered.csv",
+    )
+    ap.add_argument("--patient", help="pipeline mode: the patient_id")
+    ap.add_argument(
+        "--moving",
+        help="pipeline mode: the moving slide, a substring of its id or channels "
+        "(omitted: the slides are listed)",
     )
     ap.add_argument("--variant", default="stare", help="the STARE result (high tier)")
     ap.add_argument("--label", default="STARE", help="the method's name on the figure")
@@ -292,32 +458,36 @@ def main(argv=None):
 
     from stare.slide_io import decimation_factor, open_lazy, read_decimated
 
-    from benchmarks.regbench.cases import list_cases
-
     ps.apply_style()
-    case = next(
-        (c for c in list_cases(a.cases, a.dataset) if str(c.case_id) == a.case_id), None
-    )
-    if case is None:
-        raise SystemExit(f"no {a.dataset} case {a.case_id!r}")
-    um_px = float(case.pixel_size_um or 0)
-    if not um_px:
-        raise SystemExit(f"case {case.case_id} has no pixel size")
+    if a.pipeline:
+        src = from_pipeline(a)
+    elif a.cases and a.out and a.case_id:
+        src = from_regbench(a)
+    else:
+        raise SystemExit(
+            "give --pipeline RESULTS --patient P, or --cases --out --case-id"
+        )
+    um_px = src["um_px"]
     win = int(round(a.inset_um / um_px))
     cell_px = int(round(a.cell_um / um_px))
     clip = tuple(float(v) for v in a.clip.split(","))
     show = dict(clip=clip, clahe=a.clahe, sharpen=a.sharpen, upsample=a.upsample)
     outdir = Path(a.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    stem = outdir / f"seam_{case.case_id}_{a.variant}"
+    stem = outdir / f"seam_{src['name']}_{a.variant}"
+    ref_ch, ch, (ox, oy) = src["ref_ch"], src["mov_ch"], src["origin"]
 
-    path, ch, (ox, oy) = C.written_nuclear(a.out, a.variant, case)
-    ref_arr, _, close_ref = open_lazy(case.ref_nuclear)
-    mov_arr, _, close_mov = open_lazy(path)
+    ref_arr, _, close_ref = open_lazy(src["ref_path"])
+    mov_arr, _, close_mov = open_lazy(src["mov_path"])
     try:
         hw = tuple(int(v) for v in ref_arr.shape[1:])
-        cen = ref_centroids(case)
-        cand = corners(hw, a.tile, cen, win)
+        f = decimation_factor([hw, tuple(mov_arr.shape[1:])], a.overview_px)
+        ref_t = read_decimated(ref_arr, ref_ch, f)
+        cen = src["centroids"]
+        if cen is not None:
+            cand = corners(hw, a.tile, cen, win)
+        else:  # no nuclei table: rank the corners by tissue (Otsu on the overview)
+            cand = corners_by_tissue(hw, a.tile, ref_t, f, win)
         cand.to_csv(f"{stem}_candidates.csv", index=False)
         if a.corner:
             corner = tuple(float(v) for v in a.corner.split(","))
@@ -330,11 +500,16 @@ def main(argv=None):
                 (*(float(v) for v in spec.split(",")), np.nan, -1) for spec in a.cell
             ]
         else:
+            if cen is None:  # nuclei detected in the reference DAPI of the inset
+                x0, y0 = int(cx - win / 2), int(cy - win / 2)
+                det = detect_nuclei(C.region(ref_arr, ref_ch, y0, x0, win, win), um_px)
+                cen = det + np.array([x0, y0], dtype=float)
+                print(f"{len(cen)} nuclei detected in the inset (reference DAPI)")
             cell_xy = pick_cells(cen, cx, cy, win, cell_px, a.cells)
         print(f"corner ({cx:.0f}, {cy:.0f}) px, {len(cell_xy)} cell inset(s)")
 
         def pair(x0, y0, side, disp):
-            r = C.region(ref_arr, 0, y0, x0, side, side)
+            r = C.region(ref_arr, ref_ch, y0, x0, side, side)
             m = C.region(
                 mov_arr, ch, y0 - int(round(oy)), x0 - int(round(ox)), side, side
             )
@@ -347,8 +522,6 @@ def main(argv=None):
             for x, y, *_ in cell_xy
         ]
 
-        f = decimation_factor([hw, tuple(mov_arr.shape[1:])], a.overview_px)
-        ref_t = read_decimated(ref_arr, 0, f)
         mov_t = read_decimated(mov_arr, ch, f)
         sy, sx = int(round(oy / f)), int(round(ox / f))
         mov_t = C.on_canvas(
@@ -395,7 +568,7 @@ def main(argv=None):
     ]
     rows += [{"item": f"scale_bar_{k}", "length_um": v} for k, v in bars.items()]
     for r in rows:
-        r.update(case_id=case.case_id, variant=a.variant, origin_x=ox, origin_y=oy)
+        r.update(source=src["name"], variant=a.variant, origin_x=ox, origin_y=oy)
     ps.save(fig, str(stem), data=pd.DataFrame(rows))
     print("scale bars (µm): " + ", ".join(f"{k} {v:g}" for k, v in bars.items()))
     print(
