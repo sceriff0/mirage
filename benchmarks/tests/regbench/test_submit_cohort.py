@@ -4803,3 +4803,34 @@ def test_first_rung_says_and_ignores_a_run_the_launch_does_not_list(site):
     jobs = jobs_of(done)
     assert "rb-palom-multiplex-16g" in jobs
     assert "'no_such_run' is in no run list of this launch: not used" in done.stdout
+
+
+
+def test_selfcheck_first_holds_every_run_until_every_selfcheck_has_ended(site, dry):
+    """REGBENCH_SELFCHECK_FIRST=1: the first job of every run (its first rung, or the
+    first job of its first stage) waits for the LAST watcher link of EVERY selfcheck
+    (the one after its 256 and 512 GB retries), so no
+    registration starts before the selfchecks have ended. Off (the default), none does."""
+
+    def waits(job):
+        return {name.strip("<>") for _, name in job.deps}
+
+    def head(jobs, run, dataset="multiplex"):
+        if run in STAGED:
+            return jobs[f"rb-{run}-{dataset}-{STAGED[run][0]}-a1"]
+        return jobs.get(f"rb-{run}-{dataset}-first-16g") or rungs(jobs, run, dataset)[0]
+
+    done, _, _ = launch(site, env={"REGBENCH_SELFCHECK_FIRST": "1"}, log="scfirst")
+    jobs = jobs_of(done)
+    watchers = {links(jobs, f"rb-sc-{run}")[-1].name for run in CHECKERS}
+    names = [variants.run_name(r) for r in variants.runs_for(None)]
+    assert watchers and names
+    for name in names:
+        assert watchers <= waits(head(jobs, name)), name
+    plain, _, _ = dry
+    plain_watchers = {links(plain, f"rb-sc-{run}")[-1].name for run in CHECKERS}
+    for name in names:
+        assert not (plain_watchers & waits(head(plain, name))), name
+    bad, _, _ = launch(site, env={"REGBENCH_SELFCHECK_FIRST": "yes"}, log="scbad")
+    assert bad.returncode != 0
+    assert "REGBENCH_SELFCHECK_FIRST must be 0 or 1" in bad.stdout + bad.stderr

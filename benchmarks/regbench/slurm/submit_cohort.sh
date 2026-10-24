@@ -221,6 +221,12 @@
 #                                     after every job of the method before it (afterany):
 #                                     a timing replicate with no other method on the nodes
 #   REGBENCH_RUN_LANES (0)            runs in flight at once (0: no limit); see the ladders
+#   REGBENCH_SELFCHECK_FIRST (0)      1: every ladder and stage chain of this call waits
+#                                     for EVERY selfcheck of it to have ended (afterany:
+#                                     the watchers), so the selfchecks run before any
+#                                     registration. Still not a gate: whatever a
+#                                     selfcheck says, the runs start after it; look at
+#                                     the records first and scancel what you do not want
 #   REGBENCH_RUN_ORDER                the order the runs are SUBMITTED in, and so dealt
 #                                     onto the lanes: family or run names, space-separated
 #                                     (`runs --order`); the runs it does not name follow
@@ -398,6 +404,7 @@ MAX_SECONDS=$((7 * 24 * 3600))
 : "${REGBENCH_ARRAY_LIMIT:=20}"
 : "${REGBENCH_GPU_ARRAY_LIMIT:=$REGBENCH_ARRAY_LIMIT}"
 : "${REGBENCH_RUN_LANES:=0}"
+: "${REGBENCH_SELFCHECK_FIRST:=0}"
 : "${REGBENCH_SBATCH_GPU=--gres=gpu:1}"
 : "${REGBENCH_STAGE_ARRAY_MAX:=100}"
 : "${REGBENCH_STAGE_QUEUE_MAX:=200}"
@@ -640,6 +647,7 @@ need_int REGBENCH_STAGE_FEED_MIN 1
 need_int REGBENCH_STAGE_POLL_S 1
 need_int REGBENCH_STAGE_FEEDERS 1
 need_int REGBENCH_RUN_LANES 0
+case "$REGBENCH_SELFCHECK_FIRST" in 0|1) ;; *) die "REGBENCH_SELFCHECK_FIRST must be 0 or 1, not '$REGBENCH_SELFCHECK_FIRST'" ;; esac
 need_int REGBENCH_SCORE_CPUS 1
 need_int REGBENCH_RETRY_WATCHERS 1
 # REGBENCH_REPEAT=N (T31 R13, the CPU cross's two repetitions per point): the same
@@ -2163,6 +2171,14 @@ staged() {
 
 N_FED=0 FED_RUNS=""
 feed_time="$(limit "$feed_s")"
+# REGBENCH_SELFCHECK_FIRST=1: what every ladder waits for, the watcher of each selfcheck
+sc_first=""
+if [ "$REGBENCH_SELFCHECK_FIRST" = 1 ]; then
+    for r in $needed; do
+        last="SC_LAST_$r"
+        [ -n "${!last:-}" ] && sc_first="${sc_first:+$sc_first:}${!last}"
+    done
+fi
 finals="" prev_ds="" n_laned=0
 WAVE_METHOD="" WAVE_PREV="" WAVE_CUR=""
 # wave_add <jobs>: what the next method's wave waits for (REGBENCH_WAVES=1)
@@ -2178,8 +2194,10 @@ for ds in $sized; do
         else
             n="${!n_cases}"; time="$(limit "$round_s")"
         fi
-        # no selfcheck is waited for: reported, never a gate
+        # no selfcheck is waited for: reported, never a gate. REGBENCH_SELFCHECK_FIRST=1
+        # orders them first (afterany), and still gates nothing
         base=""
+        [ -n "$sc_first" ] && base="afterany:$sc_first"
         if [ "$after" != - ]; then
             last="LAST_${ds}_$after"
             if [ -n "${!last:-}" ]; then
