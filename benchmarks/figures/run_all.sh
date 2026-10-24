@@ -28,7 +28,8 @@ repo="$(cd "$here/../.." && pwd)"
 FIG_PYTHON="${FIG_PYTHON:-python}"
 JOBS='^(regbench-launch|rb-)'
 
-queued() { squeue --me -h -o '%j' 2>/dev/null | grep -cE "$JOBS" || true; }
+# grep -c prints the count and exits 1 when it is 0: the count is the data, not a failure
+queued() { local n; n="$(squeue --me -h -o '%j' 2>/dev/null | grep -cE "$JOBS")" || n=0; echo "$n"; }
 
 case "${1:-}" in
 launch)
@@ -39,7 +40,7 @@ launch)
 status)
     n="$(queued)"
     echo "regbench jobs queued or running: $n"
-    squeue --me -h -o '%.12i %.24j %.10T %.10M' 2>/dev/null | grep -E " (regbench-launch|rb-)" || true
+    squeue --me -h -o '%.12i %.24j %.10T %.10M' 2>/dev/null | awk '/ (regbench-launch|rb-)/'
     if [ -n "${REGBENCH_OUT:-}" ] && [ -f "$REGBENCH_OUT/tables/cells.csv" ]; then
         echo "scorer tables: $REGBENCH_OUT/tables ($(date -r "$REGBENCH_OUT/tables/cells.csv" '+%F %T'))"
     else
