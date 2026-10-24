@@ -76,11 +76,12 @@
       "benchmarks/regbench/mapping.py",
       "benchmarks/regbench/methods/__init__.py",
       "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/_valis_writer_field.py",
       "benchmarks/regbench/methods/valis.py",
       "benchmarks/regbench/resources.py",
       "bin/utils/jvm_cache.py"
     ],
-    "fingerprint": "d494f493d2354c9567013f132043d323bbd2cc2a169bdb35da20c338e2b91c9a"
+    "fingerprint": "a62bae59b6e330a6671fd0fc33e58aacf170b0d11d492e88bc6095bd5d81886b"
   },
   "valis_mirage": {
     "files": [
@@ -89,6 +90,7 @@
       "benchmarks/regbench/mapping.py",
       "benchmarks/regbench/methods/__init__.py",
       "benchmarks/regbench/methods/_valis_points.py",
+      "benchmarks/regbench/methods/_valis_writer_field.py",
       "benchmarks/regbench/methods/valis_mirage.py",
       "benchmarks/regbench/resources.py",
       "bin/register.py",
@@ -104,6 +106,6 @@
       "bin/utils/valis_micro_rigid.py",
       "bin/utils/valis_preflight.py"
     ],
-    "fingerprint": "16263ec4eb98dc90d0991fafbfdcde40b3a8ae78cbeb4ef99312f6673e40d95f"
+    "fingerprint": "d737444c99f7b04a19822b33f11586f292b09d7d8e302f44c8ddd1d78003ce18"
   }
 }
