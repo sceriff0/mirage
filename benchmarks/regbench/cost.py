@@ -148,6 +148,8 @@ CLOCK = {
         "writes": "one pyramidal OME-TIFF per round, every channel (BigTIFF, zlib)",
     },
 }
+# VALIS 1.2.0 with one line changed (methods/valis_fixed.py) is methods/valis.py's run
+CLOCK["valis_fixed"] = CLOCK["valis"]
 
 
 # The same work, stated per adapter (P11, R15): whether the method's own conversion is
@@ -192,6 +194,8 @@ WORK = {
         "channels_read": "the nuclear channel of each slide (read_level_channels)",
     },
 }
+# VALIS 1.2.0 with one line changed (methods/valis_fixed.py) is methods/valis.py's run
+WORK["valis_fixed"] = WORK["valis"]
 
 
 def _nan(value):

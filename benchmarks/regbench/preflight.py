@@ -40,6 +40,7 @@ PACKAGE = {
     "stare": "stare",
     "valis_mirage": "valis",
     "valis": "valis",
+    "valis_fixed": "valis",
     "ashlar": "ashlar",
     "deeperhistreg": "deeperhistreg",
     "palom": "palom",

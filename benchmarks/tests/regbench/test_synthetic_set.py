@@ -71,10 +71,10 @@ def test_every_other_run_is_excluded_with_the_reason():
 
 
 def test_the_cohort_and_hyreco_run_lists_are_unchanged():
-    """No run was added for the set: the 108 runs, the cohort's 72 (the full STARE cross,
-    2026-10-20), HyReCo's 50."""
-    assert len(variants.RUNS) == 108
-    assert len(variants.runs_for(None)) == 72
+    """No run was added for the set: the 110 runs, the cohort's 74 (the full STARE cross,
+    2026-10-20; valis120_fixed and valis120_fixed_hires, 2026-11-04), HyReCo's 50."""
+    assert len(variants.RUNS) == 110
+    assert len(variants.runs_for(None)) == 74
     assert len(variants.runs_for("hyreco")) == 50
     assert variants.excluded_for(None) == []
     assert variants.runs_for("mcmicro") == variants.runs_for(None)

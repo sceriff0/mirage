@@ -8,6 +8,7 @@ METHODS = (
     "initial",
     "stare",
     "valis",
+    "valis_fixed",
     "deeperhistreg",
     "valis_mirage",
     "ashlar",

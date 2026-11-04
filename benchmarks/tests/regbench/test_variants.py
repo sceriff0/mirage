@@ -104,8 +104,9 @@ def _stare_variants(name):
     return [f"{name}_rigid", name]
 
 
-# what the run list holds apart from STARE and ASHLAR: eleven VALIS runs (the pipeline's
-# at nine tier x depth cells, and two of 1.2.0), eight DeeperHistReg runs and PALOM
+# what the run list holds apart from STARE and ASHLAR: thirteen VALIS runs (the pipeline's
+# at nine tier x depth cells, two of 1.2.0, and those two with 1.2.0's micro-pass defect
+# fixed: methods/valis_fixed.py, 2026-11-04), eight DeeperHistReg runs and PALOM
 OTHER_FIRST = [
     "valis_mirage_rigid",
     "valis_mirage_nonrigid",
@@ -117,6 +118,12 @@ OTHER_FIRST = [
     "valis120_hires_rigid",
     "valis120_hires_nonrigid",
     "valis120_hires",
+    "valis120_fixed_rigid",
+    "valis120_fixed",
+    "valis120_fixed_micro",
+    "valis120_fixed_hires_rigid",
+    "valis120_fixed_hires_nonrigid",
+    "valis120_fixed_hires",
     "deeperhistreg_gpu",
     "deeperhistreg_cpu",
     "deeperhistreg_hr_gpu",
@@ -126,7 +133,7 @@ OTHER_FIRST = [
     "deeperhistreg_hr_fluo_gpu",
     "deeperhistreg_hr_fluo_cpu",
 ]
-N_OTHER_RUNS = 20  # 11 VALIS + 8 DeeperHistReg + PALOM
+N_OTHER_RUNS = 22  # 13 VALIS + 8 DeeperHistReg + PALOM
 # T31 R2: STARE at 4 CPUs in one job, a cost row of stare's (never a best-row candidate)
 LOCAL_4CPU = ["stare_local4"]
 EXPECTED = [
@@ -142,6 +149,8 @@ PER_PATIENT = {
     *VALIS_MIRAGE_GRID_RUNS,
     "valis120",
     "valis120_hires",
+    "valis120_fixed",
+    "valis120_fixed_hires",
     *ashlar.ASHLAR_CELLS,
 }
 GPU = {
@@ -178,7 +187,9 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 # 45 as before, the paused row never counted; 47 since STARE's medium and low tiers were
 # added beside high on 2026-10-17; 55 since the pipeline's VALIS runs at three tiers x
 # micro-registration depth 0, 1, 2, the same day)
-N_RUNS = 72  # T31: + stare_local4; 2026-10-20: + 16 cells of STARE's full cross
+N_RUNS = 74  # T31: + stare_local4; 2026-10-20: + 16 cells of STARE's full cross;
+# 2026-11-04: + valis120_fixed, valis120_fixed_hires (FIXED_RUNS)
+FIXED_RUNS = ["valis120_fixed", "valis120_fixed_hires"]
 
 
 def test_counts():
@@ -190,7 +201,7 @@ def test_counts():
     # and their medium and low tiers (rulings 2026-10-19: STARE's whole cross on HyReCo,
     # bf_same's five levels; the other brightfield regime went with its only dataset)
     assert len(_brightfield_stare_names()) == 12 and len(_landmark_tier_names()) == 24
-    assert len(variants.RUNS) == N_RUNS + 12 + 24 == 108  # 4 HyReCo tier cells are now the cohort's too
+    assert len(variants.RUNS) == N_RUNS + 12 + 24 == 110  # 4 HyReCo tier cells are now the cohort's too
     assert {variants.run_name(r) for r in cohort if r.gpu} == GPU
     per_patient = {
         variants.run_name(r) for r in cohort if variants.scope(r.method) == "group"
@@ -292,7 +303,9 @@ def test_primary_rows_are_expected_variants():
     # one primary row per method shown, and none for the anchored ASHLAR family
     families = [variants.family(v) for v in variants.PRIMARY]
     assert sorted(families) == sorted(set(families))
-    assert set(families) == set(variants.FAMILY.values()) - {"affine_ashlar"}
+    # and none for a sensitivity family (VALIS 1.2.0 with one line fixed)
+    assert set(families) == set(variants.FAMILY.values()) - {
+        "affine_ashlar", *variants.SENSITIVITY_FAMILIES}
     assert variants.primary_of("affine_ashlar") is None
     for v in variants.PRIMARY:
         assert variants.primary_of(variants.family(v)) == v
@@ -1204,6 +1217,7 @@ COHORT_RUNS = [
     "valis_mirage_high_m0", "valis_mirage_high_m1", "valis_mirage_medium_m0",
     "valis_mirage_medium_m1", "valis_mirage_medium_m2", "valis_mirage_low_m0",
     "valis_mirage_low_m1", "valis_mirage_low_m2", "valis120", "valis120_hires",
+    "valis120_fixed", "valis120_fixed_hires",
     "deeperhistreg_gpu", "deeperhistreg_cpu", "deeperhistreg_hr_gpu",
     "deeperhistreg_hr_cpu", "deeperhistreg_fluo_gpu", "deeperhistreg_fluo_cpu",
     "deeperhistreg_hr_fluo_gpu", "deeperhistreg_hr_fluo_cpu", "ashlar", "ashlar_clean",
@@ -1233,7 +1247,7 @@ def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
     assert len(COHORT_RUNS) == N_RUNS
     for dataset in (None, "multiplex"):
         lines = "\n".join("\t".join(r) for r in variants.runs_table(dataset=dataset)
-                           if r[0] not in LOCAL_4CPU)
+                           if r[0] not in LOCAL_4CPU and r[0] not in FIXED_RUNS)
         assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256
 
 
@@ -1382,8 +1396,8 @@ def test_the_new_level_runs_on_no_other_dataset():
 
 
 @pytest.mark.parametrize("ds", ["mcmicro", "phenocycler", "rashid", None])
-def test_the_cohort_and_the_fluorescence_sets_keep_their_72(ds):
-    assert len(variants.runs_for(ds)) == N_RUNS == 72
+def test_the_cohort_and_the_fluorescence_sets_keep_their_74(ds):
+    assert len(variants.runs_for(ds)) == N_RUNS == 74
 
 
 def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
@@ -1432,6 +1446,15 @@ def test_the_full_cross_only_adds_lines():
     lines = "\n".join(
         "\t".join(r)
         for r in variants.runs_table(dataset=None)
-        if r[0] not in LOCAL_4CPU and r[0] not in new
+        if r[0] not in LOCAL_4CPU and r[0] not in new and r[0] not in FIXED_RUNS
     )
     assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256_BEFORE_CROSS
+
+
+def test_the_valis120_fixed_runs_only_add_lines():
+    """VALIS 1.2.0 with its micro-pass defect fixed (2026-11-04) ADDS two runs, right
+    after the shipped ones, and moves no other: the pinned shas above are of the table
+    without them, unchanged."""
+    names = [r[0] for r in variants.runs_table(dataset=None)]
+    at = names.index("valis120_hires")
+    assert names[at + 1 : at + 3] == FIXED_RUNS

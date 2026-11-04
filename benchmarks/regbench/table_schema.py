@@ -411,6 +411,38 @@ _TABLE_LIST = [
        ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
         "dice_skip_med)"),
        ("n_pairs", "count", ""), ("disp_um_med", "um", ""), *_FULL),
+    _t("valis120_fix", ("dataset", "row", "set", "pooling"),
+       "VALIS 1.2.0 with its micro pass's one-line defect fixed (methods/valis_fixed.py) "
+       "beside VALIS 1.2.0 as shipped, paired on the cases both have: a SENSITIVITY "
+       "check, never a compared method",
+       ("dataset", "", ""),
+       ("row", "", "the fixed run's final result name (valis120_fixed, "
+        "valis120_fixed_hires)"),
+       ("shipped_row", "", "the shipped run's final result name it is paired with "
+        "(methods.valis_fixed.SHIPPED_ROW)"),
+       _SET,
+       ("pooling", "", "case (every paired case one value) or patient (per-patient median "
+        "first, then the median over patients); both over the paired cases only"),
+       _EXCLUDED,
+       ("n_cases_paired", "count", "cases both rows have a kept row on (neither excluded)"),
+       _N_UNITS,
+       ("dice_med_shipped", "1", "the shipped row's Dice over the paired units (a case with "
+        "no matched pair counts as 0)"),
+       ("dice_med_fixed", "1", "the fixed row's, the same way"),
+       ("d_dice_fixed_minus_shipped_med", "1", "fixed minus shipped, per unit, median; "
+        "0 on a unit where the fix had no effect (info.micro_fix.normalisation_loop_ran "
+        "false: the tiler engaged)"),
+       ("d_dice_fixed_minus_shipped_q25", "1", "25th percentile of that difference"),
+       ("d_dice_fixed_minus_shipped_q75", "1", "75th percentile of that difference"),
+       ("d_dice_skip_fixed_minus_shipped_med", "1", "the same with a missing Dice left out, "
+        "not 0"),
+       ("n_units_shipped_ge", "count", "units where the shipped row is at least as good"),
+       ("stare_row", "", "STARE's headline best row (method_best), the reference of the two "
+        "columns below; NA when there is none"),
+       ("d_dice_shipped_vs_stare_med", "1", "shipped minus STARE, per unit over the paired "
+        "cases STARE also has, median"),
+       ("d_dice_fixed_vs_stare_med", "1", "fixed minus STARE, the same units"),
+       ("n_units_vs_stare", "count", "units of the two columns above")),
     _t("stare_tiers", ("dataset", "row", "set", "pooling"),
        "Dice and cost per STARE run (tier, stride, prep)",
        ("dataset", "", ""), ("row", "", ""), ("tier", "", ""), ("stride", "px", ""),

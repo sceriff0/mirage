@@ -357,6 +357,11 @@ RUNS = (
     *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
+    # VALIS 1.2.0 with its micro pass's one-line defect fixed (methods/valis_fixed.py):
+    # SENSITIVITY rows beside the two above, in the same image, never a primary and never
+    # in the headline tables (SENSITIVITY_FAMILIES); paper table `valis120_fix`
+    Run("valis_fixed", "valis120_fixed", {}, "VALIS120", False, None),
+    Run("valis_fixed", "valis120_fixed_hires", {"hires": "1"}, "VALIS120", False, None),
     Run(
         "deeperhistreg",
         "deeperhistreg_gpu",
@@ -454,6 +459,8 @@ FAMILY = {
     "ashlar_astare": "affine_ashlar",
     "valis_mirage": "valis_mirage",
     "valis120": "valis120",
+    # longer than `valis120`, so `valis120_fixed*` is its own family (`family`: longest)
+    "valis120_fixed": "valis120_fixed",
     "deeperhistreg": "deeperhistreg",
     "ashlar": "ashlar",
     "affine_ashlar": "affine_ashlar",
@@ -461,6 +468,13 @@ FAMILY = {
 }
 
 FAMILY.update(plugins.get("FAMILY", {}) or {})
+
+# Families that are a SENSITIVITY check of another method, never one of the methods
+# compared: no primary row, never a best-row candidate, left out of every headline table
+# (``paper.tables._families``) so they cannot move the cross-method common cases. Their
+# rows are scored like any other and read by their own table (``paper.tables.valis120_fix``:
+# each row beside the shipped row of ``methods.valis_fixed.SHIPPED_ROW``).
+SENSITIVITY_FAMILIES = ("valis120_fixed",)
 
 # Which run's selfcheck checks a run, when it is not its own. Reported, never a gate.
 CHECKED_BY = {
