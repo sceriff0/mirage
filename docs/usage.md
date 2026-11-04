@@ -30,8 +30,8 @@ flowchart LR
   illumination correction. The correction is **off by default** (`skip_preprocessing` is `true`;
   set it `false` in a params file or profile to run it); the conversion always runs.
 - **Registration** — whole-slide alignment of every panel onto the reference panel, via
-  `--registration_method`: **VALIS** (default, graph-based) or **tiled/STARE**
-  (JVM-free, fully parallel — see [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
+  `--registration_method`: **tiled/STARE** (default; JVM-free, fully parallel) or **VALIS**
+  (graph-based — see [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
 - **Segmentation** — cell/nucleus segmentation on the reference panel + morphology/contour extraction.
 - **Postprocessing** — per-cell quantification + QuPath GeoJSON export + pyramidal OME-TIFF.
 

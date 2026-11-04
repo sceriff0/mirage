@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE (`tiled`) is the default registration method (was `valis`).** It is the method
+  used for the cohort and the one the manuscript describes as the default. VALIS stays
+  available with `--registration_method valis`. The `full_pipeline` and `registration_only`
+  presets follow the default. `conf/test.config` pins `valis`, so the stub snapshots do not
+  move; the `shipped_defaults_test` profile runs the STARE default.
 - **VALIS registration runs valis-wsi 1.2.0 at its defaults, and has no settings any more.**
   `REGISTER` now makes the benchmark's `valis120` call: `Valis()` given the patient's slides
   and the reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px),

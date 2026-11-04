@@ -282,7 +282,7 @@
     per-slide star. Both solve the same problem in the same <b>two steps</b> — a global pose fit, then a local
     residual field — and panels&nbsp;b–d take those two steps apart in full. The nuclear/fiducial channel
     (channel&nbsp;0) is what drives the alignment in both.</p>
-  <div class="railnote" style="margin:10px 0 0;justify-content:flex-start"><span><b>source of truth:</b> the pipeline source tree</span><span><b>method default:</b> <code>registration_method = valis</code></span><span><b>QC default:</b> <code>reg_qc = 2</code></span></div>
+  <div class="railnote" style="margin:10px 0 0;justify-content:flex-start"><span><b>source of truth:</b> the pipeline source tree</span><span><b>method default:</b> <code>registration_method = tiled</code></span><span><b>QC default:</b> <code>reg_qc = 2</code></span></div>
 
   <!-- a — THE METHOD-AGNOSTIC FRAME -->
   <section class="panel">
@@ -931,7 +931,7 @@
       <div class="pcol">
         <h4>Dispatch &amp; shared</h4>
         <table class="pr">
-          <tr><td class="k">registration_method</td><td class="val">valis</td><td class="d">valis | tiled (STARE)</td></tr>
+          <tr><td class="k">registration_method</td><td class="val">tiled</td><td class="d">tiled (STARE) | valis</td></tr>
           <tr><td class="k">nuclear_markers</td><td class="val">[DAPI, CELLTOX]</td><td class="d">ordered preference → channel 0</td></tr>
           <tr><td class="k">is_reference</td><td class="val">declared</td><td class="d">a samplesheet column, not a parameter — exactly one true row per patient, else a launch error</td></tr>
           <tr><td class="k">reg_qc</td><td class="val">2</td><td class="d">0 none · 1 overlay · 2 +cell overlap</td></tr>

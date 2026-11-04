@@ -72,15 +72,15 @@ owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
 
 ## Registration
 
-Two backends, selected by `--registration_method`: **VALIS** (default, graph-based
-whole-slide alignment) and **STARE tiled** (JVM-free, fully parallel). STARE is **not**
+Two backends, selected by `--registration_method`: **STARE tiled** (default; JVM-free, fully
+parallel) and **VALIS** (graph-based whole-slide alignment). STARE is **not**
 laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
 
 ### Common
 
 | Parameter | Default | Description |
 |---|---|---|
-| `registration_method` | `valis` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (STARE — see [Tiled / STARE](#tiled-stare-registration_methodtiled)). |
+| `registration_method` | `tiled` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (STARE — see [Tiled / STARE](#tiled-stare-registration_methodtiled)). |
 | `nuclear_markers` | `['DAPI','CELLTOX']` | Ordered preference of nuclear/fiducial marker names. The first present (resolved from channel metadata, never the filename) is moved to channel 0 and drives both cell segmentation and the registration fiducial. Fails fast if none present (single-channel images excepted). Accepts a **list** (config or `-params-file`) or a **comma/space-separated string**, which is the only shape a command line can produce: `--nuclear_markers CELLTOX` and `--nuclear_markers DAPI,CELLTOX` both work. Matching is case-insensitive **substring**, so `DAPI_nuclear` counts as nuclear. |
 
 !!! warning "The reference is declared, never inferred"
