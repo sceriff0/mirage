@@ -54,10 +54,14 @@ params {
     outdir                 = '/path/to/results'
 
     // ---- Segmentation model location ---------------------------------------
-    // Only consulted when seg_method = 'stardist'. The shipped default backend
-    // is 'instantseg', which needs neither of these.
+    // Only consulted when seg_method = 'stardist' (the default). The shipped
+    // segmentation_model is a pinned Hugging Face snapshot, downloaded on first use
+    // into segmentation_model_dir; on a cluster without network access, pre-download
+    // config.json, thresholds.json and weights_best.h5 into
+    // <segmentation_model_dir>/DSUnit__stardist__68b94406104b/ and it is used offline.
+    // Set segmentation_model to a folder name under that directory to use your own.
     segmentation_model_dir = '/path/to/models/'
-    segmentation_model     = 'your_stardist_model_name'
+    // segmentation_model  = 'your_stardist_model_name'
 
     // ---- SLURM settings (leave null when not using SLURM) -------------------
     slurm_partition        = null

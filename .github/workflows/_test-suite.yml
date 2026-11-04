@@ -346,8 +346,9 @@ jobs:
             --outdir test_results_stub
 
       - name: Run pipeline with SHIPPED defaults (stub mode)
-        # `-profile test` pins BOTH pixel_size (-> 0.325) and seg_method
-        # (-> 'stardist') away from what actually ships ('auto' / 'instantseg'),
+        # `-profile test` pins BOTH pixel_size (-> 0.325) and segmentation_model
+        # (-> '2D_versatile_fluo') away from what actually ships ('auto' / the
+        # pinned Hugging Face StarDist model),
         # each for its own documented reason (conf/test.config) -- which means
         # the exact combination that ships was never executed by CI, stub or
         # real. `shipped_defaults_test` overrides both back and repoints `input`

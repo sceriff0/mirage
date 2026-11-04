@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import re
 
 # Add parent directory to path to import lib modules
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
@@ -41,8 +44,18 @@ logger = get_logger(__name__)
 #: -- see docs/perf/2026-08-26-rss.md's tiled-vs-striped table.
 MASK_TIFF_TILE = 1024
 
+#: A Hugging Face model reference: ``hf://<owner>/<repo>@<40-hex commit>``. The commit is
+#: REQUIRED: a branch name like ``main`` moves, and a segmentation run whose weights can
+#: change under it is not reproducible. The commit pins every file of the snapshot.
+HF_PREFIX = "hf://"
+HF_SPEC = re.compile(r"^hf://(?P<repo>[\w.-]+/[\w.-]+)@(?P<rev>[0-9a-f]{40})$")
+#: The three files a StarDist2D model folder needs (weights_last.h5 and the logs are not
+#: read by StarDist2D(None, name, basedir) and are not downloaded).
+HF_FILES = ("config.json", "thresholds.json", "weights_best.h5")
+
 __all__ = [
     "normalize_dapi",
+    "resolve_hf_model",
     "load_stardist_model",
     "segment_nuclei",
     "run_segmentation",
@@ -87,6 +100,77 @@ def normalize_dapi(
     return normalized
 
 
+def resolve_hf_model(spec: str, cache_dir: Optional[str] = None) -> Tuple[str, str]:
+    """Download (once) a StarDist model folder from the Hugging Face Hub.
+
+    Parameters
+    ----------
+    spec : str
+        ``hf://<owner>/<repo>@<commit>``, e.g. the shipped default
+        ``hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df``.
+    cache_dir : str, optional
+        Where the folder is kept. A folder already there is used WITHOUT any network
+        access, which is how an air-gapped site runs: pre-download it into
+        ``segmentation_model_dir``. Default: ``./stardist_models`` in the task directory.
+
+    Returns
+    -------
+    (basedir, name) : tuple of str
+        For ``StarDist2D(None, name=name, basedir=basedir)``.
+    """
+    m = HF_SPEC.match(spec)
+    if not m:
+        raise ValueError(
+            f"Hugging Face model reference {spec!r} is not hf://<owner>/<repo>@<40-hex commit>; "
+            "a branch name is refused because the weights behind it can change."
+        )
+    repo, rev = m.group("repo"), m.group("rev")
+    basedir = Path(
+        cache_dir if cache_dir not in (None, "", "null", "None") else "stardist_models"
+    )
+    name = f"{repo.replace('/', '__')}__{rev[:12]}"
+    folder = basedir / name
+    if all((folder / f).exists() for f in HF_FILES):
+        logger.info(f"  Hugging Face model {repo}@{rev[:12]} found in cache: {folder}")
+        return str(basedir), name
+    # HF_ENDPOINT is the Hub's own variable for a mirror; honour it like huggingface_hub does.
+    endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+    folder.mkdir(parents=True, exist_ok=True)
+    for fname in HF_FILES:
+        dest = folder / fname
+        if dest.exists():
+            continue
+        url = f"{endpoint}/{repo}/resolve/{rev}/{fname}"
+        logger.info(f"  Downloading {url}")
+        last = None
+        for attempt in range(1, 4):
+            try:
+                tmp = dest.with_name(dest.name + ".part")
+                with (
+                    urllib.request.urlopen(url, timeout=120) as r,
+                    open(tmp, "wb") as fh,
+                ):
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                tmp.replace(dest)  # atomic: a killed download never looks complete
+                last = None
+                break
+            except OSError as exc:  # URLError and HTTPError are OSError subclasses
+                last = exc
+                logger.warning(f"  download attempt {attempt}/3 failed: {exc}")
+                time.sleep(2 * attempt)
+        if last is not None:
+            raise RuntimeError(
+                f"Could not download {url} ({last}). Without network access, pre-download "
+                f"{', '.join(HF_FILES)} of {repo} at {rev} into "
+                f"<segmentation_model_dir>/{name}/ and pass segmentation_model_dir."
+            ) from last
+    return str(basedir), name
+
+
 def load_stardist_model(
     model_dir: str, model_name: str, use_gpu: bool = True
 ) -> StarDist2D:
@@ -122,6 +206,12 @@ def load_stardist_model(
         "2D_paper_dsb2018",
         "2D_demo",
     }
+
+    if model_name.startswith(HF_PREFIX):
+        # Shipped default: a pinned Hugging Face snapshot, downloaded once into
+        # model_dir (or the task directory) and then loaded as a custom model.
+        model_dir, model_name = resolve_hf_model(model_name, model_dir)
+        logger.info(f"  Resolved to local model folder: {Path(model_dir) / model_name}")
 
     have_model_dir = model_dir not in (None, "", "null", "None")
     model_path = (Path(model_dir) / model_name) if have_model_dir else None
@@ -377,14 +467,16 @@ def parse_args():
         default=None,
         help="Directory containing a custom StarDist model. If omitted, "
         "--model-name is loaded as a StarDist built-in pretrained model "
-        '(e.g. "2D_versatile_fluo").',
+        '(e.g. "2D_versatile_fluo"). With an hf:// --model-name it is the '
+        "download cache (a model already there is used offline).",
     )
 
     parser.add_argument(
         "--model-name",
         type=str,
         required=True,
-        help='StarDist model name (e.g., "2D_versatile_fluo")',
+        help='StarDist model: a folder name under --model-dir, a built-in (e.g. "2D_versatile_fluo"), '
+        'or a pinned Hugging Face snapshot "hf://<owner>/<repo>@<commit>"',
     )
 
     # Optional arguments

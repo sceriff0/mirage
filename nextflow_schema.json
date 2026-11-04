@@ -287,21 +287,21 @@
                 },
                 "segmentation_model": {
                     "type": "string",
-                    "description": "Name of the segmentation model.",
-                    "default": "stardist_full_e200_lr00001_aug1_seed10_es50p0.001_rlr0.5p50"
+                    "description": "StarDist model: a pinned Hugging Face snapshot 'hf://<owner>/<repo>@<40-hex commit>' (default, downloaded on first use), a model folder name under segmentation_model_dir, or a StarDist built-in.",
+                    "default": "hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df"
                 },
                 "segmentation_model_dir": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Directory containing segmentation models.",
+                    "description": "Directory containing StarDist models; for an hf:// segmentation_model, the download cache (a model already there is used without network access).",
                     "default": null
                 },
                 "seg_method": {
                     "type": "string",
-                    "description": "Segmentation backend to use. 'instantseg' (default) runs without extra assets; 'stardist' requires a trained model via segmentation_model_dir unless segmentation_model names a StarDist built-in.",
-                    "default": "instantseg",
+                    "description": "Segmentation backend to use. 'stardist' (default) uses the pinned Hugging Face model of segmentation_model; 'instantseg' needs no trained model; 'cellsam' needs DeepCell weights.",
+                    "default": "stardist",
                     "enum": [
                         "stardist",
                         "instantseg",

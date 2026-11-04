@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TILED_SOLVE` asks 2 GB on its first attempt (was 1 GB).** The slide-wide solve peaked at
   0.19-1.20 GB per round pair on the regbench cohort, so a cohort-sized solve used to OOM once
   and pass only on the 2 GB retry.
+- **StarDist is the default segmentation backend, with its trained model fetched from the
+  Hugging Face Hub.** `seg_method` defaults to `stardist` (was `instantseg`), and
+  `segmentation_model` defaults to `hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df`.
+  This is the model used for the cohort runs. `bin/segment.py` downloads its `config.json`,
+  `thresholds.json` and `weights_best.h5` on first use, into `segmentation_model_dir` when set
+  and into the task directory otherwise. A copy already in `segmentation_model_dir` is used
+  without network access, which is the route for air-gapped clusters. `HF_ENDPOINT` selects a
+  mirror. The reference must name a 40-hex commit: a branch such as `@main` is refused,
+  because the weights behind it can change. A plain `segmentation_model` name still means a
+  folder under `segmentation_model_dir` or a StarDist built-in. `conf/test.config` keeps the
+  built-in `2D_versatile_fluo`, so CI does not run the shipped weights.
 - **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
   on each axis: one displacement vector every 64 px from a 128 px window. That is four
   times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows
