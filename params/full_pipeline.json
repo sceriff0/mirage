@@ -16,12 +16,12 @@
     "pixel_size": 0.325,
 
     "_comment_reg_common": "=== Registration (Common) ===",
-    "registration_method": "valis",
+    "registration_method": "tiled",
     "nuclear_markers": ["DAPI", "CELLTOX"],
     "skip_registration_qc": false,
     "qc_scale_factor": 0.25,
 
-    "_comment_reg_valis": "=== Registration (VALIS) === valis-wsi 1.2.0 at its defaults: there are no VALIS registration settings.",
+    "_comment_reg_valis": "=== Registration (VALIS, with registration_method valis) === valis-wsi 1.2.0 at its defaults: there are no VALIS registration settings.",
 
     "_comment_seg": "=== Segmentation ===",
     "_comment_seg_method": "stardist is nextflow.config's default, with the trained model of segmentation_model: a Hugging Face snapshot pinned to one commit and downloaded on first use (into segmentation_model_dir when set; a copy already there is used offline). The StarDist knobs are seg_pmin, seg_pmax, seg_prob_thresh, seg_n_tiles_x and seg_n_tiles_y, and every one of them is silently discarded while seg_method is anything else. instantseg needs no trained model and its weights are Apache-2.0.",

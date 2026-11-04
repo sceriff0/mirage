@@ -37,6 +37,7 @@ doing any work — see [Fast-fail behavior](#fast-fail-behavior).
 ```bash
 nextflow run . -profile <profile> \
   --mode add_cycle \
+  --registration_method valis \
   --cleanup_level none \
   --prior_outdir results_cycle1 \
   --input new_cycle.csv \
@@ -113,13 +114,13 @@ nextflow run . -profile <site> \
 
 # cycle 2 — prior is the full linear run
 nextflow run . -profile <site> \
-    --input cycle2.csv --mode add_cycle --cleanup_level none \
+    --input cycle2.csv --mode add_cycle --registration_method valis --cleanup_level none \
     --prior_outdir results/cycle1 --outdir results/cycle2 \
     -c site.config
 
 # cycle 3 — prior is cycle 2
 nextflow run . -profile <site> \
-    --input cycle3.csv --mode add_cycle --cleanup_level none \
+    --input cycle3.csv --mode add_cycle --registration_method valis --cleanup_level none \
     --prior_outdir results/cycle2 --outdir results/cycle3 \
     -c site.config
 ```

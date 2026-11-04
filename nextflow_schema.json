@@ -122,8 +122,8 @@
             "properties": {
                 "registration_method": {
                     "type": "string",
-                    "description": "Registration backend: 'valis' (VALIS graph-based whole-slide) or 'tiled' (STARE: JVM-free, internally tiled, fully parallel). See lib/ParamUtils.groovy.",
-                    "default": "valis",
+                    "description": "Registration backend: 'tiled' (STARE: JVM-free, internally tiled, fully parallel; the default) or 'valis' (VALIS graph-based whole-slide). See lib/ParamUtils.groovy.",
+                    "default": "tiled",
                     "enum": [
                         "valis",
                         "tiled"
