@@ -367,7 +367,9 @@ ALLOWED_LINES = {
         # 1273 -> 1285 (2026-11-05): REGISTER and WARP_SEG_QC gained a five-line
         # --writable-tmpfs containerOptions block each, and TILED_SOLVE's memory comment
         # grew by two (valis-wsi 1.2.0 defaults; Addendum A).
-        1285: (
+        # 1285 -> 1281 (2026-11-05): the StarDist ext.args comment above shrank when the
+        # shipped model became a pinned Hugging Face snapshot.
+        1281: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

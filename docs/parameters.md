@@ -176,24 +176,26 @@ build the whole-cell mask differently, and have different prerequisites.
 
 ### Choosing a backend
 
-| | `instantseg` **(default)** | `stardist` | `cellsam` |
+| | `instantseg` | `stardist` **(default)** | `cellsam` |
 |---|---|---|---|
 | **Reads** | The full multichannel image — **channel-invariant** | One channel, hardcoded to **index 0** | One nuclear channel, **resolved by marker name** |
 | **Whole-cell mask** | Predicted natively, alongside nuclei | Expanded from nuclei by `seg_expand_distance` | Expanded from nuclei by `seg_expand_distance` |
 | **Precondition** | A writable model cache | Channel 0 **must** be a nuclear marker — otherwise the task exits 1 | A nuclear channel must exist — a negative index exits 1 |
-| **Weights** | Apache-2.0, auto-downloaded from BioImage.IO | **None ship with the repo** | **Gated** — needs `DEEPCELL_ACCESS_TOKEN` |
-| **Runs on a fresh clone?** | **Yes** | No — set `segmentation_model_dir` | No — set `cellsam_model_path` or export a token |
+| **Weights** | Apache-2.0, auto-downloaded from BioImage.IO | Trained model [`DSUnit/stardist`](https://huggingface.co/DSUnit/stardist), auto-downloaded at a pinned commit | **Gated** — needs `DEEPCELL_ACCESS_TOKEN` |
+| **Runs on a fresh clone?** | **Yes** | **Yes** (needs network on first use, or a pre-downloaded copy in `segmentation_model_dir`) | No — set `cellsam_model_path` or export a token |
 | **Container image** | `bolt3x/mirage-instanseg:1.0.0` | `bolt3x/mirage-stardist:1.0.0` | `bolt3x/mirage-cellsam:1.0.0` |
 | **Entry point** | `segment_instantseg.py` | `segment.py` | `segment_cellsam.py` |
 
-!!! tip "Why InstanSeg is the default"
-    It is the only backend that produces a mask on an unconfigured clone. The
-    shipped `segmentation_model` name is **not** a StarDist built-in, so without
-    `segmentation_model_dir` StarDist raises `FileNotFoundError`; CellSAM's
-    weights sit behind a DeepCell token. InstanSeg's are Apache-2.0 and
-    unencumbered.
+!!! tip "Why StarDist is the default"
+    It runs the trained nuclear model used for the paper's cohort, published at
+    [huggingface.co/DSUnit/stardist](https://huggingface.co/DSUnit/stardist) and
+    pinned to one commit, so every run loads the same weights. `segment.py`
+    downloads its three files (`config.json`, `thresholds.json`,
+    `weights_best.h5`) on first use; on a cluster without network access,
+    pre-download them into `<segmentation_model_dir>/DSUnit__stardist__68b94406104b/`
+    and they are used offline. A branch name instead of a commit is refused.
 
-    It is also the only one that predicts the whole-cell mask directly rather
+    InstanSeg is the only backend that predicts the whole-cell mask directly rather
     than dilating nuclei by a fixed radius — so **`seg_expand_distance` has no
     effect when InstanSeg is selected**. An unrecognised `--seg_method` is
     rejected by name at launch rather than silently running a different
@@ -208,7 +210,7 @@ These three apply to every backend.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `seg_method` | `instantseg` | Backend: `instantseg`, `stardist`, or `cellsam`. The container, entry point and preconditions all follow from this one value. |
+| `seg_method` | `stardist` | Backend: `instantseg`, `stardist`, or `cellsam`. The container, entry point and preconditions all follow from this one value. |
 | `seg_gpu` | `true` | Use GPU — adds SLURM `--gres=gpu:$gpu_type` plus Docker `--gpus all` / Singularity `--nv`. Set `false` to force CPU. |
 | `seg_expand_distance` | `10` | Pixels to expand nuclei into the whole-cell mask. **StarDist and CellSAM only** — ignored by InstanSeg, which predicts cells natively. |
 
@@ -218,8 +220,8 @@ Consumes the **DAPI channel** (must be channel 0 — guaranteed upstream).
 
 | Parameter | Default | Description |
 |---|---|---|
-| `segmentation_model` | `stardist_full_e200_…` | StarDist model name. **Not a StarDist built-in** — it names a trained model that must exist under `segmentation_model_dir`. |
-| `segmentation_model_dir` | `null` | Directory holding the trained model. **Required for this backend**: with `null`, `segment.py` raises `FileNotFoundError` unless `segmentation_model` names a StarDist built-in (`2D_versatile_fluo`, `2D_versatile_he`, `2D_paper_dsb2018`, `2D_demo`). No model is bundled with the repo. |
+| `segmentation_model` | `hf://DSUnit/stardist@68b94406…` | StarDist model: a pinned Hugging Face snapshot `hf://<owner>/<repo>@<40-hex commit>` (the default; a branch name is refused), a model folder name under `segmentation_model_dir`, or a StarDist built-in (`2D_versatile_fluo`, `2D_versatile_he`, `2D_paper_dsb2018`, `2D_demo`). |
+| `segmentation_model_dir` | `null` | Directory of StarDist models. For an `hf://` model it is the download cache, and a copy already there is used without network access; with `null` the model is downloaded into each task's directory. `HF_ENDPOINT` selects a Hub mirror. |
 | `seg_pmin` | `1.0` | Lower percentile for normalization. |
 | `seg_pmax` | `99.8` | Upper percentile for normalization. |
 | `seg_n_tiles_x` | `16` | Inference tiles along X. |

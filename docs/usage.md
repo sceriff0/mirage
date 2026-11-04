@@ -521,10 +521,10 @@ key grammar is a cross-repository contract — see
 ## Troubleshooting & FAQ
 
 ??? question "Which segmentation backend should I use?"
-    Pick with `--seg_method`: **`instantseg`** (default; channel-invariant, runs
-    on an unconfigured clone; tune batch/tile size for GPU memory), **`stardist`**
-    (reads channel 0, hardcoded — needs a nuclear marker there and a configured
-    `segmentation_model_dir`), **`cellsam`** (finds the nuclear channel by name;
+    Pick with `--seg_method`: **`stardist`** (default; reads channel 0, hardcoded
+    — needs a nuclear marker there; its trained model is downloaded once from the
+    Hugging Face Hub at a pinned commit), **`instantseg`** (channel-invariant, no
+    trained model needed; tune batch/tile size for GPU memory), **`cellsam`** (finds the nuclear channel by name;
     needs a weight download via `DEEPCELL_ACCESS_TOKEN`, or a local
     `--cellsam_model_path`).
 
