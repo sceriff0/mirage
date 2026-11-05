@@ -83,21 +83,6 @@
     ],
     "fingerprint": "c0bbbeff36af9077d52d4157dc71087e718e13feca65df478459fcf584a93ed9"
   },
-  "valis_fixed": {
-    "files": [
-      "benchmarks/regbench/cases.py",
-      "benchmarks/regbench/landmark_io.py",
-      "benchmarks/regbench/mapping.py",
-      "benchmarks/regbench/methods/__init__.py",
-      "benchmarks/regbench/methods/_valis_points.py",
-      "benchmarks/regbench/methods/_valis_writer_field.py",
-      "benchmarks/regbench/methods/valis.py",
-      "benchmarks/regbench/methods/valis_fixed.py",
-      "benchmarks/regbench/resources.py",
-      "bin/utils/jvm_cache.py"
-    ],
-    "fingerprint": "c2b6ddfd5c4efe634d105a59070bab3e0df636356c1437669f19b1286bd5128b"
-  },
   "valis_mirage": {
     "files": [
       "benchmarks/regbench/cases.py",

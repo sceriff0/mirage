@@ -100,7 +100,6 @@ WRITTEN = (
     "method_best_per_method",
     "method_summary",
     "valis_stages",
-    "valis120_fix",
     "stare_tiers",
     "stare_stage_peaks",
     "ashlar_discard",
@@ -647,16 +646,10 @@ def primary_row(family, dataset, best_rows):
 
 
 def _families(dataset):
-    """The families compared on ``dataset``, in the order of their terminal rows. A
-    SENSITIVITY family (``variants.SENSITIVITY_FAMILIES``: VALIS 1.2.0 with one line
-    fixed) is no method compared: it is left out here, so it has no method_best row, no
-    method_summary line, no cost line, and cannot move the cross-method common cases
-    (``compared_rows``); ``valis120_fix`` is its table."""
-    sensitivity = set(getattr(variants, "SENSITIVITY_FAMILIES", ()))
     out = []
     for t in terminal_rows(dataset).values():
         f = family_of(t)
-        if f is not None and f not in out and f not in sensitivity:
+        if f is not None and f not in out:
             out.append(f)
     return out
 
@@ -1199,68 +1192,6 @@ def valis_stages(pp, dataset, sets=None):
     return out
 
 
-def _fix_pairs(terminals):
-    """``[(fixed run name, fixed final row, shipped final row)]`` of the sensitivity rows
-    of a dataset whose shipped run is on it too."""
-    from ..methods import valis_fixed
-
-    sensitivity = set(getattr(variants, "SENSITIVITY_FAMILIES", ()))
-    out = []
-    for name, final in terminals.items():
-        shipped = terminals.get(valis_fixed.SHIPPED_ROW.get(name))
-        if family_of(final) in sensitivity and shipped is not None:
-            out.append((name, final, shipped))
-    return out
-
-
-def valis120_fix(pp, dataset, best_rows=None):
-    """VALIS 1.2.0 with its micro pass's defect fixed beside VALIS 1.2.0 as shipped
-    (``methods.valis_fixed``): per fixed run, set and pooling (case, patient), both rows
-    over the cases BOTH have a kept row on, their Dice and the paired difference; and
-    each against STARE's headline best row over those cases where STARE has them too,
-    so the sensitivity of the comparison the paper makes is read off one line."""
-    stare_best = next((r.get("best_row") for r in headline_best(best_rows or ())
-                       if r.get("family") == STARE_FAMILY), None)
-    stare_best = None if _missing(stare_best) else stare_best
-    out = []
-    for _, fixed, shipped in _fix_pairs(terminal_rows(dataset)):
-        for set_ in SETS:
-            a = {r["case_id"] for r in _rows_of(pp, fixed, dataset, set_=set_)}
-            b = {r["case_id"] for r in _rows_of(pp, shipped, dataset, set_=set_)}
-            both = a & b
-            mine = [r for r in pp if r["case_id"] in both]
-            for pooling in (CASE_POOL, PATIENT_POOL):
-                d = _paired(mine, fixed, shipped, dataset, set_, pooling)
-                acc_s = _accuracy(mine, shipped, dataset, set_, pooling)[1]
-                acc_f = _accuracy(mine, fixed, dataset, set_, pooling)[1]
-                vs_s = _paired(mine, shipped, stare_best, dataset, set_, pooling)
-                vs_f = _paired(mine, fixed, stare_best, dataset, set_, pooling)
-                out.append(schema.empty_row(
-                    "valis120_fix",
-                    source=SOURCE,
-                    dataset=dataset,
-                    row=fixed,
-                    shipped_row=shipped,
-                    set=set_,
-                    pooling=pooling,
-                    n_cases_paired=len(both),
-                    n_units=d.get("n_units_vs_stare", 0),
-                    dice_med_shipped=acc_s["dice_med"],
-                    dice_med_fixed=acc_f["dice_med"],
-                    d_dice_fixed_minus_shipped_med=d.get("d_dice_vs_stare_med", math.nan),
-                    d_dice_fixed_minus_shipped_q25=d.get("d_dice_vs_stare_q25", math.nan),
-                    d_dice_fixed_minus_shipped_q75=d.get("d_dice_vs_stare_q75", math.nan),
-                    d_dice_skip_fixed_minus_shipped_med=d.get(
-                        "d_dice_skip_vs_stare_med", math.nan),
-                    n_units_shipped_ge=d.get("n_units_stare_ge", 0),
-                    stare_row=stare_best or schema.NA,
-                    d_dice_shipped_vs_stare_med=vs_s.get("d_dice_vs_stare_med", math.nan),
-                    d_dice_fixed_vs_stare_med=vs_f.get("d_dice_vs_stare_med", math.nan),
-                    n_units_vs_stare=vs_f.get("n_units_vs_stare", 0),
-                ))
-    return out
-
-
 def stare_tiers(pp, cost_rows, dataset, points=(), common=(), sets=None):
     """One row per STARE run: tier, stride and preprocessing from its options (defaults
     ``high``, 64, ``none``), accuracy and cost. The cost is ``costs.summary_columns``'
@@ -1462,7 +1393,7 @@ def module_parameters(run):
         sizes = _valis_presets().get(args["memory_mode"], {})
         psrc = f"bin/utils/valis_config.py MEMORY_PRESETS[{args['memory_mode']!r}] (its source)"
         return out + [(k, sizes[k], psrc) for k in _VALIS_SIZES if k in sizes]
-    if m in ("valis", "valis_fixed"):
+    if m == "valis":
         src = "benchmarks.regbench.methods.valis (MICRO_REG_FRACTION, CHANNEL; hires)"
         hires = str(opts.get("hires", 0)) in ("1", "true", "True")
         # T29 fix 6: the sizes are upstream's Valis() / register_micro() defaults, in no
@@ -1475,19 +1406,12 @@ def module_parameters(run):
                  "not recorded" if hires else
                  "upstream's register_micro() default (valis-wsi 1.2.0): no constant of "
                  "methods.valis holds it and valis is not importable score-side")
-        out = [("hires", hires, src),
-               ("micro_reg_fraction", valis.MICRO_REG_FRACTION, src),
-               ("channel", valis.CHANNEL, src),
-               ("max_processed_image_dim_px", NOT_RECORDED, why),
-               ("max_non_rigid_registration_dim_px", NOT_RECORDED, why),
-               ("micro_max_non_rigid_registration_dim_px", NOT_RECORDED, micro)]
-        if m == "valis_fixed":
-            from ..methods import valis_fixed
-
-            fsrc = "benchmarks.regbench.methods.valis_fixed (FIX, SOURCE_SHA256)"
-            out += [("micro_fix", valis_fixed.FIX[0].split("  #", 1)[0], fsrc),
-                    ("micro_fix_source_sha256", valis_fixed.SOURCE_SHA256, fsrc)]
-        return out
+        return [("hires", hires, src),
+                ("micro_reg_fraction", valis.MICRO_REG_FRACTION, src),
+                ("channel", valis.CHANNEL, src),
+                ("max_processed_image_dim_px", NOT_RECORDED, why),
+                ("max_non_rigid_registration_dim_px", NOT_RECORDED, why),
+                ("micro_max_non_rigid_registration_dim_px", NOT_RECORDED, micro)]
     if m == "palom":
         src = "benchmarks.regbench.methods.palom (THUMBNAIL_SIZE, N_KEYPOINTS, LEVEL)"
         return [("thumbnail_size", palom.THUMBNAIL_SIZE, src),
@@ -1762,10 +1686,6 @@ def add_excluded(built, excluded, dataset, summary_keys=None, best_sets=SETS):
     - ``method_best``: the family's ``excluded_runs`` on its rows of each set, and a row of
       NA in each set (``best_sets``) the family has no row in.
 
-    A run of a SENSITIVITY family (``variants.SENSITIVITY_FAMILIES``) has no
-    ``method_summary`` and no ``method_best`` rows, as when it is run (``_families``), and
-    rows of NA in ``valis120_fix`` instead; the other tables list it as above.
-
     ``summary_keys``: ``{table: extra values}`` of a landmark dataset's summary instead."""
     if not excluded:
         return built
@@ -1773,17 +1693,10 @@ def add_excluded(built, excluded, dataset, summary_keys=None, best_sets=SETS):
     by_family = {}
     for name, reason in excluded:
         final, fam, method = _excluded_final(name)
+        by_family.setdefault(fam, []).append(f"{name}: {reason}")
         settings = {k: v for k, v, _ in module_parameters(_run(name))}
         common = dict(source=SOURCE, dataset=dataset, row=final, excluded_reason=reason)
-        sensitivity = fam in set(getattr(variants, "SENSITIVITY_FAMILIES", ()))
-        if sensitivity and "valis120_fix" in built:
-            # no compared method (``_families``): its own table says it is not here
-            built["valis120_fix"] += [schema.empty_row(
-                "valis120_fix", set=st, pooling=p, **common)
-                for st in SETS for p in (CASE_POOL, PATIENT_POOL)]
-        if not sensitivity:
-            by_family.setdefault(fam, []).append(f"{name}: {reason}")
-        if "method_summary" in built and not sensitivity:
+        if "method_summary" in built:
             built["method_summary"] += [schema.empty_row(
                 "method_summary", family=fam, which="excluded", row_kind="excluded",
                 set=st, pooling=p, **common) for st, p in slots]
@@ -1865,7 +1778,6 @@ def build(out, dataset=COHORT, cases_root=None):
         "method_best_per_method": got["method_best_per_method"],
         "method_summary": summary,
         "valis_stages": valis_stages(pp, dataset, sets),
-        "valis120_fix": valis120_fix(pp, dataset, best),
         "stare_tiers": stare_tiers(pp, cost_rows, dataset, points, common, sets),
         "stare_stage_peaks": _copied(out, dataset, "stare_stage_peaks"),
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),

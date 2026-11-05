@@ -394,12 +394,11 @@ def test_the_writers_field_is_read_in_windows_and_nan_stays_nan(pair):
 
 
 def test_only_the_valis_adapters_carry_the_writers_field():
-    """It is a module of its own so that no other method's reuse_key moves with it.
-    valis_fixed wraps valis, so its points are read the same way as the shipped row's."""
+    """It is a module of its own so that no other method's reuse_key moves with it."""
     for name in METHODS:
         files = {p.name for p in methods.code_files(name)}
         assert ("_valis_writer_field.py" in files) == (
-            name in ("valis", "valis_mirage", "valis_fixed")
+            name in ("valis", "valis_mirage")
         )
 
 

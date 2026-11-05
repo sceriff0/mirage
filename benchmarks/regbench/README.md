@@ -580,7 +580,6 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
 | `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0, **upstream's default setting** (`register()` then `register_micro()` with no argument). Run and shown; not primary | patient | same | same | same |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
-| `valis120_fixed_rigid`, `valis120_fixed`, `valis120_fixed_micro`; `valis120_fixed_hires_rigid`, `valis120_fixed_hires_nonrigid`, `valis120_fixed_hires` | **NOT VALIS as shipped**: the two runs above with ONE line of VALIS 1.2.0 changed (its micro pass's last-slide field, `methods/valis_fixed.py`). A sensitivity check, never a compared method: no primary, no best row, in no headline table; read in `valis120_fix` (see "VALIS 1.2.0 with its micro-pass defect fixed") | patient | same | same | same |
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row in the scorer** (the user's ruling of 2026-10-11; the 4096 px set is the package's default); the paper's DeeperHistReg primary is its best row (2026-10-18; see "stated two ways" above). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
 | `palom_affine`, `palom` (**primary**) | PALOM 2026.4.1, its documented recipe; blocks are the reference file's TIFF tiles (2048 px on the cohort) | pair | an affine, then one shift per block of the reference | reference nuclei through the affine and their block's shift; moving frame | refused, with the reason (the README's recipe reads one channel by index; which of its colour modes is the input rule is not decided) |
@@ -2614,7 +2613,6 @@ call; it is then part of the estimate and no number is guessed for it.
 | `deeperhistreg` | the package's own loading is inside the clock (its log's `Loading time` is kept in `stage_s`) | `convert_s` | `run_registration` with the final saving off (its diagnostic images and intermediate fields included, as shipped) | `apply_deformation_pyvips` once per channel; the conversion of each further channel before it and the benchmark's copy of those files into one after it are timed apart (`native.write_parts_s`) | one single-channel pyramidal TIFF per channel (the package's); the benchmark stacks their first pages into one OME-TIFF without a pyramid |
 | `ashlar` | inside the clock: ASHLAR's reading of the tiles it is given | `retile_s` | the command up to the last aligner; a round's share is its `layer_s` plus the reference stitch over the rounds | ASHLAR's writer, inside the same command, timed from the last aligner; then the benchmark's split of the mosaic per round, timed apart (`native.write_parts_s`) | one pyramidal OME-TIFF for the patient, every cycle's channels (BigTIFF, deflate); the benchmark's per-round copies have no pyramid |
 | `palom` | inside the clock: PALOM's reader, lazily, on the cohort's OME-TIFFs | none | `Aligner.coarse_register_affine`, `compute_shifts`, `constrain_shifts` | `block_affine_transformed_moving_img` and `write_pyramid`, timed on their own | one pyramidal OME-TIFF per round, every channel (BigTIFF, zlib) |
-| `valis_fixed` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start. Outside it: the benchmark placing the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy) | not separable | `Valis.register()` and `register_micro()` | `warp_and_save_slides`, clock and peak paused; one call writes the patient, a round's share is the call over the slides written | one pyramidal OME-TIFF per round, every channel (libvips, deflate) |
 
 What a writer leaves is described twice: here from each package's source (the tags are
 in `cost.py`), and per run from the file itself (`run.json: native.written`: channels,
@@ -4250,66 +4248,6 @@ Add `--size 2048x2560` for the small pair alone (minutes, a few GB), or `--size
 2048x2560:2048x2560:2048x2560` for the patient of three slides alone; without it every
 case runs, the large pair included. `python -m pytest benchmarks/tests/regbench/test_external_methods.py`
 runs the small pair of each row whose VALIS version is installed.
-
-#### VALIS 1.2.0 with its micro-pass defect fixed (`methods/valis_fixed.py`): a sensitivity check
-
-**What it answers.** VALIS 1.2.0's micro pass prepares every slide's image with the LAST
-slide's displacement field (above, "Known defects"; `methods/valis.py`). `valis120` and
-`valis120_hires` stay VALIS as shipped and stay the rows the paper reports. Beside them,
-`valis120_fixed` and `valis120_fixed_hires` are the same two runs, in the same image, with
-that one line changed: how much of VALIS 1.2.0's result is the defect, and whether the
-comparison with STARE moves when it is gone.
-
-**The defect, executed.** `benchmarks/tests/regbench/fixtures/valis120_prep_images.txt` is
-`Valis.prep_images_for_large_non_rigid_registration` verbatim from the PyPI sdist
-`valis-wsi==1.2.0` (`registration.py:3800-4089`, MIT, its licence in the file).
-`test_valis_fixed.py` RUNS that body against stand-ins of the modules it calls. On the
-default path (no tiler, `norm_method="img_stats"`, a non-RGB registrar) and with
-`updating_non_rigid=True` (`register_micro`, `:4904`) every slide's normalised image is
-warped with its own `M` and the last slide's `bk_dxdy`, the reference's too. With
-`updating_non_rigid=False` (the first non-rigid pass) or on the tiler path the two are
-the same. The micro correction is then ADDED to each slide's own field (`:4981-4982`), so
-the stored transform stays self-consistent: the selfcheck cannot see the defect, and the
-error is in what the micro matcher compares, not in a shared output field.
-
-**The fix, the whole of it**: after `slide_obj = self.get_slide(img_f_list[i])` in the
-normalisation loop, `dxdy = slide_obj.bk_dxdy if updating_non_rigid else None`, the first
-loop's own derivation, plus one line recording the slides it ran for. The `shape[1:2]`
-padding issue (`:675`) is NOT changed: one defect, one row. The adapter reads the method
-from the INSTALLED `registration.py`, refuses it unless its sha256 is the sdist's
-(`valis_fixed.SOURCE_SHA256`) and the anchors are where the sdist has them, compiles the
-patched text against a copy of the module's globals and sets it on `registration.Valis`
-for the run only. Nothing in the image changes.
-
-**Why a method of its own.** `valis_fixed` wraps `methods/valis.py` without editing it, so
-`valis`'s code fingerprint (`method_code_freeze.json`) does not move: every `valis120` and
-`valis120_hires` result stays reusable, and only the two new runs are new work.
-
-**What each result records** (`run.json: info`): `micro_fix` (`applied`, the line,
-`source_sha256`, `source_is_sdist`; on the micro row `normalisation_loop_ran`, `last_slide`
-and `slides_given_own_field`, every slide but the last); `shipped_row`; and the change in
-`implementation.changed_from_defaults` and `benchmark_side`. A row whose loop did not run
-(the tiler engaged) is VALIS as shipped and says so (`why_no_effect`).
-
-**Where they show up.** Family `valis120_fixed` (`variants.SENSITIVITY_FAMILIES`): scored
-like every row (`per_pair.csv`, `run_parameters`, `versions`), but no `method_best`, no
-`method_summary` line, no cost line, and never among the rows the cross-method common
-cases are taken over, so adding them moves no headline number. Their table is
-`paper/<dataset>/valis120_fix.csv`: per fixed run, polygon set and pooling (case,
-patient), both rows over the cases BOTH have, `dice_med_shipped`, `dice_med_fixed`, the
-paired `d_dice_fixed_minus_shipped_*`, and each row's paired difference with STARE's
-headline best row on those cases (`d_dice_shipped_vs_stare_med`,
-`d_dice_fixed_vs_stare_med`). They run where `valis120` runs (the cohort and the
-fluorescence public sets), not on HyReCo (defaults only) or the synthetic set.
-
-```bash
-# inside the VALIS 1.2.0 image, before a launch: the patch on the installed VALIS
-python -m benchmarks.regbench.methods.valis_fixed --check
-python -m benchmarks.regbench selfcheck --method valis_fixed --label valis120_fixed \
-    --work W/valis120_fixed
-# on the cluster: the two runs alone; the shipped rows already done are reused
-benchmarks/regbench/slurm/submit_cohort.sh --runs "valis120_fixed valis120_fixed_hires"
-```
 
 ### ASHLAR (`methods/ashlar.py`, `tilemap.py`, `benchmarks/ashlar/`)
 
