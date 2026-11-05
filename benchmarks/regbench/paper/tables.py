@@ -1516,7 +1516,7 @@ def hosts(res_rows, dataset, excluded=frozenset()):
 
 
 def stare_tier_table():
-    """Table S3: one row per tier of ``methods.stare.TIERS`` (``lib/RegPresets.groovy``).
+    """Table S3: one row per tier of ``methods.stare.TIERS`` (``ParamUtils.RETIRED_STARE_TIERS``).
     ``read_box_px_s64`` is STARE's read box for an interior tile at stride 64 (tile +
     2 x 3 x 64); the memories are ``stages.ALLOCATION`` attempt 1 (the high tier's; at
     stride 64 ``conf/modules.config``'s formula floors at the same 4 GB for every tier)."""

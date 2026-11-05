@@ -215,7 +215,7 @@ def test_stare_tier_table_is_s3():
 def test_pipeline_params_lists_every_schema_param():
     rows = tables.pipeline_params()
     names = {r["name"] for r in rows}
-    assert {"registration_method", "reg_tiled_mode", "memory_mode", "pixel_size"} <= names
+    assert {"registration_method", "reg_tiled_tile", "memory_mode", "pixel_size"} <= names
     assert len(names) == len(rows)
 
 

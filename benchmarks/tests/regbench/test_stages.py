@@ -66,10 +66,15 @@ def name_block(process):
 
 
 def high_tier():
-    text = (REPO / "lib" / "RegPresets.groovy").read_text()
-    table = re.search(r"\bSTARE\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
+    """The former ``high`` row (STARE's defaults since its tiers were removed), from
+    ``ParamUtils.RETIRED_STARE_TIERS``; tests/test_reg_presets_inlined_in_config.py pins
+    it to nextflow.config's defaults."""
+    text = (REPO / "lib" / "ParamUtils.groovy").read_text()
+    table = re.search(r"\bRETIRED_STARE_TIERS\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
     row = re.search(r"\bhigh\s*:\s*\[([^\]]*)\]", table).group(1)
-    return {k: int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)}
+    return {
+        k.removeprefix("reg_tiled_"): int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)
+    }
 
 
 FORMULA = (
@@ -79,8 +84,8 @@ FORMULA = (
 
 
 def pipeline_memory_gb(stage, tier=None):
-    """The first attempt's memory of a process at a tier (a row of RegPresets' STARE
-    table; the high one when none is given) and stride 64, worked out from the text of
+    """The first attempt's memory of a process at a tier (a row of the retired STARE
+    table, ParamUtils.RETIRED_STARE_TIERS; the high one when none is given) and stride 64, worked out from the text of
     its ``memory`` closure in conf/modules.config."""
     body = name_block(stages.ALLOCATION[stage]["process"])
     tier = high_tier() if tier is None else tier
@@ -2007,7 +2012,7 @@ def test_the_placeholder_of_a_last_job_is_any_units_placeholder(
 def test_every_tier_gets_the_allocation_the_table_holds():
     """conf/modules.config's memory closures, evaluated at each of the adapter's tiers:
     the floors hold at all three, so one ALLOCATION serves every tier (this fails, and
-    the table must become per tier, if RegPresets or a closure changes)."""
+    the table must become per tier, if a closure changes)."""
     assert set(adapter.TIERS) == {"high", "medium", "low"}
     for name, row in adapter.TIERS.items():
         tier = {("coarse_max_dim" if k == "max_dim" else k): v for k, v in row.items()}

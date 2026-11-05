@@ -196,7 +196,7 @@ STARE_TIERS = ("medium", "low")  # beside high (the `stare` row): ruling 2026-10
 
 def _stare_tier_runs():
     """STARE's medium and low tiers (``methods.stare.TIERS``, the rows of
-    ``lib/RegPresets.groovy``) at stride 64 with no preprocessing: the high tier is the
+    ``ParamUtils.RETIRED_STARE_TIERS``) at stride 64 with no preprocessing: the high tier is the
     ``stare`` row itself. On the cohort and on the landmark sets' regimes
     (``LANDMARK_REGIMES``), where they are the stride-64 baseline cells of the full
     tier cross (``_stare_landmark_tier_runs``; ruling 2026-10-19)."""

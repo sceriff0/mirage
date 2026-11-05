@@ -67,44 +67,19 @@ nextflow_process {
                 // the core bounds: what makes the vector-lattice ownership exact (stare.vector_grid)
                 { assert rendered.every { it.contains('--x0 0 --y0 0 --x1 16 --y1 16') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--stride 64') },
-                    "reg_tiled_stride defaults to 64 and is not tier-owned: " + rendered.join(' --- ') },
+                    "reg_tiled_stride defaults to 64: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--m0 tiled_m0.json') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--out P001_DAPI_PANCK_SMA_0_0_ctrl.json') }, rendered.join(' --- ') }
             )
         }
     }
 
-    test("Should keep the stride under the low tier: it is not tier-owned - rendered command") {
+    test("Should render an explicit reg_tiled_stride - rendered command") {
 
         tag "stub"
 
         when {
             params {
-                reg_tiled_mode = 'low'
-            }
-            process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
-        }
-
-        then {
-            def rendered = []
-            new File("$workDir").eachFileRecurse { f ->
-                if (f.name == '.command.sh' && f.text.contains('tiled_reg_tile.py')) { rendered << f.text }
-            }
-            assertAll(
-                { assert rendered.size() >= 1 },
-                { assert rendered.every { it.contains('--stride 64') }, rendered.join(' --- ') },
-                { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') }
-            )
-        }
-    }
-
-    test("Should render an explicit reg_tiled_stride, whatever the tier - rendered command") {
-
-        tag "stub"
-
-        when {
-            params {
-                reg_tiled_mode = 'low'
                 reg_tiled_stride = 256
             }
             process { oneTile.call("$projectDir", ['DAPI', 'PANCK', 'SMA']) }
