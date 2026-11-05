@@ -156,40 +156,15 @@ def test_terminal_rows_are_the_last_variant_of_each_run():
     # DeeperHistReg has ONE result per run: the run's own name (ruling 2026-10-17)
     assert rows["deeperhistreg_hr_gpu"] == "deeperhistreg_hr_gpu"
     assert not any("asdrawn" in v for v in rows.values())
-    assert rows["valis_mirage"] == "valis_mirage" and rows["palom"] == "palom"
-
-
-def test_valis_stages_are_honest_about_the_depth(scored, monkeypatch):
-    """R18: depth 1 is micro-RIGID only (inside the `_rigid` row); a non-rigid `micro`
-    stage exists only at depth 2; at depth 0 there is no micro stage at all."""
-    monkeypatch.setattr(tables, "family_of", variants.family)
-    monkeypatch.setattr(
-        tables, "terminal_rows",
-        lambda ds: {n: n for n in ("valis_mirage", "valis_mirage_high_m1",
-                                   "valis_mirage_low_m0")})
-    built = tables.build(scored, "multiplex")
-    st = {(r["row"], r["stage"]): r for r in built["valis_stages"]}
-    assert st[("valis_mirage", "micro")]["stage_row"] == "valis_mirage"
-    assert st[("valis_mirage", "micro_rigid")]["stage_row"] == "valis_mirage_rigid"
-    assert st[("valis_mirage", "rigid")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_high_m1", "micro_rigid")]["stage_row"] == "valis_mirage_high_m1_rigid"
-    assert st[("valis_mirage_high_m1", "micro")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "rigid")]["stage_row"] == "valis_mirage_low_m0_rigid"
-    assert st[("valis_mirage_low_m0", "micro_rigid")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "micro")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "nonrigid")]["micro_reg"] == "0"
-    assert st[("valis_mirage_high_m1", "initial")]["stage_row"] == "initial"
-    allowed = schema.TABLES["valis_stages"].cols[schema.columns("valis_stages").index("stage")]
-    for stage in ("micro_rigid", "micro"):
-        assert stage in allowed.what
+    assert rows["valis120_hires"] == "valis120_hires" and rows["palom"] == "palom"
 
 
 def test_per_pair_stage_names(scored):
-    assert tables.stage_of("valis_mirage_high_m1_rigid") == "micro_rigid"
-    assert tables.stage_of("valis_mirage_low_m0_rigid") == "rigid"
-    assert tables.stage_of("valis_mirage_high_m1") == "nonrigid"
-    assert tables.stage_of("valis_mirage") == "micro"
-    assert tables.stage_of("valis_mirage_nonrigid") == "nonrigid"
+    assert tables.stage_of("valis120_hires_rigid") == "rigid"
+    assert tables.stage_of("valis120_hires_nonrigid") == "nonrigid"
+    assert tables.stage_of("valis120_hires") == "final"
+    assert tables.stage_of("valis120") == "nonrigid"  # an unsuffixed middle row
+    assert tables.stage_of("valis120_micro") == "micro"
     assert tables.stage_of("stare_rigid") == "rigid"
     assert tables.stage_of("stare") == "final"
     assert tables.stage_of("initial") == "initial"
@@ -206,7 +181,8 @@ def test_stare_tier_table_is_s3():
 def test_pipeline_params_lists_every_schema_param():
     rows = tables.pipeline_params()
     names = {r["name"] for r in rows}
-    assert {"registration_method", "reg_tiled_mode", "memory_mode", "pixel_size"} <= names
+    assert {"registration_method", "reg_tiled_mode", "pixel_size"} <= names
+    assert "memory_mode" not in names  # VALIS has no tiers since 2026-11-05
     assert len(names) == len(rows)
 
 
@@ -384,8 +360,8 @@ def test_primary_of_reads_the_dataset():
 
     public = next(d for d, reg in regimes.DATASET_REGIME.items()
                   if reg != regimes.COHORT_REGIME)
-    assert tables.primary_of("valis_mirage", "multiplex") == "valis_mirage"
-    assert tables.primary_of("valis_mirage", public) == "valis_mirage"  # runs as shipped
+    assert tables.primary_of("valis120", "multiplex") == "valis120_hires"
+    assert tables.primary_of("valis120", public) == "valis120_hires"  # runs as shipped
     # ASHLAR has no input rule for a brightfield case: never run there (excluded_for)
     assert tables.primary_of("ashlar", "multiplex") == "ashlar"
     assert tables.primary_of("ashlar", public) is None

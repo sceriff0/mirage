@@ -17,9 +17,6 @@ than ten points is drawn as points with a median bar and no box.
 non-excluded row counts as 0 (``tables._dice0``), an excluded row never enters, and a case
 that has no matched pair on every compared row is left out (``tables.best_of``). Each tick
 label gives n and how many cases were zeroed.
-
-**VALIS stages.** ``initial``, ``rigid`` (depth 0), ``micro_rigid``, ``nonrigid`` and
-``micro`` (depth 2): a stage a run does not have is a gap in the line, never a point.
 """
 from __future__ import annotations
 
@@ -42,7 +39,6 @@ WHISKERS = "1.5 x IQR"
 MIN_BOX = 10  # fewer points than this: points with a median bar, never a box
 FAMILIES = (
     "stare",
-    "valis_mirage",
     "valis120",
     "deeperhistreg",
     "ashlar",
@@ -51,14 +47,12 @@ FAMILIES = (
 )
 LABELS = {
     "stare": "STARE",
-    "valis_mirage": "VALIS (Mirage)",
     "valis120": "VALIS 1.2.0",
     "deeperhistreg": "DeeperHistReg",
     "ashlar": "ASHLAR",
     "affine_ashlar": "Affine ASHLAR",
     "palom": "PALOM",
 }
-STAGES = ("initial", "rigid", "micro_rigid", "nonrigid", "micro")
 TIERS = ("high", "medium", "low")
 EXPECTED = "expected"  # the collector's rows that hold no measurement yet
 DRAFT_SUFFIX = "_draft"
@@ -433,42 +427,6 @@ def fig3c_displacement_best(paper_dir, fig_dir):
 
 
 # ── Fig. 3d ──────────────────────────────────────────────────────────────────
-def fig3d_valis_stages(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, vs="valis_stages.csv")
-    if missing:
-        return _placeholder(fig_dir, "fig3d_valis_stages", missing)
-    _style()
-    colors = _colors(fig_dir)
-    runs = {}
-    for r in got["vs"]:
-        runs.setdefault(r["row"], {})[r["stage"]] = r
-    styles = {"high": "-", "medium": "--", "low": ":"}
-    marks = {"0": "o", "1": "s", "2": "^"}
-    fig, (ax,) = ps.figure(width="onehalf", aspect=0.75)
-    data, n = [], {}
-    for row, st in runs.items():
-        first = next(iter(st.values()))
-        ys = [_num(st[s]["dice_med"]) if s in st and st[s].get("stage_row") else math.nan
-              for s in STAGES]
-        xs = np.arange(len(STAGES))
-        ax.plot(xs, ys, ls=styles.get(first["memory_mode"], "-"), color=colors["valis_mirage"],
-                marker=marks.get(str(first["micro_reg"]), "o"), ms=3, lw=0.8,
-                label=f"{first['memory_mode']}, depth {first['micro_reg']}")
-        n[row] = max((int(_num(st[s]["n_pairs"])) for s in st if _fin(st[s].get("n_pairs"))), default=0)
-        for s, y in zip(STAGES, ys):
-            data.append({"row": row, "memory_mode": first["memory_mode"],
-                         "micro_reg": first["micro_reg"], "stage": s, "dice_med": y})
-    ax.set_xticks(range(len(STAGES)))
-    ax.set_xticklabels([s.replace("_", "\n") for s in STAGES])
-    ax.set_ylabel("Median matched-pair Dice (unitless)")
-    ax.set_xlabel("Registration stage (a missing stage is a gap)")
-    fig.legend(*ax.get_legend_handles_labels(), title="VALIS tier, micro depth",
-               loc="outside right center")
-    files = _save(fig, fig_dir, "fig3d_valis_stages",
-                  _Table(["row", "memory_mode", "micro_reg", "stage", "dice_med"], data))
-    return _result(files, n)
-
-
 def fig3d_stare_tiers(paper_dir, fig_dir):
     got, missing = _need(paper_dir, pp="per_pair.csv", st="stare_tiers.csv")
     if missing:
@@ -647,7 +605,6 @@ PLOTS = {
     "fig3b_dice_best": fig3b_dice_best,
     "fig3b_dice_all": fig3b_dice_all,
     "fig3c_displacement_best": fig3c_displacement_best,
-    "fig3d_valis_stages": fig3d_valis_stages,
     "fig3d_stare_tiers": fig3d_stare_tiers,
     "fig3e_peak_rss_best": None,  # cost_plots.FIGURES, filled in below
     "fig3f_cpu_wall_best": None,
@@ -669,7 +626,6 @@ NEEDS = {
     "fig3b_dice_all": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
     "fig3c_displacement_best": {"per_pair.csv": ("displacement_um_p50",),
                                 "method_best.csv": ("best_row",)},
-    "fig3d_valis_stages": {"valis_stages.csv": ("dice_med",)},
     "fig3d_stare_tiers": {"per_pair.csv": ("dice_matched",), "stare_tiers.csv": ("row",)},
     "fig3e_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
     "fig3f_cpu_wall_best": {"method_best.csv": ("best_row",),
@@ -734,14 +690,14 @@ def main(a):
 # paper-schema CSVs of DIR and NOTHING else (``_CTX["schema_only"]``): a collection
 # (``collect.py``) or a ``paper/`` folder. The collector's ``expected`` rows hold no
 # measurement and are left out. A table the paper DERIVES from ``per_pair``
-# (``DERIVABLE``: method_best, valis_stages, stare_tiers) that has no row in DIR is derived
-# here by the paper's own rule (``tables.best_of`` / ``valis_stages`` / ``stare_tiers``,
+# (``DERIVABLE``: method_best, stare_tiers) that has no row in DIR is derived
+# here by the paper's own rule (``tables.best_of`` / ``stare_tiers``,
 # without cost) and written to ``<to>/derived/`` with ``source = derived:<DIR>``: what the
 # figure drew is on disk. ``--draft`` (implied by the collector's README.txt) stamps
 # ``DRAFT — interim data (<source kinds>)`` on every figure and adds ``_draft`` to its name.
 # The overlay zooms need a results folder's images (``--results``, ``--cases``); without
 # one, or where they were removed (``regbench slim``), each is the placeholder naming them.
-DERIVABLE = ("method_best", "valis_stages", "stare_tiers")
+DERIVABLE = ("method_best", "stare_tiers")
 
 
 def _typed(rows):
@@ -775,8 +731,6 @@ def _derive(tables_dir, to, dataset):
             continue
         if name == "method_best":
             rows = [tables.best_of(pp, f, dataset, {}) for f in tables._families(dataset)]
-        elif name == "valis_stages":
-            rows = tables.valis_stages(pp, dataset)
         else:
             rows = tables.stare_tiers(pp, [], dataset)
         rows = [{**r, "source": source} for r in rows]
@@ -787,7 +741,7 @@ def _derive(tables_dir, to, dataset):
         (Path(to) / "README.txt").write_text(
             f"Derived by `regbench plots --tables {tables_dir}` from its per_pair.csv (the "
             "collector's `expected` rows left out), by the paper's own rules "
-            "(benchmarks/regbench/paper/tables.py: best_of, valis_stages, stare_tiers), "
+            "(benchmarks/regbench/paper/tables.py: best_of, stare_tiers), "
             "without cost (no tie-break by CPU time): these tables had no row there.\n"
             + "".join(f"  {k}: {n} row(s)\n" for k, n in made.items()))
     return made

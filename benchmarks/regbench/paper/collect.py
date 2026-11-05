@@ -24,7 +24,8 @@ tables are BUILT, not here.
 **Arms** (``<arms>/<arm>/<patient>/qc/registration/*_seg_qc.json``): the Dice of the
 ``full_transform`` record, else of the most-registered stage (``STAGE_RANK``); the panel is
 the ``channels`` of ``<arm>/csv/registered.csv`` with ``|`` -> ``_``; the row by
-``arm_row``. One difference from the ported ``harvest``: a ``full_transform`` record whose
+``arm_row`` (a VALIS arm has none since the ``valis_mirage`` rows were retired on
+2026-11-05: its rows have row ``NA``). One difference from the ported ``harvest``: a ``full_transform`` record whose
 Dice is NaN is KEPT (NaN) rather than skipped for a lower stage, which would credit the arm
 with a stage it did not ship. Cost: ``cost_points`` per traced task of ``REGISTER`` (VALIS
 arms, one per patient) or ``TILED_*`` (tiled arms, aggregated per patient: T31 P14,
@@ -122,7 +123,6 @@ def _nonempty(v):
 
 # ── the arm -> regbench row table ────────────────────────────────────────────
 _TILED = re.compile(r"^tiled_(high|medium|low)_s(64|128|256)$")
-_VALIS = re.compile(r"^valis_(high|medium|low)_micro([0-2])$")
 
 
 def arm_row(arm):
@@ -133,10 +133,6 @@ def arm_row(arm):
         if stride == "64":
             return "stare" if tier == "high" else f"stare_{tier}"
         return f"stare_s{stride}_none" if tier == "high" else None
-    m = _VALIS.match(arm)
-    if m:
-        tier, k = m.groups()
-        return "valis_mirage" if (tier, k) == ("high", "2") else f"valis_mirage_{tier}_m{k}"
     return None
 
 

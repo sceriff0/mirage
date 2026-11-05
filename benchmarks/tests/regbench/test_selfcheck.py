@@ -124,11 +124,11 @@ def test_sizes_are_the_ones_each_method_needs():
     assert sc.sizes_for("initial") == [(sc.DEFAULT_HW, None)]
     assert sc.sizes_for("stare")[0] == (sc.DEFAULT_HW, None)
     assert sc.sizes_for("stare")[1][0] == (4096, 5120)  # a four-tile junction
-    for name in ("valis", "valis_mirage", "valis120", "valis120_hires"):
+    for name in ("valis", "valis120", "valis120_hires"):
         assert max(sc.sizes_for(name)[-1][0]) >= 30000, name
     # every per-patient method has ONE patient of three slides; a pair method has none
     # of its own (`stare` runs ASHLAR's, round by round, for the anchored rows)
-    for name in ("valis_mirage", "valis120", "valis120_hires"):
+    for name in ("valis120", "valis120_hires"):
         assert [s for s in sc.sizes_for(name) if sc.is_patient(s)] == [sc.VALIS_PATIENT]
     for name in ("ashlar", "ashlar_clean", "affine_ashlar", "affine_ashlar_clean"):
         assert sc.sizes_for(name) == [(sc.ASHLAR_HW, None), sc.ASHLAR_PATIENT], name

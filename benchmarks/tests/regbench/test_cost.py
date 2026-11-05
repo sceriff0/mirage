@@ -134,7 +134,7 @@ def test_what_a_run_did_not_record_is_not_decided_on_a_guess():
 
 
 def test_a_step_the_package_does_inside_its_call_is_not_separable_not_guessed():
-    for adapter in ("valis", "valis_mirage"):
+    for adapter in ("valis",):
         r = _row(cost.end_to_end([res("v", "P1", adapter)]), "v")
         assert r["method_convert_s"] == cost.NOT_SEPARABLE
         assert "conversion" in r["estimate_includes"]

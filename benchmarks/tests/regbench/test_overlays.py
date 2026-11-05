@@ -89,13 +89,11 @@ def test_overlay_residuals_are_zero_for_the_true_map_in_both_directions(tmp_path
 def test_rigid_variant_is_read_from_the_run_list():
     assert overlays.rigid_of("stare") == "stare_rigid"
     assert overlays.rigid_of("stare_medium") == "stare_medium_rigid"
-    assert overlays.rigid_of("valis_mirage") == "valis_mirage_rigid"
+    assert overlays.rigid_of("valis120_hires") == "valis120_hires_rigid"
     assert overlays.rigid_of("palom") == "palom_affine"
     assert overlays.rigid_of("ashlar") is None
     assert overlays.rigid_of("deeperhistreg_hr_gpu") is None
-    assert overlays.rigid_title("valis_mirage") == "after rigid (+ micro-rigid)"
-    assert overlays.rigid_title("valis_mirage_high_m1") == "after rigid (+ micro-rigid)"
-    assert overlays.rigid_title("valis_mirage_high_m0") == "after rigid"
+    assert overlays.rigid_title("valis120_hires") == "after rigid"
     assert overlays.rigid_title("palom") == "after rigid"
     assert overlays.rigid_title("ashlar") == "no rigid stage"
     assert overlays.rigid_title("deeperhistreg_hr_gpu") == "no rigid stage"
@@ -190,11 +188,6 @@ def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
     out = tmp_path / "out"
     rows = {
         "stare": _stand_in("stare", ("stare_rigid", "stare"), MOV_TO_REF),
-        "valis_mirage": _stand_in(
-            "valis_mirage",
-            ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage"),
-            REF_TO_MOV,
-        ),
         # PALOM's written image is missing: its panel must say so, never vanish
         "palom": _stand_in("palom", ("palom_affine", "palom"), REF_TO_MOV, writes=False),
         "deeperhistreg_hr_gpu": _stand_in(
@@ -209,8 +202,7 @@ def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
     schema.write(paper / "method_best.csv", "method_best", [
         schema.empty_row("method_best", source="regbench", dataset="multiplex",
                          family=fam, best_row=row)
-        for fam, row in (("stare", "stare"), ("valis_mirage", "valis_mirage"),
-                         ("palom", "palom"), ("deeperhistreg", "deeperhistreg_hr_gpu"),
+        for fam, row in (("stare", "stare"), ("palom", "palom"), ("deeperhistreg", "deeperhistreg_hr_gpu"),
                          ("ashlar", "ashlar"))
     ])
     boxes = []
@@ -246,7 +238,7 @@ def test_the_three_figures_are_drawn_and_crops_are_read_by_region(
     # every row has its own three medians in the one field; PALOM's missing image is named
     rows_csv = schema.read(paper / "overlay_rois.csv")
     drawn = {r["row"]: r for r in rows_csv if r["case_id"] == "rigid"}
-    assert set(drawn) >= {"stare", "valis_mirage", "palom", "deeperhistreg_hr_gpu", "ashlar"}
+    assert set(drawn) >= {"stare", "palom", "deeperhistreg_hr_gpu", "ashlar"}
     assert len({(r["roi_x"], r["roi_y"], r["roi_px"]) for r in drawn.values()}) == 1
     assert drawn["ashlar"]["d_rigid_um"] is None  # no rigid stage: NA, never a number
     assert float(drawn["stare"]["d_final_um"]) < float(drawn["stare"]["d_initial_um"])

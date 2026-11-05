@@ -29,7 +29,6 @@ LAUNCHER = REPO / "benchmarks" / "regbench" / "slurm" / "submit_cohort.sh"
 FAMILIES = (
     "stare",
     "ashlar",
-    "valis_mirage",
     "valis120",
     "deeperhistreg",
     "palom",
@@ -70,6 +69,8 @@ FORBIDDEN = (
     r"gate\.sbatch",
     r"(?<![A-Za-z0-9_])arms(?![A-Za-z0-9_])",
     r"(?<![A-Za-z0-9_])sweep(?![A-Za-z0-9_])",
+    # the tuned VALIS 1.0.0 row, retired 2026-11-05 (archive/regbench-valis-mirage)
+    r"valis_mirage",
 )
 
 

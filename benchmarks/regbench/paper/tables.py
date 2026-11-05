@@ -25,8 +25,8 @@ candidate.
 
 **No matched pair is Dice 0.** ``pairs.record`` gives ``dice_matched = nan`` to a case with
 no pair (an imputed failure on a large offset, or a bad registration). On a non-excluded row
-it counts as 0.0 in the selection and in every Dice statistic of ``method_summary``,
-``stare_tiers`` and ``valis_stages`` (``n_dice_zeroed`` counts them), so a method is never
+it counts as 0.0 in the selection and in every Dice statistic of ``method_summary`` and
+``stare_tiers`` (``n_dice_zeroed`` counts them), so a method is never
 read on its easy rounds only. A case where EVERY candidate (``best_of``), or both rows of a
 paired difference, have no pair is the case's, not a method's, and is left out.
 
@@ -42,14 +42,6 @@ stay one release beside the new ones (deprecated: ``<stem>_common_med`` /
 ``<stem>_survivors_med`` and ``clock`` replace them); ``fold_peak_vs_stare`` is gone
 (ruling R4: it divided a sampled tree peak by one stage job's high-water mark). ``in_sample_selection`` is True for every family: the row is chosen on this cohort
 with this metric.
-
-**VALIS stages** (ruling R18, ``methods.valis_mirage.STAGES_AT_DEPTH``). At depth 0 there
-is no micro pass. At depth 1 the micro-RIGID pass runs inside ``register()``, so the
-``_rigid`` row is affine + micro-rigid and the final row equals ``_nonrigid``. A non-rigid
-``micro`` stage exists only at depth 2. ``valis_stages`` therefore has five stage slots per
-run: ``initial``, ``rigid`` (the ``_rigid`` row at depth 0 only), ``micro_rigid`` (the
-``_rigid`` row at depth 1 and 2), ``nonrigid`` and ``micro`` (the final row at depth 2
-only); a slot the run does not have is ``NA``.
 """
 
 from __future__ import annotations
@@ -73,7 +65,6 @@ OUTLINES, NUCLEI = "outlines", "nuclei"
 INITIAL = "initial"
 LAPTOP_SUFFIX = "_laptop"  # score.LAPTOP_SUFFIX: a `regbench local` result
 STARE_FAMILY = "stare"
-VALIS_FAMILY = "valis_mirage"
 
 WRITTEN = (
     "per_pair",
@@ -81,7 +72,6 @@ WRITTEN = (
     "method_best",
     "method_best_per_method",
     "method_summary",
-    "valis_stages",
     "stare_tiers",
     "stare_stage_peaks",
     "ashlar_discard",
@@ -278,18 +268,6 @@ def accuracy_pairs(pp):
     return [r for r in pp if not is_cost_only(r.get("row"))]
 
 
-def _valis_depth(run):
-    from ..methods import valis_mirage
-
-    return int(run.opts.get("micro_reg", valis_mirage.ARGS["micro_reg"]))
-
-
-def _valis_tier(run):
-    from ..methods import valis_mirage
-
-    return str(run.opts.get("memory_mode", valis_mirage.ARGS["memory_mode"]))
-
-
 def _owner(variant):
     """``(run, index of the variant in its run's names)`` or ``(None, None)``."""
     for run in variants.RUNS:
@@ -300,21 +278,12 @@ def _owner(variant):
 
 
 def stage_of(variant):
-    """The stage a result name is: ``initial``, ``rigid``, ``micro_rigid``, ``nonrigid``,
-    ``micro`` or ``final`` (the terminal row of a method with no named stage). The VALIS
-    rows follow R18 (module docstring)."""
+    """The stage a result name is: ``initial``, ``rigid``, ``nonrigid``, ``micro`` or
+    ``final`` (the terminal row of a method with no named stage)."""
     name = str(variant).split(":", 1)[0]
     if name == INITIAL:
         return INITIAL
     run, at = _owner(name)
-    if run is not None and run.method == VALIS_FAMILY:
-        depth = _valis_depth(run)
-        kind = ("rigid", "nonrigid", "final")[at]
-        if kind == "rigid":
-            return "micro_rigid" if depth >= 1 else "rigid"
-        if kind == "nonrigid":
-            return "nonrigid"
-        return "micro" if depth >= 2 else "nonrigid"
     if name.endswith("_rigid") or name.endswith("_affine"):
         return "rigid"
     if name.endswith("_nonrigid"):
@@ -633,8 +602,8 @@ def _prior_by_patient(row, cost_rows, res_rows, common, peaks):
     (R15); ``{}`` for a row with no prior. ``affine=stare``: STARE's
     COARSE (``stare_stage_peaks.coarse_cpu_h`` / ``coarse_s``) summed over the patient's
     rounds, and the count of its rounds (``resources.csv`` rows of ``stare``) with no
-    stage-peaks line: a patient with one is a LOWER bound (T31 fix M8). ``affine=valis``:
-    the ``valis_mirage_rigid`` row's ``cpu_h_used`` and ``register_s`` (complete patients)."""
+    stage-peaks line: a patient with one is a LOWER bound (T31 fix M8). No other anchor
+    exists (``methods.ashlar.AFFINES``)."""
     try:
         run = variants.run_of(row)
     except KeyError:
@@ -656,10 +625,6 @@ def _prior_by_patient(row, cost_rows, res_rows, common, peaks):
             out[p] = (c + _num(r.get("coarse_cpu_h")), t + _num(r.get("coarse_s")),
                       seen | {r.get("case_id")})
         return {p: (c, t, len(rounds.get(p, set()) - seen)) for p, (c, t, seen) in out.items()}
-    rigid = f"{VALIS_FAMILY}_rigid"
-    for r in _complete(cost_rows):
-        if r["method"] == rigid and r["group"] in common:
-            out[r["group"]] = (_num(r.get("cpu_h_used")), _num(r.get("register_s")), 0)
     return out
 
 
@@ -899,39 +864,6 @@ def _stage_stats(pp, row, dataset):
         "n_pairs": len(mine),
         "disp_um_med": _median(readable),
     }
-
-
-def valis_stages(pp, dataset):
-    """Five stage slots per ``valis_mirage`` run (R18, module docstring)."""
-    out = []
-    for name, final in terminal_rows(dataset).items():
-        run = _run(name)
-        if run is None or run.method != VALIS_FAMILY or family_of(final) != VALIS_FAMILY:
-            continue
-        rigid, nonrigid, last = list(variants.variants_of(run))
-        depth = _valis_depth(run)
-        slots = (
-            ("initial", INITIAL),
-            ("rigid", rigid if depth == 0 else None),
-            ("micro_rigid", rigid if depth >= 1 else None),
-            ("nonrigid", nonrigid),
-            ("micro", last if depth >= 2 else None),
-        )
-        for stage, row in slots:
-            out.append(
-                schema.empty_row(
-                    "valis_stages",
-                    source=SOURCE,
-                    dataset=dataset,
-                    row=final,
-                    memory_mode=_valis_tier(run),
-                    micro_reg=str(depth),
-                    stage=stage,
-                    stage_row=row if row is not None else schema.NA,
-                    **_stage_stats(pp, row, dataset),
-                )
-            )
-    return out
 
 
 def stare_tiers(pp, cost_rows, dataset, points=(), common=()):
@@ -1272,7 +1204,6 @@ def build(out, dataset=COHORT, cases_root=None):
         "method_best": best,
         "method_best_per_method": got["method_best_per_method"],
         "method_summary": summary,
-        "valis_stages": valis_stages(pp, dataset),
         "stare_tiers": stare_tiers(pp, cost_rows, dataset, points, common),
         "stare_stage_peaks": _copied(out, dataset, "stare_stage_peaks"),
         "ashlar_discard": _copied(out, dataset, "ashlar_discard"),

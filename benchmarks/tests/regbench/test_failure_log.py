@@ -45,7 +45,8 @@ def test_every_cause_has_exactly_one_owner():
         "unreadable_record",
         *losses.CAUSES,
     }
-    assert "oom" in _literal_causes()  # the scan reads something
+    # the scan reads something (its "oom" literal went with valis_mirage.py)
+    assert "benchmark_oom" in _literal_causes()
     # the gate's causes are gone with the gate: reported, never a gate
     assert "gate_blocked" not in fl.WHOSE and "dropped_row" not in fl.WHOSE
     assert "gate" not in fl.STAGES
@@ -236,8 +237,8 @@ def test_a_failed_selfcheck_and_a_flagged_realcheck_are_events_not_failures():
     verdicts = [
         said("valis120", "inconsistent", log="/out/logs/sc.log"),
         said("deeperhistreg_gpu"),
-        said("valis_mirage", realcheck="flagged", realcheck_log="flagged on P1_r1"),
-        said("valis120_hires", realcheck="ok"),
+        said("valis120_hires", realcheck="flagged", realcheck_log="flagged on P1_r1"),
+        said("valis120", realcheck="ok"),
         said("palom", "not_checked", log="no selfcheck record"),
         said("stare"),
     ]
@@ -245,12 +246,12 @@ def test_a_failed_selfcheck_and_a_flagged_realcheck_are_events_not_failures():
     got = [(r["run"], r["stage"], r["cause"], r["whose"]) for r in rows]
     assert got == [
         ("valis120", "selfcheck", "selfcheck_inconsistent", "benchmark"),
-        ("valis_mirage", "realcheck", "realcheck_flagged", "benchmark"),
+        ("valis120_hires", "realcheck", "realcheck_flagged", "benchmark"),
         ("palom", "selfcheck", "selfcheck_not_checked", "benchmark"),
     ]
     assert rows[0]["variant"] == "valis120_rigid;valis120"
     assert rows[0]["message"] == "selfcheck: inconsistent (/out/logs/sc.log)"
-    assert rows[1]["variant"] == "valis_mirage"
+    assert rows[1]["variant"] == "valis120_hires"
     assert rows[1]["message"] == "realcheck: flagged (flagged on P1_r1)"
     assert rows[2]["message"] == "selfcheck: not_checked (no selfcheck record)"
     # reported, never a gate: the run went on, so no unit ENDED with any of them, and

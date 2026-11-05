@@ -19,7 +19,7 @@ def test_every_method_of_the_run_list_has_its_package_named():
     assert "stare.slide_io" in preflight.COMMON and "stare.slide_io" in preflight.SCORER
     assert {"zarr", "imagecodecs", "tifffile", "numpy"} <= set(preflight.COMMON)
     # the version each adapter enforces is the one the preflight compares with
-    for method in ("ashlar", "valis", "valis_mirage", "deeperhistreg", "palom"):
+    for method in ("ashlar", "valis", "deeperhistreg", "palom"):
         assert methods.load(method).VERSION
 
 

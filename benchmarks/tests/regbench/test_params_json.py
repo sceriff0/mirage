@@ -39,7 +39,7 @@ def test_the_schema_scan_finds_the_real_params():
     one would silently fall through to 'pass it through as a string' -- which is
     exactly the broken behaviour being fixed."""
     assert len(TYPES) > 50, f"only {len(TYPES)} params read from the schema"
-    for expected in ("reg_qc", "memory_mode", "cleanup_work", "pyramid_resolutions"):
+    for expected in ("reg_qc", "reg_tiled_mode", "cleanup_work", "pyramid_resolutions"):
         assert expected in TYPES, f"{expected} missing from the schema scan"
 
 
@@ -48,7 +48,7 @@ def test_the_schema_scan_finds_the_real_params():
     [
         ("reg_qc", "1", 1),  # the case that broke the sweep
         ("pyramid_resolutions", "4", 4),
-        ("memory_mode", "high", "high"),
+        ("reg_tiled_mode", "high", "high"),
         ("cleanup_work", "false", False),
         ("cleanup_work", "true", True),
         ("cleanup_level", "none", "none"),  # a STRING whose value is the word none
@@ -107,7 +107,7 @@ def test_the_cli_writes_a_usable_params_file(tmp_path):
             "--out",
             str(out),
             "reg_qc=1",
-            "memory_mode=high",
+            "reg_tiled_mode=high",
             "cleanup_work=false",
         ],
         cwd=ROOT,
@@ -116,7 +116,7 @@ def test_the_cli_writes_a_usable_params_file(tmp_path):
     )
     assert rc.returncode == 0, rc.stderr
     doc = json.loads(out.read_text())
-    assert doc == {"reg_qc": 1, "memory_mode": "high", "cleanup_work": False}
+    assert doc == {"reg_qc": 1, "reg_tiled_mode": "high", "cleanup_work": False}
     # Types survive the round trip through JSON, which is the entire point.
     assert isinstance(doc["reg_qc"], int) and not isinstance(doc["reg_qc"], bool)
     assert doc["cleanup_work"] is False

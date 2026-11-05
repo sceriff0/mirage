@@ -92,16 +92,6 @@ CLOCK = {
         "writes": "one OME-TIFF per round, every channel, BigTIFF, uncompressed, no "
         "pyramid",
     },
-    "valis_mirage": {
-        "reading": "inside the clock: VALIS's readers, its conversion of every slide "
-        "to its working images, and the JVM start. Outside it: the benchmark placing "
-        "the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy)",
-        "convert": NOT_SEPARABLE,
-        "estimate": "the pipeline's `valis_registration` up to the writer (rigid, "
-        "non-rigid, micro)",
-        "write": "`Slide.warp_and_save_slide`, clock and peak paused, timed per slide",
-        "writes": "one pyramidal OME-TIFF per round, every channel (libvips, LZW)",
-    },
     "valis": {
         "reading": "inside the clock: VALIS's readers, its conversion of every slide "
         "to its working images, and the JVM start. Outside it: the benchmark placing "
@@ -161,12 +151,6 @@ WORK = {
         "working_px": "full resolution, tile by tile (a STARE_PREP row reads the "
         "reduced nuclear slide, f x f blocks)",
         "channels_read": "the nuclear channel (--nuclear-index)",
-    },
-    "valis_mirage": {
-        "convert_inside_clock": "yes",
-        "working_px": "max_image_dim_px 4000 for the rigid step; the tier's "
-        "max_processed_image_dim_px for the non-rigid and micro steps",
-        "channels_read": "the DAPI channel (get_channel_index('dapi'), else channel 0)",
     },
     "valis": {
         "convert_inside_clock": "yes",

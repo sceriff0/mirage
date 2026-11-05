@@ -1,6 +1,6 @@
 """The brightfield input rules: which methods take an RGB case, and that they run one.
 
-Both VALIS adapters, DeeperHistReg and STARE (through a one-channel proxy) have a rule;
+The VALIS adapter, DeeperHistReg and STARE (through a one-channel proxy) have a rule;
 ASHLAR and PALOM have none and refuse such a case with the reason
 (``methods.NO_BRIGHTFIELD``).
 """
@@ -25,7 +25,7 @@ def _bf(case):
     return dataclasses.replace(case, modality="brightfield")
 
 
-@pytest.mark.parametrize("method", ["valis_mirage", "valis", "deeperhistreg", "stare"])
+@pytest.mark.parametrize("method", ["valis", "deeperhistreg", "stare"])
 def test_brightfield_is_accepted(method, toy_cases):
     case = _bf(next(iter(toy_cases.values())))
     assert methods.input_rule(method, "brightfield") is None
@@ -102,25 +102,13 @@ def test_the_stand_in_slides_are_rgb_with_a_grey_proxy(rgb_patient):
     assert case.modality == "brightfield" and len({c.group for c in rgb_patient}) == 1
 
 
-@pytest.mark.parametrize(
-    "method, names",
-    [
-        (
-            "valis_mirage",
-            ["valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage"],
-        ),
-        ("valis", ["valis_rigid", "valis", "valis_micro"]),
-    ],
-)
-def test_valis_runs_an_rgb_patient_with_the_stand_in(
-    tmp_path, rgb_patient, method, names
-):
-    """The adapter's call (for ``valis_mirage``: the pipeline's own ``bin/register.py``)
-    reaches the stand-in for an RGB patient and yields its three rows per round; nothing
+def test_valis_runs_an_rgb_patient_with_the_stand_in(tmp_path, rgb_patient):
+    """The adapter's call reaches the stand-in for an RGB patient and yields its three rows per round; nothing
     in the adapter looks for a DAPI channel on an RGB slide."""
     from benchmarks.tests.regbench import fake_valis
 
-    rows = fake_valis.run_group(method, rgb_patient, tmp_path)
+    names = ["valis_rigid", "valis", "valis_micro"]
+    rows = fake_valis.run_group("valis", rgb_patient, tmp_path)
     got = [v for _, v, pm, _ in rows if pm is not None]
     # the generator yields stage by stage, every round of a stage together
     assert sorted(got) == sorted(names * len(rgb_patient))
@@ -143,7 +131,7 @@ def test_a_slide_of_three_separate_channels_is_not_rgb_to_valis(tmp_path, rgb_pa
     planar = [
         rgb_cases.rgb_case(base, tmp_path / "bf", case_id="BF2_r1", interleaved=False)
     ]
-    rows = fake_valis.run_group("valis_mirage", planar, tmp_path / "v")
+    rows = fake_valis.run_group("valis", planar, tmp_path / "v")
     assert rows and all(pm is not None for _, _, pm, _ in rows)
     for *_, info in rows:
         assert set(info["valis_img_type"].values()) == {"fluorescence"}
@@ -155,7 +143,7 @@ def test_a_fluorescence_patient_records_no_modality_key(tmp_path, rgb_pair):
     from benchmarks.tests.regbench import fake_valis
 
     base = sc.pair_case(rgb_pair, tmp_path / "fluo")
-    rows = fake_valis.run_group("valis_mirage", [base], tmp_path / "f")
+    rows = fake_valis.run_group("valis", [base], tmp_path / "f")
     assert rows and all(pm is not None for _, _, pm, _ in rows)
     assert all("modality" not in info for *_, info in rows)
     assert all(info["nuclear_channel"] is not None for *_, info in rows)

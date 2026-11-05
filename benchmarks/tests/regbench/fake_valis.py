@@ -2,7 +2,7 @@
 
 It does three things and nothing else:
 
-* **records** every call the adapters and the pipeline's ``bin/register.py`` make into
+* **records** every call the adapter makes into
   it (``CALLS``: constructor keywords, ``register``, ``register_micro``, every writer
   call), so a test can assert the exact sequence and arguments of a row;
 * keeps VALIS's **geometry conventions**, transcribed from the PyPI sdists
@@ -18,8 +18,7 @@ It does NOT register anything: ``Valis.register`` invents a similarity and a smo
 The selfcheck does not need a good registration, only a writer and a point path.
 
 ``install(...)`` puts the fake modules in ``sys.modules``; ``main()`` runs one scenario in
-a fresh process (the pipeline's module rebinds ``multiprocessing.cpu_count``, so it is
-never imported into the test process).
+a fresh process.
 """
 
 from __future__ import annotations
@@ -914,19 +913,6 @@ def install(setitem=None, **config):
         put(sys.modules, name, mod)
 
 
-def _torch_stub():
-    """``torch`` for the pipeline's ``valis_config``, which only needs these three."""
-    import contextlib
-
-    threads = [os.cpu_count() or 1]
-    return _module(
-        "torch",
-        no_grad=contextlib.nullcontext,
-        set_num_threads=lambda n: threads.__setitem__(0, int(n)),
-        get_num_threads=lambda: threads[0],
-    )
-
-
 def main(argv=None):
     """One scenario in this (fresh) process: ``fake_valis.py <request.json>``.
 
@@ -938,7 +924,6 @@ def main(argv=None):
 
     request = json.loads(Path((argv or sys.argv[1:])[0]).read_text())
     install(**request.get("fake", {}))
-    sys.modules["torch"] = _torch_stub()
     for key, value in (request.get("env") or {}).items():
         os.environ[key] = str(value)
     if request.get("mode") == "group":
@@ -990,9 +975,8 @@ def _group(request):
 
 
 def run_group(method, cases, work, opts=None, **fake):
-    """``register_group`` of ``method`` (``valis_mirage``: the REAL ``bin/register.py``;
-    ``valis``) on ``cases`` with this stand-in installed, in a fresh process (the
-    pipeline's module rebinds ``multiprocessing.cpu_count``). Returns the generator's
+    """``register_group`` of ``method`` (``valis``) on ``cases`` with this stand-in
+    installed, in a fresh process. Returns the generator's
     rows as ``(case_id, variant, map, info)``: ``map`` is the row's point map evaluated
     at ``PROBE`` (None for a failed row), ``info`` its JSON-safe record."""
     import subprocess
@@ -1000,16 +984,13 @@ def run_group(method, cases, work, opts=None, **fake):
     root = Path(__file__).resolve().parents[3]
     work = Path(work)
     work.mkdir(parents=True, exist_ok=True)
-    pinned = (
-        {"version": "1.0.0", "rounding": "trunc"} if method == "valis_mirage" else {}
-    )
     request = {
         "mode": "group",
         "method": method,
         "work": str(work),
         "cases": [str(c.dir) for c in cases],
         "opts": {"workers": 2, **(opts or {})},
-        "fake": {**pinned, **fake},
+        "fake": dict(fake),
         "env": {"REGBENCH_MEM_GB": "64", "REGBENCH_ATTEMPT": "1"},
     }
     (work / "group_request.json").write_text(json.dumps(request))

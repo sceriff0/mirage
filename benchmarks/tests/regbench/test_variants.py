@@ -10,24 +10,11 @@ from __future__ import annotations
 import pytest
 
 from benchmarks.regbench import METHODS, cli, methods, variants
-from benchmarks.regbench.methods import ashlar, palom, valis, valis_mirage
+from benchmarks.regbench.methods import ashlar, palom, valis
 from benchmarks.regbench.methods import deeperhistreg as dhr
 
 # the two STARE tier runs beside `stare` (the high tier), written out: ruling 2026-10-16
 STARE_TIER_RUNS = ["stare_medium", "stare_low"]
-
-# the pipeline's VALIS at its three tiers x micro-registration depth 0, 1, 2, written out:
-# `valis_mirage` is (high, 2), the shipped call; the other eight follow it (Plan F Task 4)
-VALIS_MIRAGE_GRID_RUNS = [
-    "valis_mirage_high_m0",
-    "valis_mirage_high_m1",
-    "valis_mirage_medium_m0",
-    "valis_mirage_medium_m1",
-    "valis_mirage_medium_m2",
-    "valis_mirage_low_m0",
-    "valis_mirage_low_m1",
-    "valis_mirage_low_m2",
-]
 
 
 def _stare_names():
@@ -67,13 +54,10 @@ def _stare_variants(name):
     return [f"{name}_rigid", name]
 
 
-# what the run list holds apart from STARE and ASHLAR: eleven VALIS runs (the pipeline's
-# at nine tier x depth cells, and two of 1.2.0), eight DeeperHistReg runs and PALOM
+# what the run list holds apart from STARE and ASHLAR: two VALIS runs (1.2.0), eight
+# DeeperHistReg runs and PALOM (the pipeline's tuned VALIS, nine `valis_mirage` runs,
+# retired 2026-11-05)
 OTHER_FIRST = [
-    "valis_mirage_rigid",
-    "valis_mirage_nonrigid",
-    "valis_mirage",
-    *[f"{n}{s}" for n in VALIS_MIRAGE_GRID_RUNS for s in ("_rigid", "_nonrigid", "")],
     "valis120_rigid",
     "valis120",
     "valis120_micro",
@@ -89,7 +73,7 @@ OTHER_FIRST = [
     "deeperhistreg_hr_fluo_gpu",
     "deeperhistreg_hr_fluo_cpu",
 ]
-N_OTHER_RUNS = 20  # 11 VALIS + 8 DeeperHistReg + PALOM
+N_OTHER_RUNS = 11  # 2 VALIS + 8 DeeperHistReg + PALOM
 # T31 R2: STARE at 4 CPUs in one job, a cost row of stare's (never a best-row candidate)
 LOCAL_4CPU = ["stare_local4"]
 EXPECTED = [
@@ -101,8 +85,6 @@ EXPECTED = [
     "palom",
 ]
 PER_PATIENT = {
-    "valis_mirage",
-    *VALIS_MIRAGE_GRID_RUNS,
     "valis120",
     "valis120_hires",
     *ashlar.ASHLAR_CELLS,
@@ -140,8 +122,9 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 # 2026-10-15 after the stare_prep row and the brightfield regimes were removed: the same
 # 45 as before, the paused row never counted; 47 since STARE's medium and low tiers were
 # added beside high on 2026-10-17; 55 since the pipeline's VALIS runs at three tiers x
-# micro-registration depth 0, 1, 2, the same day)
-N_RUNS = 56  # T31: + stare_local4
+# micro-registration depth 0, 1, 2, the same day; 47 since those nine were retired with the
+# tuned VALIS configuration on 2026-11-05)
+N_RUNS = 47  # T31: + stare_local4
 
 
 def test_counts():
@@ -189,7 +172,7 @@ def test_scopes():
     assert variants.scope("stare") == "pair"
     assert variants.scope("deeperhistreg") == "pair"
     assert variants.scope("palom") == "pair"
-    for method in ("valis", "valis_mirage", "ashlar"):
+    for method in ("valis", "ashlar"):
         assert variants.scope(method) == "group"
 
 
@@ -221,14 +204,6 @@ def test_every_label_agrees_with_its_options_as_the_adapter_checks_them():
         elif run.method == "valis":
             hires = str(run.opts.get("hires", "0")) == "1"
             assert hires == (name == valis.HIRES_LABEL)
-        elif run.method == "valis_mirage":
-            got = valis_mirage.call_args(opts)
-            want = (
-                ("high", 2)
-                if name == "valis_mirage"
-                else (name.split("_")[2], int(name.split("_m")[-1]))
-            )
-            assert (got["memory_mode"], got["micro_reg"]) == want, name
     assert {n for n, r in runs.items() if r.method == "ashlar"} == set(
         ashlar.ASHLAR_CELLS
     )
@@ -245,7 +220,7 @@ def test_a_wrong_option_is_caught_by_the_adapter_check():
 
 
 def test_primary_rows_are_expected_variants():
-    assert len(variants.PRIMARY) == len(set(variants.PRIMARY)) == 6
+    assert len(variants.PRIMARY) == len(set(variants.PRIMARY)) == 5
     assert set(variants.PRIMARY) <= set(variants.expected_variants())
     # one primary row per method shown, and none for the anchored ASHLAR family
     families = [variants.family(v) for v in variants.PRIMARY]
@@ -264,14 +239,13 @@ def test_the_primary_list_is_the_plans():
     assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_hr_gpu"
     assert variants.PRIMARY == (
         "stare",
-        "valis_mirage",
         "valis120_hires",
         "deeperhistreg_hr_gpu",
         "ashlar",
         "palom",
     )
-    assert variants.PRIMARY[2] is variants.PRIMARY_VALIS120
-    assert variants.PRIMARY[3] is variants.PRIMARY_DEEPERHISTREG
+    assert variants.PRIMARY[1] is variants.PRIMARY_VALIS120
+    assert variants.PRIMARY[2] is variants.PRIMARY_DEEPERHISTREG
 
 
 def test_the_high_resolution_rows_are_primary_and_the_defaults_stay_in_their_family():
@@ -305,7 +279,6 @@ def test_every_variant_has_a_family_and_the_longest_prefix_wins():
     for v in variants.expected_variants():
         assert variants.family(v) in set(variants.FAMILY.values()), v
     assert variants.family("valis120_hires_nonrigid") == "valis120"
-    assert variants.family("valis_mirage_rigid") == "valis_mirage"
     assert variants.family("deeperhistreg_hr_fluo_cpu") == "deeperhistreg"
     assert variants.family("stare_rigid") == "stare"
     assert variants.family("palom_affine") == "palom"
@@ -348,15 +321,14 @@ def test_ashlar_rows_are_checked_by_the_row_of_their_affine_level_and_stare_cell
 def test_selfcheck_masks_come_from_the_adapters():
     assert variants.selfcheck_mask("ashlar") == "overlap" == ashlar.MASKS[0]
     assert variants.selfcheck_mask("palom") == "seams" == palom.MASKS[0]
-    for method in ("stare", "valis", "valis_mirage", "deeperhistreg"):
+    for method in ("stare", "valis", "deeperhistreg"):
         assert variants.selfcheck_mask(method) is None
 
 
-def test_images_are_the_six_the_launcher_knows():
+def test_images_are_the_five_the_launcher_knows():
     images = {r.image for r in variants.RUNS}
     assert images == {
         "STARE_REGBENCH",
-        "VALIS_MIRAGE",
         "VALIS120",
         "DEEPERHISTREG",
         "ASHLAR",
@@ -850,7 +822,7 @@ def test_verdict_prints_the_status(capsys, tmp_path, monkeypatch):
     assert verdict(capsys, tmp_path, "palom", {"variants": {}}) == (0, "not_checked")
 
 
-def test_the_realcheck_reports_on_the_primary_rows_of_the_two_valis_adapters(capsys):
+def test_the_realcheck_reports_on_the_primary_row_of_the_valis_adapter(capsys):
     """Column 15: which row's realcheck.json the scorer reports for a run. Only a run
     with a primary row has one."""
     real = {
@@ -858,7 +830,6 @@ def test_the_realcheck_reports_on_the_primary_rows_of_the_two_valis_adapters(cap
         for r in variants.runs_for(None)
     }
     assert {k: v for k, v in real.items() if v} == {
-        "valis_mirage": "valis_mirage",
         "valis120_hires": "valis120_hires",
     }
     assert real["valis120"] is None  # the same adapter, no primary row
@@ -884,8 +855,8 @@ def test_every_run_passes_only_options_its_adapter_reads():
     # the constant is what the adapter's own code reads (the driver's keys aside)
     folder = Path(methods.__file__).parent
     internal = {"label", "monitor", "native_dir", *methods.COMMON_OPTIONS}
-    shared = {"valis": "_valis_points.py", "valis_mirage": "_valis_points.py"}
-    for name in ("stare", "valis", "valis_mirage", "deeperhistreg", "ashlar", "palom"):
+    shared = {"valis": "_valis_points.py"}
+    for name in ("stare", "valis", "deeperhistreg", "ashlar", "palom"):
         code = (folder / f"{name}.py").read_text()
         code += (folder / shared[name]).read_text() if name in shared else ""
         read = set(re.findall(r"opts(?:\.get\(|\[)\s*[\"'](\w+)[\"']", code)) - internal
@@ -1133,10 +1104,8 @@ def test_the_cohort_is_a_regime_and_takes_only_channel_stare_runs():
 COHORT_RUNS = [
     "stare", "stare_s128_none", "stare_s256_none", "stare_clahe", "stare_s128_clahe",
     "stare_s256_clahe", "stare_percentile", "stare_s128_percentile",
-    "stare_s256_percentile", "stare_medium", "stare_low", "stare_local4", "valis_mirage",
-    "valis_mirage_high_m0", "valis_mirage_high_m1", "valis_mirage_medium_m0",
-    "valis_mirage_medium_m1", "valis_mirage_medium_m2", "valis_mirage_low_m0",
-    "valis_mirage_low_m1", "valis_mirage_low_m2", "valis120", "valis120_hires",
+    "stare_s256_percentile", "stare_medium", "stare_low", "stare_local4", "valis120",
+    "valis120_hires",
     "deeperhistreg_gpu", "deeperhistreg_cpu", "deeperhistreg_hr_gpu",
     "deeperhistreg_hr_cpu", "deeperhistreg_fluo_gpu", "deeperhistreg_fluo_cpu",
     "deeperhistreg_hr_fluo_gpu", "deeperhistreg_hr_fluo_cpu", "ashlar", "ashlar_clean",
@@ -1150,8 +1119,10 @@ COHORT_RUNS = [
     "ashlar_astare_n05_s240", "palom",
 ]  # fmt: skip
 # T31 R2 adds ONE line, stare_local4's: the sha is of the lines without it, so every
-# other run's line is byte-identical to before
-COHORT_RUNS_SHA256 = "2a608b13030e81da52113e422501023a820118605eb0fc9fc81820a2681b67a4"
+# other run's line is byte-identical to before. Re-pinned 2026-11-05 when the nine
+# `valis_mirage` lines were removed: the sha of the old list without those nine lines is
+# this one, so no other line changed
+COHORT_RUNS_SHA256 = "f5fece4fbd45997bc088cabb90c94f6799f63564a78c35c148a419e4ff57641c"
 
 
 def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
@@ -1186,41 +1157,6 @@ def test_the_stare_tiers_are_runs_checked_by_stare():
     )
     # neither is a primary row: `stare` stays STARE's primary
     assert variants.primary_of("stare") == "stare"
-
-
-def test_valis_mirage_tier_by_micro_grid():
-    names = list(variants.members("valis_mirage"))
-    assert names == ["valis_mirage", *VALIS_MIRAGE_GRID_RUNS]
-    for t in ("high", "medium", "low"):
-        for m in (0, 1, 2):
-            name = "valis_mirage" if (t, m) == ("high", 2) else f"valis_mirage_{t}_m{m}"
-            assert name in names
-            run = variants.run_of(name)
-            assert variants.checked_by(name) == "valis_mirage"
-            assert (run.method, run.image, run.gpu, run.after, run.active) == (
-                "valis_mirage",
-                "VALIS_MIRAGE",
-                False,
-                None,
-                True,
-            )
-            assert variants.scope(run.method) == "group"
-            assert variants.variants_of(run) == [
-                f"{name}_rigid",
-                f"{name}_nonrigid",
-                name,
-            ]
-            if name != "valis_mirage":
-                assert run.opts == {"memory_mode": t, "micro_reg": str(m)}
-                assert variants.realcheck_row(name) is None
-                assert variants.CHECKED_BY[name] == "valis_mirage"
-            else:
-                # the shipped call: no option, its own label-less run
-                assert run.opts == {} and run.label is None
-                assert variants.realcheck_row(name) == "valis_mirage"
-    assert len(names) == 9
-    # neither is a primary row: `valis_mirage` stays the family's primary
-    assert variants.primary_of("valis_mirage") == "valis_mirage"
 
 
 def test_stare_local4_is_a_4_cpu_cost_row_of_stare():

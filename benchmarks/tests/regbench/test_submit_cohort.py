@@ -498,14 +498,14 @@ def test_the_launch_job_finds_or_pulls_every_image_and_never_uses_path_python(
     done = subprocess.run(argv, env=base, capture_output=True, text=True)
     assert "unknown option --no-such-option" in done.stdout + done.stderr  # started
     pulled = pulls.read_text().split()
-    assert len(pulled) == 4 and not any("palom" in r or "ashlar" in r for r in pulled)
+    assert len(pulled) == 3 and not any("palom" in r or "ashlar" in r for r in pulled)
     assert not any("stardist" in r for r in pulled)  # --prepare only
     assert f"PALOM -> {images}/bolt3x-mirage-palom-1.0.0.img" in done.stdout
     assert f"ASHLAR -> {images}/regbench/ashlar.sif" in done.stdout
     assert (images / "bolt3x-mirage-stare-regbench-1.0.0.img").exists()
-    # containers/valis100, never the pipeline's bare upstream image (no zarr inside)
-    assert (images / "bolt3x-mirage-valis100-1.0.0.img").exists()
     assert not any(p.name.startswith("cdgatenbee-valis-wsi") for p in images.iterdir())
+    # the retired valis_mirage row's image (containers/valis100) is no longer pulled
+    assert not (images / "bolt3x-mirage-valis100-1.0.0.img").exists()
     # no runtime at all: said, and nothing started
     if not (shutil.which("apptainer") or shutil.which("singularity")):
         bare = {**base, "PATH": base["PATH"].split(":", 1)[1]}
@@ -908,7 +908,7 @@ def test_no_job_asks_for_more_than_seven_days(site):
         h, m, s = (int(v) for v in clock.split(":"))
         assert int(days) * 86400 + h * 3600 + m * 60 + s <= 7 * 86400, job.name
     # three rounds at three days each would be nine: capped at the site's maximum
-    assert rungs(jobs, "valis_mirage", suffix="-first")[0].opt("--time") == "7-00:00:00"
+    assert rungs(jobs, "valis120_hires", suffix="-first")[0].opt("--time") == "7-00:00:00"
     assert rungs(jobs, "palom")[0].opt("--time") == "3-00:00:00"
     # the last job of a staged round: one round's time plus the writer's 40 h
     assert rungs(jobs, "stare")[0].opt("--time") == "4-16:00:00"
@@ -1783,7 +1783,7 @@ def test_a_submission_leaves_its_id_for_score_only_which_never_replaces_it(site)
 
 
 # ── the order the runs are submitted in ───────────────────────────────────────
-USER_ORDER = "ashlar palom deeperhistreg valis120 stare valis_mirage"
+USER_ORDER = "ashlar palom deeperhistreg valis120 stare"
 ORDERS = (
     USER_ORDER,
     "affine_ashlar ashlar stare",  # an anchored family named BEFORE its anchor
@@ -1927,7 +1927,7 @@ def test_an_order_with_an_unknown_name_is_refused(site):
     )
     assert done.returncode == 2 and not _sbatch_lines(done.stdout) and not log.exists()
     assert "no family and no run named 'valis'" in done.stderr
-    assert "Families: stare, valis_mirage, valis120" in done.stderr
+    assert "Families: stare, valis120" in done.stderr
     assert "Nothing was submitted" in done.stderr
 
 
@@ -2734,7 +2734,7 @@ def test_the_stare_source_is_fetched_with_and_without_the_preflight(
     tag = asked[0].rsplit("/", 1)[1][: -len(".tar.gz")]  # the pinned release
     src = out / "cache" / f"stare-{tag}" / "src"
     assert (src / "stare" / "slide_io.py").read_text().startswith("WHAT")
-    line = f"# STARE source for the images without one (ASHLAR VALIS_MIRAGE) -> {src}"
+    line = f"# STARE source for the images without one (ASHLAR) -> {src}"
     assert line in done.stdout
     if preflight == "0":
         # skipped, said, and the launch goes on with the source in place
@@ -2909,7 +2909,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
 def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
     jobs, _, _ = dry
     real = {n: variants.realcheck_row(n) for n in RUNS if variants.realcheck_row(n)}
-    assert real == {"valis_mirage": "valis_mirage", "valis120_hires": "valis120_hires"}
+    assert real == {"valis120_hires": "valis120_hires"}
     settle = {n.strip("<>") for _, n in jobs["rb-settle"].deps}
     for run in real:
         first = rungs(jobs, run, suffix="-first")
@@ -3041,7 +3041,7 @@ def test_no_package_of_the_host_can_shadow_one_inside_an_image(tmp_path):
     """PYTHONNOUSERSITE=1 in every image, and a PYTHONPATH that holds the checkout (and
     the STARE source where the image has none) and nothing of the host's."""
     images = {r.image for r in variants.RUNS} | {variants.SCORER_IMAGE}
-    without = {"ASHLAR", "VALIS_MIRAGE"}  # pulled as their projects publish them
+    without = {"ASHLAR"}  # pulled as its project publishes it
     assert without <= images
     tag = re.search(
         r"tags/([^\s]+)\.tar\.gz", (REPO / "requirements" / "stare.txt").read_text()

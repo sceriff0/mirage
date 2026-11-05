@@ -171,8 +171,8 @@ each method's section give them in full. In short:
 
 - **Parameter sets.** Not every primary row is its package's default: `valis120_hires`
   is upstream's high-resolution example, `deeperhistreg_hr_gpu` a shipped 8192
-  px set on a GPU, and `stare` and `valis_mirage` run the pipeline's settings, which
-  their authors chose on this cohort with this metric.
+  px set on a GPU, and `stare` runs the pipeline's settings, which its authors chose
+  on this cohort with this metric.
 - **ASHLAR.** Its nuclei are moved by a map the benchmark builds from ASHLAR's tile
   shifts; in a tile overlap that map is a weighted mean of two tiles' shifts while the
   image is a cross-fade of two copies. Its tiles are cut from stitched slides, and the
@@ -211,11 +211,11 @@ step with the run list, `score.TABLES` and the launcher's job names).
 | contract (`mapping.PointMap`, per-pair and per-patient methods, `run.json`) | here |
 | the cohort's inputs and cases (`slurm/inputs.sbatch`, `manifest.py`, `outlines.py`, `nuclei.py`, `datasets/multiplex.py`) | here: regbench's OWN pipeline preprocessing of the cohort (`submit_cohort.sh --inputs`, `pixel_size` pinned at 0.325 µm by user ruling) and its own StarDist outlines (the cell mask traced as the pipeline's QC traces it: see "What the cohort's nuclei are"). Inputs carry fingerprints. Never run on the cohort itself |
 | scoring (`pairs.py`, `score.py`) and cost (`resources.py`, `billing.py`) | here |
-| adapters `stare` (the pipeline's `high` tier on the original slides, its own STITCH deferred until the clock has stopped, the option `stride`), `valis_mirage` (VALIS 1.0.0 through the pipeline's function), `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`), `initial` (the identity), `deeperhistreg` (1.0.1: eight labels, one row each: the image its writer draws), `ashlar` (1.20.0: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` and a 20-cell factorial), `palom` (2026.4.1, one run) | here, as in "Methods" and each method's section. **Only `stare` has ever been run with its package** (the only one installed where this was written); the others are written against the package's source and tested with a recording stand-in. Their first real run is the selfcheck inside each method's image |
+| adapters `stare` (the pipeline's `high` tier on the original slides, its own STITCH deferred until the clock has stopped, the option `stride`), `valis` (1.2.0 as shipped: `valis120`, `valis120_hires`), `initial` (the identity), `deeperhistreg` (1.0.1: eight labels, one row each: the image its writer draws), `ashlar` (1.20.0: `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` and a 20-cell factorial), `palom` (2026.4.1, one run) | here, as in "Methods" and each method's section. **Only `stare` has ever been run with its package** (the only one installed where this was written); the others are written against the package's source and tested with a recording stand-in. Their first real run is the selfcheck inside each method's image |
 | selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
 | tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 55 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, the pipeline's VALIS at three tiers x micro depth 0, 1, 2 and VALIS 1.2.0, DeeperHistReg, PALOM), six primary rows |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 47 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, VALIS 1.2.0, DeeperHistReg, PALOM), five primary rows |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster". **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | cost by step (`cost.py`, `cost_end_to_end.csv`, secondary) | here: every number in it is measured by this benchmark |
 | full pipeline cost (`compute_all.py`, `trace.py`, `slurm/compute_all.sbatch`, `pipeline_cost*.csv`, secondary) | here, as in "Cost". Reads Nextflow traces of the whole pipeline run per patient and backend; tested on generated traces, never run |
@@ -350,7 +350,7 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-55 runs, 4 on a GPU, 35 per patient (`variants.counts()`; the list is generated from
+47 runs, 4 on a GPU, 26 per patient (`variants.counts()`; the list is generated from
 tables, so the totals move with the tables; `test_variants.py` pins the total as the
 literal `N_RUNS`, which a change to the list must update). The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the two brightfield
@@ -359,9 +359,9 @@ the regime of every dataset of the paper; a run carries the regimes that take it
 (`Run.regimes`: every regime by default, a generated STARE cell the regimes whose levels
 make it, and the two STARE tier runs the cohort's alone), so the brightfield regimes' 15
 STARE runs are in `RUNS` (`runs --all`) and never in the cohort's list (`variants.runs_for`). `score` expects
-exactly the cohort's result names and opens its summary on the six primary rows:
+exactly the cohort's result names and opens its summary on the five primary rows:
 
-`stare`, `valis_mirage`, `valis120_hires`, `deeperhistreg_hr_gpu`, `ashlar`, `palom`.
+`stare`, `valis120_hires`, `deeperhistreg_hr_gpu`, `ashlar`, `palom`.
 
 - **Two methods run at two settings, and the high-resolution one is primary** (the
   user's ruling of 2026-10-11, fixed before any cohort run). VALIS 1.2.0: `valis120` is
@@ -413,9 +413,9 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   under `containers/` in capitals with `-` written `_`: `STARE_REGBENCH` (the `stare`
   run, and `tissue` and `score`: `variants.SCORER_IMAGE`), `VALIS120` (built FROM
   upstream's `cdgatenbee/valis-wsi:1.2.0`; needs `--writable-tmpfs`), `DEEPERHISTREG`,
-  `PALOM`. Upstream's published image plus the slide reader's codecs: `VALIS_MIRAGE`
-  (`containers/valis100`: `cdgatenbee/valis-wsi` 1.0.0, the pipeline's digest) and
-  `ASHLAR` (`containers/ashlar120`: `labsyspharm/ashlar:1.20.0`). `containers/README.md`
+  `PALOM`. Upstream's published image plus the slide reader's codecs: `ASHLAR`
+  (`containers/ashlar120`: `labsyspharm/ashlar:1.20.0`). (`containers/valis100`, which ran the retired `valis_mirage`
+  row, was removed with it.) `containers/README.md`
   has what each holds. Inside an image the harness is started with the image's own
   `python`, or with `python3` where it has no `python`: the choice is made inside the
   image (`slurm/env.sh: regbench_py`), never on the host. ASHLAR's image is the case
@@ -428,8 +428,8 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   column `checked_rows`): all of the run's rows. Nothing is dropped:
   `variants.selfcheck_status(name, record)` is the status that is REPORTED, and no row
   is ever left out of a table because of it.
-- **Which runs have a realcheck** (`realcheck`, column 15): the primary rows of the two
-  VALIS adapters, `valis_mirage` and `valis120_hires` (`variants.REALCHECK_METHODS`).
+- **Which runs have a realcheck** (`realcheck`, column 15): the primary row of the
+  VALIS adapter, `valis120_hires` (`variants.REALCHECK_METHODS`).
   Their point path is derived by the benchmark from VALIS's matrices and fields, so it
   is checked once more on a real case: the launcher sends the run's first patient
   ahead with `run --realcheck`, beside the rest of the run, which does not wait for it.
@@ -563,8 +563,7 @@ plug-in's rows are never primary. Nothing of a plug-in is built, pushed or teste
 | variant(s) | software | run unit | native transform | how nuclei are moved | an RGB (brightfield) case |
 |---|---|---|---|---|---|
 | `stare_rigid`, `stare` | pinned `stare-registration`, mirage's `high` tier, stride 64 | pair | affine + mesh, moving -> reference | moving nuclei through `stage_warp.make_warper`; reference frame | registered on a one-channel proxy of each slide: the case's own grey proxy, or a haematoxylin / smoothed proxy the benchmark writes; STARE's own `--prep` on it; the image written is the registered proxy |
-| `valis_mirage_rigid`, `valis_mirage_nonrigid`, `valis_mirage` | VALIS 1.0.0 through the pipeline's own call | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
-| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0. **`valis120` is upstream's default** (`Valis(...).register()`, nothing more); `valis120_micro` adds upstream's OPTIONAL micro-registration (`register_micro()` with no argument, 4096 px), so it is the default plus an extra step, not the default. Run and shown; not primary | patient | same | same | same |
+| `valis120_rigid`, `valis120`, `valis120_micro` | VALIS 1.2.0. **`valis120` is upstream's default** (`Valis(...).register()`, nothing more); `valis120_micro` adds upstream's OPTIONAL micro-registration (`register_micro()` with no argument, 4096 px), so it is the default plus an extra step, not the default. Run and shown; not primary | patient | affine + backward field `bk_dxdy` | reference nuclei (pixels of the written image's grid) through VALIS's `warp_tools.warp_xy_inv`; moving frame | taken as it is: VALIS picks its brightfield processing when its reader calls the slide RGB (three samples per pixel); `info.valis_img_type` records what it picked, and a `problem` says so when it read the slide as fluorescence |
 | `valis120_hires_rigid`, `valis120_hires_nonrigid`, `valis120_hires` | VALIS 1.2.0, upstream's high-resolution example (`--opt hires=1`). **`valis120_hires` is VALIS 1.2.0's primary row**, by the user's ruling | patient | same | same | same |
 | `deeperhistreg_{gpu,cpu}`, `deeperhistreg_hr_{gpu,cpu}`, and the same four with `_fluo` | DeeperHistReg 1.0.1 (the method is RegWSI), a shipped parameter set with only the device changed; `_hr` is the 8192 px set, `_fluo` adds two benchmark-set keys. One row per run, under the run's own label | pair | the image its own writer puts on disk | reference-grid pixels of the written image through the writer's own arithmetic; moving frame. **`deeperhistreg_hr_gpu` is DeeperHistReg's primary row**, by the user's ruling (the 4096 px set is the package's default). **It follows the writer**, which by the adapter's reading sits about half a field pixel from the registration (2.5 px = 0.81 µm per axis at this 8192 px set, 1.15 µm along the diagonal; 4.9 px = 1.59 µm per axis at the 4096 px set), plus a whole-pixel padding term on uneven sizes, so its `within_1um` can be low with a perfect registration | taken as it is (an RGB TIFF, JPEG or PNG, re-contained as one RGB TIFF page with its values untouched), with its shipped (brightfield) parameters; `_fluo` is refused on it |
 | `ashlar`, `ashlar_clean`, `affine_ashlar`, `affine_ashlar_clean` | ASHLAR 1.20.0, its own command, on tiles cut from stitched slides | patient | one shift per tile | moving nuclei by their tiles' shifts; reference frame | refused, with the reason (one translation per tile of unstitched tiles: two whole slides are not its input) |
@@ -639,7 +638,7 @@ jittered by up to 24 px so a mapping wrong by a whole lattice period cannot pass
 reference's dots channel is empty. Dots are addressed by channel INDEX, never by name.
 Methods with a size-dependent code path are checked on more than one case
 (`selfcheck.SIZES`): `stare` also at 4096 x 5120 (a four-tile junction) and on ASHLAR's
-two cases at 8192 x 10240 (below), both VALIS adapters also on a pair with a 30000 px
+two cases at 8192 x 10240 (below), the VALIS rows also on a pair with a 30000 px
 side, every DeeperHistReg label on a pair of
 40000 x 50000 against 40000 x 48000 (the cohort's size class, with sizes that divide
 exactly; see "DeeperHistReg").
@@ -651,14 +650,14 @@ that overhangs its reference was otherwise first met on the cluster):
   50000), so the REFERENCE is the padded one and the writer's crop back to the reference
   grid runs with a non-zero pad. Same memory as the first pair; it doubles that
   selfcheck's time (unmeasured: DeeperHistReg has not run here).
-- both VALIS adapters: reference 2048 x 2560, moving 2305 x 2817. The overhang is odd
+- the VALIS rows: reference 2048 x 2560, moving 2305 x 2817. The overhang is odd
   (257 px each way), so a centred placement is half a pixel off the grid; whether VALIS's
   crop origin is then fractional is by reading only. Seconds to minutes, under the first
   rung.
 
 **One patient of three slides for the methods that register a patient together** (user
-ruling R3.19, 2026-10-11). The VALIS adapters (`valis_mirage`, `valis120`,
-`valis120_hires`) and ASHLAR take every round of a patient in one run, and every cohort
+ruling R3.19, 2026-10-11). The VALIS rows (`valis120`, `valis120_hires`) and
+ASHLAR take every round of a patient in one run, and every cohort
 patient has more than one moving round, so a pair alone never exercised the path the
 cohort takes. Their `SIZES` now hold a case of the form `(reference, moving, moving)`:
 one reference and two moving rounds that share it (`selfcheck.make_group`; round 2 keeps
@@ -668,7 +667,7 @@ moving round is checked on its own**: its points against its image.
 
 | rows | the patient | what it adds to the pairs |
 |---|---|---|
-| `valis_mirage`, `valis120`, `valis120_hires` | 2048 x 2560, three slides (`patient_2048x2560`), before the large pair | VALIS orders the slides and, at upstream's defaults (`valis120*`), registers each to its neighbour in that order, so a round may reach the reference through the other round; the pipeline's settings register each to the reference. One `Valis` object, one `register`, a written image per round |
+| `valis120`, `valis120_hires` | 2048 x 2560, three slides (`patient_2048x2560`), before the large pair | VALIS orders the slides and, at upstream's defaults (`valis120*`), registers each to its neighbour in that order, so a round may reach the reference through the other round. One `Valis` object, one `register`, a written image per round |
 | the four ASHLAR rows | 8192 x 10240, three slides (`patient_8192x10240`) | two moving cycles in one command and one mosaic: each cycle's planes, the shared `origin_xy`, the shared reference tiles. The anchored rows read STARE's matrix of the same round |
 | `stare` | ASHLAR's pair and ASHLAR's patient, the patient run round by round | nothing for STARE itself (it is a pair method): it is what the anchored ASHLAR rows read (`--m0-from`), at the cost of three more registrations of ASHLAR's canvas |
 
@@ -2275,7 +2274,6 @@ call; it is then part of the estimate and no number is guessed for it.
 | method (adapter) | reading and conversion | its own conversion, reported as | the registration clock | the writer | what it writes |
 |---|---|---|---|---|---|
 | `stare` | inside the clock: STARE's own reader on the cohort's OME-TIFFs | none | COARSE, one REG-TILE job per tile and SOLVE, each a scheduler job of its own with the pipeline's allocation: COARSE + the longest tile + SOLVE, each the attempt its job ended ok with (`wall_unlimited_parallel_s`; a failed attempt is `wasted_*`; queue waits are in `elapsed_with_queue_s`) | STITCH, a process of its own inside the round's last job once the transform exists, timed on its own (the attempt that wrote the image) | one OME-TIFF per round, every channel, BigTIFF, uncompressed, no pyramid |
-| `valis_mirage` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start. Outside it: the benchmark placing the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy) | not separable | the pipeline's `valis_registration` up to the writer (rigid, non-rigid, micro) | `Slide.warp_and_save_slide`, clock and peak paused, timed per slide | one pyramidal OME-TIFF per round, every channel (libvips, LZW) |
 | `valis` | inside the clock: VALIS's readers, its conversion of every slide to its working images, and the JVM start. Outside it: the benchmark placing the slides in the folder VALIS reads (`info.place_s`: a hard link, or a copy) | not separable | `Valis.register()` and `register_micro()` | `warp_and_save_slides`, clock and peak paused; one call writes the patient, a round's share is the call over the slides written | one pyramidal OME-TIFF per round, every channel (libvips, deflate) |
 | `deeperhistreg` | the package's own loading is inside the clock (its log's `Loading time` is kept in `stage_s`) | `convert_s` | `run_registration` with the final saving off (its diagnostic images and intermediate fields included, as shipped) | `apply_deformation_pyvips` once per channel; the conversion of each further channel before it and the benchmark's copy of those files into one after it are timed apart (`native.write_parts_s`) | one single-channel pyramidal TIFF per channel (the package's); the benchmark stacks their first pages into one OME-TIFF without a pyramid |
 | `ashlar` | inside the clock: ASHLAR's reading of the tiles it is given | `retile_s` | the command up to the last aligner; a round's share is its `layer_s` plus the reference stitch over the rounds | ASHLAR's writer, inside the same command, timed from the last aligner; then the benchmark's split of the mosaic per round, timed apart (`native.write_parts_s`) | one pyramidal OME-TIFF for the patient, every cycle's channels (BigTIFF, deflate); the benchmark's per-round copies have no pyramid |
@@ -2349,7 +2347,7 @@ copying is in `benchmark_copy_s` and in no total, here or in the headline block
 (`test_cost.py::test_the_headline_write_time_and_the_by_step_one_are_the_same_number`).
 The medians are over the patients that wrote an image for EVERY round
 (`n_patients_partial` counts the others), the completeness rule of the per-method block.
-For both VALIS adapters the benchmark's placing of the slides in the folder VALIS reads
+For the VALIS rows the benchmark's placing of the slides in the folder VALIS reads
 (a hard link, or a full copy of every slide across file systems) runs with the clock
 paused and is recorded as `info.place_s`, in no cost.
 
@@ -2386,7 +2384,7 @@ every step in its own column, per patient and per result that wrote an image:
   has a pyramid, it is one file, and it holds at least as many channels as the patient's
   slides hold together (`native.written.patient_channels`). With the adapters as built:
   ASHLAR's mosaic is (`yes`; an anchored row that dropped a round is not); STARE (one
-  flat file per round), both VALIS adapters and PALOM (one pyramid per ROUND) and
+  flat file per round), the VALIS rows and PALOM (one pyramid per ROUND) and
   DeeperHistReg (one file per channel) are not (`no`), and would still need a
   merge-and-pyramid step that this benchmark neither runs nor times. So ASHLAR's total
   covers one step more than the others': read `merged_image` beside every total. The
@@ -2421,7 +2419,8 @@ submission, like `--score-only`.
   slide without metadata; shipped `auto`, which the pipeline's preflight refuses when it
   cannot read a scale). Everything else is the shipped default and the site profile
   (`REGBENCH_NF_PROFILE`, `REGBENCH_SITE_CONFIG`). **Registration therefore runs at the
-  shipped tier `memory_mode='high'` unless the site profile overrides it**, which may
+  shipped STARE tier `reg_tiled_mode='high'`, and VALIS at valis-wsi 1.2.0's own defaults
+  (it has no tiers), unless the site profile overrides them**, which may
   differ from the settings the site uses in production (caveat 12).
   `test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default`
   fails when a pinned name is not a schema param, a value is not of its schema type,
@@ -2634,7 +2633,7 @@ script names no method.
      kill (time limit, `scancel`) ends the script as well, so it leaves no note.
    - The output directory is kept between rungs, so the cost of a failed attempt is
      kept (`previous_attempts`). `REGBENCH_ATTEMPT`, `REGBENCH_RETRY` and
-     `REGBENCH_MEM_GB` reach the task (both VALIS adapters size a JVM heap from them).
+     `REGBENCH_MEM_GB` reach the task (the VALIS adapter sizes a JVM heap from them).
    - The anchored ASHLAR rows wait for STARE's last array on the same dataset.
    **A run whose registration is several jobs per round** (`runs`, column `stages`:
    every STARE run: `variants.stages_of`, the generated set, 9 on the cohort) has, per dataset, a chain of stage jobs in place of that
@@ -2763,7 +2762,7 @@ script names no method.
    SOLVE and the last jobs run, and every round with a tile that is not done ends as
    `not_submitted`. Release or cancel the held tasks and submit again: what is ok is
    reused.
-4. **The realcheck** of `valis_mirage` and `valis120_hires` (reported, never a gate): the
+4. **The realcheck** of `valis120_hires` (reported, never a gate): the
    first patient of the first dataset goes alone, on its own ladder
    (`rb-<run>-<ds>-first-<rung>g`), with `run --realcheck`, SUBMITTED BESIDE the rest of
    the run, which does not wait for it. What waits for the run waits for both.
@@ -2914,8 +2913,8 @@ folder; these rules keep one from answering for the other:
 `run.json: reuse_key` equals the key the current code computes. `code` is a sha256 over
 the driver `methods/__init__.py` and `methods.DRIVER_CODE`, the adapter, the `methods/`
 modules it imports, the `regbench` and absolute `benchmarks.*` modules it imports, and
-the outside code it runs (`valis_mirage`: `bin/register.py` and the `bin/utils` modules
-on its path; ASHLAR: `benchmarks/ashlar/` and the tile cutter); `billing.py`,
+the outside code it runs (VALIS: `bin/utils/jvm_cache.py`; ASHLAR: `benchmarks/ashlar/`
+and the tile cutter); `billing.py`,
 `plugins.py` and the reporting modules are left out because they change cost
 accounting or reports, not a result (`methods.DRIVER_CODE_LEFT_OUT`); `inputs` is the fingerprint of every image the
 cases name; STARE adds its version and its SOLVE identity. So **any byte change to one
@@ -3002,7 +3001,7 @@ slide's record and `prepare multiplex`'s drop reason name the exit code instead 
 | `REGBENCH_OUT` | results, logs | `$HOME/regbench_results/mirage-<commit>` |
 | `REGBENCH_BIND` | paths to bind into every image, comma-separated: where the cohort's slides and nuclei live | none |
 | `REGBENCH_WORK` | scratch for a method's intermediates | `$TMPDIR` |
-| `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS_MIRAGE`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the six images of the run list (a seventh, `REGBENCH_SIF_STARDIST`, is for `--prepare` only); the script refuses to submit when one a selected run needs is missing. Local `.sif` paths: "Before the first real submission" | none |
+| `REGBENCH_SIF_STARE_REGBENCH`, `REGBENCH_SIF_VALIS120`, `REGBENCH_SIF_DEEPERHISTREG`, `REGBENCH_SIF_ASHLAR`, `REGBENCH_SIF_PALOM` | the five images of the run list (a sixth, `REGBENCH_SIF_STARDIST`, is for `--prepare` only); the script refuses to submit when one a selected run needs is missing. Local `.sif` paths: "Before the first real submission" | none |
 | `REGBENCH_SBATCH_GPU` | what a task of the four GPU runs asks for: one GPU. Export the site's own form where it names the card, e.g. `--gres=gpu:nvidia_h200:1`; set empty, the GPU runs are refused | `--gres=gpu:1` |
 | `REGBENCH_TIME` | per round, every rung | `24:00:00` |
 | `REGBENCH_SELFCHECK_TIME` | every selfcheck attempt | `24:00:00` |
@@ -3019,7 +3018,7 @@ slide's record and `prepare multiplex`'s drop reason name the exit code instead 
 | `REGBENCH_STAGE_STALL_S`, `REGBENCH_STAGE_STALL_MAX_S` | read by the tile submitter: seconds without a tile task leaving the queue before it lists what is left (and gives up on a held one); and before it gives up whatever the reasons | `3600`, `172800` |
 | `REGBENCH_STAGE_WAIT_REASONS` | the scheduler's reasons the tile submitter takes for "only waiting its turn": while every tile task left has one of them the time is not counted towards `REGBENCH_STAGE_STALL_MAX_S`; empty counts every stretch | `Priority Resources QOSMaxJobsPerUserLimit AssocMaxJobsLimit BeginTime Dependency None` |
 | `REGBENCH_STAGE_HELD_REASONS` | the scheduler's reasons the tile submitter takes for "does not leave the queue by itself", space-separated | `JobHeldAdmin JobHeldUser JobHoldMaxRequeue DependencyNeverSatisfied JobLaunchFailure` |
-| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis_mirage`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty: the run list's order |
+| `REGBENCH_RUN_ORDER` | the order the runs are SUBMITTED in (and dealt onto the lanes): family names (`stare`, `valis120`, `deeperhistreg`, `ashlar`, `affine_ashlar`, `palom`: every run of the family) or run names, space-separated; the runs not named follow in the run list's order. A run that reads another's results (the two `affine_ashlar` rows read `stare`'s) is never submitted before it: it is put directly after it and a `# run order:` line says so. An unknown name is refused with the list. It changes the order of submission and nothing else: not `runs`, not a table, not a result | `default` on the cohort: the two ASHLAR runs, then STARE and the two affine ASHLAR runs that read it, then the rest (`runs --order default` prints it). Set empty: the run list's order |
 | `REGBENCH_RUN_LANES` | runs in flight at once: the selected runs are dealt onto that many lanes in the order of the run list, and a run starts when the run before it on its lane has ended, whatever became of it. With `REGBENCH_ARRAY_LIMIT` this bounds the tasks running at once (lanes x limit, plus the selfchecks, which are not laned) | `0` (no limit) |
 | `REGBENCH_FORCE` | `1`: run every unit again, also those whose results are all `ok` already | `0` (reuse) |
 | `REGBENCH_SUBMISSION` | this submission's id. Set it only with `--score-only` (the submission to score) or to run a unit by hand under a submission's id: the launcher refuses an id the folder already holds a submission of | time and process id |
@@ -3041,7 +3040,7 @@ slide's record and `prepare multiplex`'s drop reason name the exit code instead 
 | `REGBENCH_SCORE_TIME` | time limit of one task of those arrays (never above 7 days). A task that runs out keeps the pair records it finished; `--score-only` goes on from there | `24:00:00` |
 | `REGBENCH_HEAD_IMAGE` | the image the script itself reads the run list with, on the login node | `STARE_REGBENCH` |
 | `REGBENCH_WRITABLE_TMPFS_IMAGES` | images started with `--writable-tmpfs` | `VALIS120` |
-| `REGBENCH_STARE_SRC_IMAGES` | images that have no `stare` package inside: the pinned STARE source is put on their `PYTHONPATH` | `ASHLAR VALIS_MIRAGE` |
+| `REGBENCH_STARE_SRC_IMAGES` | images that have no `stare` package inside: the pinned STARE source is put on their `PYTHONPATH` | `ASHLAR` |
 | `REGBENCH_STARE_SRC` | where that source is; fetched once by the launcher on the login node when it is not there, before the first `sbatch` of every real submission that uses such an image as a `.sif`, with or without the preflight | `$REGBENCH_OUT/cache/stare-<tag>/src` |
 | `REGBENCH_PREFLIGHT` | `0`: submit without the preflight (a login node without the container runtime); said aloud. The STARE source is fetched all the same | `1` |
 | `REGBENCH_PRIVATE`, `REGBENCH_PRIVATE_DIR` | the private plug-in's switch and folder (`plugins.py`); passed into every image, the folder bound | unset |
@@ -3125,8 +3124,7 @@ figure; each item names the column that answers it.
 - **The images as local `.sif` files, pulled ONE AT A TIME** on a node with network,
   before anything is submitted (never by a job, and never two pulls at once into one
   cache). The names are the ones this repository builds or pins: the four it builds
-  (`containers/README.md`), the pipeline's StarDist image, ASHLAR's upstream tag, and
-  the pipeline's VALIS 1.0.0 by the digest of `modules/local/register.nf`:
+  (`containers/README.md`), the pipeline's StarDist image and ASHLAR's upstream tag:
 
   ```bash
   mkdir -p <scratch>/regbench/sif && cd <scratch>/regbench/sif
@@ -3135,14 +3133,12 @@ figure; each item names the column that answers it.
   apptainer pull deeperhistreg.sif  docker://bolt3x/mirage-deeperhistreg:1.0.0
   apptainer pull palom.sif          docker://bolt3x/mirage-palom:1.0.0
   apptainer pull ashlar.sif         docker://bolt3x/mirage-ashlar120:1.0.0
-  apptainer pull valis-mirage.sif   docker://bolt3x/mirage-valis100:1.0.0
   apptainer pull stardist.sif       docker://bolt3x/mirage-stardist:1.0.0
   export REGBENCH_SIF_STARE_REGBENCH=$PWD/stare-regbench.sif
   export REGBENCH_SIF_VALIS120=$PWD/valis120.sif
   export REGBENCH_SIF_DEEPERHISTREG=$PWD/deeperhistreg.sif
   export REGBENCH_SIF_PALOM=$PWD/palom.sif
   export REGBENCH_SIF_ASHLAR=$PWD/ashlar.sif
-  export REGBENCH_SIF_VALIS_MIRAGE=$PWD/valis-mirage.sif
   export REGBENCH_SIF_STARDIST=$PWD/stardist.sif      # --prepare only
   ```
 
@@ -3381,19 +3377,18 @@ stops the launch with nothing submitted.
   adapter's `--opt any_version=1` exists for a reviewed exception).
 - **`stare` in the images that do not ship it.** The harness reads every image through
   `stare.slide_io`, and the benchmark's ASHLAR command path imports STARE's manifest
-  code. The official ASHLAR image and upstream's VALIS 1.0.0 image have no `stare`
-  (`REGBENCH_STARE_SRC_IMAGES`). For those the launcher fetches the release pinned in
+  code. The official ASHLAR image has no `stare`
+  (`REGBENCH_STARE_SRC_IMAGES`). For it the launcher fetches the release pinned in
   `requirements/stare.txt` once, as source, into `$REGBENCH_OUT/cache/stare-<tag>/src`
   (`regbench_fetch_stare`, on the login node; a job never downloads), and puts that
   folder on `PYTHONPATH` inside the image. That is STARE's pure-Python code only: the
   image must already hold what it imports that is compiled or third-party, `numpy`,
   `tifffile`, `zarr` (with `numcodecs`) and `imagecodecs`; `psutil` where the memory
   monitor is to use it (without it the monitor reads `/proc`, `rss_method: proc`).
-  Neither published image holds all of them (the preflight, 2026-10-13: the official
-  ASHLAR image has no `imagecodecs`, upstream's VALIS 1.0.0 image has neither `zarr`
-  nor `imagecodecs`), so the two are run from `containers/ashlar120` and
-  `containers/valis100`: the published image by digest, plus those packages, with a
-  freeze of the base as the install's constraint.
+  The published image does not hold all of them (the preflight, 2026-10-13: the official
+  ASHLAR image has no `imagecodecs`), so it is run from `containers/ashlar120`: the
+  published image by digest, plus those packages, with a freeze of the base as the
+  install's constraint.
 - **Inside every image** (`slurm/env.sh`, through `APPTAINERENV_<name>`, which sets a
   variable under `--cleanenv`): `PYTHONNOUSERSITE=1`, so the packages in the host
   user's `~/.local` (the home folder is mounted) cannot shadow a pinned one;
@@ -3523,13 +3518,8 @@ missing the rest of the list]`). None of the following was observed:
   init_jvm(jar=None, mem_gb=10)` passes the literal 10 on and ignores its argument
   (1.0.0 `registration.py:115-118`, 1.2.0 `:132-135` `[PARTIAL: those lines and
   slide_io.init_jvm]`). For VALIS 1.2.0 the adapter therefore starts the JVM itself
-  through `valis.slide_io.init_jvm(mem_gb=...)`. For the pipeline's VALIS the adapter
-  changes nothing (it runs the pipeline's call), so the heap the pipeline asks for may
-  never arrive. `run.json: info.jvm_max_heap_gb` is the JVM's own
-  `Runtime.maxMemory()`: read it on the first `valis_mirage` and `valis120` patient. If
-  it is 10 for `valis_mirage` at every rung, a Java heap error there repeats on all four
-  rungs; that is a defect of the pipeline (`bin/utils/valis_config.py::init_jvm`), not
-  of this benchmark, and it is the owner's to rule on.
+  through `valis.slide_io.init_jvm(mem_gb=...)`. `run.json: info.jvm_max_heap_gb` is
+  the JVM's own `Runtime.maxMemory()`: read it on the first `valis120` patient.
 - **The tile submitter** (`feed_tiles.sbatch`) was run only against stand-ins. On the
   site, before the first staged run, see "What the site must allow": that a compute
   node can call `sbatch` and `squeue`, that `squeue -h -r -u $USER -o %j` prints one
@@ -3551,8 +3541,8 @@ missing the rest of the list]`). None of the following was observed:
 
 ## Caveats that travel with the results
 
-1. **Whose settings.** STARE's settings and the pipeline's VALIS settings were chosen by the
-   authors on this cohort with this metric: `stare` and `valis_mirage` are in-sample, and
+1. **Whose settings.** STARE's settings were chosen by its
+   authors on this cohort with this metric: `stare` is in-sample, and
    the caption of the cohort's tables in `summary.md` says so above the numbers
    (`score.IN_SAMPLE`). The other methods were NOT tuned on it, but
    "package defaults" describes only some of them: three primary rows are not a default.
@@ -3597,8 +3587,9 @@ missing the rest of the list]`). None of the following was observed:
 12. **Compute-all is at the shipped defaults and may differ from the site's production
    settings.** The full-pipeline cost (`pipeline_cost*.csv`, secondary) runs the pipeline
    with `seg_method=stardist` and `pixel_size=0.325` (rulings) and everything else at the
-   shipped defaults and the site profile; registration is at the shipped tier
-   `memory_mode='high'` unless the site profile overrides it. A site that runs production
+   shipped defaults and the site profile; registration is at the shipped STARE tier
+   `reg_tiled_mode='high'`, and VALIS at valis-wsi 1.2.0's own defaults, unless the site
+   profile overrides them. A site that runs production
    at another tier, another segmenter or another resource profile has another cost. The
    `all` row's wall time is a sum over patients that includes SLURM queue time, and the
    realtime-based CPU-h does not; the two clocks are never added.
@@ -3731,10 +3722,11 @@ Selfcheck per stride (2026-10-09, macOS arm64, `--opt workers=4`, `stare` 1.2.1)
 | 256 | 2048 x 2560 | 539 / 539 | 0.058 / 0.089 | -0.001 / +0.001 | 0.098 (20 blocks) | 0.021 |
 | 256 | 4096 x 5120 | 2200 / 2200 | 0.056 / 0.089 | -0.001 / 0.000 | 0.103 (80 blocks) | 0.022 |
 
-### VALIS (`methods/valis_mirage.py`, `methods/valis.py`, `methods/_valis_points.py`)
+### VALIS (`methods/valis.py`, `methods/_valis_points.py`)
 
-**Never run with VALIS.** Both adapters were written from the PyPI sdists
-`valis-wsi==1.0.0` and `==1.2.0` `[PARTIAL: registration.py (Slide's crop, field getters
+**Never run with VALIS.** The adapter was written from the PyPI sdist `valis-wsi==1.2.0`
+(beside `==1.0.0`, read for the retired `valis_mirage` adapter, whose readings stay
+below) `[PARTIAL: registration.py (Slide's crop, field getters
 and warp functions, Valis.__init__, non_rigid_register, register, register_micro,
 warp_and_save_slides), warp_tools.py (warp_img, the point functions), slide_tools.warp_slide;
 the registrars, slide_io and libvips were not read]` and tested against a recording
@@ -3742,14 +3734,13 @@ stand-in (`tests/regbench/fake_valis.py`). Everything in this section about VALI
 behaviour is a reading of that source; the selfcheck inside each VALIS image is what
 tests it.
 
-**Three rows, one patient per run** (`run --group`, `selfcheck`). For VALIS 1.2.0,
+**Two runs, one patient per run** (`run --group`, `selfcheck`). For VALIS 1.2.0,
 `valis120` is upstream's default setting and `valis120_hires` upstream's high-resolution
 example; both run, and `valis120_hires` is the primary row by the user's ruling of
 2026-10-11 (`variants.PRIMARY_VALIS120`):
 
 | run | call | what the benchmark sets |
 |---|---|---|
-| `--method valis_mirage` | `bin/register.py::valis_registration`, the function the pipeline's REGISTER runs, with `valis_mirage.ARGS` (= `nextflow.config`'s defaults: `memory_mode` high, micro fraction 0.125, `max_image_dim_px` 4000, `micro_reg` 2). `align_to_reference=True`, `crop="reference"`, SuperPoint + SuperGlue and the micro-rigid registrar are inside that function | the folder, the reference's file name, `n_cpus` = the allocation, `jvm_heap_gb` = `min(32 + 16 x attempt, GiB - 4)`, attempt being the pipeline's own attempt for that memory (REGISTER asks `64 GB x 2^(attempt-1)`; the module's formula: 12, 48, 80, 96, 96 GiB on the five rungs), `stage_checkpoint_dir=None` (files only) |
 | `--method valis --label valis120` | `Valis(src, dst, img_list=..., reference_img_f=...)`, `.register()` (the row `valis120`: upstream's default), then `.register_micro()` with no argument (the row `valis120_micro`: upstream's optional extra step) | the reference slide; also `img_list`, the slides already placed in `src`, which upstream's basic example does not pass. `align_to_reference` stays `False` |
 | `--method valis --label valis120_hires --opt hires=1` | upstream's high-resolution example (`docs/examples.rst:122-149` at v1.2.0 `[PARTIAL: lines 100-175]`): `micro_rigid_registrar_cls=MicroRigidRegistrar`, then `register_micro(max_non_rigid_registration_dim_px=floor(0.25 x the smallest slide's longest side))` | the reference slide. The label and the option must come together or the run is refused |
 
@@ -3770,42 +3761,20 @@ header says two flags are set (three are: `-o`, `-c`, `-m 15` = the default, plu
 says the tiles carry a stage error (regbench adds none, and noise only to the reference
 cycle's tiles when `noise_frac > 0`). None of these changes what any method computes.
 
-**The pipeline's VALIS at three tiers x micro-registration depth 0, 1, 2** (Plan F, the
-paper's tier / micro table). `--opt memory_mode=<high|medium|low>` and
-`--opt micro_reg=<0|1|2>` (unset: `high` and 2) go into the call through
-`valis_mirage.call_args`, which changes those two values of `ARGS` and nothing else, as
-the pipeline's own tier moves `--memory-mode` alone (`modules/local/register.nf`). The
-tier picks a row of `bin/utils/valis_config.py` `MEMORY_PRESETS`: processed / non-rigid
-size `high` 2048 / 2048, `medium` 1024 / 1024, `low` 512 / 512 px. `max_image_dim_px`
-4000, the micro fraction 0.125, the keypoint ceiling, the JVM heap formula and the
-pipeline's REGISTER allocation are the same at every tier. The depth is
-`bin/register.py`'s `micro_reg` (`bin/register.py:253-257`): 0 is neither micro pass,
-**1 is micro-RIGID only** (the `MicroRigidRegistrar` inside `register()`), and 2 adds the
-micro non-rigid pass (`register_micro`). A non-rigid `micro` stage exists only at depth 2,
-so at depth 0 and 1 the `_nonrigid` row and the final row are the same transform, and at
-depth 0 the `_rigid` row is the affine alone. `run.json: info.implementation` records
-`tier`, `micro_reg` and `stages` (`valis_mirage.STAGES_AT_DEPTH`). The runs are
-`valis_mirage` (`high`, 2: the shipped call, unchanged) and eight more,
-`valis_mirage_<tier>_m<depth>` (`variants._valis_mirage_runs`), each writing
-`<label>_rigid`, `<label>_nonrigid` and `<label>`, checked by `valis_mirage`'s selfcheck,
-with no realcheck (only the primary row has one). A label of that form must agree with
-the two options, or the run is refused. Each is one job per patient on the ladder, at 4
-CPUs.
+**The pipeline's tuned VALIS is not a row any more.** The `valis_mirage` row (VALIS 1.0.0
+through `bin/register.py::valis_registration`, nine runs: the pipeline's three
+`memory_mode` tiers x micro-registration depth 0, 1, 2) was retired on 2026-11-05 with that
+configuration; its adapter, its tests and its image (`containers/valis100`) are at the git tag
+`archive/regbench-valis-mirage`, the pipeline configuration at `archive/valis-mirage-tuned`.
 
 **Memory failures, and the heap.** `Valis.register()` catches its own exception, prints
 it and returns `(None, None, None)`; the adapters used to raise a fixed text, so a Java
 `OutOfMemoryError` or a NumPy memory error was `cause: exception` and VALIS never went up
-the ladder while STARE's `MemoryError` did. Both adapters now wrap `valtils.print_warning`
+the ladder while STARE's `MemoryError` did. The adapter now wraps `valtils.print_warning`
 for the duration of the call (`_valis_points.swallowed_errors`: it notes what VALIS hands
 it and calls the original with the same arguments) and put that text into the error, so a
-memory failure is `oom` and climbs. VALIS 1.0.0 also reports a failed Bio-Formats tile
-read with a bare `print(e)`, which `print_warning` never sees, so for the call stdout is
-teed (`_valis_points.printed_errors`: what it printed passes on unchanged, and up to 50
-chunks that read as a memory error are kept, 400 characters each) and that text is read
-too, also for the micro pass `bin/register.py` catches. In `valis_mirage`, a slide the
-pipeline's writer failed on keeps its reason as `writer` (`writer_oom` on memory), and a
-failure of the benchmark's own capture (the crop probe, the field load) is `benchmark`
-(`benchmark_oom`), not the method's `exception`; the same holds for `valis120`'s capture.
+memory failure is `oom` and climbs. A failure of the benchmark's own capture (the crop
+probe, the field load) is `benchmark` (`benchmark_oom`), not the method's `exception`.
 
 - `valis120`, `valis120_hires`: the JVM is started by the adapter through VALIS's own
   `slide_io.init_jvm(mem_gb=...)` before `Valis(...)` is built, with
@@ -3818,19 +3787,6 @@ failure of the benchmark's own capture (the crop probe, the field load) is `benc
   really had is in the tables as the JVM reported it: `jvm_max_heap_gb` beside
   `jvm_heap_asked_gb` in `resources.csv` and `summary_resources.csv`, and one line above
   the resources table of `summary.md` per row of a JVM method.
-- `valis_mirage`: the pipeline's call is run as it is, with `jvm_heap_gb` from the same
-  formula. Whether that value reaches the JVM is recorded, not assumed
-  (`info.jvm_max_heap_gb`, column `jvm_max_heap_gb`; "Not verified"): where the column
-  reads 10 while `jvm_heap_asked_gb` reads more, the request did not arrive, and the
-  row ran with VALIS's own 10 GB.
-- `valis_mirage`'s micro pass: `bin/register.py` catches ANY exception of
-  `register_micro` and writes the non-rigid result. When that exception is a memory
-  error the `valis_mirage` row is FAILED with `cause: oom` and the patient goes up a
-  rung, instead of being kept with a `problem`: the row's name is the full method, every
-  other method's memory failure is retried with more memory, and a cheaper stage under
-  the full method's name would misdescribe the method and flatter its cost. The
-  `valis_mirage_nonrigid` row still holds that stage. A micro pass that fails for another
-  reason is kept as the pipeline ships it, with `problem`.
 
 **Which file each row reads.** The patient's ORIGINAL multichannel slides
 (`case.ref_image`, every round's `case.mov_image`), hard-linked under their own names
@@ -3875,28 +3831,18 @@ function that moves a point is VALIS's own.
 
 | variant | what it is | image |
 |---|---|---|
-| `valis_mirage_rigid` | the matrix after the pipeline's micro-rigid refinement, no field | selfcheck only |
-| `valis_mirage_nonrigid` | the field as it stood when the pipeline called `register_micro` | selfcheck only |
-| `valis_mirage` | the final transform | always: the file the pipeline's function wrote |
 | `valis120_rigid` / `valis120_hires_rigid` | the matrix (after micro-rigid for hires) | selfcheck only |
 | `valis120` / `valis120_hires_nonrigid` | after `register()` | always, written BEFORE `register_micro` rewrites the fields |
 | `valis120_micro` / `valis120_hires` | after `register_micro()` | always |
 
-- `valis_mirage` captures its stages inside the one call through three wrappers
-  (`Valis.register`, `Valis.register_micro`, `Slide.warp_and_save_slide`) that copy
-  matrices and fields out, pause the clock around the writer, and change no argument and
-  no result. `register_micro`'s wrapper always calls the original.
 - A written image has the reference slide's size and is on its grid: **no `origin_xy`**.
   Pixels the moving slide does not cover are **filled** with the slide's background colour
   (the value of its darkest pixel; zero when the writer is given another path), so the
   native record carries **`valid_box`**: the bounding box of the lattice points the map
   sends inside the moving slide, grown by one step.
-- Cost: `valis120`'s three results are billed at their own yields. All three
-  `valis_mirage` results carry the cost of the whole call; `info.cost_after_register` is
-  the bill when `Valis.register()` returned. The writer is never billed.
-- CPUs: nothing is exported. `valis_mirage` passes the allocation as `n_cpus`, which the
-  pipeline's `bound_cpu_count` turns into `multiprocessing.cpu_count()` (VALIS 1.0.0's
-  pools use that minus one). VALIS 1.2.0 has no option and takes the affinity mask minus
+- Cost: `valis120`'s three results are billed at their own yields. The writer is never
+  billed.
+- CPUs: nothing is exported. VALIS 1.2.0 has no option and takes the affinity mask minus
   one. `info.workers_seen` is what VALIS saw.
 - `info` also records: `micro_ran` (and `problem` when the micro pass did not run),
   `repair_fired`, the µm per pixel of the rigid image and of the field
@@ -3908,8 +3854,7 @@ function that moves a point is VALIS's own.
 pair with an overhanging moving slide, and one patient of three slides: see "selfcheck")
 and on 24000 x 30000 against 23000 x 29000. On the small pair `valis120_hires`'s micro pass
 cannot run (its size, 640 px, is under the first pass's 2048 px, and 1.2.0 returns
-early: `registration.py:4862-4871`), and the pipeline's runs on a coarser grid than the
-first pass; on the large pair all three micro passes run and the first field is applied
+early: `registration.py:4862-4871`); on the large pair both micro passes run and the first field is applied
 at 14x. Not reached by any pair: stored (tiled) fields, which need more than 10 GB of
 images at registration size. That path, and field scales of 29x, are first exercised by
 the realcheck on a cohort patient.
@@ -3918,8 +3863,6 @@ the realcheck on a cohort patient.
 `selfcheck [<variant>]: ok` for all three variants of the row):
 
 ```bash
-# the pipeline's VALIS image (valis-wsi 1.0.0)
-python -m benchmarks.regbench selfcheck --method valis_mirage --work W/valis_mirage
 # the VALIS 1.2.0 image
 python -m benchmarks.regbench selfcheck --method valis --label valis120 --work W/valis120
 python -m benchmarks.regbench selfcheck --method valis --label valis120_hires --opt hires=1 \
@@ -4540,10 +4483,9 @@ bookkeeping (its reader's levels and chunks, the affine's rescaling, the block m
 and draws the image block by block the way `block_affine.py` is written to. `test_dhr_adapter.py` runs the DeeperHistReg adapter
 against `fake_dhr.py`, a stand-in that records every call, keeps the package's bookkeeping
 (pads, resample ratio, field size, its swallowed exception) and draws the warped image the
-way the package's writer and libvips are written to. `test_valis_adapters.py` runs both VALIS adapters against
+way the package's writer and libvips are written to. `test_valis_adapters.py` runs the VALIS adapter against
 `fake_valis.py`, a stand-in that records every call and draws images the way VALIS's
-writer is written to; for `valis_mirage` it executes the real `bin/register.py` on that
-stand-in, in a fresh process.
+writer is written to.
 `test_ashlar_adapter.py` runs the ASHLAR adapter against `fake_ashlar.py`, the same kind of
 stand-in (ASHLAR's reader, positions and paste rule transcribed from its source at
 v1.20.0); the one test that needs ASHLAR itself is in `test_external_methods.py`.

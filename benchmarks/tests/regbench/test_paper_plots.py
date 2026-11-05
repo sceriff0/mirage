@@ -10,7 +10,7 @@ pytest.importorskip("matplotlib")
 
 from benchmarks.regbench.paper import plots, schema, tables  # noqa: E402
 
-FAMILY = {"stare": "stare", "stare_medium": "stare", "valis_mirage": "valis_mirage",
+FAMILY = {"stare": "stare", "stare_medium": "stare", "valis120_hires": "valis120",
           "ashlar": "ashlar", "ashlar_clean": "ashlar", "initial": None}
 PATIENTS = [f"P{i}" for i in range(5)]
 CASES = [(p, f"{p}_r{k}") for p in PATIENTS for k in (1, 2)]
@@ -33,7 +33,7 @@ def paper(tmp_path, monkeypatch):
     d = tmp_path / "paper"
     d.mkdir()
     pp = []
-    level = {"stare": 0.9, "stare_medium": 0.8, "valis_mirage": 0.7, "ashlar": 0.5, "ashlar_clean": 0.6}
+    level = {"stare": 0.9, "stare_medium": 0.8, "valis120_hires": 0.7, "ashlar": 0.5, "ashlar_clean": 0.6}
     for row, base in level.items():
         for i, (p, c) in enumerate(CASES):
             dice = base - 0.01 * i
@@ -48,7 +48,7 @@ def paper(tmp_path, monkeypatch):
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="stare",
                          best_row="stare"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex",
-                         family="valis_mirage", best_row="valis_mirage"),
+                         family="valis120", best_row="valis120_hires"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="ashlar",
                          best_row="ashlar_clean"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="palom",
@@ -60,17 +60,6 @@ def paper(tmp_path, monkeypatch):
                          row="stare", which="best", peak_rss_unit="per task (largest job)",
                          device="cpu"),
     ])
-    vs = []
-    for tier, depth in (("high", 2), ("low", 0)):
-        row = f"valis_{tier}"
-        for stage in plots.STAGES:
-            has = stage in ("initial", "nonrigid") or (stage == "micro" and depth == 2) \
-                or (stage == "rigid" and depth == 0) or (stage == "micro_rigid" and depth >= 1)
-            vs.append(schema.empty_row("valis_stages", source="regbench", dataset="multiplex",
-                                       row=row, memory_mode=tier, micro_reg=str(depth), stage=stage,
-                                       stage_row=("x" if has else None),
-                                       dice_med=0.5 if has else None, n_pairs=10))
-    schema.write(d / "valis_stages.csv", "valis_stages", vs)
     schema.write(d / "stare_tiers.csv", "stare_tiers", [
         schema.empty_row("stare_tiers", source="regbench", dataset="multiplex", row="stare",
                          tier="high", stride=64, sprep="none"),
@@ -78,7 +67,7 @@ def paper(tmp_path, monkeypatch):
                          tier="medium", stride=64, sprep="none"),
     ])
     cost = []
-    for row, fam in (("stare", "stare"), ("valis_mirage", "valis_mirage"), ("ashlar_clean", "ashlar")):
+    for row, fam in (("stare", "stare"), ("valis120_hires", "valis120"), ("ashlar_clean", "ashlar")):
         for i, p in enumerate(PATIENTS):
             cost.append(schema.empty_row("cost_points", source="regbench", dataset="multiplex",
                                          family=fam, row=row, unit_kind="patient", unit_id=p,
@@ -129,7 +118,7 @@ def test_all_variants_has_more_boxes_than_best(paper):
     every = plots.PLOTS["fig3b_dice_all"](paper, figs)
     rows = lambda res: {r["row"] for r in _source(res, "")}  # noqa: E731
     assert len(rows(every)) > len(rows(best))
-    assert rows(best) == {"stare", "valis_mirage", "ashlar_clean"}
+    assert rows(best) == {"stare", "valis120_hires", "ashlar_clean"}
 
 
 def test_a_family_with_no_rows_is_absent_but_counted_zero(paper):
@@ -160,14 +149,6 @@ def test_an_excluded_row_never_enters(paper):
         w.writerows({k: ("NA" if v is None else v) for k, v in r.items()} for r in rows)
     res = plots.PLOTS["fig3b_dice_best"](paper, paper / "figures")
     assert res["n"]["stare"] == 9
-
-
-def test_valis_stage_a_run_lacks_is_a_gap_not_a_point(paper):
-    res = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
-    rows = _source(res, "")
-    low = {r["stage"]: r["dice_med"] for r in rows if r["row"] == "valis_low"}
-    assert low["micro"] in ("", "NA", "nan") and low["micro_rigid"] in ("", "NA", "nan")
-    assert low["rigid"] not in ("", "NA", "nan")
 
 
 def test_colours_are_locked_across_figures(paper):

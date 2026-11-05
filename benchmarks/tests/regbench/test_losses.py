@@ -355,7 +355,7 @@ def test_six_kinds_of_loss_are_six_rows_and_nothing_else_moves(
     path.write_text(json.dumps(rec))
     # 6. a run the launcher dropped at its preflight
     (out / "submit_dropped.csv").write_text(
-        "run,reason,detail\nvalis_mirage,preflight_failed,the image would not start\n"
+        "run,reason,detail\nvalis120,preflight_failed,the image would not start\n"
     )
     got = run(root, out)
     assert got["n_scored_cases"] == 3
@@ -518,7 +518,7 @@ def test_run_level_rows_are_the_cohorts_and_losses_run_csv_only(cohort, tmp_path
     root, out = copy_of(cohort, tmp_path)
     _public_case(root, out)
     (out / "submit_dropped.csv").write_text(
-        "run,reason,detail\nvalis_mirage,preflight_failed,no start\n"
+        "run,reason,detail\nvalis120,preflight_failed,no start\n"
     )
     score_mod.score(root, out, ["multiplex", "nucset"], with_tissue=False, **KW)
     cohort_rows = [r for r in losses_of(out) if r["cause"] == "preflight_failed"]
