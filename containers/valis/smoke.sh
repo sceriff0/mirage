@@ -39,9 +39,8 @@ as_user "$PY" -c "import sys; print('python', sys.version.split()[0], 'at', sys.
 
 # 2. UPSTREAM'S STACK IS UPSTREAM'S, line for line: this image adds no Python package.
 "$PY" -m pip freeze --all | grep -E '^[A-Za-z0-9._-]+==[^ ]+$' | LC_ALL=C sort > "$SCRATCH/now.txt"
-if ! LC_ALL=C cmp -s /opt/mirage/upstream-freeze.txt "$SCRATCH/now.txt"; then
-  echo "the Python stack differs from upstream's freeze:" >&2
-  LC_ALL=C diff /opt/mirage/upstream-freeze.txt "$SCRATCH/now.txt" >&2 || true
+if ! LC_ALL=C diff /opt/mirage/upstream-freeze.txt "$SCRATCH/now.txt" >&2; then
+  echo "the Python stack differs from upstream's freeze (diff above)" >&2
   exit 1
 fi
 echo "upstream's $(wc -l < /opt/mirage/upstream-freeze.txt) pinned distributions are untouched"
