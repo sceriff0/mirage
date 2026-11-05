@@ -9,28 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- **STARE has no cost tiers any more: `reg_tiled_mode` is gone.** STARE runs one default
-  configuration, the former `high` row, now the plain defaults of its four knobs in
-  `nextflow.config`: `reg_tiled_tile` 2048, `reg_tiled_halo` 256, `reg_tiled_out_tile` 1024,
-  `reg_tiled_coarse_max_dim` 1024. A default run is unchanged: the same rendered commands and
-  the same memory requests (TILED_COARSE 2 GB, TILED_REG_TILE 4 GB, TILED_SOLVE 1 GB with
-  `--max-disp 256`, TILED_STITCH 4 GB, at attempt 1). Each knob can now be set directly,
-  without `custom`. `RegPresets.STARE`, `STARE_KEYS`, `STARE_PARAM_OF` and
-  `RegPresets.stare()` are removed, and `conf/modules.config` no longer inlines the tier
-  table. A run that still passes `reg_tiled_mode` (command line, `-params-file`, profile) is
-  **refused at launch** when the value is `medium`, `low` or `custom`, with the four knob
-  values of the retired row in the message (medium 1024/192/768/1024, low 512/128/512/512),
-  so an old `--reg_tiled_mode low` cannot silently run the high values. `high` only logs a
-  warning, since it is what runs anyway. VALIS's `memory_mode` tiers are unchanged.
+- **STARE has no cost tiers any more: `reg_tiled_mode` is gone, and so is
+  `lib/RegPresets.groovy`.** STARE runs one default configuration, the former `high` row, now
+  the plain defaults of its four knobs in `nextflow.config`: `reg_tiled_tile` 2048,
+  `reg_tiled_halo` 256, `reg_tiled_out_tile` 1024, `reg_tiled_coarse_max_dim` 1024. A default
+  run is unchanged: the same rendered commands and the same memory requests at attempt 1
+  (TILED_COARSE 2 GB, TILED_REG_TILE 4 GB, TILED_SOLVE 2 GB with `--max-disp 256`,
+  TILED_STITCH 4 GB; measured from a stub trace before and after). Each knob can now be set
+  directly, without `custom`. With VALIS already tier-free (valis-wsi 1.2.0 at its defaults),
+  `RegPresets` held nothing and is deleted, `conf/modules.config` no longer inlines a tier
+  table, and `ParamUtils.validateRegPresets` is `validateStareKnobs`: the per-knob-override
+  check had nothing left to check, and only COARSE's 256 px floor remains.
+  `tests/test_reg_presets_inlined_in_config.py` (which pinned the inlined copies to the table)
+  is replaced by `tests/test_stare_has_no_tiers.py`. A run that still passes `reg_tiled_mode`
+  (command line, `-params-file`, profile) is **refused at launch** when the value is `medium`,
+  `low` or `custom`, with the four knob values of the retired row in the message (medium
+  1024/192/768/1024, low 512/128/512/512), so an old `--reg_tiled_mode low` cannot silently
+  run the high values. `high` only logs a warning, since it is what runs anyway.
 
 ### Changed
 
-- **REGISTER gives VALIS's JVM VALIS's own 10 GiB heap at every attempt** (was
-  `32 + 16 × attempt`, capped at `task.memory - 4`). The heap no longer climbs with the
-  retry ramp; `REGISTER`'s memory still does. `reg_jvm_heap_gb` still overrides it (the
-  `tma` profile pins 16). VALIS 1.0.0's `registration.init_jvm` passes the literal 10 on to
-  `slide_io.init_jvm` whatever it is given, so the scaled value may never have reached the
-  JVM. Guarded by `tests/test_jvm_heap_contract.py`.
+- **STARE is pinned to stare-registration v1.3.0 (was v1.2.1)**, the version the manuscript and
+  the benchmark ran. 1.3.0 adds an optional `--prep` (default `none`) and a `mosaic` stage; the
+  default COARSE/REG_TILE path is unchanged. The `containers/stare` image must be rebuilt.
+- **STARE (`tiled`) is the default registration method (was `valis`).** It is the method
+  used for the cohort and the one the manuscript describes as the default. VALIS stays
+  available with `--registration_method valis`. The `full_pipeline` and `registration_only`
+  presets follow the default. `conf/test.config` pins `valis`, so the stub snapshots do not
+  move; the `shipped_defaults_test` profile runs the STARE default.
+- **VALIS registration runs valis-wsi 1.2.0 at its defaults, and has no settings any more.**
+  `REGISTER` now makes the benchmark's `valis120` call: `Valis()` given the patient's slides
+  and the reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px),
+  `align_to_reference` at its default `False`, VALIS's own detector and matcher, no
+  micro-registration, every slide warped in the reference frame. The one non-default argument
+  is the registration channel: the nuclear channel is passed by index 0 instead of VALIS's
+  fuzzy name match on `"dapi"`, which a decoy name such as `DAPI_x` could win. **Removed:**
+  `memory_mode`, `reg_valis_max_processed_dim`, `reg_valis_max_non_rigid_dim`,
+  `reg_valis_max_keypoints`, `reg_micro_reg`, `reg_micro_reg_fraction`, `reg_max_image_dim`,
+  and the `tma` profile. Passing any of them is now refused at launch as an unrecognised
+  parameter. The Bio-Formats JVM heap is a fixed 10 GB at every attempt (VALIS's own value;
+  `reg_jvm_heap_gb` still overrides it), and `register.py` starts the JVM through
+  `slide_io.init_jvm` because 1.2.0's `registration.init_jvm` ignores the size it is given.
+  The pyramid-level -1 reader clamp stays: the defect is still in 1.2.0. Staged registration QC
+  scores `native`, `rigid` and `non_rigid` (there is no micro stage). Results are not comparable
+  with registrations made by the old configuration, which is archived at the git tag
+  `archive/valis-mirage-tuned`.
+- **New image `bolt3x/mirage-valis:1.0.0` (`containers/valis`) for `REGISTER` and
+  `WARP_SEG_QC`'s VALIS path.** It is upstream's `cdgatenbee/valis-wsi:1.2.0`, digest-pinned,
+  with only the four fixes a non-root user needs under Apptainer (Python under a 0700 `/root`,
+  the Bio-Formats jar and the weights where another user finds them, a writable
+  `bf_formats.txt`). No Python package is added or moved. Both processes run with
+  `--writable-tmpfs` under Singularity/Apptainer. **The image must be published
+  (`containers.yml` workflow_dispatch) before a real VALIS run.**
+- **`TILED_SOLVE` asks 2 GB on its first attempt (was 1 GB).** The slide-wide solve peaked at
+  0.19-1.20 GB per round pair on the regbench cohort, so a cohort-sized solve used to OOM once
+  and pass only on the 2 GB retry.
+- **StarDist is the default segmentation backend, with its trained model fetched from the
+  Hugging Face Hub.** `seg_method` defaults to `stardist` (was `instantseg`), and
+  `segmentation_model` defaults to `hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df`.
+  This is the model used for the cohort runs. `bin/segment.py` downloads its `config.json`,
+  `thresholds.json` and `weights_best.h5` on first use, into `segmentation_model_dir` when set
+  and into the task directory otherwise. A copy already in `segmentation_model_dir` is used
+  without network access, which is the route for air-gapped clusters. `HF_ENDPOINT` selects a
+  mirror. The reference must name a 40-hex commit: a branch such as `@main` is refused,
+  because the weights behind it can change. A plain `segmentation_model` name still means a
+  folder under `segmentation_model_dir` or a StarDist built-in. `conf/test.config` keeps the
+  built-in `2D_versatile_fluo`, so CI does not run the shipped weights.
 - **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
   on each axis: one displacement vector every 64 px from a 128 px window. That is four
   times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows
@@ -50,6 +94,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`reg_valis_mode`: VALIS gets exactly two options, `default` and `hires`, both VALIS's
+  own.** `default` (the default) is unchanged: `register()` at valis-wsi 1.2.0's defaults,
+  the same rendered command. `hires` is valis-wsi 1.2.0's high-resolution example
+  (`docs/examples.rst`), as shipped and as the benchmark's `valis120_hires` row runs it:
+  `micro_rigid_registrar_cls=MicroRigidRegistrar` in `Valis(...)`, `register()`, then
+  `register_micro(max_non_rigid_registration_dim_px=floor(0.25 × the smallest slide's
+  longest side))`. The registration channel (index 0) and the `crop="reference"` warp are
+  the same as at `default`; the channel is also passed to `register_micro`, which would
+  otherwise pick its own by VALIS's name match on "dapi". VALIS 1.2.0's known micro-pass
+  defect is NOT fixed (ruling 2026-11-05). `REGISTER` asks **128 GB** on its first attempt
+  under `hires` (128 → 256 → 512 → 1024 GB; `default` keeps 64 → 512): measured peak RSS
+  on the 8-case regbench cohort at 4 CPUs was median 81.7 / max 106.4 GB for hires
+  against 31.6 / 51.4 GB for the default. Staged registration QC (`reg_qc = 2`) gets its
+  `micro` stage back under `hires`: the checkpoint is taken after `register()` and before
+  `register_micro()` (and corrected if `register_micro` was a no-op, as on slides under
+  8192 px a side), so `non_rigid` is the pre-micro field and `micro` the final one, and
+  `WARP_SEG_QC` records `micro_reg: 2`; the pre-micro VALIS error summary is saved as
+  `*_summary_premicro.csv` for the QC report.
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
   now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
   samplesheet validator, called from `workflows/mirage.nf` before any process is

@@ -113,8 +113,8 @@
             "properties": {
                 "registration_method": {
                     "type": "string",
-                    "description": "Registration backend: 'valis' (VALIS graph-based whole-slide) or 'tiled' (STARE: JVM-free, internally tiled, fully parallel). See lib/ParamUtils.groovy.",
-                    "default": "valis",
+                    "description": "Registration backend: 'tiled' (STARE: JVM-free, internally tiled, fully parallel; the default) or 'valis' (VALIS graph-based whole-slide). See lib/ParamUtils.groovy.",
+                    "default": "tiled",
                     "enum": [
                         "valis",
                         "tiled"
@@ -172,59 +172,13 @@
                     "minimum": 0.1,
                     "maximum": 10
                 },
-                "reg_micro_reg_fraction": {
-                    "type": "number",
-                    "description": "Fraction for micro registration.",
-                    "default": 0.125
-                },
-                "reg_max_image_dim": {
-                    "type": "integer",
-                    "description": "Maximum image dimension for registration.",
-                    "default": 4000
-                },
-                "memory_mode": {
+                "reg_valis_mode": {
                     "type": "string",
-                    "description": "VALIS cost/accuracy tier. Table: bin/utils/valis_config.py MEMORY_PRESETS. 'custom' starts from 'high' and applies the reg_valis_* overrides you set.",
-                    "default": "high",
+                    "default": "default",
+                    "description": "VALIS's own configuration: 'default' = register() at valis-wsi 1.2.0's defaults; 'hires' = valis-wsi 1.2.0's high-resolution example as shipped (MicroRigidRegistrar, then register_micro at floor(0.25 x the smallest slide's longest side)). REGISTER asks 128 GB on its first attempt under hires.",
                     "enum": [
-                        "high",
-                        "medium",
-                        "low",
-                        "custom"
-                    ]
-                },
-                "reg_valis_max_processed_dim": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "VALIS feature detection/matching working size (px). null = from memory_mode. Only legal with memory_mode=custom."
-                },
-                "reg_valis_max_non_rigid_dim": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "VALIS non-rigid registration size (px). null = from memory_mode. Only legal with memory_mode=custom. Must be smaller than the full resolution of every slide: VALIS 1.0.0-1.2.0 reads a slide no larger than this at pyramid level -1 and kills its JVM (its own clamp does not prevent it), so REGISTER refuses such input at start. Lower it below the smallest slide on small-format input such as TMA cores, with a margin."
-                },
-                "reg_valis_max_keypoints": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "Keypoints kept per image for SuperPoint detection and SuperGlue matching in REGISTER. null = VALIS's own 20000. SuperGlue's cost is quadratic in this; the tma profile lowers it to 2000. Lowering it changes which matches exist, so registrations at different values are not comparable."
-                },
-                "reg_micro_reg": {
-                    "type": "integer",
-                    "description": "Micro-registration depth (nested, default 2): 0=none, 1=micro-rigid only (refines slide.M), 2=+micro non-rigid (register_micro) [default].",
-                    "default": 2,
-                    "enum": [
-                        0,
-                        1,
-                        2
+                        "default",
+                        "hires"
                     ]
                 },
                 "reg_jvm_heap_gb": {
@@ -232,7 +186,7 @@
                         "integer",
                         "null"
                     ],
-                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = VALIS's own 10 GiB at every attempt, clamped to task.memory - 4.",
+                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = a fixed 10 GB (VALIS's own value), capped at task.memory - 4 GB.",
                     "default": null,
                     "minimum": 1
                 },
@@ -323,21 +277,21 @@
                 },
                 "segmentation_model": {
                     "type": "string",
-                    "description": "Name of the segmentation model.",
-                    "default": "stardist_full_e200_lr00001_aug1_seed10_es50p0.001_rlr0.5p50"
+                    "description": "StarDist model: a pinned Hugging Face snapshot 'hf://<owner>/<repo>@<40-hex commit>' (default, downloaded on first use), a model folder name under segmentation_model_dir, or a StarDist built-in.",
+                    "default": "hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df"
                 },
                 "segmentation_model_dir": {
                     "type": [
                         "string",
                         "null"
                     ],
-                    "description": "Directory containing segmentation models.",
+                    "description": "Directory containing StarDist models; for an hf:// segmentation_model, the download cache (a model already there is used without network access).",
                     "default": null
                 },
                 "seg_method": {
                     "type": "string",
-                    "description": "Segmentation backend to use. 'instantseg' (default) runs without extra assets; 'stardist' requires a trained model via segmentation_model_dir unless segmentation_model names a StarDist built-in.",
-                    "default": "instantseg",
+                    "description": "Segmentation backend to use. 'stardist' (default) uses the pinned Hugging Face model of segmentation_model; 'instantseg' needs no trained model; 'cellsam' needs DeepCell weights.",
+                    "default": "stardist",
                     "enum": [
                         "stardist",
                         "instantseg",

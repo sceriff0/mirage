@@ -72,15 +72,15 @@ owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
 
 ## Registration
 
-Two backends, selected by `--registration_method`: **VALIS** (default, graph-based
-whole-slide alignment) and **STARE tiled** (JVM-free, fully parallel). STARE is **not**
-laptop-sized at its default configuration — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
+Two backends, selected by `--registration_method`: **STARE tiled** (default; JVM-free, fully
+parallel) and **VALIS** (graph-based whole-slide alignment). Every STARE task asks 2–4 GB at the
+defaults — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
 
 ### Common
 
 | Parameter | Default | Description |
 |---|---|---|
-| `registration_method` | `valis` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (STARE — see [Tiled / STARE](#tiled-stare-registration_methodtiled)). |
+| `registration_method` | `tiled` | Registration backend: `valis` (VALIS whole-slide) or `tiled` (STARE — see [Tiled / STARE](#tiled-stare-registration_methodtiled)). |
 | `nuclear_markers` | `['DAPI','CELLTOX']` | Ordered preference of nuclear/fiducial marker names. The first present (resolved from channel metadata, never the filename) is moved to channel 0 and drives both cell segmentation and the registration fiducial. Fails fast if none present (single-channel images excepted). Accepts a **list** (config or `-params-file`) or a **comma/space-separated string**, which is the only shape a command line can produce: `--nuclear_markers CELLTOX` and `--nuclear_markers DAPI,CELLTOX` both work. Matching is case-insensitive **substring**, so `DAPI_nuclear` counts as nuclear. |
 
 !!! warning "The reference is declared, never inferred"
@@ -95,22 +95,42 @@ laptop-sized at its default configuration — see the memory note under [Tiled /
 
 ### VALIS
 
+`REGISTER` runs **valis-wsi 1.2.0 at its defaults**: `Valis()` given the patient's slides and the
+reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px) with
+`align_to_reference` at its default `False` and VALIS's own feature detector and matcher, and
+every slide warped in the reference frame (bicubic, VALIS's default). No micro-registration
+runs. There are **no VALIS registration settings**. The one argument that differs from VALIS's
+default is the registration channel: VALIS matches the channel *name* `"dapi"` (falling back to
+channel 0 with a warning); the pipeline passes the nuclear channel by **index 0**, where
+conversion always puts it, so a channel named like "DAPI_x" can never be chosen instead. The
+tuned VALIS 1.0.0 configuration this replaced (`memory_mode` tiers, SuperPoint/SuperGlue,
+keypoint cap, micro-registration, `reg_max_image_dim`, the `tma` profile) is archived at the git
+tag `archive/valis-mirage-tuned`.
+
+**`reg_valis_mode hires`** swaps in VALIS's *own* other configuration, its high-resolution
+example (valis-wsi 1.2.0 `docs/examples.rst`), **as shipped**: `MicroRigidRegistrar` in the
+`Valis()` constructor, then `register_micro(max_non_rigid_registration_dim_px=micro_reg_size)`
+after `register()`, with `micro_reg_size = floor(0.25 × the smallest slide's longest side)`
+(on slides under 8192 px a side that is ≤ 2048, VALIS's own non-rigid size, and `register_micro`
+returns without registering). Everything else is as at `default`: the channel by index 0
+(passed to `register_micro` too, which otherwise matches "dapi" by name), the reference-frame
+warp. VALIS 1.2.0's known micro-pass defect (on its non-tiled path every slide's micro image is
+prepared with the *last* slide's field) is **not** fixed. It costs memory: `REGISTER` asks
+128 GB on its first attempt instead of 64 (see [Resources](resources.md)).
+
 | Parameter | Default | Description |
 |---|---|---|
-| `memory_mode` | `high` | VALIS cost/accuracy tier: `high` \| `medium` \| `low` \| `custom` (processed / non-rigid dims): `high` = 2048/2048 px, `medium` = 1024/1024 px, `low` = 512/512 px — one size per tier, used for both stages. All three use SuperPoint + SuperGlue with 5000 features — the tier changes resolution, not the feature matcher. `custom` starts from `high` and applies the `reg_valis_*` overrides below. Source: `MEMORY_PRESETS` in `bin/utils/valis_config.py`. See [Tiers](#tiers). |
-| `reg_valis_max_processed_dim` | tier (`high`: 2048) | Feature detection/matching working size (px). **Tier-owned** — only settable under `--memory_mode custom`. |
-| `reg_valis_max_non_rigid_dim` | tier (`high`: 2048) | Non-rigid registration size (px). **Tier-owned.** May exceed a slide's full resolution: VALIS then reads that slide at full resolution and upsamples it, so a value above the smallest slide costs memory and buys no detail for it (`REGISTER` logs a notice naming such slides). VALIS 1.0.0–1.2.0 asked Bio-Formats for pyramid level −1 there and killed its JVM — also for slides somewhat *larger* than this value when the tissue mask covers part of the frame — and `bin/utils/valis_preflight.py` clamps that level to 0 at the reader. |
-| `reg_valis_max_keypoints` | `null` | Keypoints kept per image for SuperPoint detection and SuperGlue matching. `null` = VALIS's own 20000, what every run has used. SuperGlue's cost is quadratic in it; the `tma` profile pins 2000. **Lowering it changes which matches exist**, so registrations at different values are not comparable. Legal under any `memory_mode`. |
-| `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
-| `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
-| `reg_micro_reg` | `2` | Micro-registration depth (nested, default `2`): `0` = none, `1` = micro-rigid only (refines `slide.M`), `2` = + micro non-rigid (`register_micro`) — default. At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
-| `reg_jvm_heap_gb` | `null` | Explicit JVM heap (GiB) for VALIS. `null` uses VALIS's own 10 GiB at every attempt (never scaled with the retry ramp), clamped to `task.memory - 4`. |
+| `reg_valis_mode` | `default` | VALIS's own configuration: `default` (`register()` at valis-wsi 1.2.0's defaults, no micro pass) or `hires` (its high-resolution example, as shipped; above). |
+| `reg_jvm_heap_gb` | `null` | Bio-Formats JVM heap (GB) for VALIS. `null` = a fixed 10 GB at every attempt, VALIS's own value. |
 | `reg_qc` | `2` | Registration QC depth: `0` = none, `1` = the [before/after DAPI overlay](registration_qc.md#the-reg_qc-1-overlay-is-a-beforeafter-pair) only, `2` = that overlay + [staged segmentation-overlap metrics](registration_qc.md). |
 
 At `reg_qc = 2` the pipeline segments each slide's DAPI on its **native** image, pairs the
 nuclei once after rigid registration, and then re-scores those same pairs after every later
-stage — so per-pair IoU and centroid residual can be attributed to `rigid`, `non_rigid` and
-`micro` individually. See [Staged registration QC](registration_qc.md) for the output schema
+stage — so per-pair IoU and centroid residual can be attributed to `rigid` and `non_rigid`
+individually. At `reg_valis_mode default` VALIS runs no micro-registration, so no `micro`
+stage is reported; at `hires` the checkpoint is taken after `register()` and before
+`register_micro()`, so `non_rigid` and `micro` are reported as separate stages (and `micro`
+is dropped again if `register_micro` turned out to be a no-op). See [Staged registration QC](registration_qc.md) for the output schema
 and how to read it.
 
 ### Tiled / STARE (`registration_method=tiled`)
@@ -132,42 +152,23 @@ asked ~48 GB at the then-default `high` tier, so sites sized for that can lower 
 | `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. (STARE v2 has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
 | `reg_tiled_stride` | `64` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. See `research/stare-optimal-design-2026-09-27.md` §2. |
 | `reg_tiled_out_tile` | `1024` | Streaming stitch write-tile size (px) — gigapixel-safe. |
-| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateRegPresets` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. |
+| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateStareKnobs` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. |
 
-### Tiers
+### No tiers
 
-**STARE has no tiers** (removed 2026-11-04): it runs one default configuration, the four
-values in the table above (the former `high` row), and each knob is set directly. A run that
-still passes `reg_tiled_mode` is refused at launch unless the value is `high` (a no-op, which
-only warns); the message gives the retired row's values to set instead — `medium`:
-`reg_tiled_tile` 1024, `reg_tiled_halo` 192, `reg_tiled_out_tile` 768,
-`reg_tiled_coarse_max_dim` 1024; `low`: 512 / 128 / 512 / 512.
-
-VALIS keeps its four values: `high` is the shipped default; `medium` and `low` trade accuracy
-for memory and wall-clock; `custom` starts from `high` and applies only the knobs you set.
+**Neither backend has cost tiers.** VALIS runs valis-wsi 1.2.0 at its defaults (see
+[VALIS](#valis)); STARE runs one default configuration, the four
+values in the table above (the former `high` row), and each knob is set directly:
 
 ```bash
 --reg_tiled_tile 4096                                  # STARE: set the knob directly
---memory_mode custom --reg_valis_max_non_rigid_dim 1024
 ```
 
-**Tissue microarrays.** The `tma` profile sets **no tier**: TMA cores register at
-`memory_mode`'s own sizes (`high`: 2048/2048 px), and `--memory_mode` / the `reg_valis_*`
-overrides work as for any input. It describes the *data*, so it composes with a site
-profile: `-profile slurm,ieo,tma`. (It used to pin `custom` + a 1024 px non-rigid size to
-dodge VALIS's pyramid-level −1 crash; that crash depends on the tissue-mask extent, so no
-size was safe, and it is now clamped at the reader instead.) It lowers `REGISTER`'s
-memory ramp from 64 → 128 → 256 → 512 GB (doubling) to 64 GB × attempt, pins `reg_valis_max_keypoints` to 2000
-(a ~2800 px core has no use for VALIS's 20000, and SuperGlue's cost is quadratic in it)
-and pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
-REGISTER's real peak — SuperGlue matching — lives; see [Resources](resources.md).
-
-Setting a VALIS tier-owned knob under any tier **other than** `custom` is rejected before the
-first process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that reports
-`--memory_mode low` while using a hand-set size would be reported under a tier it is not using,
-and the tier name is what reaches the QC report and the benchmark tables. The VALIS tier values
-live in `bin/utils/valis_config.py` (its rows hold Python objects that cannot be expressed in
-Groovy); `lib/RegPresets.groovy` holds the shared vocabulary.
+STARE's tiers (`reg_tiled_mode`) were removed on 2026-11-04. A run that still passes
+`reg_tiled_mode` is refused at launch (`ParamUtils.checkRetiredParams`) unless the value is
+`high` (a no-op, which only warns); the message gives the retired row's values to set instead —
+`medium`: `reg_tiled_tile` 1024, `reg_tiled_halo` 192, `reg_tiled_out_tile` 768,
+`reg_tiled_coarse_max_dim` 1024; `low`: 512 / 128 / 512 / 512.
 
 ## Segmentation
 
@@ -177,24 +178,26 @@ build the whole-cell mask differently, and have different prerequisites.
 
 ### Choosing a backend
 
-| | `instantseg` **(default)** | `stardist` | `cellsam` |
+| | `instantseg` | `stardist` **(default)** | `cellsam` |
 |---|---|---|---|
 | **Reads** | The full multichannel image — **channel-invariant** | One channel, hardcoded to **index 0** | One nuclear channel, **resolved by marker name** |
 | **Whole-cell mask** | Predicted natively, alongside nuclei | Expanded from nuclei by `seg_expand_distance` | Expanded from nuclei by `seg_expand_distance` |
 | **Precondition** | A writable model cache | Channel 0 **must** be a nuclear marker — otherwise the task exits 1 | A nuclear channel must exist — a negative index exits 1 |
-| **Weights** | Apache-2.0, auto-downloaded from BioImage.IO | **None ship with the repo** | **Gated** — needs `DEEPCELL_ACCESS_TOKEN` |
-| **Runs on a fresh clone?** | **Yes** | No — set `segmentation_model_dir` | No — set `cellsam_model_path` or export a token |
+| **Weights** | Apache-2.0, auto-downloaded from BioImage.IO | Trained model [`DSUnit/stardist`](https://huggingface.co/DSUnit/stardist), auto-downloaded at a pinned commit | **Gated** — needs `DEEPCELL_ACCESS_TOKEN` |
+| **Runs on a fresh clone?** | **Yes** | **Yes** (needs network on first use, or a pre-downloaded copy in `segmentation_model_dir`) | No — set `cellsam_model_path` or export a token |
 | **Container image** | `bolt3x/mirage-instanseg:1.0.0` | `bolt3x/mirage-stardist:1.0.0` | `bolt3x/mirage-cellsam:1.0.0` |
 | **Entry point** | `segment_instantseg.py` | `segment.py` | `segment_cellsam.py` |
 
-!!! tip "Why InstanSeg is the default"
-    It is the only backend that produces a mask on an unconfigured clone. The
-    shipped `segmentation_model` name is **not** a StarDist built-in, so without
-    `segmentation_model_dir` StarDist raises `FileNotFoundError`; CellSAM's
-    weights sit behind a DeepCell token. InstanSeg's are Apache-2.0 and
-    unencumbered.
+!!! tip "Why StarDist is the default"
+    It runs the trained nuclear model used for the paper's cohort, published at
+    [huggingface.co/DSUnit/stardist](https://huggingface.co/DSUnit/stardist) and
+    pinned to one commit, so every run loads the same weights. `segment.py`
+    downloads its three files (`config.json`, `thresholds.json`,
+    `weights_best.h5`) on first use; on a cluster without network access,
+    pre-download them into `<segmentation_model_dir>/DSUnit__stardist__68b94406104b/`
+    and they are used offline. A branch name instead of a commit is refused.
 
-    It is also the only one that predicts the whole-cell mask directly rather
+    InstanSeg is the only backend that predicts the whole-cell mask directly rather
     than dilating nuclei by a fixed radius — so **`seg_expand_distance` has no
     effect when InstanSeg is selected**. An unrecognised `--seg_method` is
     rejected by name at launch rather than silently running a different
@@ -209,7 +212,7 @@ These three apply to every backend.
 
 | Parameter | Default | Description |
 |---|---|---|
-| `seg_method` | `instantseg` | Backend: `instantseg`, `stardist`, or `cellsam`. The container, entry point and preconditions all follow from this one value. |
+| `seg_method` | `stardist` | Backend: `instantseg`, `stardist`, or `cellsam`. The container, entry point and preconditions all follow from this one value. |
 | `seg_gpu` | `true` | Use GPU — adds SLURM `--gres=gpu:$gpu_type` plus Docker `--gpus all` / Singularity `--nv`. Set `false` to force CPU. |
 | `seg_expand_distance` | `10` | Pixels to expand nuclei into the whole-cell mask. **StarDist and CellSAM only** — ignored by InstanSeg, which predicts cells natively. |
 
@@ -219,8 +222,8 @@ Consumes the **DAPI channel** (must be channel 0 — guaranteed upstream).
 
 | Parameter | Default | Description |
 |---|---|---|
-| `segmentation_model` | `stardist_full_e200_…` | StarDist model name. **Not a StarDist built-in** — it names a trained model that must exist under `segmentation_model_dir`. |
-| `segmentation_model_dir` | `null` | Directory holding the trained model. **Required for this backend**: with `null`, `segment.py` raises `FileNotFoundError` unless `segmentation_model` names a StarDist built-in (`2D_versatile_fluo`, `2D_versatile_he`, `2D_paper_dsb2018`, `2D_demo`). No model is bundled with the repo. |
+| `segmentation_model` | `hf://DSUnit/stardist@68b94406…` | StarDist model: a pinned Hugging Face snapshot `hf://<owner>/<repo>@<40-hex commit>` (the default; a branch name is refused), a model folder name under `segmentation_model_dir`, or a StarDist built-in (`2D_versatile_fluo`, `2D_versatile_he`, `2D_paper_dsb2018`, `2D_demo`). |
+| `segmentation_model_dir` | `null` | Directory of StarDist models. For an `hf://` model it is the download cache, and a copy already there is used without network access; with `null` the model is downloaded into each task's directory. `HF_ENDPOINT` selects a Hub mirror. |
 | `seg_pmin` | `1.0` | Lower percentile for normalization. |
 | `seg_pmax` | `99.8` | Upper percentile for normalization. |
 | `seg_n_tiles_x` | `16` | Inference tiles along X. |

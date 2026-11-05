@@ -216,17 +216,16 @@ nextflow_process {
         }
     }
 
-    test("Should omit the VALIS override flags when none are set - rendered command") {
+    test("Should run valis-wsi at its defaults: no tier, micro, keypoint or size flags - rendered command") {
 
         // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
         //
-        // The assertion with teeth is the LAST one. The override flags interpolate at column 0
-        // between two backslash-continued lines, so with no overrides an empty interpolation
-        // leaves a BLANK line mid-command -- which ends the shell command there and runs
-        // everything after it (--micro-reg, --jvm-heap-gb, the stage checkpoint) as separate
-        // commands. register.nf guards that with `?: ['']`, rendering a whitespace-only
-        // continuation instead. Nothing else in the suite would notice: the truncated command is
-        // still valid shell, and REGISTER would simply run at the wrong settings.
+        // REGISTER runs valis-wsi 1.2.0 at its defaults (2026-11-05): the rendered call carries
+        // the inputs, the JVM heap and the stage checkpoint, and NOTHING that sets VALIS. Each
+        // flag below is one the tuned configuration used to render (archive/valis-mirage-tuned);
+        // register.py no longer accepts any of them, so a reappearance would also fail the task.
+        // The one non-default VALIS argument, the registration channel (index 0), lives inside
+        // register.py and is pinned by tests/test_register_valis_defaults.py.
         tag "stub"
 
         when {
@@ -255,42 +254,52 @@ nextflow_process {
                     rendered << f.text
                 }
             }
+            def calls = rendered.collect { it.substring(it.indexOf('register.py \\')) }
+            def removed = ['--memory-mode', '--micro-reg', '--micro-reg-fraction', '--max-image-dim',
+                           '--max-processed-dim', '--max-non-rigid-dim', '--max-keypoints',
+                           '--cpus', '--interp-method']
 
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered REGISTER .command.sh found under the task work dir" },
-                { assert rendered.every { !it.contains('--max-processed-dim') },
-                    "an override flag rendered with no override set: " + rendered.join(' --- ') },
-                { assert rendered.every { !it.contains('--max-non-rigid-dim') },
-                    "an override flag rendered with no override set: " + rendered.join(' --- ') },
-                // Truncation guard. Asserting that '--micro-reg' is PRESENT does not work and
-                // was tried: a blank line breaks the shell continuation but leaves every word in
-                // the file, so the text-presence check passes against the broken render. What
-                // actually distinguishes them is the blank line itself -- a backslash-newline
-                // followed by an empty line. With the guard, that slot holds a whitespace-only
-                // continuation ('         \') instead.
-                { assert rendered.every { !it.substring(it.indexOf('register.py')).contains('\\\n\n') },
-                    "register.py invocation is truncated by a blank line at the override " +
-                    "interpolation point -- the `?: ['']` guard in register.nf is gone. Everything " +
-                    "after it runs as a SEPARATE command: " + rendered.join(' --- ') }
+                { assert calls.every { c -> removed.every { !c.contains(it + ' ') } },
+                    "a VALIS setting is rendered again: " + calls.join(' --- ') },
+                // reg_valis_mode 'default' renders nothing: the command is byte-identical to
+                // the one before the option existed (the hires case below renders the flag).
+                { assert calls.every { !it.contains('--valis-mode') },
+                    "the default mode rendered a mode flag: " + calls.join(' --- ') },
+                // REGISTER passes the STAGED path (stageAs 'ref/*' -> ref/<name>); register.py
+                // takes its basename and finds the copy under --input-dir.
+                { assert calls.every { it =~ /--reference (\S+\/)?P001_ref\.ome\.tiff / },
+                    "the reference did not reach register.py: " + calls.join(' --- ') },
+                // Fixed heap: 10 GB (VALIS's own), clamped by task.memory - 4 on a small runner.
+                { assert calls.every { c ->
+                        def m = (c =~ /--jvm-heap-gb (\d+)/)
+                        m.find() && (m.group(1) as int) >= 1 && (m.group(1) as int) <= 10 },
+                    "the JVM heap is not the fixed <= 10 GB: " + calls.join(' --- ') },
+                // Truncation guard: a backslash-newline followed by an empty line would end the
+                // shell command early and run the rest as separate commands.
+                { assert calls.every { !it.contains('\\\n\n') },
+                    "register.py invocation is truncated by a blank line: " + calls.join(' --- ') }
             )
         }
     }
 
-    test("Should render reg_max_image_dim and reg_micro_reg_fraction - rendered command") {
+    test("Should run valis-wsi's hires example under reg_valis_mode hires - rendered command") {
 
-        // Copy of "Should omit the VALIS override flags when none are set", but naming
-        // the two knobs that render UNCONDITIONALLY on every REGISTER invocation
-        // (register.nf:53-54, `--micro-reg-fraction`/`--max-image-dim` on lines
-        // 143-144) rather than the memory_mode=custom-gated override flags that case
-        // exercises. `stub` tag but NO `options "-stub"` -- `-stub` never evaluates a
-        // script: block.
+        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so a stub
+        // run cannot see whether the mode reached register.py.
+        //
+        // reg_valis_mode = 'hires' is valis-wsi 1.2.0's own high-resolution example
+        // (MicroRigidRegistrar + register_micro, built inside register.py and pinned by
+        // tests/test_register_valis_modes.py). Its whole rendered footprint is ONE flag,
+        // `--valis-mode hires`, sharing the stage-checkpoint line; nothing else changes. The
+        // default case above asserts the flag's absence, so `default` stays byte-identical.
         tag "stub"
 
         when {
             params {
-                reg_max_image_dim = 1234
-                reg_micro_reg_fraction = 0.33
+                reg_valis_mode = 'hires'
             }
             process {
                 """
@@ -317,73 +326,23 @@ nextflow_process {
                     rendered << f.text
                 }
             }
+            def calls = rendered.collect { it.substring(it.indexOf('register.py \\')) }
 
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered REGISTER .command.sh found under the task work dir" },
-                { assert rendered.every { it.contains('--max-image-dim 1234') },
-                    "reg_max_image_dim did not reach register.py: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--micro-reg-fraction 0.33') },
-                    "reg_micro_reg_fraction did not reach register.py: " + rendered.join(' --- ') }
-            )
-        }
-    }
-
-    test("Should render a VALIS override under memory_mode=custom - rendered command") {
-
-        tag "stub"
-
-        when {
-            params {
-                memory_mode = 'custom'
-                reg_valis_max_non_rigid_dim = 2048
-            }
-            process {
-                """
-                input[0] = [
-                    [patient_id: 'P001'],
-                    'P001',
-                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
-                    [
-                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
-                    ],
-                    [
-                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
-                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
-                    ]
-                ]
-                """
-            }
-        }
-
-        then {
-            def rendered = []
-            new File("$workDir").eachFileRecurse { f ->
-                if (f.name == '.command.sh' && f.text.contains('register.py')) {
-                    rendered << f.text
-                }
-            }
-
-            assertAll(
-                { assert rendered.size() >= 1, "no rendered REGISTER .command.sh found" },
-                { assert rendered.every { it.contains('--max-non-rigid-dim 2048') },
-                    "the custom override did not reach register.py: " + rendered.join(' --- ') },
-                // An unset knob must NOT render, so register.py takes it from the preset row
-                // rather than being handed a literal 'null'.
-                { assert rendered.every { !it.contains('--max-processed-dim') },
-                    "an unset knob rendered anyway: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--memory-mode custom') },
-                    "the tier itself did not reach register.py: " + rendered.join(' --- ') },
-                // Truncation guard. Asserting that '--micro-reg' is PRESENT does not work and
-                // was tried: a blank line breaks the shell continuation but leaves every word in
-                // the file, so the text-presence check passes against the broken render. What
-                // actually distinguishes them is the blank line itself -- a backslash-newline
-                // followed by an empty line. With the guard, that slot holds a whitespace-only
-                // continuation ('         \') instead.
-                { assert rendered.every { !it.substring(it.indexOf('register.py')).contains('\\\n\n') },
-                    "register.py invocation is truncated by a blank line at the override " +
-                    "interpolation point -- the `?: ['']` guard in register.nf is gone. Everything " +
-                    "after it runs as a SEPARATE command: " + rendered.join(' --- ') }
+                { assert calls.every { it.contains('--valis-mode hires') },
+                    "reg_valis_mode 'hires' did not reach register.py: " + calls.join(' --- ') },
+                // reg_qc defaults to 2, so the pre-micro checkpoint is still requested: hires
+                // scores non_rigid (the checkpoint) apart from micro (the pickle).
+                { assert calls.every { it.contains('--valis-mode hires --stage-checkpoint-dir reg_stage_checkpoint') },
+                    "the hires flag must share the stage-checkpoint line: " + calls.join(' --- ') },
+                { assert calls.every { !it.contains('--valis-mode default') },
+                    "only hires renders a mode flag: " + calls.join(' --- ') },
+                { assert rendered.every { it.contains('valis-wsi high-resolution example (hires)') },
+                    "the settings banner does not name the hires example: " + rendered.join(' --- ') },
+                { assert calls.every { !it.contains('\\\n\n') },
+                    "register.py invocation is truncated by a blank line: " + calls.join(' --- ') }
             )
         }
     }
@@ -463,7 +422,7 @@ nextflow_process {
                 // Ruling R6: the image is recorded by the run itself, not only by the trace.
                 // Digest-pinned, no tag (Apptainer/Singularity: NAME[:TAG|@DIGEST], never both) --
                 // see tests/test_base_images_are_digest_pinned.py.
-                { assert rendered.every { it.contains('    container: cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6') },
+                { assert rendered.every { it.contains('    container: bolt3x/mirage-valis:1.0.0') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('valis: $(python -c "import valis;') },
                     "rendered command: " + rendered.join(' --- ') }
@@ -506,55 +465,6 @@ nextflow_process {
                     assert size() == 1
                     assert get(0).get(0) == 'P001'
                 }}
-            )
-        }
-    }
-
-    test("Should bound VALIS's thread pools to task.cpus - rendered command") {
-
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
-        //
-        // register.py's `--cpus` is how VALIS's all-pairs SuperGlue matching learns the
-        // task's allocation; without it serial_rigid.py sizes the pool on the NODE's core
-        // count and runs every image pair at once (five TMA cores OOM-killed at 128 GB,
-        // 2026-09-10). A stub run cannot see whether the flag is rendered, so this reads
-        // .command.sh, like the two cases above.
-        tag "stub"
-
-        when {
-            process {
-                """
-                input[0] = [
-                    [patient_id: 'P001'],
-                    'P001',
-                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
-                    [
-                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
-                    ],
-                    [
-                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
-                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
-                    ]
-                ]
-                """
-            }
-        }
-
-        then {
-            def rendered = []
-            new File("$workDir").eachFileRecurse { f ->
-                if (f.name == '.command.sh' && f.text.contains('register.py')) {
-                    rendered << f.text
-                }
-            }
-
-            assertAll(
-                { assert rendered.size() >= 1,
-                    "no rendered REGISTER .command.sh found under the task work dir" },
-                // task.cpus is a positive integer whatever the profile resolves it to; the
-                // contract is that the flag is rendered from it, on the register.py line.
-                { assert rendered.every { (it =~ /--cpus [1-9][0-9]*/).find() },
-                    "rendered command does not pass --cpus <task.cpus> to register.py: " + rendered.join(' --- ') }
             )
         }
     }

@@ -324,8 +324,7 @@
     <div class="panel-head"><h2>Modules and default parameters</h2>
       <p>Each lane is one step's subworkflow; boxes are processes in execution order. Chips give real defaults;
         chip names drop the stage prefix a parameter carries in <code>nextflow.config</code>
-        (<code>micro_reg</code> = <code>reg_micro_reg</code>, <code>max_dim</code> = <code>reg_max_image_dim</code>,
-        and every chip on the tiled fork = <code>reg_tiled_*</code>) — panel <b>i</b> gives the full names.
+        (every chip on the tiled fork = <code>reg_tiled_*</code>) — panel <b>i</b> gives the full names.
         Every process runs in a pinned container and emits <code>versions.yml</code>.</p></div>
     <div class="flow">
 
@@ -369,18 +368,16 @@
               warped onto, so row order may not decide it.</div></div>
           <div class="grp">
             <div class="bh">fork — registration_method</div>
-            <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
+            <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-alt">method=valis</span></div>
               <div class="ox">Feature-based rigid + non-rigid warp (JVM/Bio-Formats), resolving all slides into a
-                shared space. <b>Full micro-registration</b> by default
-                (<code>reg_micro_reg=2</code> of a legal <code>0 | 1 | 2</code> — micro-rigid, then the micro
-                non-rigid pass; <code>1</code> stops after micro-rigid). <b>Tiered</b>, with the
-                four-word vocabulary — <code>high | medium | low | custom</code> — where <code>custom</code>
-                means "start from high, apply whichever knobs you overrode"; a per-knob override under any other
-                tier is refused, so a run cannot report a tier it is not using. VALIS's table lives in
-                <code>bin/utils/valis_config.py</code> rather than <code>lib/RegPresets.groovy</code> because its
-                rows hold Python objects (feature detector, matcher), not integers.</div>
-              <div class="pp" style="margin-top:6px"><span>memory_mode <b>high</b></span><span>proc_dim <b>2048</b></span><span>nonrigid_dim <b>4096</b></span><span>micro_reg <b>2</b></span><span>max_dim <b>4000</b></span></div></div>
-            <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
+                shared space: <b>valis-wsi 1.2.0 at its defaults</b> (rigid 512 px, non-rigid 2048 px,
+                VALIS's own detector and matcher, no micro-registration). The one non-default argument is the
+                registration channel, passed by index (the nuclear channel, index 0) instead of VALIS's name match
+                on "dapi". No MIRAGE settings and no tiers; <code>reg_valis_mode hires</code> swaps in VALIS's own
+                high-resolution example as shipped (<code>MicroRigidRegistrar</code>, then <code>register_micro</code>
+                at 0.25 × the smallest slide's longest side).</div>
+              <div class="pp" style="margin-top:6px"><span>valis-wsi <b>1.2.0</b></span><span>rigid <b>512</b></span><span>nonrigid <b>2048</b></span><span>JVM heap <b>10 GB</b></span></div></div>
+            <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-def">default</span></div>
               <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial = channel 0.
                 COARSE asked 48 GB while its matcher was a U-Net; its FFT anchor now asks 2 GB.
                 Step 2 fans out to one task per tile — the only shape it has. Its geometry knobs
@@ -411,10 +408,10 @@
             <div class="pp"><span>gpu <b>true</b></span></div></div>
           <div class="grp">
             <div class="bh">fork — seg_method</div>
-            <div class="opt"><div class="oh"><span>instantseg</span><span class="tag-def">default</span></div>
+            <div class="opt"><div class="oh"><span>stardist</span><span class="tag-def">default</span></div>
+              <div class="ox">Nuclear channel 0 only; cells expanded from nuclei; pinned Hugging Face model.</div></div>
+            <div class="opt"><div class="oh"><span>instantseg</span><span class="tag-alt">no trained model</span></div>
               <div class="ox">Channel-invariant; native cell + nuclei output.</div></div>
-            <div class="opt"><div class="oh"><span>stardist</span><span class="tag-alt">needs model</span></div>
-              <div class="ox">Nuclear channel 0 only; cells expanded from nuclei.</div></div>
             <div class="opt"><div class="oh"><span>cellsam</span><span class="tag-alt">gated weights</span></div>
               <div class="ox">Nuclear channel by name; cells expanded from nuclei.</div></div>
           </div>
@@ -483,38 +480,38 @@
     <div class="tbl-scroll"><table class="bk">
       <thead><tr>
         <th>&nbsp;</th>
-        <th>instantseg <span class="tag-def">default</span></th>
-        <th>stardist</th>
+        <th>instantseg</th>
+        <th>stardist <span class="tag-def">default</span></th>
         <th>cellsam</th>
       </tr></thead>
       <tbody>
         <tr><td class="rk">reads</td>
-          <td class="hi">the full multichannel image — <b>channel-invariant</b></td>
-          <td>one channel, hardcoded to <b>index 0</b></td>
+          <td>the full multichannel image — <b>channel-invariant</b></td>
+          <td class="hi">one channel, hardcoded to <b>index 0</b></td>
           <td>one nuclear channel, <b>resolved by marker name</b></td></tr>
         <tr><td class="rk">whole-cell mask</td>
-          <td class="hi">predicted natively, alongside nuclei</td>
-          <td>expanded from nuclei by <code>seg_expand_distance</code></td>
+          <td>predicted natively, alongside nuclei</td>
+          <td class="hi">expanded from nuclei by <code>seg_expand_distance</code></td>
           <td>expanded from nuclei by <code>seg_expand_distance</code></td></tr>
         <tr><td class="rk">precondition<br><span class="sm">(enforced at task start)</span></td>
-          <td class="hi">a writable model cache; none on the image itself</td>
-          <td>channel 0 <b>must</b> be a nuclear marker — else <b>exit 1</b></td>
+          <td>a writable model cache; none on the image itself</td>
+          <td class="hi">channel 0 <b>must</b> be a nuclear marker — else <b>exit 1</b></td>
           <td>a nuclear channel must exist — a negative index is <b>exit 1</b></td></tr>
         <tr><td class="rk">weights</td>
-          <td class="hi">Apache-2.0, auto-downloaded from BioImage.IO</td>
-          <td><b>none ship with the repo</b> — a trained model must be supplied</td>
+          <td>Apache-2.0, auto-downloaded from BioImage.IO</td>
+          <td class="hi">trained model <code>DSUnit/stardist</code> on the Hugging Face Hub, auto-downloaded at a pinned commit</td>
           <td><b>gated</b> — needs <code>DEEPCELL_ACCESS_TOKEN</code> to auto-download</td></tr>
         <tr><td class="rk">runs on a fresh clone?</td>
-          <td class="hi"><b>yes</b> — the reason it is the default</td>
-          <td>no — set <code>segmentation_model_dir</code></td>
+          <td><b>yes</b></td>
+          <td class="hi"><b>yes</b> — network on first use, or a copy in <code>segmentation_model_dir</code></td>
           <td>no — set <code>cellsam_model_path</code> or export a token</td></tr>
         <tr><td class="rk">entry point</td>
-          <td class="hi">segment_instantseg.py</td>
-          <td>segment.py</td>
+          <td>segment_instantseg.py</td>
+          <td class="hi">segment.py</td>
           <td>segment_cellsam.py</td></tr>
         <tr><td class="rk">container image</td>
-          <td class="hi">bolt3x/mirage-instanseg:1.0.0</td>
-          <td>bolt3x/mirage-stardist:1.0.0</td>
+          <td>bolt3x/mirage-instanseg:1.0.0</td>
+          <td class="hi">bolt3x/mirage-stardist:1.0.0</td>
           <td>bolt3x/mirage-cellsam:1.0.0</td></tr>
       </tbody>
     </table></div>
@@ -523,7 +520,7 @@
       <div class="bkc">
         <div class="rh">shared by all three</div>
         <table class="pr">
-          <tr><td class="k">seg_method</td><td class="v">instantseg</td><td class="d">backend selector</td></tr>
+          <tr><td class="k">seg_method</td><td class="v">stardist</td><td class="d">backend selector</td></tr>
           <tr><td class="k">seg_gpu</td><td class="v">true</td><td class="d">adds --gres + --nv / --gpus all</td></tr>
           <tr><td class="k">gpu_type</td><td class="v">1</td><td class="d">SLURM GRES string — bare <code>1</code> = any one GPU</td></tr>
         </table>
@@ -542,8 +539,8 @@
       <div class="bkc">
         <div class="rh">stardist only</div>
         <table class="pr">
-          <tr><td class="k">segmentation_model_dir</td><td class="v nul">null</td><td class="d"><b>required</b> — no model ships</td></tr>
-          <tr><td class="k">segmentation_model</td><td class="v w">stardist_full_e200_…</td><td class="d">not a StarDist built-in</td></tr>
+          <tr><td class="k">segmentation_model_dir</td><td class="v nul">null</td><td class="d">download cache; a copy there is used offline</td></tr>
+          <tr><td class="k">segmentation_model</td><td class="v w">hf://DSUnit/stardist@68b94406…</td><td class="d">Hugging Face snapshot, pinned commit</td></tr>
           <tr><td class="k">seg_n_tiles_y / _x</td><td class="v">16 / 16</td><td class="d">inference tile grid</td></tr>
           <tr><td class="k">seg_pmin / seg_pmax</td><td class="v">1.0 / 99.8</td><td class="d">normalization percentiles</td></tr>
           <tr><td class="k">seg_prob_thresh</td><td class="v nul">null</td><td class="d">null → the model's own default</td></tr>
@@ -563,11 +560,11 @@
       </div>
     </div>
 
-    <p class="outnote"><b>Why InstanSeg is the default.</b> It is the only backend that produces a mask on a
-      fresh clone: StarDist's configured model name is not one of the StarDist built-ins, so without
-      <code>segmentation_model_dir</code> it raises <code>FileNotFoundError</code>, and CellSAM's weights are
-      gated behind a DeepCell token. InstanSeg's weights are Apache-2.0 and unencumbered. It is also the only
-      one of the three that predicts the whole-cell mask directly rather than dilating nuclei by a fixed
+    <p class="outnote"><b>Why StarDist is the default.</b> It runs the trained nuclear model published at
+      <code>huggingface.co/DSUnit/stardist</code>, pinned to one commit so every run loads the same weights;
+      <code>segment.py</code> downloads it on first use, and a copy already in <code>segmentation_model_dir</code>
+      is used without network access. CellSAM's weights are gated behind a DeepCell token. InstanSeg needs no
+      trained model, and it is the only one of the three that predicts the whole-cell mask directly rather than dilating nuclei by a fixed
       radius — so <code>seg_expand_distance</code> has no effect when it is selected. An unrecognised
       <code>--seg_method</code> is rejected by name at launch rather than silently falling back to a
       different segmenter.</p>
@@ -752,11 +749,8 @@
         </table>
         <h4>Registration</h4>
         <table class="pr">
-          <tr><td class="k">registration_method</td><td class="v">valis</td><td class="d">valis | tiled (STARE)</td></tr>
+          <tr><td class="k">registration_method</td><td class="v">tiled</td><td class="d">tiled (STARE) | valis</td></tr>
           <tr><td class="k">reg_qc</td><td class="v">2</td><td class="d">0 none · 1 overlay · 2 +seg</td></tr>
-          <tr><td class="k">reg_micro_reg</td><td class="v">2</td><td class="d">micro-reg depth (default 2)</td></tr>
-          <tr><td class="k">memory_mode</td><td class="v">high</td><td class="d">VALIS tier: high | medium | low | custom</td></tr>
-          <tr><td class="k">reg_max_image_dim</td><td class="v">4000</td><td class="d">VALIS working max dim</td></tr>
           <tr><td class="k">reg_jvm_heap_gb</td><td class="v nul">null</td><td class="d">null → derive from task.memory</td></tr>
         </table>
         <h4>Registration — tiled / STARE</h4>
@@ -770,7 +764,7 @@
       <div class="pcol">
         <h4>Segmentation — see panel d</h4>
         <table class="pr">
-          <tr><td class="k">seg_method</td><td class="v">instantseg</td><td class="d">instantseg | stardist | cellsam</td></tr>
+          <tr><td class="k">seg_method</td><td class="v">stardist</td><td class="d">stardist | instantseg | cellsam</td></tr>
           <tr><td class="k">seg_gpu</td><td class="v">true</td><td class="d">use GPU</td></tr>
           <tr><td class="k">seg_expand_distance</td><td class="v">10</td><td class="d">nuclei→cell (px); stardist + cellsam only</td></tr>
         </table>
@@ -814,14 +808,12 @@
     writing a resumable checkpoint. <b>(c)</b> Preprocessing standardizes and illumination-corrects images;
     registration aligns each moving slide to the reference through one of two interchangeable backends behind a
     single adapter seam — VALIS or the JVM-free tiled/STARE backend —
-    with staged registration QC on by default and full micro-registration
-    (<code>reg_micro_reg=2</code> of <code>0 | 1 | 2</code>); segmentation
+    with staged registration QC on by default (VALIS runs valis-wsi 1.2.0 at its defaults); segmentation
     detects every cell on the reference and extracts morphology and contours once per mask; postprocessing
     quantifies each marker per compartment and exports. <b>(d)</b> The three
     segmentation backends compared on what they read, how the whole-cell mask is produced, what each requires
     before it will run, and how its weights are licensed — with the 17 backend-specific parameters grouped by
-    the backend that reads them. InstanSeg is the default because it is the only one that produces a mask on
-    an unconfigured clone. <b>(e)</b> Each run yields a QuPath-compatible GeoJSON and a pyramidal OME-TIFF as
+    the backend that reads them. StarDist is the default, with a trained model pinned on the Hugging Face Hub. <b>(e)</b> Each run yields a QuPath-compatible GeoJSON and a pyramidal OME-TIFF as
     primary artifacts, plus an additive SpatialData <code>.zarr</code> that re-serializes the same masks,
     polygons, measurements and QC — including a per-cell registration residual — for the scverse ecosystem.
     <b>(f)</b> Each process's CPU, memory and wall-time request has a single owner and scales with the retry

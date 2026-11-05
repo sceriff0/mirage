@@ -1098,7 +1098,7 @@ def checkPassthroughPath() {
 // returns null. Out-of-band of workflow{} for the string-constant ceiling (file header).
 def checkRetiredStareTier() {
     assert ParamUtils.checkRetiredParams([:]) == null : "absent reg_tiled_mode must be a no-op"
-    assert ParamUtils.checkRetiredParams([memory_mode: 'low']) == null : "VALIS tiers are untouched"
+    assert ParamUtils.checkRetiredParams([reg_tiled_tile: 512]) == null : "a live STARE knob is not retired"
     def warn = ParamUtils.checkRetiredParams([reg_tiled_mode: 'high'])
     assert warn != null && warn.contains('RETIRED') : "high must warn, not throw: ${warn}"
     def expect = [
@@ -1440,20 +1440,18 @@ workflow {
         // expected
     }
 
-    // validateRegPresets - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
+    // validateStareKnobs - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
     // merely invalid: decimation_factor reads <=0 as "no decimation" (full-res
     // plane into a U-Net) and the memory closure squares the value, so both ask
     // for the 4 GB floor for the largest possible job. Rationale: ParamUtils.
-    def sb = [memory_mode: 'high',
-              reg_valis_max_processed_dim: null, reg_valis_max_non_rigid_dim: null,
-              reg_tiled_tile: 2048, reg_tiled_halo: 256,
+    def sb = [reg_tiled_tile: 2048, reg_tiled_halo: 256,
               reg_tiled_out_tile: 1024]
-    [null, 512, 256].each { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: it]) }
+    [null, 512, 256].each { ParamUtils.validateStareKnobs(sb + [reg_tiled_coarse_max_dim: it]) }
     [0, -1, 255, 16].each { bad ->
         def no = false
-        try { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: bad]) }
+        try { ParamUtils.validateStareKnobs(sb + [reg_tiled_coarse_max_dim: bad]) }
         catch (IllegalArgumentException ignored) { no = true }
-        assert no : "validateRegPresets must reject reg_tiled_coarse_max_dim=${bad}"
+        assert no : "validateStareKnobs must reject reg_tiled_coarse_max_dim=${bad}"
     }
     checkRetiredStareTier()
 
@@ -1554,8 +1552,8 @@ workflow {
     // WarpBackends - one seam for the reg_qc=2 warp
     // ------------------------------------------------------------------ //
     assert WarpBackends.methods().toSorted() == ['tiled', 'valis']
-    // Digest-pinned (ruling R6): no tag, see tests/test_base_images_are_digest_pinned.py.
-    assert WarpBackends.container('valis') == 'cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6'
+    // REGISTER's image: containers/valis, FROM the digest-pinned upstream valis-wsi 1.2.0.
+    assert WarpBackends.container('valis') == 'bolt3x/mirage-valis:1.0.0'
     assert WarpBackends.container('tiled') == 'bolt3x/mirage-stare:1.0.0'
     assert WarpBackends.of('valis').stages == ['native', 'rigid', 'non_rigid', 'micro']
     assert WarpBackends.of('tiled').stages == ['native', 'rigid', 'refined']
@@ -1565,13 +1563,13 @@ workflow {
     // No JVM heap flag may leak onto a JVM-free backend (see the WarpBackends header).
     assert !WarpBackends.of('tiled').flags([:]).any { it.contains('--jvm-heap-gb') }
     def valisFlags = WarpBackends.of('valis').flags(
-        [ref_slide: 'R', moving_slide: 'M', stage_checkpoint: null, micro_reg: 2])
+        [ref_slide: 'R', moving_slide: 'M', stage_checkpoint: null, micro_reg: 0])
     assert !valisFlags.any { it.contains('--method') }
-    assert valisFlags.any { it.contains('--micro-reg 2') }
+    assert valisFlags.any { it.contains('--micro-reg 0') }
     // Absent checkpoint is a null object, not an empty flag.
     assert !valisFlags.any { it.contains('--checkpoint-dir') }
     assert WarpBackends.of('valis').flags(
-        [ref_slide: 'R', moving_slide: 'M', stage_checkpoint: 'ckpt/', micro_reg: 2]
+        [ref_slide: 'R', moving_slide: 'M', stage_checkpoint: 'ckpt/', micro_reg: 0]
     ).any { it.contains('--checkpoint-dir ckpt/') }
 
     def badMethod = false

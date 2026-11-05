@@ -62,11 +62,10 @@ workflow MIRAGE {
     validateParameters()
 
     ParamUtils.validateOutdir(params.outdir)
-    // Tier vs per-knob-override consistency (VALIS's memory_mode; STARE has no tiers) and the
-    // COARSE thumbnail floor. Cross-parameter,
+    // STARE's COARSE thumbnail floor (neither backend has cost tiers). Cross-parameter,
     // so it belongs here rather than in the schema; runs before any process is instantiated.
     ParamUtils.validatePixelSize(params)
-    ParamUtils.validateRegPresets(params)
+    ParamUtils.validateStareKnobs(params)
     // --cleanup_level against --mode. add_cycle must PRODUCE a re-enterable tree, so a
     // cleaning level is refused outright rather than discovered by the next cycle.
     ParamUtils.validateCleanup(params)

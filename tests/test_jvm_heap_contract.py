@@ -1,11 +1,11 @@
 """JVM heap: VALIS's own fixed 10 GB, and a diagnosable failure.
 
 User ruling 2026-10-21: the heap REGISTER gives VALIS's Bio-Formats JVM is VALIS's own
-shipped 10 GB (``registration.init_jvm`` passes the literal 10 on to
-``slide_io.init_jvm``), at every attempt. It is no longer scaled with the retry ramp
+shipped 10 GB (valis-wsi 1.2.0's ``registration.init_jvm`` passes the literal 10 on to
+``slide_io.init_jvm``, registration.py:132-135, so bin/register.py starts the JVM through
+``slide_io.init_jvm`` itself to make an override real), at every attempt. It is no longer scaled with the retry ramp
 (it was ``32 + 16 * task.attempt``): the benchmark runs VALIS with the heap VALIS ships,
-and the pipeline runs it the same way. ``reg_jvm_heap_gb`` still overrides it (the
-``tma`` profile pins 16), and the task's memory still clamps it:
+and the pipeline runs it the same way. ``reg_jvm_heap_gb`` still overrides it, and the task's memory still clamps it:
 
     def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : 10
     def jvm_heap_gb  = Math.min(heap_request, task.memory.toGiga() - 4)
@@ -105,7 +105,7 @@ def test_the_heap_is_clamped_at_small_memory():
 
 
 def test_an_explicit_heap_still_overrides():
-    """`reg_jvm_heap_gb` (the tma profile pins 16) wins over the default."""
+    """`reg_jvm_heap_gb` wins over the default."""
     assert heap_for_attempt(64, 1, reg_jvm_heap_gb=16) == 16
     assert heap_for_attempt(64, 3, reg_jvm_heap_gb=16) == 16
 

@@ -1,8 +1,16 @@
 /*
- * REGISTER - VALIS whole-slide registration
+ * REGISTER - VALIS whole-slide registration: valis-wsi 1.2.0, its default or its hires example
  *
- * Performs multi-modal image registration using VALIS with SuperPoint/SuperGlue
- * feature detection. Supports rigid, non-rigid, and micro-registration stages.
+ * The benchmark's `valis120` call (bin/register.py's header): Valis() given the patient's
+ * slides and the reference only, register() at VALIS's defaults (rigid 512 px, non-rigid
+ * 2048 px, align_to_reference False, no micro-registration), every slide warped in the
+ * reference frame. The one non-default argument is the registration channel, passed by
+ * index (the nuclear channel, index 0) instead of VALIS's name match on "dapi".
+ * params.reg_valis_mode = 'hires' runs valis-wsi 1.2.0's OWN high-resolution example instead
+ * (the benchmark's valis120_hires row): MicroRigidRegistrar in the constructor, then
+ * register_micro() at floor(0.25 x the smallest slide's longest side), as shipped, with the same
+ * channel-by-index and the same reference-frame warp. bin/register.py's header has the detail.
+ * The tuned configuration this replaced is at the git tag archive/valis-mirage-tuned.
  *
  * Input: Reference image path, preprocessed images, and metadata
  * Output: Registered OME-TIFF files aligned to reference coordinate space
@@ -13,13 +21,14 @@ process REGISTER {
     // patient_id is the grouping key; all_metas carries the per-slide metadata list.
     tag "${patient_id}"
 
-    // VALIS uses the maintained upstream image (linux/amd64); we do not rebuild it (its
-    // from-source libvips build is heavy and not vendored). See containers/README.md.
-    // DIGEST-PINNED (ruling R6), digest only and no tag: Apptainer documents an image
-    // reference as NAME[:TAG|@DIGEST] and has known bugs with the combined form, and the
-    // cluster pulls through Singularity. The digest below is cdgatenbee/valis-wsi:1.0.0
-    // as resolved 2026-09-02, and it is the SAME image containers/merge builds FROM.
-    container 'cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6'
+    // containers/valis: upstream's cdgatenbee/valis-wsi:1.2.0 (FROM its index digest
+    // sha256:4fd20b687ae0f08c47011753bc5083dca5ac65a454d3615589eddf6b14e3c419, read from
+    // Docker Hub 2026-10-11) with ONLY the four fixes that let a user who is not root run it
+    // under Apptainer -- no Python package added or moved (its smoke.sh checks the freeze).
+    // The bare upstream image has no Python for a non-root user (/root is 0700). Under
+    // Singularity it also needs --writable-tmpfs (conf/modules.config). lib/WarpBackends.groovy's
+    // valis row carries the SAME image, so the registrar pickle loads in the VALIS that wrote it.
+    container 'bolt3x/mirage-valis:1.0.0'
 
     input:
     // Use stageAs to avoid filename collision when reference is included in preproc_files
@@ -32,7 +41,7 @@ process REGISTER {
     path("*.size.csv")                                                                     , emit: size_log
     path("preprocessed/data/*.csv")                                                        , emit: summary, optional: true
     tuple val(patient_id), path("preprocessed/data/*_registrar.pickle")                    , emit: registrar, optional: true
-    // Pre-micro displacement fields for staged registration QC (reg_qc >= 2). Optional
+    // Displacement fields for staged registration QC (reg_qc >= 2). Optional
     // because it is only requested at that level, and because a failure to write it must
     // never fail a registration — see bin/utils/stage_checkpoint.py.
     tuple val(patient_id), path("reg_stage_checkpoint")                                    , emit: stage_checkpoint, optional: true
@@ -48,38 +57,22 @@ process REGISTER {
     // marker-based fallback is not used from the pipeline.
     def ref_filename = reference ? reference.name : ''
     def ref_arg = ref_filename ? "--reference ${ref_filename}" : ''
-    // Memory mode controls feature detector, matcher, and dimension settings
-    def memory_mode = params.memory_mode
-    def micro_reg_fraction = params.reg_micro_reg_fraction
-    def max_image_dim = params.reg_max_image_dim
-    // Tier-owned VALIS knobs. Rendered ONLY when set, so an unset knob leaves register.py to take
-    // it from --memory-mode's preset row -- passing an explicit 'null' would override the preset
-    // with nothing. ParamUtils has already rejected these under any tier other than 'custom'.
-    // reg_valis_max_keypoints is NOT tier-owned (legal under any tier); unset = VALIS's own 20000.
-    def valis_override_flags = [
-        (params.reg_valis_max_processed_dim != null ? "--max-processed-dim ${params.reg_valis_max_processed_dim}" : null),
-        (params.reg_valis_max_non_rigid_dim != null ? "--max-non-rigid-dim ${params.reg_valis_max_non_rigid_dim}" : null),
-        (params.reg_valis_max_keypoints != null ? "--max-keypoints ${params.reg_valis_max_keypoints}" : null),
-    ].findAll { it != null }
-    // `?: ['']` is load-bearing, not defensive: with no overrides the interpolation below sits at
-    // column 0 between two backslash-continued lines, and an EMPTY line there ends the shell
-    // command early -- everything after it would run as separate commands. A single empty-string
-    // entry renders a harmless whitespace-only continuation instead. Same guard, same reason, as
-    // modules/local/warp_seg_qc.nf's backend_flags.
-    def valis_overrides = (valis_override_flags ?: ['']).collect { "        ${it} \\" }.join('\n')
-    // Micro-registration depth (0/1/2), resolved via the single-source ParamUtils helper.
-    def micro_reg = ParamUtils.microRegLevelOf(params.reg_micro_reg)
-    // reg_qc >= 2 scores each registration stage separately, which needs the post-non-rigid,
-    // pre-micro displacement fields. VALIS composes micro into the same attribute, so nothing
-    // downstream can recover them — REGISTER is the only place they can be captured.
+    // reg_qc >= 2 scores each registration stage separately; the checkpoint carries the
+    // displacement fields WARP_SEG_QC needs to report 'non_rigid' apart from 'rigid'.
     // ParamUtils.regQcLevel is the single source of truth (null reg_qc -> 2), shared with
     // registration.nf/add_cycle.nf so this process can't drift from the rest of the pipeline.
     def reg_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
     def stage_ckpt = reg_qc_level >= 2 ? '--stage-checkpoint-dir reg_stage_checkpoint' : ''
-    // JVM heap: VALIS's own shipped 10 GB (registration.init_jvm passes the literal 10),
-    // at every attempt -- user ruling 2026-10-21; it was 32 + 16 * task.attempt. The task's
-    // MEMORY still climbs with the attempt; only the heap is pinned. reg_jvm_heap_gb
-    // overrides it (the tma profile pins 16). Guarded by tests/test_jvm_heap_contract.py.
+    // VALIS's own two configurations (params.reg_valis_mode, schema enum default|hires). An
+    // itemised params.x read, never the bare `params` map, so only this value enters the task
+    // hash. `default` renders NOTHING here: its command is byte-identical to the one before
+    // the option existed, so register.py runs its own default. The flag shares the
+    // stage-checkpoint line for the same reason (no new, empty continuation line).
+    def hires      = params.reg_valis_mode == 'hires'
+    def mode_flags = [hires ? '--valis-mode hires' : '', stage_ckpt].findAll { it }.join(' ')
+    // JVM heap: a fixed 10 GB at every attempt (ruling 2026-10-21), VALIS's own value and
+    // the benchmark's. reg_jvm_heap_gb overrides it; register.py starts the JVM through
+    // slide_io.init_jvm because valis-wsi 1.2.0's registration.init_jvm ignores the size.
     // Explicit null test, NOT `?:` -- Elvis treats 0 as unset, so an explicit
     // `--reg_jvm_heap_gb 0` would silently become the default instead of being honoured
     // or refused. The schema's `minimum: 1` refuses it up front; this keeps the code correct
@@ -96,11 +89,7 @@ process REGISTER {
     echo "========================================================================"
     echo "VALIS Registration - Attempt ${task.attempt}"
     echo "========================================================================"
-    echo "Settings:"
-    echo "  - memory_mode: ${memory_mode}"
-    echo "  - valis overrides: ${valis_override_flags ? valis_override_flags.join(' ') : '(none - every knob from the preset)'}"
-    echo "  - max_image_dim: ${max_image_dim}"
-    echo "  - micro_reg: ${micro_reg} (0=none, 1=micro-rigid, 2=+micro non-rigid)"
+    echo "Settings: ${hires ? 'valis-wsi high-resolution example (hires)' : 'valis-wsi defaults'}; registration channel index 0; JVM heap ${jvm_heap_gb} GB"
     echo "========================================================================"
 
     # === STAGE INPUT FILES ===
@@ -142,14 +131,8 @@ process REGISTER {
         --input-dir preprocessed \\
         --out registered_slides \\
         ${ref_arg} \\
-        --memory-mode ${memory_mode} \\
-        --micro-reg-fraction ${micro_reg_fraction} \\
-        --max-image-dim ${max_image_dim} \\
-${valis_overrides}
-        --micro-reg ${micro_reg} \\
         --jvm-heap-gb ${jvm_heap_gb} \\
-        --cpus ${task.cpus} \\
-        ${stage_ckpt} \\
+        ${mode_flags} \\
         ${args}
 
     # === VALIDATE OUTPUTS ===
@@ -217,11 +200,12 @@ ${valis_overrides}
     // Mirror the real path: the stage checkpoint exists only at reg_qc >= 2, so stub runs
     // exercise the same channel wiring the real run does (including its absence at reg_qc<2).
     // Uses the same ParamUtils.regQcLevel default (null -> 2) as the script block above.
+    // At hires the real checkpoint records that a micro pass follows (micro_registration true).
     def stub_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
-    def stub_micro_reg = ParamUtils.microRegLevelOf(params.reg_micro_reg)
+    def stub_micro    = params.reg_valis_mode == 'hires'
     def stub_ckpt = stub_qc_level < 2 ? '' : """
     mkdir -p reg_stage_checkpoint
-    echo '{"version": 1, "stage": "post_non_rigid_pre_micro", "micro_registration": ${stub_micro_reg >= 2}, "slides": {}, "errors": []}' > reg_stage_checkpoint/stage_checkpoint.json
+    echo '{"version": 1, "stage": "post_non_rigid_pre_micro", "micro_registration": ${stub_micro}, "slides": {}, "errors": []}' > reg_stage_checkpoint/stage_checkpoint.json
     """
     """
     mkdir -p registered_slides preprocessed/data

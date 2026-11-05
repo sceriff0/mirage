@@ -138,7 +138,10 @@ nextflow_pipeline {
         }
     }
 
-    test("Should reject an out-of-range --reg_micro_reg and name the parameter") {
+    // The tuned VALIS settings were removed 2026-11-05 (valis-wsi 1.2.0 at its defaults). A
+    // run that still passes one must be REFUSED, never silently run at the defaults while the
+    // caller believes the setting applied: validation.logging.unrecognisedParams = 'error'.
+    test("Should reject a retired VALIS setting (--memory_mode) and name the parameter") {
         tag "stub"
         options "-stub"
 
@@ -147,7 +150,7 @@ nextflow_pipeline {
                 input         = "$projectDir/tests/testdata/test_input.csv"
                 outdir        = "$outputDir"
                 start         = "preprocessing"
-                reg_micro_reg = 9
+                memory_mode   = "high"
             }
         }
 
@@ -155,7 +158,35 @@ nextflow_pipeline {
             def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
             assertAll(
                 { assert workflow.failed },
-                { assert report.contains("--reg_micro_reg") }
+                { assert report.contains("memory_mode") }
+            )
+        }
+    }
+
+    // STARE's cost tiers were removed 2026-11-04. reg_tiled_mode is in validation.ignoreParams
+    // so nf-schema lets it through, and ParamUtils.checkRetiredParams (before
+    // validateParameters) refuses it, naming the retired row's knob values to set instead --
+    // an old `low` must never silently run the high values.
+    test("Should refuse a retired --reg_tiled_mode low and name the knobs to set instead") {
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                input          = "$projectDir/tests/testdata/test_input.csv"
+                outdir         = "$outputDir"
+                start          = "preprocessing"
+                reg_tiled_mode = "low"
+            }
+        }
+
+        then {
+            def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
+            assertAll(
+                { assert workflow.failed },
+                { assert report.contains("reg_tiled_mode") },
+                { assert report.contains("reg_tiled_tile 512, reg_tiled_halo 128"),
+                    "the refusal must name the retired low row's values: " + report }
             )
         }
     }
@@ -177,7 +208,6 @@ nextflow_pipeline {
                 registration_method = "valis"
                 seg_method          = "cellsam"
                 reg_qc              = 0
-                reg_micro_reg       = 1
                 seg_gpu             = false
             }
         }

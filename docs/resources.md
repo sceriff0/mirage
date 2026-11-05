@@ -112,33 +112,20 @@ real slide. Changing either number changes an unguarded figure, so change it her
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `REGISTER` | `8` | `64 GB × 2^(attempt − 1)` (64 → 128 → 256 → 512 GB) | `24.h × attempt` | `withName` |
+| `REGISTER` | `8` | `64 GB × 2^(attempt − 1)` (64 → 128 → 256 → 512 GB); at `reg_valis_mode hires` `128 GB × 2^(attempt − 1)` (128 → 256 → 512 → 1024 GB) | `24.h × attempt` | `withName` |
 
-`REGISTER` pins its own retry budget (at most four attempts, so the ramp stops at its 512 GB rung) rather than inheriting a profile's, and every rung is still clamped by `max_memory`.
+`REGISTER` pins its own retry budget (at most four attempts, so the ramp stops at its fourth rung) rather than inheriting a profile's, and every rung is still clamped by `max_memory`.
+The first rung is sized per mode from peak RSS measured per case on the 8-case regbench
+cohort (VALIS 1.2.0, 4 CPUs): `default` median 31.6 GB, max 51.4 → 64 GB; `hires` median
+81.7 GB, max 106.4 → 128 GB, the smallest rung of the same doubling ramp above the cohort's max.
 
-The `tma` profile overrides only `REGISTER`'s memory, to `64 GB × attempt`: tissue-microarray
-cores are ~2800 px on a side, and the doubling ramp's upper rungs are sized for whole slides. Cpus and time
-stay as above. The profile also pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`).
-It was written against `register.nf`'s former `32 + 16 × attempt` ramp, which would hand Java
-most of a small request; since 2026-10-21 the default is VALIS's own 10 GiB at every attempt,
-never scaled (`REGISTER`'s memory still climbs). `REGISTER`'s peak is not pixels but SuperGlue matching: quadratic in keypoints, every
-image pair at once, and — in VALIS 1.0.0 — with autograd ON, so every attention layer's
-activations are retained for a backward pass nobody runs. `bin/utils/valis_config.py` wraps
-the SuperPoint/SuperGlue methods in `torch.no_grad()` (grad mode is thread-local, so a global
-switch would miss VALIS's joblib threads) and bounds VALIS's thread pools to `task.cpus`
-(`register.py --cpus`). The keypoint count defaults to VALIS's 20000 (`reg_valis_max_keypoints`
-null; `MAX_KEYPOINTS` is the one home for it), so results stay comparable with earlier runs; the
-`tma` profile pins 2000, which is a results-changing choice made per data shape. Before those two
-fixes, five ~2800 px cores were OOM-killed at 128 GB on 2026-09-10. Budget at 20000 keypoints:
-roughly 15 GB per pair in flight, `task.cpus - 1` pairs at once; at 2000, a few hundred MB.
-
-Since 2026-09-23 the profile no longer lowers the non-rigid size (the pyramid-level −1 crash it
-dodged is clamped at the reader), so TMA runs at `high`'s 2048 px. **That cost is not yet
-measured on TMA data.** VALIS sizes the non-rigid frame so that the *tissue box* reaches that
-size, and allocates float32 displacement fields for the whole frame per slide — so when tissue
-fills a small part of a core's frame, the frame is roughly 2048 ÷ (tissue fraction) px on a side
-and the fields grow with its square. If a cohort climbs `REGISTER`'s ramp, pass
-`--memory_mode custom --reg_valis_max_non_rigid_dim 1024` or lower.
+`REGISTER` runs valis-wsi 1.2.0 at its defaults (rigid 512 px, non-rigid 2048 px, VALIS's own
+detector and matcher, no micro-registration), or at `reg_valis_mode hires` its high-resolution
+example (`MicroRigidRegistrar`, then `register_micro` at 0.25 × the smallest slide's longest
+side), with a fixed 10 GB Bio-Formats JVM heap at every
+attempt (`reg_jvm_heap_gb` overrides it). The old `tma` profile and its keypoint cap, CPU bound
+and heap pin were settings of the tuned VALIS 1.0.0 configuration and went with it (git tag
+`archive/valis-mirage-tuned`).
 
 `REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
 concurrency block, after the profiles) and its own error strategy — see
@@ -156,8 +143,8 @@ STARE has had no tiers since 2026-11-04.)
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner | `maxForks` |
 |---|---|---|---|---|---|
 | `TILED_COARSE` | `2` *(label)* | derived from `reg_tiled_coarse_max_dim`, `× attempt` *(withName)* — 2 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
-| `TILED_REG_TILE` | `2` *(label)* | derived from `reg_tiled_tile` + 2×`reg_tiled_halo`, `× attempt` *(withName)* — 4 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
-| `TILED_SOLVE` | `1` *(label)* | `1 GB × attempt` *(withName)* | `8.h × attempt` *(label)* | partial | — |
+| `TILED_REG_TILE` | `2` *(label)* | derived from `reg_tiled_tile` + 2×max(`reg_tiled_halo`, 3×`reg_tiled_stride`), `× attempt` *(withName)* — 4 GB at defaults | `2.h × attempt` *(label)* | partial | `20` |
+| `TILED_SOLVE` | `1` *(label)* | `2 GB × attempt` *(withName)* | `8.h × attempt` *(label)* | partial | — |
 | `TILED_STITCH` | `4` *(label)* | derived from `reg_tiled_out_tile`, `× attempt` *(withName)* — 4 GB at defaults | `4.h × attempt` *(label)* | partial | `10` |
 
 `TILED_COARSE` / `TILED_REG_TILE` / `TILED_SOLVE` / `TILED_STITCH` are the STARE method —
@@ -581,7 +568,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-convert:1.0.0` | `CONVERT_IMAGE` |
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
-| `cdgatenbee/valis-wsi:1.0.0` | `REGISTER` |
+| `cdgatenbee/valis-wsi:1.2.0` (digest-pinned) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
 | `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
 | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |

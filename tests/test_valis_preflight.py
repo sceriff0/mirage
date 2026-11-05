@@ -179,8 +179,20 @@ def test_a_reader_whose_first_parameter_is_not_level_is_left_alone():
     assert Other().slide2vips(-1) == -1
 
 
+def _valis_registration_body() -> str:
+    """The function body only, unparsed: the module docstring quotes the VALIS call, so a
+    raw-text index would find the documentation, not the code."""
+    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
+    fn = next(
+        n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
+    )
+    return ast.unparse(fn)
+
+
 def test_register_py_clamps_the_bio_formats_reader_before_it_builds_the_registrar():
-    src = (ROOT / "bin" / "register.py").read_text()
+    src = _valis_registration_body()
     clamp = src.index("clamp_negative_levels(slide_io.BioFormatsSlideReader)")
     build = src.index("registration.Valis(")
     assert clamp < build, "the clamp is applied AFTER the registrar is built"
@@ -208,10 +220,10 @@ def test_register_py_runs_the_preflight_before_it_builds_the_registrar():
     """The check has to run before `registration.Valis(...)`, which starts the JVM
     and reads every slide -- a check after that point has already paid for the
     rigid stage the crash then throws away."""
-    src = (ROOT / "bin" / "register.py").read_text()
-    assert "from utils.valis_preflight import" in src or "valis_preflight" in src, (
+    assert "valis_preflight" in (ROOT / "bin" / "register.py").read_text(), (
         "bin/register.py does not import the preflight"
     )
+    src = _valis_registration_body()
     call = src.index("slides_too_small_for_non_rigid(")
     build = src.index("registration.Valis(")
     assert call < build, "the preflight runs AFTER the registrar is built"
@@ -222,18 +234,12 @@ def test_register_py_treats_a_none_error_df_as_the_failure_it_is():
     kills the JVM and returns (None, None, None). bin/register.py used to log
     'Initial registration completed' on that and fail 158 s later on the dead JVM
     with advice about --micro-reg 0."""
-    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
-    fn = next(
-        n
-        for n in tree.body
-        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
-    )
-    body = ast.unparse(fn)
-    call = body.index("registrar.register()")
+    body = _valis_registration_body()
+    call = body.index("registrar.register(")
     check = body.find("error_df is None", call)
     assert check != -1, "no `error_df is None` check after registrar.register()"
     raise_pos = body.find("raise RuntimeError", check)
-    completed = body.find("Initial registration completed", call)
+    completed = body.find("Registration completed", call)
     assert raise_pos != -1 and raise_pos < completed, (
         "the None check must raise BEFORE anything is logged as completed"
     )

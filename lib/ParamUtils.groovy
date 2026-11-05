@@ -158,7 +158,7 @@ class ParamUtils {
      * registration.nf / add_cycle.nf so the QC gate has a single source of truth.
      */
     /*
-     * WHY regQcLevelOf / microRegLevelOf ARE SCALAR
+     * WHY regQcLevelOf IS SCALAR
      *
      * Nextflow hashes the FREE VARIABLES a process's `script:` block references. A block
      * that says `ParamUtils.regQcLevel(params)` therefore hashes `params` -- the WHOLE
@@ -167,16 +167,14 @@ class ParamUtils {
      * cascaded 20 of 28 tasks. `-dump-hashes` showed every individually-named entry
      * unchanged and only `params=ScriptBinding$ParamsMap@...` differing.
      *
-     * A `params.reg_qc` / `params.reg_micro_reg` access is recorded as its OWN hash entry,
+     * A `params.reg_qc` access is recorded as its OWN hash entry,
      * so passing the scalar keeps the process bound to just the parameters it actually reads.
      *
      * regQcLevel(Map) stays: workflow/subworkflow code (registration.nf, add_cycle.nf) is
      * not hashed this way, reads better with `params`, and there is exactly one
      * implementation behind it -- the scalar form is where the logic lives and the Map
-     * form delegates to it, so the two cannot drift. `microRegLevelOf` has no Map
-     * counterpart -- every call site is inside a `script:` block (register.nf,
-     * warp_seg_qc.nf), so there is no workflow-level caller to justify one. CALL THE
-     * `...Of` FORM FROM A `script:` BLOCK; either form elsewhere.
+     * form delegates to it, so the two cannot drift. CALL THE `...Of` FORM FROM A
+     * `script:` BLOCK; either form elsewhere.
      *
      * `regQcLevelOf` is named rather than being an overload of `regQcLevel(Map)` because
      * `regQcLevel(Map)` and a same-arity `regQcLevel(def)` are ambiguous for a NULL
@@ -191,24 +189,6 @@ class ParamUtils {
     /** Map form -- see the note above. Delegates; holds no logic of its own. */
     static int regQcLevel(Map params) {
         return regQcLevelOf(params.skip_registration_qc, params.reg_qc)
-    }
-
-    /**
-     * Effective micro-registration depth: 0 = none, 1 = micro-rigid only (refines slide.M),
-     * 2 = micro-rigid + micro non-rigid (register_micro). VALIS controls the two passes
-     * independently — micro_rigid_registrar_cls for the rigid refinement, the register_micro()
-     * call for the non-rigid one — and this ordinal nests them (0 ⊂ 1 ⊂ 2), which forbids the
-     * odd "micro non-rigid without micro-rigid" combination. The shipped default is 2
-     * (micro-rigid + micro non-rigid, since 2026-09-16), declared in nextflow.config -- the
-     * single source of truth for it -- and restated in nextflow_schema.json;
-     * tests/test_micro_reg_default_is_two.py holds every home to that number, this comment
-     * included. The `null` fallback below also returns 2, and is UNREACHABLE on the pipeline
-     * path: the schema declares reg_micro_reg non-nullable with its own default, so
-     * validateParameters() has filled it in before any caller reaches here. Single source of truth for register.nf / warp_seg_qc.nf so the QC can
-     * honestly say what the 'rigid' stage means for a given run.
-     */
-    static int microRegLevelOf(def regMicroReg) {
-        return regMicroReg == null ? 2 : (regMicroReg as int)
     }
 
     /**
@@ -395,8 +375,7 @@ class ParamUtils {
      * STARE's retired cost-tier rows (removed 2026-11-04), kept ONLY so the launch refusal in
      * checkRetiredParams() can name the values a stale `reg_tiled_mode` used to select. Nothing
      * resolves a knob from this table: `high` is now the plain nextflow.config default of the
-     * four knobs (pinned by tests/test_reg_presets_inlined_in_config.py), and the benchmark
-     * harness's own tier rows (benchmarks/regbench/methods/stare.py TIERS) are pinned to it.
+     * four knobs (pinned to this table's `high` row by tests/test_stare_has_no_tiers.py).
      */
     static final Map<String, Map<String, Integer>> RETIRED_STARE_TIERS = [
         high  : [reg_tiled_tile: 2048, reg_tiled_halo: 256, reg_tiled_out_tile: 1024, reg_tiled_coarse_max_dim: 1024],
@@ -444,40 +423,18 @@ class ParamUtils {
     }
 
     /**
-     * Reject per-knob overrides that contradict the cost/accuracy tier they are used with.
+     * STARE's one cross-parameter knob rule: COARSE's thumbnail floor (below).
      *
-     * Only VALIS has tiers now (`memory_mode`: `high | medium | low | custom`; STARE's were
-     * removed 2026-11-04, see checkRetiredParams). Individual knob overrides
-     * are meaningful ONLY under `custom`, which is defined as "start from `high`, apply what the
-     * user set". Allowing `--memory_mode low --reg_valis_max_non_rigid_dim 4096` would produce a
-     * run that reports a tier it is not actually using, and nothing downstream could tell: the
-     * tier name reaches the QC report and the benchmark tables, the resolved numbers do not.
+     * Neither registration backend has cost tiers any more (VALIS runs valis-wsi 1.2.0 at its
+     * defaults; STARE's reg_tiled_mode tiers were removed 2026-11-04, see checkRetiredParams),
+     * so the per-knob-override-vs-tier check this function used to carry has nothing left to
+     * check and is gone.
      *
-     * Runs before any process is instantiated (workflows/mirage.nf), so a contradictory
-     * invocation costs nothing. This is the cross-parameter layer -- the per-value enums and
-     * types are the schema's job (nextflow_schema.json), per the two-layer rule in CLAUDE.md.
+     * Runs before any process is instantiated (workflows/mirage.nf). This is the
+     * cross-parameter layer -- the per-value enums and types are the schema's job
+     * (nextflow_schema.json), per the two-layer rule in CLAUDE.md.
      */
-    static void validateRegPresets(Map params) {
-        def offenders = { String modeName, Object mode, Map knobs ->
-            if (mode == 'custom') return []
-            return knobs.findAll { name, value -> value != null }
-                        .collect { name, value -> "--${name} ${value}" }
-        }
-
-        def valisBad = offenders('memory_mode', params.memory_mode, [
-            reg_valis_max_processed_dim: params.reg_valis_max_processed_dim,
-            reg_valis_max_non_rigid_dim: params.reg_valis_max_non_rigid_dim,
-        ])
-        if (valisBad) {
-            throw new IllegalArgumentException(
-                "VALIS knob override(s) ${valisBad.join(', ')} were given, but " +
-                "--memory_mode is '${params.memory_mode}'. Per-knob overrides only apply under " +
-                "--memory_mode custom, which starts from the 'high' preset and keeps every knob " +
-                "you do not set. Either pass --memory_mode custom, or drop the override(s) and " +
-                "let the '${params.memory_mode}' preset supply them " +
-                "(table: bin/utils/valis_config.py, MEMORY_PRESETS).")
-        }
-
+    static void validateStareKnobs(Map params) {
         // COARSE's thumbnail bound has a FLOOR, and it is not cosmetic. bin/utils/tiled_io.py's
         // decimation_factor() treats `max_dim <= 0` as "no decimation" and returns factor 1, so
         // the anchor is handed the FULL-RESOLUTION plane: every one of its ~50 refine

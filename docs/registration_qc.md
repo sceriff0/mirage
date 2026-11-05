@@ -86,7 +86,13 @@ of all three inputs (see [Resources](resources.md#registration-qc)).
 
 ## Why the correspondence is fixed, and fixed *there*
 
-VALIS applies four transform states in this order:
+VALIS's transform states, in order. At `reg_valis_mode default` REGISTER runs valis-wsi 1.2.0
+at its defaults, which run **no micro-registration** (no `MicroRigidRegistrar`, no
+`register_micro()`), so the pipeline scores `native`, `rigid` and `non_rigid`, and `rigid` is the
+plain affine. At `reg_valis_mode hires` (valis-wsi's own high-resolution example) both micro
+passes run, so all four rows below are scored, and `rigid` is affine ∘ micro-rigid
+(`MicroRigidRegistrar` refines `slide.M` inside `register()`; the record says so with
+`micro_reg: 2`, `rigid_includes_micro_rigid: true`):
 
 | Stage | What it is | Where it comes from |
 |---|---|---|
@@ -160,8 +166,7 @@ Per stage, over the fixed pairs:
 
 `delta_vs_anchor` reports each stage minus `rigid`. **A positive displacement delta means that
 stage made the alignment worse** — which is exactly the failure this design exists to surface,
-since micro-registration is caught-and-continued in `bin/register.py` and would otherwise fail
-silently.
+since a stage that hurts the alignment would otherwise go unnoticed.
 
 ## The REGISTER stage checkpoint
 
@@ -171,10 +176,15 @@ VALIS composes its stages destructively:
 - `register_micro()` does `fwd_dxdy = fwd_dxdy + micro_residual` and writes it back onto the
   same attribute.
 
-So a finished registrar pickle holds **one** field that is rigid + non-rigid + micro, and no
-reader can recover the intermediate. REGISTER therefore snapshots each slide's forward
-displacement field at the only moment it exists — after `register()` returns, before
-`register_micro()` is called — into `reg_stage_checkpoint/`. Fields are at non-rigid
+So a registrar pickle that ran a micro pass holds **one** field that is rigid + non-rigid +
+micro, and no reader can recover the intermediate. REGISTER snapshots each slide's forward
+displacement field after `register()` returns, and before any `register_micro()`, into
+`reg_stage_checkpoint/`. At `default` no micro pass runs, so the checkpoint records
+`micro_registration: false`: its field is the final one, and the QC reports `non_rigid` and
+omits `micro`. At `hires` it records `true` (corrected to `false` after the fact if
+`register_micro` returned without registering), so `non_rigid` is the checkpoint's pre-micro
+field and `micro` is the pickle's final one: a post-micro field is never labelled
+`non_rigid`. Fields are at non-rigid
 registration resolution (a few thousand pixels a side), not slide resolution: tens of MB.
 
 Writing it can never fail a registration; it is QC input, and REGISTER's own success does not
@@ -182,7 +192,7 @@ depend on it. The QC process that *reads* it is gating, though — `GENERATE_REG
 carries `retry-then-fail`, so if that process itself dies the run fails. When the checkpoint is
 merely missing, the QC still runs and reports `native`, `rigid` and `micro`, sets
 `stages_separable: false`, and records a `note` saying why `non_rigid` is absent. When
-micro-registration did not run (skipped, or it raised and was caught), the checkpoint records
+micro-registration did not run (`default`, or a `hires` `register_micro` that was a no-op), the checkpoint records
 that and the QC omits the `micro` stage rather than reporting a byte-for-byte duplicate of
 `non_rigid`.
 

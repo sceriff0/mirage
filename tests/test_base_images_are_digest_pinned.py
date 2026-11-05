@@ -44,14 +44,6 @@ _FROM_ANY = re.compile(r"^FROM\s+", re.M)
 # The image references the pipeline pulls at RUNTIME that are not first-party.
 # Each is (file, the exact pinned string that must appear).
 EXTERNAL_SITES = {
-    "modules/local/register.nf": (
-        "cdgatenbee/valis-wsi@sha256:"
-        "eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6"
-    ),
-    "lib/WarpBackends.groovy": (
-        "cdgatenbee/valis-wsi@sha256:"
-        "eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6"
-    ),
     "conf/modules.config": (
         "docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:"
         "355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4"
@@ -61,10 +53,10 @@ EXTERNAL_SITES = {
 
 def _dockerfiles():
     found = sorted(CONTAINERS.glob("*/Dockerfile"))
-    # Seventeen since 2026-10-13: the eleven pipeline images plus the registration
-    # benchmark's six (valis120, deeperhistreg, palom, stare-regbench, valis100, ashlar120).
-    assert len(found) == 17, (
-        f"expected seventeen build contexts, found {len(found)}: {[p.parent.name for p in found]}. "
+    # Eighteen since 2026-11-05: the twelve pipeline images (containers/valis joined then) plus
+    # the registration benchmark's six (valis120, deeperhistreg, palom, stare-regbench, valis100, ashlar120).
+    assert len(found) == 18, (
+        f"expected eighteen build contexts, found {len(found)}: {[p.parent.name for p in found]}. "
         "The glob, not the repository, is what changed -- and a glob that misses the "
         "interesting files passes vacuously."
     )
