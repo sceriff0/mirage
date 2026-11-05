@@ -624,8 +624,8 @@ def primary_of(family, dataset=COHORT):
     return None
 
 
-# Ruling 193 (user 2026-10-18 "the best one as_drawn"): a family whose primary is its
-# dataset's method_best row (every DeeperHistReg row is as-drawn since 2026-10-17).
+# Ruling 193 (user 2026-10-18 "the best one"): a family whose primary is its dataset's
+# method_best row (every DeeperHistReg row is the image its writer draws).
 # variants.PRIMARY keeps a placeholder (PRIMARY_DEEPERHISTREG) for the scorer's common
 # block and the realcheck; the paper resolves the primary here, at table time.
 BEST_IS_PRIMARY = {

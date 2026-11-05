@@ -162,7 +162,7 @@ def test_terminal_rows_are_the_last_variant_of_each_run():
             continue
         assert rows[variants.run_name(run)] == variants.variants_of(run)[-1]
     assert variants.STARE_LOCAL4 in variants.COST_ONLY
-    # DeeperHistReg has ONE result per run: the run's own name (ruling 2026-10-17)
+    # DeeperHistReg has ONE result per run: the run's own name
     assert rows["deeperhistreg_hr_gpu"] == "deeperhistreg_hr_gpu"
     assert not any("asdrawn" in v for v in rows.values())
     assert rows["valis_mirage"] == "valis_mirage" and rows["palom"] == "palom"
@@ -668,7 +668,7 @@ def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
 
 
 def test_deeperhistregs_primary_is_its_best_as_drawn_row():
-    """Ruling 193 (user 2026-10-18 'the best one as_drawn'): DeeperHistReg's primary is
+    """Ruling 193 (user 2026-10-18 'the best one'): DeeperHistReg's primary is
     the dataset's method_best row, said and flagged in-sample; variants.PRIMARY's
     placeholder is not what the tables use."""
     rows = [t for t in tables.terminal_rows("multiplex").values()

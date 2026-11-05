@@ -164,7 +164,7 @@ moved by its own code in its own direction. Every departure from that is listed 
 in `run.json: info.implementation.benchmark_side`.** Where a method's writer departs
 from its own transform, that is stated in prose in the method's section, not recorded
 per run. DeeperHistReg, whose shipped writer draws its image off its own registration,
-is scored on the image as drawn only (user instruction of 2026-10-17).
+is scored on the image as drawn.
 
 The departures are listed, none is hidden; "Caveats that travel with the results" and
 each method's section give them in full. In short:
@@ -385,9 +385,8 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   chosen from the scorer's tables, so the scorer cannot use it without a cycle. The
   scorer's common case set and the paper's `common` pooling can therefore differ;
   `summary.md` says so in its header (`score.PRIMARY_ANCHOR_RULE`).
-- **DeeperHistReg keeps one row per run, the image its writer draws** (user instruction
-  of 2026-10-17, which replaced option A of 2026-10-15). The row is named after the run
-  (`deeperhistreg_hr_gpu`); no row of the estimated field is written.
+- **DeeperHistReg keeps one row per run, the image its writer draws.** The row is named
+  after the run (`deeperhistreg_hr_gpu`).
 - **STARE runs are generated: stride x preprocessing level**
   (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. The cohort's
   regime has the levels `baseline` (STARE unchanged: the fluorescence channel as it is),
@@ -4583,7 +4582,7 @@ uncompressed (`single_page_tiff`); the clock is paused meanwhile and `convert_s`
 min-max rule (counted on every fourth row and column): a few bright pixels can leave
 16-bit DAPI in a handful of levels.
 
-**One row per run, reference -> moving, not inverted** (user instruction of 2026-10-17).
+**One row per run, reference -> moving, not inverted.**
 `<label>` scores the image **as written**: for every pixel of the file on disk, the
 moving-slide position the package's writer sampled (`asdrawn_map`). Its points are the
 transform of the image, and its selfcheck declares no offset.

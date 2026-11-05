@@ -432,7 +432,7 @@ RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
 # have one. Each is one line to switch back to upstream's default setting:
 # "valis120" (register at 512 / 2048 px) and "deeperhistreg_gpu" (the 4096 px set). Both
 # settings run either way. DeeperHistReg's one row per run is the image its writer puts
-# on disk (user instruction 2026-10-17).
+# on disk.
 PRIMARY_VALIS120 = "valis120_hires"
 PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_gpu"
 PRIMARY = (
