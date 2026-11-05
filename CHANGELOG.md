@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **STARE has no cost tiers any more: `reg_tiled_mode` is gone, and so is
+  `lib/RegPresets.groovy`.** STARE runs one default configuration, the former `high` row, now
+  the plain defaults of its four knobs in `nextflow.config`: `reg_tiled_tile` 2048,
+  `reg_tiled_halo` 256, `reg_tiled_out_tile` 1024, `reg_tiled_coarse_max_dim` 1024. A default
+  run is unchanged: the same rendered commands and the same memory requests at attempt 1
+  (TILED_COARSE 2 GB, TILED_REG_TILE 4 GB, TILED_SOLVE 2 GB with `--max-disp 256`,
+  TILED_STITCH 4 GB; measured from a stub trace before and after). Each knob can now be set
+  directly, without `custom`. With VALIS already tier-free (valis-wsi 1.2.0 at its defaults),
+  `RegPresets` held nothing and is deleted, `conf/modules.config` no longer inlines a tier
+  table, and `ParamUtils.validateRegPresets` is `validateStareKnobs`: the per-knob-override
+  check had nothing left to check, and only COARSE's 256 px floor remains.
+  `tests/test_reg_presets_inlined_in_config.py` (which pinned the inlined copies to the table)
+  is replaced by `tests/test_stare_has_no_tiers.py`. A run that still passes `reg_tiled_mode`
+  (command line, `-params-file`, profile) is **refused at launch** when the value is `medium`,
+  `low` or `custom`, with the four knob values of the retired row in the message (medium
+  1024/192/768/1024, low 512/128/512/512), so an old `--reg_tiled_mode low` cannot silently
+  run the high values. `high` only logs a warning, since it is what runs anyway.
+
 ### Changed
 
 - **STARE (`tiled`) is the default registration method (was `valis`).** It is the method

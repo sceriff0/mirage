@@ -295,8 +295,8 @@
           <code>estimate_rigid</code>'s return value.</div></div>
       <div class="r"><div class="t">the constraint</div><div class="v">residual &lt; halo</div>
         <div class="d">The per-tile step reads a tile core expanded by <code>reg_tiled_halo</code> px and clamped to
-          the image — the capture radius the anchor's residual must land inside. Null by default, resolved from the
-          <code>reg_tiled_mode</code> tier row (256 px at <code>high</code>).</div></div>
+          the image — the capture radius the anchor's residual must land inside. Default 256 px (STARE has one
+          default configuration; the cost tiers were removed).</div></div>
       <div class="r"><div class="t">what enforces it</div><div class="v">nothing</div>
         <div class="d"><code>TILED_COARSE</code> logs a warning once the residual reaches the halo, but nothing
           downstream checks it and no task fails on it — a slide can mis-register silently and the run still exits
@@ -415,21 +415,15 @@
     <span class="plabel">e</span>
     <div class="panel-head"><h2>The knobs</h2>
       <p>Defaults verbatim from the <code>params{}</code> block of <code>nextflow.config</code>, the only place a
-        default is declared. <code>reg_tiled_coarse_max_dim</code> and <code>reg_tiled_halo</code> are
-        <b>tier-owned</b>: both are declared <code>null</code>, and the value comes from <code>reg_tiled_mode</code>'s
-        row in the STARE preset table. Setting either directly requires <code>reg_tiled_mode&nbsp;=&nbsp;custom</code>
-        — an override under any other tier is rejected at launch, before any process runs.</p></div>
+        default is declared. <code>reg_tiled_coarse_max_dim</code> and <code>reg_tiled_halo</code> carry plain
+        defaults and are set directly (the <code>reg_tiled_mode</code> cost tiers were removed; passing it is
+        refused at launch unless it is <code>high</code>).</p></div>
     <div class="tbl-scroll"><table class="pr">
-      <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="val nul">null</td>
-        <td class="d">M0 thumbnail longest side (px) — the memory knob from panel&nbsp;d. null → the
-          <code>reg_tiled_mode</code> row in the STARE preset table (<code>high</code>: 2048). 256 px floor enforced
+      <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="val">1024</td>
+        <td class="d">M0 thumbnail longest side (px) — the knob from panel&nbsp;d. 256 px floor enforced
           at launch.</td></tr>
-      <tr><td class="k">reg_tiled_halo</td><td class="val nul">null</td>
-        <td class="d">tile read halo = the capture radius from panel&nbsp;a (px). null → the same tier row
-          (<code>high</code>: 256).</td></tr>
-      <tr><td class="k">reg_tiled_mode</td><td class="val">high</td>
-        <td class="d">cost/accuracy tier: high | medium | low | custom. <code>custom</code> starts from the
-          <code>high</code> row and keeps every knob not explicitly set.</td></tr>
+      <tr><td class="k">reg_tiled_halo</td><td class="val">256</td>
+        <td class="d">tile read halo = the capture radius from panel&nbsp;a (px).</td></tr>
     </table></div>
   </section>
 
@@ -469,15 +463,15 @@
     <b>(d)</b> Because the matcher is a U-Net, its activation memory scales with thumbnail <i>area</i>
     (GB ≈ 1.1 + 7.3 × Mpx) rather than staying near-flat the way a classical corner detector's did — the resource
     request this step asks for, and the tier this pipeline ships at, both moved to respect that curve. <b>(e)</b> The
-    two knobs governing this step's cost and accuracy are tier-owned and null-declared, resolved from
-    <code>reg_tiled_mode</code>'s row unless <code>reg_tiled_mode=custom</code> explicitly overrides them.
+    two knobs governing this step's cost and accuracy carry plain defaults in <code>nextflow.config</code>
+    and are set directly (the cost tiers were removed).
     <b>(f)</b> The replacement is unmeasured head-to-head against what it replaced, has no fallback if its learned
     stack is unavailable, and reports a residual that is an estimate lifted from a thumbnail, not a full-resolution
     guarantee. This figure is the long form of Supplementary Figure <b>S2</b>'s panel on the STARE backend, which it
     must not contradict; Supplementary Figure <b>S1</b> places registration in the whole workflow.
     <span class="footnote">All algorithm details and parameter defaults are read verbatim from the pipeline source
     (<code>bin/utils/coarse_align.py</code>, <code>bin/tiled_coarse.py</code>,
-    <code>bin/utils/tile_grid.py</code>, <code>bin/utils/tiled_io.py</code>, <code>lib/RegPresets.groovy</code>,
+    <code>bin/utils/tile_grid.py</code>, <code>bin/utils/tiled_io.py</code>,
     <code>lib/ParamUtils.groovy</code>, <code>conf/modules.config</code>, <code>nextflow.config</code>,
     <code>containers/tiled/Dockerfile</code>, <code>requirements/torch-cpu.txt</code>,
     <code>requirements/kornia.txt</code>, <code>tests/test_coarse_frontend.py</code> and CHANGELOG.md).</span>

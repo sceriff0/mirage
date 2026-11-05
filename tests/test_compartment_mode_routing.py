@@ -301,7 +301,7 @@ ALLOWED_LINES = {
         # 1251 -> 1253 in the final whole-branch review: +2 lines in TILED_COARSE's memory
         # closure comment. The old text was a CAUTION telling the operator not to pass
         # `reg_tiled_coarse_max_dim` 0; commit 9073f14 had already made anything below 256
-        # a hard launch abort in ParamUtils.validateRegPresets, so the caution described a
+        # a hard launch abort in ParamUtils.validateRegPresets (now validateStareKnobs), so the caution described a
         # state the operator can no longer reach and was rewritten to say the floor is
         # enforced. Composition check: 1251 + 2 = 1253, and `wc -l conf/modules.config`
         # rose 1338 -> 1340, the same 2. Re-pinned directly from the file, not computed:
@@ -369,7 +369,10 @@ ALLOWED_LINES = {
         # grew by two (valis-wsi 1.2.0 defaults; Addendum A).
         # 1285 -> 1281 (2026-11-05): the StarDist ext.args comment above shrank when the
         # shipped model became a pinned Hugging Face snapshot.
-        1281: (
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1281
+        # 1281 -> 1254 (2026-11-05): STARE's cost tiers were removed, and the four TILED_*
+        # closures above this line lost their inlined tier table.
+        1254: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

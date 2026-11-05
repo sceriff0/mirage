@@ -49,7 +49,7 @@ nextflow_process {
         // native-resolution plane ~50 times, against a memory request derived from this very
         // flag. (When the anchor was a U-Net that was thousands of GB -- how patient 052
         // exhausted all four attempts with exit status 137; the pre-change module rendered no
-        // such flag at all.) 1024 is the 'high' tier's refine resolution since 2026-09-27.
+        // such flag at all.) 1024 is the default refine resolution since 2026-09-27.
         //
         // The assertions read the rendered .command.sh rather than the process outcome, so
         // the case holds whether tiled_coarse.py itself succeeds; under `--profile test` no
@@ -80,7 +80,7 @@ nextflow_process {
                 { assert rendered.size() >= 1,
                     "no rendered TILED_COARSE .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--max-dim 1024') },
-                    "rendered command missing --max-dim (params.reg_tiled_coarse_max_dim 'high' tier 1024): " + rendered.join(' --- ') },
+                    "rendered command missing --max-dim (params.reg_tiled_coarse_max_dim default 1024): " + rendered.join(' --- ') },
                 // the pre-existing flags must survive the change
                 { assert rendered.every { it.contains('--tile 2048') },
                     "rendered command missing --tile: " + rendered.join(' --- ') },
@@ -171,68 +171,14 @@ nextflow_process {
         }
     }
 
-    test("Should render the tier's values when reg_tiled_mode is not high - rendered command") {
+    test("Should let an explicit reg_tiled_tile override its default and keep the others - rendered command") {
 
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so a stub
-        // run cannot see which tier's numbers reached the command. Same idiom as the case above.
-        //
-        // The assertion with teeth for the preset refactor: reg_tiled_tile/halo/coarse_max_dim are
-        // null in nextflow.config and resolve through RegPresets at render time. If that wiring
-        // regresses, the flags render as 'null' (or stay at the high values) and every non-high
-        // tier silently becomes a no-op -- the run would look completely normal.
+        // STARE has no cost tiers (2026-11-04): each knob is a plain param, set directly.
+        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
         tag "stub"
 
         when {
             params {
-                reg_tiled_mode = 'low'
-            }
-            process {
-                """
-                input[0] = [
-                    [ patient_id: 'P001', channels: ['DAPI', 'CD3'], is_reference: false ],
-                    file('${projectDir}/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
-                    file('${projectDir}/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
-                ]
-                """
-            }
-        }
-
-        then {
-            def rendered = []
-            new File("$workDir").eachFileRecurse { f ->
-                if (f.name == '.command.sh' && f.text.contains('tiled_coarse.py')) {
-                    rendered << f.text
-                }
-            }
-
-            assertAll(
-                { assert rendered.size() >= 1,
-                    "no rendered TILED_COARSE .command.sh found under the task work dir" },
-                // RegPresets.STARE.low
-                { assert rendered.every { it.contains('--tile 512') },
-                    "the 'low' tier did not reach --tile: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--halo 128') },
-                    "the 'low' tier did not reach --halo: " + rendered.join(' --- ') },
-                { assert rendered.every { it.contains('--max-dim 512') },
-                    "the 'low' tier did not reach --max-dim: " + rendered.join(' --- ') },
-                // The failure mode a broken resolution would produce, called out explicitly so
-                // the message names the cause rather than just showing a missing flag. Matched on
-                // the FLAG VALUE, not the whole script: shell redirections legitimately contain
-                // '/dev/null' and a bare contains('null') fires on those.
-                { assert rendered.every { r -> ['--tile null', '--halo null', '--max-dim null'].every { !r.contains(it) } },
-                    "a tier-owned knob rendered as literal 'null' -- RegPresets resolution is " +
-                    "not wired: " + rendered.join(' --- ') }
-            )
-        }
-    }
-
-    test("Should let a custom override beat the tier - rendered command") {
-
-        tag "stub"
-
-        when {
-            params {
-                reg_tiled_mode = 'custom'
                 reg_tiled_tile = 4096
             }
             process {
@@ -257,14 +203,12 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1, "no rendered TILED_COARSE .command.sh found" },
                 { assert rendered.every { it.contains('--tile 4096') },
-                    "the explicit override did not win over the tier: " + rendered.join(' --- ') },
-                // ...and everything NOT overridden still comes from 'high', which is what
-                // "custom starts from high" means. A custom tier that zeroed the rest would be
-                // a very different contract.
+                    "the explicit reg_tiled_tile was not rendered: " + rendered.join(' --- ') },
+                // ...and everything NOT overridden keeps its default (the former 'high' row)
                 { assert rendered.every { it.contains('--halo 256') },
-                    "custom did not inherit halo from the high row: " + rendered.join(' --- ') },
+                    "halo did not keep its default 256: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--max-dim 1024') },
-                    "custom did not inherit max-dim from the high row: " + rendered.join(' --- ') }
+                    "max-dim did not keep its default 1024: " + rendered.join(' --- ') }
             )
         }
     }

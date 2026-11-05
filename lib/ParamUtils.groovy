@@ -481,42 +481,69 @@ class ParamUtils {
     }
 
     /**
-     * Reject per-knob overrides that contradict the cost/accuracy tier they are used with.
-     *
-     * The STARE backend exposes `high | medium | low | custom` (VALIS has no tiers: it runs
-     * valis-wsi 1.2.0 at its defaults). Individual knob overrides are meaningful ONLY under
-     * `custom`, which is defined as "start from `high`, apply what the user set". Allowing
-     * `--reg_tiled_mode low --reg_tiled_tile 4096` would produce a run that reports a tier it
-     * is not actually using, and nothing downstream could tell: the tier name reaches the QC
-     * report and the benchmark tables, the resolved numbers do not.
-     *
-     * Runs before any process is instantiated (workflows/mirage.nf), so a contradictory
-     * invocation costs nothing. This is the cross-parameter layer -- the per-value enums and
-     * types are the schema's job (nextflow_schema.json), per the two-layer rule in CLAUDE.md.
+     * STARE's retired cost-tier rows (removed 2026-11-04), kept ONLY so the launch refusal in
+     * checkRetiredParams() can name the values a stale `reg_tiled_mode` used to select. Nothing
+     * resolves a knob from this table: `high` is now the plain nextflow.config default of the
+     * four knobs (pinned to this table's `high` row by tests/test_stare_has_no_tiers.py).
      */
-    static void validateRegPresets(Map params) {
-        def offenders = { String modeName, Object mode, Map knobs ->
-            if (mode == 'custom') return []
-            return knobs.findAll { name, value -> value != null }
-                        .collect { name, value -> "--${name} ${value}" }
-        }
+    static final Map<String, Map<String, Integer>> RETIRED_STARE_TIERS = [
+        high  : [reg_tiled_tile: 2048, reg_tiled_halo: 256, reg_tiled_out_tile: 1024, reg_tiled_coarse_max_dim: 1024],
+        medium: [reg_tiled_tile: 1024, reg_tiled_halo: 192, reg_tiled_out_tile:  768, reg_tiled_coarse_max_dim: 1024],
+        low   : [reg_tiled_tile:  512, reg_tiled_halo: 128, reg_tiled_out_tile:  512, reg_tiled_coarse_max_dim:  512],
+    ]
 
-        def stareBad = offenders('reg_tiled_mode', params.reg_tiled_mode, [
-            reg_tiled_tile          : params.reg_tiled_tile,
-            reg_tiled_halo          : params.reg_tiled_halo,
-            reg_tiled_out_tile      : params.reg_tiled_out_tile,
-            reg_tiled_coarse_max_dim: params.reg_tiled_coarse_max_dim,
-        ])
-        if (stareBad) {
-            throw new IllegalArgumentException(
-                "STARE knob override(s) ${stareBad.join(', ')} were given, but " +
-                "--reg_tiled_mode is '${params.reg_tiled_mode}'. Per-knob overrides only apply " +
-                "under --reg_tiled_mode custom, which starts from the 'high' preset and keeps " +
-                "every knob you do not set. Either pass --reg_tiled_mode custom, or drop the " +
-                "override(s) and let the '${params.reg_tiled_mode}' preset supply them " +
-                "(table: lib/RegPresets.groovy, RegPresets.STARE).")
+    /**
+     * Answer a RETIRED parameter that still reaches `params` (a command-line flag, a
+     * -params-file or a profile all land there even though nextflow.config no longer declares
+     * it). Today that is only STARE's cost tier, `reg_tiled_mode`.
+     *
+     * Must run BEFORE validateParameters(): nextflow.config's validation.ignoreParams lists
+     * `reg_tiled_mode` so nf-schema lets it through to here, and this refusal is the one the
+     * user sees. "Seamless" removal means an old `--reg_tiled_mode low` must not silently run
+     * the high values, so anything but `high` THROWS with the row's four knob values; `high`
+     * is exactly what runs anyway, so it only returns a warning for the caller to log (lib/
+     * classes have no `log`). Returns null when the param is absent.
+     *
+     * Reads through `containsKey`/`get` rather than `params.reg_tiled_mode`, so no source line
+     * references the undeclared param as if it were live (tests/check_param_consistency.py).
+     */
+    static String checkRetiredParams(Map params) {
+        if (params == null || !params.containsKey('reg_tiled_mode')) return null
+        def raw = params.get('reg_tiled_mode')
+        def mode = raw == null ? null : raw.toString().trim()
+        if (mode == 'high') {
+            return "--reg_tiled_mode is RETIRED and ignored: STARE no longer has cost tiers, and " +
+                "'high' is exactly its single default configuration (reg_tiled_tile 2048, " +
+                "reg_tiled_halo 256, reg_tiled_out_tile 1024, reg_tiled_coarse_max_dim 1024). " +
+                "Drop it from your command line, params file or profile."
         }
+        def row = RETIRED_STARE_TIERS[mode]
+        def instead = row != null
+            ? "To keep the former '${mode}' tier, set its four knobs directly: " +
+              row.collect { k, v -> "${k} ${v}" }.join(', ') + "."
+            : "For a former 'custom' tier, set the knobs you overrode directly " +
+              "(reg_tiled_tile, reg_tiled_halo, reg_tiled_out_tile, reg_tiled_coarse_max_dim); " +
+              "every knob you leave unset takes the former 'high' value, as custom did."
+        throw new IllegalArgumentException(
+            "--reg_tiled_mode '${raw}' is no longer supported: STARE's cost tiers were removed " +
+            "(2026-11-04) and STARE runs one default configuration, the former 'high' row. " +
+            "Refusing rather than silently running the 'high' values. ${instead} " +
+            "Then remove reg_tiled_mode from your command line, params file or profile.")
+    }
 
+    /**
+     * STARE's one cross-parameter knob rule: COARSE's thumbnail floor (below).
+     *
+     * Neither registration backend has cost tiers any more (VALIS runs valis-wsi 1.2.0 at its
+     * defaults; STARE's reg_tiled_mode tiers were removed 2026-11-04, see checkRetiredParams),
+     * so the per-knob-override-vs-tier check this function used to carry has nothing left to
+     * check and is gone.
+     *
+     * Runs before any process is instantiated (workflows/mirage.nf). This is the
+     * cross-parameter layer -- the per-value enums and types are the schema's job
+     * (nextflow_schema.json), per the two-layer rule in CLAUDE.md.
+     */
+    static void validateStareKnobs(Map params) {
         // COARSE's thumbnail bound has a FLOOR, and it is not cosmetic. bin/utils/tiled_io.py's
         // decimation_factor() treats `max_dim <= 0` as "no decimation" and returns factor 1, so
         // the anchor is handed the FULL-RESOLUTION plane: every one of its ~50 refine
@@ -528,7 +555,7 @@ class ParamUtils {
         // The schema's `minimum: 0` blocks negatives on the pipeline path; this is the
         // cross-parameter half that blocks the rest, with a message that says why. 256 px is
         // the floor because it is the anchor's own sweep resolution -- a refine thumbnail below
-        // it would be coarser than the sweep that seeds it -- and half of the 'low' tier (512).
+        // it would be coarser than the sweep that seeds it -- and a quarter of the default (1024).
         if (params.reg_tiled_coarse_max_dim != null &&
             (params.reg_tiled_coarse_max_dim as int) < 256) {
             throw new IllegalArgumentException(
@@ -538,9 +565,8 @@ class ParamUtils {
                 "value of 0 or less disables decimation entirely -- handing it the " +
                 "full-resolution plane, which it warps and FFTs ~50 times. TILED_COARSE's " +
                 "memory request is derived from this same value, so that would also " +
-                "under-reserve the task. Use 512 (the 'low' tier) or higher, or " +
-                "drop the override and let --reg_tiled_mode pick the tier " +
-                "(table: lib/RegPresets.groovy, RegPresets.STARE).")
+                "under-reserve the task. Use 256 or higher, or drop the " +
+                "override and keep the default (1024).")
         }
     }
 

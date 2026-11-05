@@ -1093,6 +1093,35 @@ def checkPassthroughPath() {
     println "LIB PROBE: checkPassthroughPath passed"
 }
 
+// ParamUtils.checkRetiredParams -- STARE's cost tier (reg_tiled_mode) was removed on
+// 2026-11-04. A stale value still lands in `params` (CLI, -params-file, profile), and
+// "seamless" removal means it must never silently run the high values: medium/low/custom
+// (or anything else) THROW naming the knobs to set, high only returns a warning, absent
+// returns null. Out-of-band of workflow{} for the string-constant ceiling (file header).
+def checkRetiredStareTier() {
+    assert ParamUtils.checkRetiredParams([:]) == null : "absent reg_tiled_mode must be a no-op"
+    assert ParamUtils.checkRetiredParams([reg_tiled_tile: 512]) == null : "a live STARE knob is not retired"
+    def warn = ParamUtils.checkRetiredParams([reg_tiled_mode: 'high'])
+    assert warn != null && warn.contains('RETIRED') : "high must warn, not throw: ${warn}"
+    def expect = [
+        medium: 'reg_tiled_tile 1024, reg_tiled_halo 192, reg_tiled_out_tile 768, reg_tiled_coarse_max_dim 1024',
+        low   : 'reg_tiled_tile 512, reg_tiled_halo 128, reg_tiled_out_tile 512, reg_tiled_coarse_max_dim 512',
+        custom: 'set the knobs you overrode directly',
+        bogus : 'set the knobs you overrode directly',
+    ]
+    expect.each { mode, needle ->
+        def msg = null
+        try { ParamUtils.checkRetiredParams([reg_tiled_mode: mode]) }
+        catch (IllegalArgumentException e) { msg = e.message }
+        assert msg != null : "reg_tiled_mode=${mode} must be REFUSED, not run with the high values"
+        assert msg.contains('no longer supported') && msg.contains(needle) :
+            "reg_tiled_mode=${mode}: the refusal must name ${needle}; got: ${msg}"
+    }
+    // a CLI value arrives as a String with whatever whitespace the shell left
+    assert ParamUtils.checkRetiredParams([reg_tiled_mode: ' high ']) != null : "trimmed high warns"
+    println "LIB PROBE: checkRetiredStareTier passed"
+}
+
 workflow {
 
     // Layout checkpoint paths + MarkerUtils, and CsvUtils.resolveKeptChannelsPerSlide.
@@ -1413,20 +1442,20 @@ workflow {
         // expected
     }
 
-    // validateRegPresets - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
+    // validateStareKnobs - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
     // merely invalid: decimation_factor reads <=0 as "no decimation" (full-res
     // plane into a U-Net) and the memory closure squares the value, so both ask
     // for the 4 GB floor for the largest possible job. Rationale: ParamUtils.
-    def sb = [reg_tiled_mode: 'custom',
-              reg_tiled_tile: null, reg_tiled_halo: null,
-              reg_tiled_out_tile: null]
-    [null, 512, 256].each { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: it]) }
+    def sb = [reg_tiled_tile: 2048, reg_tiled_halo: 256,
+              reg_tiled_out_tile: 1024]
+    [null, 512, 256].each { ParamUtils.validateStareKnobs(sb + [reg_tiled_coarse_max_dim: it]) }
     [0, -1, 255, 16].each { bad ->
         def no = false
-        try { ParamUtils.validateRegPresets(sb + [reg_tiled_coarse_max_dim: bad]) }
+        try { ParamUtils.validateStareKnobs(sb + [reg_tiled_coarse_max_dim: bad]) }
         catch (IllegalArgumentException ignored) { no = true }
-        assert no : "validateRegPresets must reject reg_tiled_coarse_max_dim=${bad}"
+        assert no : "validateStareKnobs must reject reg_tiled_coarse_max_dim=${bad}"
     }
+    checkRetiredStareTier()
 
     // ------------------------------------------------------------------ //
     // Layout - the published-kind vocabulary
