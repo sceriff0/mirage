@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **VALIS registration runs valis-wsi 1.2.0 at its defaults, and has no settings any more.**
+  `REGISTER` now makes the benchmark's `valis120` call: `Valis()` given the patient's slides
+  and the reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px),
+  `align_to_reference` at its default `False`, VALIS's own detector and matcher, no
+  micro-registration, every slide warped in the reference frame. The one non-default argument
+  is the registration channel: the nuclear channel is passed by index 0 instead of VALIS's
+  fuzzy name match on `"dapi"`, which a decoy name such as `DAPI_x` could win. **Removed:**
+  `memory_mode`, `reg_valis_max_processed_dim`, `reg_valis_max_non_rigid_dim`,
+  `reg_valis_max_keypoints`, `reg_micro_reg`, `reg_micro_reg_fraction`, `reg_max_image_dim`,
+  and the `tma` profile. Passing any of them is now refused at launch as an unrecognised
+  parameter. The Bio-Formats JVM heap is a fixed 10 GB at every attempt (VALIS's own value;
+  `reg_jvm_heap_gb` still overrides it), and `register.py` starts the JVM through
+  `slide_io.init_jvm` because 1.2.0's `registration.init_jvm` ignores the size it is given.
+  The pyramid-level -1 reader clamp stays: the defect is still in 1.2.0. Staged registration QC
+  scores `native`, `rigid` and `non_rigid` (there is no micro stage). Results are not comparable
+  with registrations made by the old configuration, which is archived at the git tag
+  `archive/valis-mirage-tuned`.
+- **New image `bolt3x/mirage-valis:1.0.0` (`containers/valis`) for `REGISTER` and
+  `WARP_SEG_QC`'s VALIS path.** It is upstream's `cdgatenbee/valis-wsi:1.2.0`, digest-pinned,
+  with only the four fixes a non-root user needs under Apptainer (Python under a 0700 `/root`,
+  the Bio-Formats jar and the weights where another user finds them, a writable
+  `bf_formats.txt`). No Python package is added or moved. Both processes run with
+  `--writable-tmpfs` under Singularity/Apptainer. **The image must be published
+  (`containers.yml` workflow_dispatch) before a real VALIS run.**
+- **`TILED_SOLVE` asks 2 GB on its first attempt (was 1 GB).** The slide-wide solve peaked at
+  0.19-1.20 GB per round pair on the regbench cohort, so a cohort-sized solve used to OOM once
+  and pass only on the 2 GB retry.
 - **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
   on each axis: one displacement vector every 64 px from a 128 px window. That is four
   times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows

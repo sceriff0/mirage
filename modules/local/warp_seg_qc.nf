@@ -52,10 +52,10 @@ process WARP_SEG_QC {
     def args    = task.ext.args ?: ''
     def prefix  = "${meta.patient_id}_${moving_geojson.simpleName}"
     // Tell the QC the run's micro depth so it can state honestly whether 'rigid' includes
-    // micro-rigid (level >= 1). Single-source via ParamUtils, same as REGISTER. Unused by
-    // the tiled backend's flags closure, but harmless to compute either way.
+    // micro-rigid. REGISTER runs valis-wsi at its defaults, which run no micro pass, so it
+    // is always 0. Unused by the tiled backend's flags closure.
     def ctx = [meta: meta, ref_slide: ref_slide, moving_slide: moving_slide,
-               stage_checkpoint: stage_checkpoint, micro_reg: ParamUtils.microRegLevelOf(params.reg_micro_reg)]
+               stage_checkpoint: stage_checkpoint, micro_reg: 0]
     // `?: ['']` guards against a future backend whose `flags` closure returns `[]`: with
     // no fallback, `backend_flags` would be the empty string and the interpolation below
     // (column 0, right after a line ending in `\`) would land a BLANK line between two
@@ -85,7 +85,7 @@ ${backend_flags}
     stub:
     def backend = WarpBackends.of(method)
     def prefix  = "${meta.patient_id}_${moving_geojson.simpleName}"
-    def ctx     = [micro_reg: ParamUtils.microRegLevelOf(params.reg_micro_reg)]
+    def ctx     = [micro_reg: 0]   // REGISTER runs no micro pass (valis-wsi defaults)
     def stages     = backend.stages
     def stage_stub = [n_pairs: 0, n_pairs_scored: 0, iou_n: 0, displacement_px_n: 0]
     // Built as base + extras + rest (rather than one flat literal) so each backend's

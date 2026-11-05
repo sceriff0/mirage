@@ -42,6 +42,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import test_container_harmonisation as harmonisation
+
 yaml = pytest.importorskip("yaml")
 
 # The shared workflow/composite-action resolver, imported rather than re-derived --
@@ -212,6 +214,13 @@ def _tokens_from_pip_line(chunk: str) -> set[str]:
     return found
 
 
+# An image whose Python stack is ENTIRELY its base image's: it asks pip for nothing, so the
+# scan below finds nothing and that is correct, not a stale scan. containers/valis is
+# upstream's VALIS 1.2.0 with only non-root fixes; its own smoke.sh fails the build if the
+# pip freeze moves at all. One table for both container guards.
+UPSTREAM_STACK = {"valis": harmonisation.BASE_IMAGE_PROVIDES["valis"]}
+
+
 def declared_distributions(name: str) -> set[str]:
     """Distributions this image asks pip for, from its Dockerfile AND the
     requirements/ files that Dockerfile COPYs.
@@ -361,7 +370,7 @@ def test_every_module_the_smoke_script_imports_is_installed_by_the_image(name):
     succeeds. The build proves the rest. It is still the difference between finding a
     typo in a second and finding it in a release.
     """
-    declared = declared_distributions(name)
+    declared = declared_distributions(name) | UPSTREAM_STACK.get(name, set())
     assert declared, (
         f"no pip requirement was parsed out of containers/{name}/Dockerfile at all, so "
         "the comparison below is against an empty set. The scan, not the image, is what "

@@ -9,5 +9,6 @@
   { "dir": "regqc",       "tag": "regqc" },
   { "dir": "segeval",     "tag": "segeval" },
   { "dir": "spatialdata", "tag": "spatialdata" },
-  { "dir": "stardist",    "tag": "stardist" }
+  { "dir": "stardist",    "tag": "stardist" },
+  { "dir": "valis",       "tag": "valis" }
 ]

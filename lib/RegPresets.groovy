@@ -37,20 +37,18 @@
  * An inline map lookup on a CLI-provided param inside a `memory = {}` closure was verified to work
  * on BOTH Nextflow 25.04.7 and 26.04.6, including the `?:` fallback for an unrecognised mode.
  *
- * VALIS IS NOT HERE ON PURPOSE
- * ----------------------------
- * The VALIS tier table stays in `bin/utils/valis_config.py` because its rows hold Python objects
- * -- `feature_detectors.SuperPointFD` and a `SuperGlueMatcher()` instance -- which cannot be
- * expressed in Groovy. Splitting only its numeric half up here would create exactly the two-homes
- * drift this class exists to prevent. `modules/local/register.nf` passes `--memory-mode` plus any
- * explicit numeric overrides, and `register.py` resolves them against the same table.
+ * VALIS HAS NO TIERS
+ * ------------------
+ * REGISTER runs valis-wsi 1.2.0 at its defaults (modules/local/register.nf), so there is no
+ * VALIS table anywhere. The old memory_mode tiers are archived at the git tag
+ * archive/valis-mirage-tuned.
  */
 class RegPresets {
 
-    /** The tier vocabulary, shared by both backends. Mirrored by the schema enums. */
+    /** The STARE tier vocabulary. Mirrored by the schema's reg_tiled_mode enum. */
     static final List<String> MODES = ['high', 'medium', 'low', 'custom']
 
-    /** The tier every unset value falls back to, and the shipped default for both backends. */
+    /** The tier every unset value falls back to, and the shipped default. */
     static final String DEFAULT_MODE = 'high'
 
     /*
@@ -58,10 +56,8 @@ class RegPresets {
      *
      * `tile` + 2*`halo` is the per-task window that drives TILED_REG_TILE's memory request, and
      * `out_tile` drives TILED_STITCH's, so these three are the memory axis. `coarse_max_dim` is
-     * the resolution the global transform is solved at -- STARE's counterpart to VALIS's
-     * `reg_max_image_dim`, and its dominant runtime-and-accuracy knob. (The guard that ties this
-     * axis to VALIS's is benchmarks/tests/test_build_run_plan.py, which exists only on the
-     * `benchmarking` branch -- there is no benchmarks/ directory on this one.)
+     * the resolution the global transform is solved at, and its dominant runtime-and-accuracy
+     * knob.
      *
      * Gating and resolution knobs -- reg_tiled_max_disp, reg_tiled_stride, reg_tiled_nuclear_index --
      * are deliberately NOT tiered. The range gate sets what counts as an acceptable displacement

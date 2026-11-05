@@ -138,7 +138,10 @@ nextflow_pipeline {
         }
     }
 
-    test("Should reject an out-of-range --reg_micro_reg and name the parameter") {
+    // The tuned VALIS settings were removed 2026-11-05 (valis-wsi 1.2.0 at its defaults). A
+    // run that still passes one must be REFUSED, never silently run at the defaults while the
+    // caller believes the setting applied: validation.logging.unrecognisedParams = 'error'.
+    test("Should reject a retired VALIS setting (--memory_mode) and name the parameter") {
         tag "stub"
         options "-stub"
 
@@ -147,7 +150,7 @@ nextflow_pipeline {
                 input         = "$projectDir/tests/testdata/test_input.csv"
                 outdir        = "$outputDir"
                 start         = "preprocessing"
-                reg_micro_reg = 9
+                memory_mode   = "high"
             }
         }
 
@@ -155,7 +158,7 @@ nextflow_pipeline {
             def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
             assertAll(
                 { assert workflow.failed },
-                { assert report.contains("--reg_micro_reg") }
+                { assert report.contains("memory_mode") }
             )
         }
     }
@@ -177,7 +180,6 @@ nextflow_pipeline {
                 registration_method = "valis"
                 seg_method          = "cellsam"
                 reg_qc              = 0
-                reg_micro_reg       = 1
                 seg_gpu             = false
             }
         }

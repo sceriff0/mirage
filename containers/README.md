@@ -6,7 +6,7 @@ This directory vendors the Dockerfiles for every image the Mirage pipeline runs.
 `.github/workflows/containers.yml` passes `context: .` with
 `file: containers/<name>/Dockerfile`, because every image takes its Python pins from
 [`requirements/`](../requirements) — `constraints.txt` is the one version authority shared
-by all eleven images AND by the CI workflows, and a per-directory context cannot reach
+by all twelve images AND by the CI workflows, and a per-directory context cannot reach
 outside itself. A local build must therefore be run from the repository root:
 
 ```sh
@@ -94,12 +94,12 @@ gh workflow run containers.yml --ref <branch> -f version=<tag> -f only=segeval
 | `stardist` | `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` | `tensorflow/tensorflow:2.15.0-gpu-jupyter` + StarDist 0.9.1 + csbdeep 0.8.2, with `gputools` 0.3.1 / `edt` 3.1.2 as StarDist's optional OpenCL and EDT accelerators. TensorFlow comes from the base, not from pip. |
 | `cellsam` | `bolt3x/mirage-cellsam:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method cellsam` | `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` + `cellSAM` pinned to a git commit. torch 2.6.0 is the first release carrying the CVE-2025-32434 (`torch.load`) fix, and cellSAM downloads weights, so that path is reachable. |
 | `instanseg` | `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` *(default)* | `pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime` + `instanseg-torch` 0.1.1 |
-| `merge` | `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID` (1 module; the dev branch's add_cycle path adds `EXTRACT_MASK_SERIES`) | `cdgatenbee/valis-wsi:1.0.0` — the **same upstream VALIS image** `REGISTER` runs in, which is what lets this image reuse its libvips build — plus numpy/tifffile/imagecodecs/opencv-python/zarr for the pyramid write. |
+| `merge` | `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID` (1 module; the dev branch's add_cycle path adds `EXTRACT_MASK_SERIES`) | `cdgatenbee/valis-wsi:1.0.0` — the upstream VALIS image `REGISTER` ran in until 2026-11-05 (REGISTER now runs 1.2.0, `containers/valis`), reused here for its libvips build — plus numpy/tifffile/imagecodecs/opencv-python/zarr for the pyramid write. |
 | `regqc` | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` | `nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04` + numpy/scipy/scikit-image/tifffile/zarr and the **non-headless** `opencv-python` (`ffmpeg`/`libsm6`/`libxext6` are its runtime libraries). Nothing else: the TensorFlow/StarDist stack, Miniconda and `bftools` were removed 2026-09-02, having been imported by nothing. |
 | `stare` | `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH`, and `WARP_SEG_QC`'s tiled backend (STARE: `registration_method='tiled'`) | `python:3.11-slim` (same digest the retired `tiled` image used) + `procps` + numpy/scipy/scikit-image/tifffile/zarr/numcodecs/imagecodecs (`requirements/stare.txt`) and the `stare` package (a pinned release of [sceriff0/stare](https://github.com/sceriff0/stare), `requirements/stare.txt`). **Slim:** no torch, no kornia, no libGL, no learned weights — `smoke.sh` asserts torch is NOT importable. No JVM, no BioFormats, no libvips, no CUDA runtime. Replaces `bolt3x/mirage-tiled:1.0.0` (build context `containers/tiled`, removed), which carried torch/kornia and the DISK+LightGlue checkpoints for the COARSE front-end retired on 2026-09-27. |
 | `spatialdata` | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` (+ the out-of-band `bin/join_flowpath.py` cohort join) | `python:3.12-slim` + spatialdata/anndata/geopandas/shapely/pyarrow/**zarr 3** — CPU only, no JVM, no GPU. Takes no `constraints.txt` (documented `python:3.12` / `zarr>=3` island); `requirements/spatialdata.txt` is exact-pinned. |
 | `segeval` | `bolt3x/mirage-segeval:1.0.0` | `SEG_QUALITY_EVAL`, `MERGE_SEG_EVAL` (opt-in, `-params-file params/seg_quality_eval.json`) | `python:3.11-slim` + numpy/scipy/pandas/scikit-image/scikit-learn/matplotlib/tifffile/xmltodict, for the vendored CellSegmentationEvaluator 1.5.19 subset under `bin/utils/cse/`. **No `aicsimageio`** — it is on the forbidden list and cannot coexist with the harmonised `tifffile`. |
-| VALIS (not vendored) | `cdgatenbee/valis-wsi:1.0.0` (upstream) | `REGISTER`, and `WARP_SEG_QC`'s VALIS backend | upstream maintained image — **not rebuilt or published by us** (see the note below). Referenced by content digest, not by tag. |
+| `valis` | `bolt3x/mirage-valis:1.0.0` | `REGISTER`, and `WARP_SEG_QC`'s VALIS backend | `cdgatenbee/valis-wsi:1.2.0` (upstream, digest-pinned) with **only** the four fixes that let a user who is not root run it under Apptainer: `/root` opened for reading (its Python lives there), the Bio-Formats jar linked beside the installed package, `TORCH_HOME=/opt/torch` linked to upstream's weights, and `bf_formats.txt` made writable. **No Python package added or moved** — `smoke.sh` fails the build if the pip freeze differs from upstream's. Needs `--writable-tmpfs` under Singularity/Apptainer (set in `conf/modules.config`). |
 
 > **zarr major versions differ on purpose.** `spatialdata` pins `zarr>=3.0.0`
 > (required by `spatialdata>=0.8.0`, which writes NGFF `"0.5-dev-spatialdata"`),
@@ -113,16 +113,15 @@ gh workflow run containers.yml --ref <branch> -f version=<tag> -f only=segeval
 > image is `bolt3x/mirage-instanseg:1.0.0` on **Docker Hub** (not GHCR — see "Publishing"
 > above), even though `params.seg_method` is `instantseg`.
 
-### VALIS — uses the upstream image (not vendored)
+### VALIS — upstream's image, made runnable by a non-root user
 
-`REGISTER` references the maintained upstream image [`cdgatenbee/valis-wsi:1.0.0`](https://hub.docker.com/r/cdgatenbee/valis-wsi)
-directly. We do **not** vendor or republish it: its from-source libvips build is
-heavy (and the original vendored Dockerfile failed to build in CI — `meson` was
-missing). The upstream image is `linux/amd64` and already battle-tested, so there
-is little value in re-hosting it. It is therefore excluded from
-`containers.yml`. If you ever want a self-hosted copy, add a `containers/valis/`
-Dockerfile that installs `meson`/`ninja` before the libvips build and re-add
-`valis` to the build matrix.
+`REGISTER` runs valis-wsi 1.2.0 at its defaults, in `containers/valis`: upstream's
+[`cdgatenbee/valis-wsi:1.2.0`](https://hub.docker.com/r/cdgatenbee/valis-wsi), digest-pinned,
+with nothing rebuilt. The bare upstream image cannot be used directly on the cluster: it is
+built to run as root, and under Apptainer a non-root user finds no Python (`/root` is mode
+0700), no Bio-Formats jar beside the installed package, no weights, and a read-only
+`bf_formats.txt` that VALIS 1.2.0 rewrites on every JVM start. The Dockerfile's header and
+`place_assets.py` carry the reading behind each fix.
 
 All published images are built for **`linux/amd64`** (the pipeline's HPC target).
 
@@ -142,7 +141,7 @@ It runs **before** the process's `script:` block, so a missing `ps` fails the ta
 crashed silently, not like a missing system package. Debian/Ubuntu bases do **not** ship
 `procps`: `python:*-slim` and `ubuntu:22.04` both lack it. Rather than reason about which
 bases happen to have it — a claim nothing checked, and one this file previously got wrong
-— **all eleven install it explicitly**, and every `containers/<name>/smoke.sh` ends with a
+— **all twelve install it explicitly**, and every `containers/<name>/smoke.sh` ends with a
 `ps -e` assertion that runs at build time and again through `containers.yml`'s `docker
 run`. `apt-get install procps` is a no-op where the base already provides it. Guarded by
 `tests/test_container_smoke_tests.py::test_every_smoke_script_proves_ps_exists`.
@@ -161,12 +160,12 @@ RUN ps -e -o pid= -o ppid= > /dev/null && echo "procps OK"
 
 ## Contexts that are NOT vendored
 
-Only the eleven directories above are built and published. Two images the pipeline pulls are
+Only the twelve directories above are built and published. Two images the pipeline pulls are
 not built here at all:
 
 | Image | Why it is not vendored |
 | --- | --- |
-| `cdgatenbee/valis-wsi` | Upstream-maintained; its from-source libvips build is heavy and an earlier vendored attempt failed in CI on a missing `meson`. `containers/merge` builds **from** it, so the two can never disagree about libvips. |
+| `cdgatenbee/valis-wsi` | Upstream-maintained; its from-source libvips build is heavy and an earlier vendored attempt failed in CI on a missing `meson`. Pulled only as a BASE: `containers/valis` builds FROM 1.2.0 and `containers/merge` FROM 1.0.0. No process pulls it directly. |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro` | The vendored nf-core `BASICPY` module's own image (`modules/nf-core/basicpy/main.nf`). Re-hosting it would mean maintaining a fork of the vendored image too. |
 
 Both are referenced by content digest; `tests/test_container_image_naming.py`'s
@@ -185,5 +184,5 @@ from `params.seg_method`, via the table in `lib/SegBackends.groovy` (`cellsam` �
 `mirage-cellsam`, `instantseg` → `mirage-instanseg`, otherwise the StarDist default
 `mirage-stardist`).
 
-`REGISTER` uses the upstream `cdgatenbee/valis-wsi:1.0.0` directly; VALIS is deliberately not
-re-hosted, because its from-source libvips build is heavy and upstream maintains it.
+`REGISTER` uses `bolt3x/mirage-valis:1.0.0`: upstream's `cdgatenbee/valis-wsi:1.2.0` with only
+the non-root fixes above. VALIS itself is not rebuilt; upstream maintains it.
