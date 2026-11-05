@@ -368,7 +368,7 @@
               warped onto, so row order may not decide it.</div></div>
           <div class="grp">
             <div class="bh">fork — registration_method</div>
-            <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
+            <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-alt">method=valis</span></div>
               <div class="ox">Feature-based rigid + non-rigid warp (JVM/Bio-Formats), resolving all slides into a
                 shared space: <b>valis-wsi 1.2.0 at its defaults</b> (rigid 512 px, non-rigid 2048 px,
                 VALIS's own detector and matcher, no micro-registration). The one non-default argument is the
@@ -377,7 +377,7 @@
                 high-resolution example as shipped (<code>MicroRigidRegistrar</code>, then <code>register_micro</code>
                 at 0.25 × the smallest slide's longest side).</div>
               <div class="pp" style="margin-top:6px"><span>valis-wsi <b>1.2.0</b></span><span>rigid <b>512</b></span><span>nonrigid <b>2048</b></span><span>JVM heap <b>10 GB</b></span></div></div>
-            <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
+            <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-def">default</span></div>
               <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial = channel 0.
                 COARSE asked 48 GB while its matcher was a U-Net; its FFT anchor now asks 2 GB.
                 Step 2 fans out to one task per tile — the only shape it has. Its geometry knobs

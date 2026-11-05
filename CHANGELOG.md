@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE is pinned to stare-registration v1.3.0 (was v1.2.1)**, the version the manuscript and
+  the benchmark ran. 1.3.0 adds an optional `--prep` (default `none`) and a `mosaic` stage; the
+  default COARSE/REG_TILE path is unchanged. The `containers/stare` image must be rebuilt.
 - **STARE (`tiled`) is the default registration method (was `valis`).** It is the method
   used for the cohort and the one the manuscript describes as the default. VALIS stays
   available with `--registration_method valis`. The `full_pipeline` and `registration_only`

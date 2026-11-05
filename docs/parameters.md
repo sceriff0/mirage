@@ -73,8 +73,8 @@ owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
 ## Registration
 
 Two backends, selected by `--registration_method`: **STARE tiled** (default; JVM-free, fully
-parallel) and **VALIS** (graph-based whole-slide alignment). STARE is **not**
-laptop-sized at its default configuration — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
+parallel) and **VALIS** (graph-based whole-slide alignment). Every STARE task asks 2–4 GB at the
+defaults — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
 
 ### Common
 
