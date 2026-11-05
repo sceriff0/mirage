@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **STARE is pinned to stare-registration v1.3.0 (was v1.2.1)**, the version the manuscript and
+  the benchmark ran. 1.3.0 adds an optional `--prep` (default `none`) and a `mosaic` stage; the
+  default COARSE/REG_TILE path is unchanged. The `containers/stare` image must be rebuilt.
 - **STARE (`tiled`) is the default registration method (was `valis`).** It is the method
   used for the cohort and the one the manuscript describes as the default. VALIS stays
   available with `--registration_method valis`. The `full_pipeline` and `registration_only`
@@ -108,8 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `register_micro()` (and corrected if `register_micro` was a no-op, as on slides under
   8192 px a side), so `non_rigid` is the pre-micro field and `micro` the final one, and
   `WARP_SEG_QC` records `micro_reg: 2`; the pre-micro VALIS error summary is saved as
-  `*_summary_premicro.csv` for the QC report. `add_cycle` registers through the same
-  `REGISTER`, so it honours `reg_valis_mode` too.
+  `*_summary_premicro.csv` for the QC report.
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
   now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
   samplesheet validator, called from `workflows/mirage.nf` before any process is
