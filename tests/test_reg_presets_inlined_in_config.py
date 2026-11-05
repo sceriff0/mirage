@@ -9,9 +9,10 @@ place, and not by choice:
   `lib/*.groovy` at all (the class name resolves silently against ConfigObject and fails only when
   the closure runs), and a shared helper is not expressible in a config file under Nextflow 26's
   strict parser. See the long comment at the top of conf/modules.config.
-* `bin/utils/valis_config.py` -- the VALIS tier table, which cannot move to Groovy because its rows
-  hold Python objects (a SuperPointFD class, a SuperGlueMatcher instance).
-* `nextflow_schema.json` -- the enums the schema validates `memory_mode` / `reg_tiled_mode` against.
+* `nextflow_schema.json` -- the enum the schema validates `reg_tiled_mode` against.
+
+VALIS has no tiers since 2026-11-05 (valis-wsi 1.2.0 at its defaults), so the VALIS half of
+this guard went with its `memory_mode` table (git tag archive/valis-mirage-tuned).
 
 Duplication that cannot be removed has to be pinned instead, or it drifts. The specific failure
 this prevents is silent and expensive: an inlined copy that still says `tile: 2048` after the
@@ -27,62 +28,17 @@ from __future__ import annotations
 
 import json
 import re
-import sys
-import types
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "bin" / "utils"))
 
 GROOVY = (ROOT / "lib" / "RegPresets.groovy").read_text()
 CONFIG = (ROOT / "conf" / "modules.config").read_text()
 NEXTFLOW_CONFIG = (ROOT / "nextflow.config").read_text()
 
 TIERS = ("high", "medium", "low")
-
-
-@pytest.fixture
-def valis_config(monkeypatch):
-    """Import bin/utils/valis_config with the valis package faked out.
-
-    valis is not installed in CI and valis_config imports it at module scope. Same approach as
-    tests/test_micro_reg_gating.py and tests/test_jvm_cache_guard.py.
-    """
-    micro_mod = types.ModuleType("valis.micro_rigid_registrar")
-    micro_mod.MicroRigidRegistrar = type("MicroRigidRegistrar", (), {})
-    nonrigid_mod = types.ModuleType("valis.non_rigid_registrars")
-    nonrigid_mod.OpticalFlowWarper = type("OpticalFlowWarper", (), {})
-    fd_mod = MagicMock(name="valis.feature_detectors")
-    fm_mod = MagicMock(name="valis.feature_matcher")
-
-    valis_pkg = types.ModuleType("valis")
-    valis_pkg.feature_detectors = fd_mod
-    valis_pkg.feature_matcher = fm_mod
-    valis_pkg.micro_rigid_registrar = micro_mod
-    valis_pkg.non_rigid_registrars = nonrigid_mod
-
-    for name, mod in {
-        "valis": valis_pkg,
-        "valis.feature_detectors": fd_mod,
-        "valis.feature_matcher": fm_mod,
-        "valis.micro_rigid_registrar": micro_mod,
-        "valis.non_rigid_registrars": nonrigid_mod,
-    }.items():
-        monkeypatch.setitem(sys.modules, name, mod)
-
-    monkeypatch.delitem(sys.modules, "valis_config", raising=False)
-    import valis_config as vc
-
-    return vc
-
-
-# ---------------------------------------------------------------------------
-# Parsers. Each has a companion test asserting it found something, so a regex
-# that stops matching fails loudly instead of turning its callers into no-ops.
-# ---------------------------------------------------------------------------
 
 
 def _parse_row(block: str, mode: str) -> dict[str, int]:
@@ -157,18 +113,7 @@ def test_inlined_config_tables_match_reg_presets():
                 )
 
 
-def test_the_two_backends_share_one_tier_vocabulary(valis_config):
-    """RegPresets.MODES (Groovy) and valis_config.MEMORY_MODES (Python) must be the same list."""
-    MEMORY_MODES = valis_config.MEMORY_MODES
-
-    assert groovy_modes() == MEMORY_MODES, (
-        f"lib/RegPresets.groovy MODES={groovy_modes()} but "
-        f"bin/utils/valis_config.py MEMORY_MODES={MEMORY_MODES}. The two backends advertise one "
-        "shared vocabulary to the user; they must not diverge."
-    )
-
-
-@pytest.mark.parametrize("param", ["memory_mode", "reg_tiled_mode"])
+@pytest.mark.parametrize("param", ["reg_tiled_mode"])
 def test_schema_enum_matches_the_tier_vocabulary(param):
     """nextflow_schema.json validates the user's input, so its enum is the one that must be right."""
     schema = json.loads((ROOT / "nextflow_schema.json").read_text())
@@ -181,7 +126,7 @@ def test_schema_enum_matches_the_tier_vocabulary(param):
     )
 
 
-def test_custom_is_not_a_preset_row(valis_config):
+def test_custom_is_not_a_preset_row():
     """'custom' must resolve to 'high', not be its own row.
 
     If someone adds a `custom:` row, "unset knobs stay at the high value" quietly stops being
@@ -193,10 +138,6 @@ def test_custom_is_not_a_preset_row(valis_config):
         "the overrides given' -- a row of its own contradicts that."
     )
 
-    assert "custom" not in valis_config.MEMORY_PRESETS, (
-        "MEMORY_PRESETS grew a 'custom' row -- same problem"
-    )
-    assert valis_config.resolve_memory_mode("custom") == "high"
 
 
 @pytest.mark.parametrize(
@@ -206,8 +147,6 @@ def test_custom_is_not_a_preset_row(valis_config):
         "reg_tiled_halo",
         "reg_tiled_out_tile",
         "reg_tiled_coarse_max_dim",
-        "reg_valis_max_processed_dim",
-        "reg_valis_max_non_rigid_dim",
     ],
 )
 def test_tier_owned_params_are_null_declared(param):

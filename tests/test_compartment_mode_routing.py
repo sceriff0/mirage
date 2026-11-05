@@ -363,7 +363,10 @@ ALLOWED_LINES = {
         # 1223 -> 1229 (2026-10-16): 305216c4's STARE comment fixes (TILED_SOLVE's range
         # gate, REG_TILE's window note) added a net +6 lines above this one.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1229
-        1229: (
+        # 1229 -> 1241 (2026-11-05): REGISTER and WARP_SEG_QC gained a five-line
+        # --writable-tmpfs containerOptions block each, and TILED_SOLVE's memory comment
+        # grew by two (valis-wsi 1.2.0 defaults; Addendum A).
+        1241: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

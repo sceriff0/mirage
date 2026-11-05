@@ -163,21 +163,19 @@ The first real run downloads each tool's image, which can take several minutes. 
 | `bolt3x/mirage-stare:1.0.0` | the `tiled` (STARE) registration backend, and `WARP_SEG_QC`'s tiled path (slim: no torch; replaces `bolt3x/mirage-tiled`) |
 | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` |
 | `bolt3x/mirage-segeval:1.0.0` | `SEG_QUALITY_EVAL`, `MERGE_SEG_EVAL` (opt-in) |
-| `cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6` (upstream, not vendored) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
+| `bolt3x/mirage-valis:1.0.0` (upstream `cdgatenbee/valis-wsi:1.2.0`, digest-pinned, with only the non-root fixes) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4` (vendored nf-core module's own image, repinned) | `BASICPY` — pulled only when `skip_preprocessing` is set `false` (illumination correction is off by default) |
 
 === "Docker"
 
     ```bash
-    docker pull cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
     docker pull docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4
-    docker pull bolt3x/mirage-<component>:1.0.0   # e.g. convert, preprocess, quantify, stare...
+    docker pull bolt3x/mirage-<component>:1.0.0   # e.g. convert, preprocess, quantify, stare, valis...
     ```
 
 === "Singularity / Apptainer"
 
     ```bash
-    singularity pull docker://cdgatenbee/valis-wsi@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
     singularity pull docker://docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4
     singularity pull docker://bolt3x/mirage-<component>:1.0.0
     ```
@@ -198,11 +196,12 @@ The first real run downloads each tool's image, which can take several minutes. 
     `containers/*/Dockerfile` is **digest-pinned** (`FROM <base>@sha256:...`), so
     an image rebuilt a year from now still starts from the same base bytes.
 
-    The eleven first-party images themselves are pinned by **version tag**
+    The twelve first-party images themselves are pinned by **version tag**
     (`bolt3x/mirage-<component>:<manifest.version>`), because a digest cannot
-    exist before `release.yml` has pushed them. The two externals
-    (`cdgatenbee/valis-wsi`, `docker.io/labsyspharm/basicpy-docker-mcmicro`) are
-    referenced by content digest directly. Every task's `versions.yml` records
+    exist before `release.yml` has pushed them. The one external pulled at run
+    time (`docker.io/labsyspharm/basicpy-docker-mcmicro`) is referenced by content
+    digest directly, and so is upstream's `cdgatenbee/valis-wsi:1.2.0` as the
+    base `containers/valis` builds FROM. Every task's `versions.yml` records
     `container:` as `task.container` resolved it — a tag for a first-party image
     today, a digest for an external one — so a result can already be traced to
     the exact bytes an external tool ran; the first-party images' *published*

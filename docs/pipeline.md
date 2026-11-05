@@ -134,9 +134,9 @@ Chips give real defaults. Every process runs in a pinned container and emits
         <div class="bh">◇ registration_method</div>
         <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
           <div class="ox">Feature-based rigid + non-rigid warp (JVM / Bio-Formats), resolving all
-            slides into a shared space. Full micro-registration by default
-            (<code>reg_micro_reg=2</code>: micro-rigid, then the micro non-rigid pass); <code>1</code> stops after micro-rigid.</div>
-          <div class="pp"><span>memory_mode <b>high</b></span><span>micro_reg <b>2</b></span><span>max_dim <b>4000</b></span></div></div>
+            slides into a shared space: valis-wsi 1.2.0 at its defaults, with the nuclear
+            channel (index 0) passed as the registration channel. No micro-registration.</div>
+          <div class="pp"><span>valis-wsi <b>1.2.0</b></span><span>rigid / non-rigid <b>512 / 2048 px</b></span><span>JVM heap <b>10 GB</b></span></div></div>
         <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
           <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial is
             channel 0. Every step is bounded by a parameter; COARSE (NCC rotation sweep, ORB
