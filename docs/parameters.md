@@ -97,22 +97,27 @@ laptop-sized at its shipped tier — see the memory note under [Tiled / STARE](#
 
 ### VALIS
 
+`REGISTER` runs **valis-wsi 1.2.0 at its defaults**: `Valis()` given the patient's slides and the
+reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px) with
+`align_to_reference` at its default `False` and VALIS's own feature detector and matcher, and
+every slide warped in the reference frame (bicubic, VALIS's default). No micro-registration
+runs. There are **no VALIS registration settings**. The one argument that differs from VALIS's
+default is the registration channel: VALIS matches the channel *name* `"dapi"` (falling back to
+channel 0 with a warning); the pipeline passes the nuclear channel by **index 0**, where
+conversion always puts it, so a channel named like "DAPI_x" can never be chosen instead. The
+tuned VALIS 1.0.0 configuration this replaced (`memory_mode` tiers, SuperPoint/SuperGlue,
+keypoint cap, micro-registration, `reg_max_image_dim`, the `tma` profile) is archived at the git
+tag `archive/valis-mirage-tuned`.
+
 | Parameter | Default | Description |
 |---|---|---|
-| `memory_mode` | `high` | VALIS cost/accuracy tier: `high` \| `medium` \| `low` \| `custom` (processed / non-rigid dims): `high` = 2048/2048 px, `medium` = 1024/1024 px, `low` = 512/512 px — one size per tier, used for both stages. All three use SuperPoint + SuperGlue with 5000 features — the tier changes resolution, not the feature matcher. `custom` starts from `high` and applies the `reg_valis_*` overrides below. Source: `MEMORY_PRESETS` in `bin/utils/valis_config.py`. See [Tiers](#tiers). |
-| `reg_valis_max_processed_dim` | tier (`high`: 2048) | Feature detection/matching working size (px). **Tier-owned** — only settable under `--memory_mode custom`. |
-| `reg_valis_max_non_rigid_dim` | tier (`high`: 2048) | Non-rigid registration size (px). **Tier-owned.** May exceed a slide's full resolution: VALIS then reads that slide at full resolution and upsamples it, so a value above the smallest slide costs memory and buys no detail for it (`REGISTER` logs a notice naming such slides). VALIS 1.0.0–1.2.0 asked Bio-Formats for pyramid level −1 there and killed its JVM — also for slides somewhat *larger* than this value when the tissue mask covers part of the frame — and `bin/utils/valis_preflight.py` clamps that level to 0 at the reader. |
-| `reg_valis_max_keypoints` | `null` | Keypoints kept per image for SuperPoint detection and SuperGlue matching. `null` = VALIS's own 20000, what every run has used. SuperGlue's cost is quadratic in it; the `tma` profile pins 2000. **Lowering it changes which matches exist**, so registrations at different values are not comparable. Legal under any `memory_mode`. |
-| `reg_micro_reg_fraction` | `0.125` | Image fraction used for micro-registration. |
-| `reg_max_image_dim` | `4000` | Max cached image dimension during registration. |
-| `reg_micro_reg` | `2` | Micro-registration depth (nested, default `2`): `0` = none, `1` = micro-rigid only (refines `slide.M`), `2` = + micro non-rigid (`register_micro`) — default. At `>=1` the QC `rigid` stage means affine ∘ micro-rigid. |
-| `reg_jvm_heap_gb` | `null` | Explicit JVM heap (GB) for VALIS. `null` auto-estimates from input size. |
+| `reg_jvm_heap_gb` | `null` | Bio-Formats JVM heap (GB) for VALIS. `null` = a fixed 10 GB at every attempt, VALIS's own value. |
 | `reg_qc` | `2` | Registration QC depth: `0` = none, `1` = the [before/after DAPI overlay](registration_qc.md#the-reg_qc-1-overlay-is-a-beforeafter-pair) only, `2` = that overlay + [staged segmentation-overlap metrics](registration_qc.md). |
 
 At `reg_qc = 2` the pipeline segments each slide's DAPI on its **native** image, pairs the
 nuclei once after rigid registration, and then re-scores those same pairs after every later
-stage — so per-pair IoU and centroid residual can be attributed to `rigid`, `non_rigid` and
-`micro` individually. See [Staged registration QC](registration_qc.md) for the output schema
+stage — so per-pair IoU and centroid residual can be attributed to `rigid` and `non_rigid`
+individually (VALIS runs no micro-registration, so no `micro` stage is reported). See [Staged registration QC](registration_qc.md) for the output schema
 and how to read it.
 
 ### Tiled / STARE (`registration_method=tiled`)
@@ -139,7 +144,7 @@ asked ~48 GB at the `high` tier, so sites sized for that can lower `max_memory` 
 
 ### Tiers
 
-Both registration backends take the same four values. `high` is the shipped default and, with
+The STARE backend takes four values (VALIS has no tiers). `high` is the shipped default and, with
 **one exception**, is the behaviour that shipped before tiers existed; `medium` and `low` trade
 accuracy for memory and wall-clock; `custom` starts from `high` and applies only the knobs you
 set. The exception is `reg_tiled_coarse_max_dim` — 4096 shipped, then 2048 while COARSE's
@@ -150,19 +155,7 @@ anchor's refine resolution and 1024 already lands M0 well inside every tier's ha
 ```bash
 --reg_tiled_mode low                                   # every STARE knob from the low row
 --reg_tiled_mode custom --reg_tiled_tile 4096          # high everywhere else, tile overridden
---memory_mode custom --reg_valis_max_non_rigid_dim 1024
 ```
-
-**Tissue microarrays.** The `tma` profile sets **no tier**: TMA cores register at
-`memory_mode`'s own sizes (`high`: 2048/2048 px), and `--memory_mode` / the `reg_valis_*`
-overrides work as for any input. It describes the *data*, so it composes with a site
-profile: `-profile slurm,ieo,tma`. (It used to pin `custom` + a 1024 px non-rigid size to
-dodge VALIS's pyramid-level −1 crash; that crash depends on the tissue-mask extent, so no
-size was safe, and it is now clamped at the reader instead.) It lowers `REGISTER`'s
-memory ramp from 64 → 128 → 256 → 512 GB (doubling) to 64 GB × attempt, pins `reg_valis_max_keypoints` to 2000
-(a ~2800 px core has no use for VALIS's 20000, and SuperGlue's cost is quadratic in it)
-and pins the Bio-Formats JVM heap flat at 16 GiB (`reg_jvm_heap_gb`), so the request goes to the Python side where
-REGISTER's real peak — SuperGlue matching — lives; see [Resources](resources.md).
 
 Setting a tier-owned knob under any tier **other than** `custom` is rejected before the first
 process starts (`ParamUtils.validateRegPresets`). That is deliberate: a run that reports

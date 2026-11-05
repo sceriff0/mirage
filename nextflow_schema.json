@@ -181,67 +181,12 @@
                     "minimum": 0.1,
                     "maximum": 10
                 },
-                "reg_micro_reg_fraction": {
-                    "type": "number",
-                    "description": "Fraction for micro registration.",
-                    "default": 0.125
-                },
-                "reg_max_image_dim": {
-                    "type": "integer",
-                    "description": "Maximum image dimension for registration.",
-                    "default": 4000
-                },
-                "memory_mode": {
-                    "type": "string",
-                    "description": "VALIS cost/accuracy tier. Table: bin/utils/valis_config.py MEMORY_PRESETS. 'custom' starts from 'high' and applies the reg_valis_* overrides you set.",
-                    "default": "high",
-                    "enum": [
-                        "high",
-                        "medium",
-                        "low",
-                        "custom"
-                    ]
-                },
-                "reg_valis_max_processed_dim": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "VALIS feature detection/matching working size (px). null = from memory_mode. Only legal with memory_mode=custom."
-                },
-                "reg_valis_max_non_rigid_dim": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "VALIS non-rigid registration size (px). null = from memory_mode. Only legal with memory_mode=custom. Must be smaller than the full resolution of every slide: VALIS 1.0.0-1.2.0 reads a slide no larger than this at pyramid level -1 and kills its JVM (its own clamp does not prevent it), so REGISTER refuses such input at start. Lower it below the smallest slide on small-format input such as TMA cores, with a margin."
-                },
-                "reg_valis_max_keypoints": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "minimum": 1,
-                    "description": "Keypoints kept per image for SuperPoint detection and SuperGlue matching in REGISTER. null = VALIS's own 20000. SuperGlue's cost is quadratic in this; the tma profile lowers it to 2000. Lowering it changes which matches exist, so registrations at different values are not comparable."
-                },
-                "reg_micro_reg": {
-                    "type": "integer",
-                    "description": "Micro-registration depth (nested, default 2): 0=none, 1=micro-rigid only (refines slide.M), 2=+micro non-rigid (register_micro) [default].",
-                    "default": 2,
-                    "enum": [
-                        0,
-                        1,
-                        2
-                    ]
-                },
                 "reg_jvm_heap_gb": {
                     "type": [
                         "integer",
                         "null"
                     ],
-                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = derive from task.memory at runtime.",
+                    "description": "JVM heap (GiB) for VALIS/Bio-Formats in REGISTER. null = a fixed 10 GB (VALIS's own value), capped at task.memory - 4 GB.",
                     "default": null,
                     "minimum": 1
                 },

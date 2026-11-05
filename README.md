@@ -28,8 +28,7 @@ MIRAGE is a Nextflow DSL2 pipeline for whole slide image (WSI) processing. It su
 3. **Multi-modal image registration** — two interchangeable backends, chosen with
    `--registration_method`:
    - **`valis`** (default) — graph-based whole-stack alignment via
-     [VALIS](https://github.com/MathOnco/valis); rigid + non-rigid, with optional staged
-     micro-registration.
+     [VALIS](https://github.com/MathOnco/valis) 1.2.0 at its defaults; rigid + non-rigid.
    - **`tiled`** (STARE) — JVM-free, internally tiled and fully parallel; coarse NCC
      rotation-sweep anchor (ORB fallback), per-tile refinement, global solve, tiled warp.
      Every step stays within a few GB, so it runs on a workstation.

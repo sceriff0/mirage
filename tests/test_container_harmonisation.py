@@ -154,6 +154,15 @@ BASE_IMAGE_PROVIDES = {
     # one, exactly as for torch below. bin/segment.py does not import tensorflow directly,
     # but stardist 0.9.1 does, and lib/SegBackends.groovy reports its version.
     "stardist": {"tensorflow"},
+    # containers/valis installs NOTHING with pip: it is upstream's cdgatenbee/valis-wsi:1.2.0
+    # (digest-pinned) with only the non-root permission/asset fixes, and its smoke.sh FAILS
+    # THE BUILD if the pip freeze differs from the base image's by one line. Its Python stack
+    # is therefore entirely the base image's -- read from Docker Hub's registry 2026-10-11
+    # (containers/valis/Dockerfile header; the dist-info names of upstream's layer 22).
+    "valis": {
+        "valis-wsi", "valis", "numpy", "scipy", "scikit-image", "pandas", "tifffile",
+        "psutil", "torch", "torchvision", "kornia", "pyvips", "scyjava", "jpype1",
+    },
 }
 
 # Packages that are genuinely absent from a given image are fine; these are the ones that must

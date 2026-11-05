@@ -318,7 +318,7 @@
             <tr><td><b>registered</b></td><td>[meta, file]</td><td>warped + passthroughs</td><td>warped + reference</td></tr>
             <tr><td><b>transform</b></td><td>[patient_id, file]</td><td><code>registrar.pickle</code></td><td><code>*_manifest.json</code></td></tr>
             <tr><td><b>transform_by_slide</b></td><td>[meta, file]</td><td><i>empty</i></td><td>manifest per slide</td></tr>
-            <tr><td><b>stage_checkpoint</b></td><td>[patient_id, dir]</td><td>pre-micro fields</td><td><i>empty</i></td></tr>
+            <tr><td><b>stage_checkpoint</b></td><td>[patient_id, dir]</td><td>post-<code>register()</code> fields</td><td><i>empty</i></td></tr>
             <tr><td><b>intrinsic_tre</b></td><td>file</td><td><code>*_summary.csv</code></td><td><code>*_tre.json</code></td></tr>
             <tr><td><b>size_logs · versions</b></td><td>file</td><td colspan="2">universal QC kinds — every process emits both</td></tr>
           </tbody></table></div>
@@ -455,8 +455,8 @@
       <thead><tr><th>&nbsp;</th><th class="v">step 1 — global pose</th><th class="v">step 2 — local deformation</th></tr></thead>
       <tbody>
         <tr><td class="k"><span class="em">VALIS</span></td>
-          <td class="v">SuperPoint keypoints + SuperGlue matching over <i>all</i> the patient's slides → a match graph → a rigid/affine matrix <code>slide.M</code> per slide<br><span style="color:#767c83">(+ <code>MicroRigidRegistrar</code> re-fit at higher resolution)</span></td>
-          <td class="v"><code>OpticalFlowWarper</code> — a dense displacement field per slide, estimated at up to 4096&nbsp;px<br><span style="color:#767c83">(+ <code>register_micro()</code> re-estimate on a 12.5% crop, composed in)</span></td></tr>
+          <td class="v">DISK features + LightGlue matching (VALIS 1.2.0's default matcher) over <i>all</i> the patient's slides → a match graph → a rigid matrix <code>slide.M</code> per slide, at 512&nbsp;px</td>
+          <td class="v"><code>OpticalFlowWarper</code> — a dense displacement field per slide, estimated at 2048&nbsp;px (VALIS default); no micro-registration</td></tr>
         <tr><td class="k"><span class="em">STARE tiled</span></td>
           <td class="v">DISK keypoints + LightGlue matching + RANSAC euclidean fit on a shared <b>thumbnail</b> of both DAPI planes → one matrix <code>M0</code> per moving slide</td>
           <td class="v">Phase cross-correlation per <b>tile</b> → one (dx, dy) at each tile centre → a TRE-gated, bilinearly interpolated <b>mesh field</b> <code>F</code></td></tr>
@@ -464,7 +464,7 @@
           <td class="v">the optical-flow pyramid, at <code>max_non_rigid_registration_dim_px</code></td>
           <td class="v">explicit and tunable: <code>reg_tiled_halo</code> (default <b>256&nbsp;px</b>)</td></tr>
         <tr><td class="k">how step 1's residual is reported</td>
-          <td class="v"><code>error_df</code> from <code>measure_error()</code>, saved <i>before</i> the micro pass overwrites it</td>
+          <td class="v"><code>error_df</code> returned by <code>register()</code>, written to VALIS's own <code>*_summary.csv</code></td>
           <td class="v"><code>coarse_tre</code> = RMS of the RANSAC inliers, lifted to full-res; warns if ≥ <code>halo</code></td></tr>
       </tbody>
     </table></div>
@@ -474,15 +474,16 @@
   <section class="panel">
     <span class="plabel">c</span>
     <div class="panel-head"><h2>Backend 1 — VALIS (default): the two steps as a deep-feature batch registrar</h2>
-      <p>One <code>REGISTER</code> process per patient, on the upstream <code>cdgatenbee/valis-wsi:1.0.0</code> image.
-        VALIS ingests <i>all</i> of a patient's slides at once, so step&nbsp;1 is solved jointly over the whole series
-        rather than pair by pair. Features are learned (SuperPoint), matching is learned (SuperGlue), and both steps
-        run over a Bio-Formats <b>JVM</b>. The pipeline's entire configuration of VALIS lives in one function,
-        <code>build_registrar_kwargs()</code> in <code>bin/utils/valis_config.py</code>.</p></div>
+      <p>One <code>REGISTER</code> process per patient, running <b>valis-wsi 1.2.0 at its defaults</b> on
+        <code>bolt3x/mirage-valis:1.0.0</code>. VALIS ingests <i>all</i> of a patient's slides at once, so step&nbsp;1
+        is solved jointly over the whole series rather than pair by pair. Features (DISK) and matching (LightGlue) are
+        learned, and both steps run over a Bio-Formats <b>JVM</b>. The pipeline sets exactly <b>one</b> non-default
+        argument — the registration channel. The earlier tuned configuration is archived at git tag
+        <code>archive/valis-mirage-tuned</code>.</p></div>
 
     <div class="bkhead">
       <span class="name">VALIS_ADAPTER → REGISTER → bin/register.py</span>
-      <span class="sub">batch graph over all slides · SuperPoint + SuperGlue · JVM / Bio-Formats · 1 task per patient</span>
+      <span class="sub">batch graph over all slides · VALIS 1.2.0 defaults · JVM / Bio-Formats · 1 task per patient</span>
       <span class="flag">default</span>
     </div>
 
@@ -493,18 +494,23 @@
           <span class="who">registration.Valis(...)</span></div>
         <div class="sb">
           <p>Every slide of the patient — reference included — is hard-linked into one input directory and handed to a
-            single <code>Valis</code> object. The reference is named explicitly via <code>reference_img_f</code>; the
-            pipeline always knows it, so <code>register.py</code>'s standalone marker-search fallback never runs here.</p>
+            single <code>Valis</code> object: <code>registration.Valis(src_dir, dst_dir, img_list=&lt;patient's slides&gt;,
+            reference_img_f=&lt;reference&gt;)</code> and nothing else. The pipeline always knows the reference, so
+            <code>register.py</code>'s standalone marker-search fallback never runs here.</p>
           <div class="pp">
-            <span>align_to_reference <b>True</b></span><span>crop <b>reference</b></span>
-            <span>create_masks <b>True</b></span><span>affine_optimizer_cls <b>None</b></span>
-            <span>max_image_dim_px <b>4000</b></span>
+            <span>rigid <b>512&nbsp;px</b></span><span>non-rigid <b>2048&nbsp;px</b></span>
+            <span>max_image_dim <b>1024</b></span><span>align_to_reference <b>False</b></span>
+            <span>affine optimizer <b>None</b></span><span>micro-registration <b>none</b></span>
           </div>
           <ul class="tight">
-            <li><b><code>crop='reference'</code></b> is what makes every output share the reference's raster — the
-              reference defines the frame and is never moved.</li>
-            <li><b><code>affine_optimizer_cls=None</code></b>: VALIS's intensity-based affine refiner needs SimpleITK
-              with Elastix bindings, which the image does not carry. Alignment is therefore purely feature-driven.</li>
+            <li><b>Every constructor and <code>register()</code> argument is VALIS's default</b>
+              (VALIS's own module defaults for the rigid size, the non-rigid size, the image cap and the
+              matcher), with one exception: the channel.</li>
+            <li><b>The registration channel, by index.</b> VALIS's default fluorescence processor picks the channel by a
+              fuzzy <i>name</i> match on <code>"dapi"</code> (<code>slide_io.get_channel_index</code>; no close match →
+              a warning and index&nbsp;0). The pipeline passes
+              <code>if_processing_kwargs={"channel": 0, "adaptive_eq": True}</code> — conversion always writes the
+              nuclear channel first, so a decoy name such as <code>DAPI_x</code> can never win.</li>
             <li>Files are <b>copied, not symlinked</b>, into <code>preprocessed/</code> — VALIS loses track of
               <code>src_f</code> through Nextflow's symlinks.</li>
           </ul>
@@ -517,25 +523,10 @@
         <div class="sb">
           <table class="qa">
             <tr><td class="q">estimates</td><td>One matrix <b><code>slide.M</code></b> per slide, mapping that slide's pixels into the reference frame.</td></tr>
-            <tr><td class="q">sees</td><td>Each slide's <b>channel 0</b> (the resolved nuclear marker), downscaled so the longest side is <b><code>max_processed_image_dim_px</code></b> — 2048&nbsp;px under the default <code>high</code> preset.</td></tr>
-            <tr><td class="q">how</td><td><b>SuperPointFD</b> detects up to <b>5000</b> keypoints per slide and describes each with a learned 256-d descriptor. <b>SuperGlueMatcher</b> — a graph neural network — matches two descriptor sets jointly, reasoning about all candidate pairs at once instead of independent nearest-neighbour lookups. VALIS matches across the whole series, builds a graph whose edges are those match sets, and derives each slide's transform toward the reference along it, so the slides land in <i>one</i> consistent space rather than in N independently-fitted ones.</td></tr>
-            <tr><td class="q">why learned</td><td>Consecutive IF cycles are photometrically unlike each other (different exposures, bleaching, sometimes different stains). Hand-crafted descriptors degrade across that gap; SuperPoint/SuperGlue were trained to survive it. This is VALIS's core accuracy claim and the reason it is the default.</td></tr>
-            <tr><td class="q">cost</td><td>Working resolution is the memory knob, and the <i>only</i> thing the three presets change.</td></tr>
+            <tr><td class="q">sees</td><td>Each slide's <b>channel 0</b> (the resolved nuclear marker), adaptively equalised and downscaled so the longest side is <b>512&nbsp;px</b>, VALIS's default rigid size.</td></tr>
+            <tr><td class="q">how</td><td>VALIS 1.2.0's default matcher, <b><code>LightGlueMatcher</code> with DISK features</b>; slides are ordered with a VGG sorting matcher. VALIS matches across the whole series, builds a graph whose edges are those match sets, and — with <code>align_to_reference=False</code>, the default — aligns the slides <i>serially through its ordering</i> toward the reference, so they land in <i>one</i> consistent space rather than in N independently-fitted ones.</td></tr>
+            <tr><td class="q">no refiner</td><td>No affine optimizer (default <code>None</code>) and no micro-rigid pass: alignment is purely feature-driven, and <code>slide.M</code> is final when step&nbsp;1 ends.</td></tr>
           </table>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="sh"><span class="k">step 1b</span><span class="ttl">Micro-rigid — re-fit the same matrix at higher resolution</span>
-          <span class="who">MicroRigidRegistrar · micro_reg ≥ 1</span></div>
-        <div class="sb">
-          <p>Passed as <code>micro_rigid_registrar_cls</code>, so it runs <i>inside</i> <code>register()</code> —
-            <b>before</b> the non-rigid stage, not after it. It re-detects features on higher-resolution crops and
-            sharpens <code>slide.M</code>. It does not add a new kind of transform; it improves the accuracy of the
-            step-1 answer.</p>
-          <div class="warnbox"><span class="wl">consequence for QC</span>At <code>micro_reg ≥ 1</code> the QC
-            stage labelled <code>rigid</code> means <b>affine ∘ micro-rigid</b>, not the raw affine. By the time the
-            non-rigid stage runs, <code>slide.M</code> is already final.</div>
         </div>
       </div>
 
@@ -545,32 +536,10 @@
         <div class="sb">
           <table class="qa">
             <tr><td class="q">estimates</td><td>A dense <b>displacement field</b> per slide — one (dx, dy) per pixel — held as <code>bk_dxdy</code> (backward, used for resampling) and <code>fwd_dxdy</code> (forward, used to warp <i>points</i>, which is what the reg_qc=2 scorer needs).</td></tr>
-            <tr><td class="q">sees</td><td>The <b>rigidly aligned</b> images, at up to <b><code>max_non_rigid_registration_dim_px</code></b> — 2048&nbsp;px under <code>high</code>, 1024&nbsp;px under <code>medium</code>, 512&nbsp;px under <code>low</code> (the same size each tier uses for feature matching). The field is then scaled up to full resolution.</td></tr>
-            <tr><td class="q">how</td><td>Dense optical flow between the aligned nuclear channels: every pixel is allowed to move independently, regularised toward smoothness. With <code>align_to_reference=True</code> each slide is deformed <i>directly onto the reference</i>, rather than serially through its neighbours — errors therefore do not accumulate along the stack.</td></tr>
+            <tr><td class="q">sees</td><td>The <b>rigidly aligned</b> images, at up to <b>2048&nbsp;px</b>, VALIS's default non-rigid size. The field is then scaled up to full resolution.</td></tr>
+            <tr><td class="q">how</td><td>Dense optical flow (VALIS's default <code>OpticalFlowWarper</code>) between the aligned nuclear channels: every pixel is allowed to move independently, regularised toward smoothness. This is the last estimation step — no <code>register_micro()</code> follows.</td></tr>
             <tr><td class="q">gotcha</td><td>VALIS auto-switches to <code>NonRigidTileRegistrar</code> above an internal ~10&nbsp;GB estimate. That path returns <code>fwd_dxdy</code> as a <code>pyvips.Image</code>, which the <code>Slide</code> setter silently rejects — leaving <code>fwd_dxdy = None</code> and making rigid and non-rigid errors come out <i>identical</i>. <code>register.py</code> carries an explicit safety net that recomputes it by inverting <code>bk_dxdy</code> and re-runs <code>measure_error()</code>. Passing the tile registrar explicitly is deliberately avoided.</td></tr>
           </table>
-        </div>
-      </div>
-
-      <div class="step">
-        <div class="sh"><span class="k">step 2b</span><span class="ttl">Micro non-rigid — a second field on a crop, composed in</span>
-          <span class="who">register_micro() · micro_reg = 2 · the default</span></div>
-        <div class="sb">
-          <p>A <b>separate method call</b> after <code>register()</code> returns. It re-estimates the non-rigid field
-            at higher effective resolution on a crop of <code>floor(min_max_size × <b>0.125</b>)</code>, then
-            <b>adds</b> that residual into each slide's existing field:
-            <code>fwd_dxdy ← fwd_dxdy + micro_residual</code>. <b>This pass runs at the shipped
-            defaults.</b> <code>reg_micro_reg</code> is <b>2</b> of a legal <code>0 | 1 | 2</code>: <code>0</code>
-            is no micro-registration at all, <code>1</code> is micro-<i>rigid</i> only (it refines
-            <code>slide.M</code>), and <code>2</code>, which ships, adds this second field. Opt out of it
-            with <code>reg_micro_reg = 1</code>.</p>
-          <div class="warnbox"><span class="wl">why a checkpoint must be taken before it</span>The composition is
-            <b>destructive</b> — afterwards there is no attribute anywhere in the registrar that still holds the
-            pre-micro field, and <code>register_micro()</code> also overwrites <code>{name}_summary.csv</code> with
-            post-micro numbers. The instant between <code>register()</code> and <code>register_micro()</code> is
-            therefore the <i>only</i> moment at which the <code>non_rigid</code> stage can be told apart from
-            <code>micro</code>. That is exactly what <code>--stage-checkpoint-dir</code> captures at
-            <code>reg_qc ≥ 2</code>, and why <code>REGISTER</code> is the only place it can be captured.</div>
         </div>
       </div>
 
@@ -578,10 +547,11 @@
         <div class="sh"><span class="k">step 3</span><span class="ttl">Warp and save every slide, all channels</span>
           <span class="who">registered_slides/*_registered.ome.tiff</span></div>
         <div class="sb">
-          <p>Each slide's full channel stack is resampled through <code>M</code> then the field, and written as
-            OME-TIFF cropped to the reference. The process then <b>hard-fails</b> unless the output count equals the
+          <p>Each slide's full channel stack — every channel — is resampled through <code>M</code> then the field with
+            <code>warp_and_save_slide(level=0, non_rigid=True, crop="reference")</code> (bicubic, VALIS's default) and
+            written as OME-TIFF in the reference's raster; the reference defines the frame and is never moved. The process then <b>hard-fails</b> unless the output count equals the
             input count — a partial warp is a silent data loss otherwise.</p>
-          <div class="math">x<sub>ref</sub> &nbsp;=&nbsp; D( M · x<sub>mov</sub> ) &nbsp;&nbsp;<span class="cm">— M from steps 1+1b, D the field from steps 2+2b, composed into one</span></div>
+          <div class="math">x<sub>ref</sub> &nbsp;=&nbsp; D( M · x<sub>mov</sub> ) &nbsp;&nbsp;<span class="cm">— M from step 1, D the field from step 2</span></div>
           <p>The adapter then re-matches each output file to its slide metadata by <b>OME channel signature</b> — the
             sorted, lower-cased channel-name set read from a manifest of the written OME-XML — never by filename. Two
             slides of one patient sharing a channel set is a hard error, because the match would silently be
@@ -592,36 +562,39 @@
 
     <div class="grid2" style="margin-top:14px">
       <div>
-        <div class="tbl-scroll"><table class="rc">
-          <caption>memory_mode presets — bin/utils/valis_config.py</caption>
-          <thead><tr><th>preset</th><th class="v">step 1 dim</th><th class="v">step 2 dim</th></tr></thead>
-          <tbody>
-            <tr class="valwin"><td class="k"><span class="em">high</span> (default)</td><td class="v">2048&nbsp;px</td><td class="v">4096&nbsp;px</td></tr>
-            <tr><td class="k">medium</td><td class="v">1024&nbsp;px</td><td class="v">4096&nbsp;px</td></tr>
-            <tr><td class="k">low</td><td class="v">256&nbsp;px</td><td class="v">1024&nbsp;px</td></tr>
-          </tbody></table></div>
-        <div class="callout" style="margin-top:11px">All three presets share SuperPoint&nbsp;+&nbsp;SuperGlue and 5000
-          features; <b>only the working dimensions change</b>. <code>low</code> additionally sets
-          <code>tile_wh=512</code> / <code>tile_buffer=100</code>. Higher dim = more accurate, more RAM.</div>
+        <div class="callout" style="margin-top:0"><b>Kept plumbing — not settings.</b> None of these changes what
+          VALIS computes:
+          <ul class="tight">
+            <li>the pyramid-level −1 reader clamp (<code>bin/utils/valis_preflight.py</code>) — the defect is still in
+              1.2.0 (<code>registration.py:3952-3954</code>); the clamp changes nothing when the level is ≥&nbsp;0;</li>
+            <li>the read-only-home-directory JVM cache guard (<code>bin/utils/jvm_cache.py</code>);</li>
+            <li>the registrar pickle <code>WARP_SEG_QC</code> reads, and writing every channel.</li>
+          </ul></div>
+        <div class="callout" style="margin-top:11px"><b>Container.</b> <code>bolt3x/mirage-valis:1.0.0</code>
+          (<code>containers/valis</code>) is upstream <code>cdgatenbee/valis-wsi:1.2.0</code> pinned to index digest
+          <code>sha256:4fd20b68…</code>, plus only the four fixes that let a non-root user run it under Apptainer
+          (<code>/root</code> readable, Python lives there; Bio-Formats jar linked beside the package;
+          torch's weight directory pointed at <code>/opt/torch</code>, linked to upstream's weights; <code>bf_formats.txt</code> writable) — no
+          Python package added or moved. Under Singularity/Apptainer <code>REGISTER</code> and <code>WARP_SEG_QC</code>
+          run with <code>--writable-tmpfs</code>; <code>WARP_SEG_QC</code>'s VALIS backend uses the same image.</div>
         <div class="callout" style="margin-top:11px"><b>Resources.</b> <code>REGISTER</code> asks for
-          <b>8&nbsp;CPU · 300&nbsp;GB × attempt · 24&nbsp;h × attempt</b>, <code>maxForks 10</code>, and retries on
-          exit&nbsp;1 as well as the usual OOM/kill signals — VALIS tile-read failures and JVM OOM both surface as
+          <b>8&nbsp;CPU · 64&nbsp;GB doubling per retry (to 512&nbsp;GB) · 24&nbsp;h × attempt</b>, and under
+          <code>retry-exit1-then-fail</code> retries on exit&nbsp;1 as well as the usual OOM/kill signals — VALIS tile-read failures and JVM OOM both surface as
           exit&nbsp;1.</div>
       </div>
       <div>
         <div class="emit"><span class="lbl">REGISTER emits (per patient)</span>
           <b>registered</b> — one OME-TIFF per slide, in the reference frame<br>
           <b>registrar</b> — <code>*_registrar.pickle</code>: the whole transform object, replayable by the reg_qc=2 warper<br>
-          <b>summary</b> — <code>preprocessed/data/*.csv</code>, the pre-micro <code>error_df</code> → the contract's <code>intrinsic_tre</code><br>
-          <b>stage_checkpoint</b> — pre-micro displacement fields <span class="tag tag-on">reg_qc ≥ 2 only</span><br>
+          <b>summary</b> — <code>preprocessed/data/*_summary.csv</code>, VALIS's own <code>error_df</code> → the contract's <code>intrinsic_tre</code><br>
+          <b>stage_checkpoint</b> — the displacement fields after <code>register()</code>, <code>micro_registration=false</code> <span class="tag tag-on">reg_qc ≥ 2 only</span><br>
           <b>channels_manifest.json</b> · <b>size_log</b> · <b>versions</b><br>
           <span class="nul">transform_by_slide — empty: the registrar is one group-wide object, not decomposable per slide</span></div>
-        <div class="callout" style="margin-top:11px"><b>JVM heap.</b> <code>REGISTER</code> always passes an explicit
-          value: <code>min(reg_jvm_heap_gb ?: 32 + 16·task.attempt, task.memory − 4&nbsp;GiB)</code>. So the heap
-          <b>climbs with the retry ramp</b> — 48 / 64 / 80&nbsp;GiB — which is the fix for the OOMs seen on merged,
-          high-LZW multi-channel references. The older <code>max(8, min(0.75·sysGB, 3·inputGB + 8))</code> heuristic
-          survives only as <code>valis_config.init_jvm</code>'s fallback for callers that pass nothing, and
-          <code>WARP_SEG_QC</code> pins itself at 8&nbsp;GB rather than use it.</div>
+        <div class="callout" style="margin-top:11px"><b>JVM heap.</b> A <b>fixed 10&nbsp;GB</b> Bio-Formats heap at
+          every attempt — VALIS's own value — capped at <code>task.memory − 4&nbsp;GiB</code>;
+          <code>reg_jvm_heap_gb</code> overrides it. <code>bin/register.py</code> starts the JVM itself through
+          <code>slide_io.init_jvm</code>, because 1.2.0's <code>registration.init_jvm</code> passes a literal 10
+          whatever it is given. <code>WARP_SEG_QC</code> pins itself at 8&nbsp;GB.</div>
         <div class="callout" style="margin-top:11px"><b>Disk.</b> The process deletes its working copies and VALIS's
           <code>deformation_fields/ masks/ overlaps/ rigid_registration/ non_rigid_registration/ processed/</code>
           intermediates before exiting — but never the staged inputs, which Nextflow needs intact for a retry.</div>
@@ -828,33 +801,33 @@
       <thead><tr><th>property</th><th class="v">VALIS <span class="tag-def">default</span></th><th class="v">STARE tiled <span class="tag-alt">method=tiled</span></th></tr></thead>
       <tbody>
         <tr><td class="k">topology</td><td class="v"><span class="em">batch graph</span> over all a patient's slides at once</td><td class="v"><span class="em">star</span> — each moving slide → reference, independently</td></tr>
-        <tr><td class="k">step 1 · features</td><td class="v">SuperPoint + SuperGlue (learned, cross-modal)</td><td class="v">DISK + LightGlue + RANSAC (learned)</td></tr>
-        <tr><td class="k">step 1 · model</td><td class="v">rigid / affine, graph-consistent</td><td class="v">euclidean — rotation + translation (3 DOF)</td></tr>
-        <tr><td class="k">step 1 · resolution</td><td class="v">2048 px working image (<code>high</code>)</td><td class="v">2048 px shared thumbnail (<code>high</code>)</td></tr>
-        <tr><td class="k">step 2 · model</td><td class="v">dense per-pixel optical-flow field + up to 2 micro passes</td><td class="v">TRE-gated control grid, bilinearly interpolated</td></tr>
+        <tr><td class="k">step 1 · features</td><td class="v">DISK + LightGlue (VALIS 1.2.0 default, learned)</td><td class="v">DISK + LightGlue + RANSAC (learned)</td></tr>
+        <tr><td class="k">step 1 · model</td><td class="v">rigid, graph-consistent (serial through VALIS's ordering)</td><td class="v">euclidean — rotation + translation (3 DOF)</td></tr>
+        <tr><td class="k">step 1 · resolution</td><td class="v">512 px working image (VALIS default)</td><td class="v">2048 px shared thumbnail (<code>high</code>)</td></tr>
+        <tr><td class="k">step 2 · model</td><td class="v">dense per-pixel optical-flow field at 2048 px; no micro pass</td><td class="v">TRE-gated control grid, bilinearly interpolated</td></tr>
         <tr><td class="k">step 2 · capture radius</td><td class="v">implicit (optical-flow pyramid)</td><td class="v"><span class="em">explicit</span> — <code>reg_tiled_halo</code>, 256 px (<code>high</code>)</td></tr>
         <tr><td class="k">estimation channel</td><td class="v">channel 0 — the resolved nuclear marker</td><td class="v">resolved nuclear marker — <code>reg_tiled_nuclear_index</code></td></tr>
-        <tr><td class="k">resampler</td><td class="v">VALIS / pyvips internals</td><td class="v">bilinear, non-negativity preserved by construction</td></tr>
-        <tr><td class="k">JVM / Bio-Formats</td><td class="v">required (heap climbs with the retry ramp)</td><td class="v"><span class="em">none</span> — NumPy / scikit-image / tifffile (+ torch + kornia at step 1)</td></tr>
-        <tr><td class="k">container</td><td class="v"><code>cdgatenbee/valis-wsi:1.0.0</code></td><td class="v"><code>bolt3x/mirage-tiled:1.0.0</code></td></tr>
-        <tr><td class="k">memory request</td><td class="v"><span class="em">300 GB</span> × attempt, 8 CPU, 24 h</td><td class="v"><span class="em">48 / 4 / 1 / 4 GB</span> across the four processes</td></tr>
-        <tr><td class="k">memory scales with</td><td class="v">the slides (heap sized from inputs / task memory)</td><td class="v"><span class="em">parameters only</span> — thumbnail, tile+halo, out_tile</td></tr>
+        <tr><td class="k">resampler</td><td class="v">VALIS / pyvips, bicubic (VALIS default)</td><td class="v">bilinear, non-negativity preserved by construction</td></tr>
+        <tr><td class="k">JVM / Bio-Formats</td><td class="v">required (fixed 10 GB heap)</td><td class="v"><span class="em">none</span> — NumPy / scikit-image / tifffile (+ torch + kornia at step 1)</td></tr>
+        <tr><td class="k">container</td><td class="v"><code>bolt3x/mirage-valis:1.0.0</code> (valis-wsi 1.2.0)</td><td class="v"><code>bolt3x/mirage-tiled:1.0.0</code></td></tr>
+        <tr><td class="k">memory request</td><td class="v"><span class="em">64 GB</span> doubling per retry (to 512), 8 CPU, 24 h × attempt</td><td class="v"><span class="em">48 / 4 / 1 / 4 GB</span> across the four processes</td></tr>
+        <tr><td class="k">memory scales with</td><td class="v">the slides (retry ramp; heap fixed)</td><td class="v"><span class="em">parameters only</span> — thumbnail, tile+halo, out_tile</td></tr>
         <tr><td class="k">parallelism grain</td><td class="v">one task per <span class="em">patient</span></td><td class="v">one task per <span class="em">tile</span> for step 2; per slide elsewhere</td></tr>
         <tr><td class="k">transform artifact</td><td class="v"><code>registrar.pickle</code> — one per patient, replayed through the JVM</td><td class="v"><code>manifest.json</code> — M0 + mesh, per slide, JVM-free</td></tr>
-        <tr><td class="k">intrinsic TRE</td><td class="v"><code>*_summary.csv</code> — pre-micro <code>error_df</code>, per stage</td><td class="v"><code>*_tre.json</code> — rigid-stage, with a per-tile spatial heatmap</td></tr>
-        <tr><td class="k">reg_qc=2 stages scored</td><td class="v"><code>native · rigid · non_rigid · micro</code></td><td class="v"><code>native · rigid · refined</code></td></tr>
-        <tr><td class="k">stage checkpoint</td><td class="v">required — micro composes destructively</td><td class="v">not needed — nothing is composed destructively</td></tr>
+        <tr><td class="k">intrinsic TRE</td><td class="v"><code>*_summary.csv</code> — VALIS's own <code>error_df</code>, per stage</td><td class="v"><code>*_tre.json</code> — rigid-stage, with a per-tile spatial heatmap</td></tr>
+        <tr><td class="k">reg_qc=2 stages scored</td><td class="v"><code>native · rigid · non_rigid</code></td><td class="v"><code>native · rigid · refined</code></td></tr>
+        <tr><td class="k">stage checkpoint</td><td class="v">written at reg_qc ≥ 2 — separates <code>non_rigid</code> from <code>rigid</code></td><td class="v">not needed — nothing is composed destructively</td></tr>
         <tr><td class="k">single-slide patient</td><td class="v">must bypass (crashes on a lone image)</td><td class="v">bypasses via the same shared passthrough</td></tr>
         <tr><td class="k">add_cycle mode</td><td class="v"><span class="em">supported</span> — new cycle → frozen prior reference</td><td class="v">rejected up front in <code>workflows/mirage.nf</code></td></tr>
       </tbody>
     </table></div>
     <div class="callout" style="margin-top:12px"><b>Step 1 no longer differs in kind between backends</b> — both are now
-      learned matchers (SuperPoint+SuperGlue vs. DISK+LightGlue). They differ in <b>scope</b>: VALIS registers a
+      DISK + LightGlue learned matchers. They differ in <b>scope</b>: VALIS registers a
       patient's whole slide series as one graph, while STARE fits each moving slide to the reference independently
       (the star topology in the row above).</div>
     <div class="callout" style="margin-top:12px"><b>Which to pick.</b> Default to <b>VALIS</b> when accuracy across a
-      whole series matters and a 300&nbsp;GB, multi-hour task is affordable — the joint graph and the learned
-      cross-modal matcher are its real advantages. Pick <b>STARE</b> when the cluster cannot give one task that much
+      whole series matters and one large, multi-hour task per patient is affordable — the joint graph over
+      the series is its real advantage. Pick <b>STARE</b> when the cluster cannot give one task that much
       memory, when there is no JVM, when turnaround matters more than the last fraction of a pixel (tiles run
       concurrently), or when you want an <i>explicit, inspectable</i> transform: a JSON manifest and a per-tile TRE
       heatmap beat an opaque pickle for debugging a bad alignment.</div>
@@ -909,8 +882,8 @@
                 "1.4 µm after non-rigid" is a sentence a pathologist can act on, and it degrades gracefully where a
                 thresholded IoU falls off a cliff.</li>
               <li><b>Deltas are reported against the rigid anchor</b>, so
-                <code>delta_vs_anchor.micro.displacement_px_p50</code> literally reads as "what the non-rigid and micro
-                stages bought over rigid alone" — and, with the wrong sign, as a warning that a stage made things
+                <code>delta_vs_anchor.non_rigid.displacement_px_p50</code> literally reads as "what the non-rigid
+                stage bought over rigid alone" — and, with the wrong sign, as a warning that a stage made things
                 <i>worse</i>.</li>
             </ul>
           </div>
@@ -922,17 +895,14 @@
           <thead><tr><th>stage</th><th>VALIS</th><th>STARE</th></tr></thead>
           <tbody>
             <tr><td><code>native</code></td><td colspan="2">no transform — the raw misalignment</td></tr>
-            <tr><td><code>rigid</code></td><td>M, incl. micro-rigid — <b>the anchor</b></td><td>M0 only — <b>the anchor</b></td></tr>
-            <tr><td><code>non_rigid</code></td><td>+ wave-1 field <i>(needs the checkpoint)</i></td><td>—</td></tr>
-            <tr><td><code>micro</code></td><td>+ micro residual — what ships</td><td>—</td></tr>
+            <tr><td><code>rigid</code></td><td>M only — <b>the anchor</b></td><td>M0 only — <b>the anchor</b></td></tr>
+            <tr><td><code>non_rigid</code></td><td>+ the field — what ships <i>(needs the checkpoint)</i></td><td>—</td></tr>
             <tr><td><code>refined</code></td><td>—</td><td>M0 + mesh — what ships</td></tr>
           </tbody></table></div>
-        <div class="callout" style="margin-top:11px"><b>VALIS's stage list is conditional</b>, and conflating the three
-          cases is how a QC report lies. <i>Checkpoint present and micro ran</i> → all four stages are distinct.
-          <i>Checkpoint present, micro skipped</i> → the field <i>is</i> the wave-1 field, so <code>micro</code> would
-          duplicate <code>non_rigid</code> and is not emitted. <i>No checkpoint</i> → the micro residual is already
-          composed in and unrecoverable, so <code>non_rigid</code> is not emitted. Each case ships an explicit
-          <code>note</code>.</div>
+        <div class="callout" style="margin-top:11px"><b>No <code>micro</code> stage.</b> <code>REGISTER</code>'s
+          checkpoint always records <code>micro_registration=false</code>, so the shipped field <i>is</i> the
+          <code>non_rigid</code> field and a <code>micro</code> stage would duplicate it — <code>WARP_SEG_QC</code>
+          does not emit one. It is passed <code>--micro-reg 0</code>, so <code>rigid</code> is the plain affine.</div>
         <div class="callout" style="margin-top:11px"><b>One process, two backends.</b>
           The old tiled-only warp process was merged into <code>WARP_SEG_QC</code>; <code>container</code>,
           <code>stages</code>, <code>versionTools</code> and <code>flags</code> now come from
@@ -970,11 +940,7 @@
         </table>
         <h4>VALIS backend</h4>
         <table class="pr">
-          <tr><td class="k">memory_mode</td><td class="val">high</td><td class="d">high | medium | low | custom preset</td></tr>
-          <tr><td class="k">reg_max_image_dim</td><td class="val">4000</td><td class="d">max_image_dim_px — cached image cap</td></tr>
-          <tr><td class="k">reg_micro_reg</td><td class="val">2</td><td class="d">0 none · 1 micro-rigid · 2 +micro non-rigid (default)</td></tr>
-          <tr><td class="k">reg_micro_reg_fraction</td><td class="val">0.125</td><td class="d">micro non-rigid crop fraction</td></tr>
-          <tr><td class="k">reg_jvm_heap_gb</td><td class="val nul">null</td><td class="d">null → 32 + 16·attempt, capped at task.memory − 4</td></tr>
+          <tr><td class="k">reg_jvm_heap_gb</td><td class="val nul">null</td><td class="d">null → 10 GB (VALIS's own value) at every attempt, capped at task.memory − 4. Every registration setting is valis-wsi 1.2.0's default; there is no other VALIS knob.</td></tr>
         </table>
       </div>
       <div class="pcol">
@@ -1014,10 +980,11 @@
     freedom and unbounded search range, then a <i>local</i> displacement field with many degrees of freedom and a
     bounded capture radius. The engineering constraint common to both is that step 1's residual must land inside step
     2's capture radius. <b>(c)</b> The default <b>VALIS</b> backend registers all of a patient's slides together as one
-    graph using learned features (SuperPoint + SuperGlue) for step 1, and a dense optical-flow field plus up to two
-    micro passes for step 2; it runs on a Bio-Formats JVM whose heap climbs with the retry ramp, and emits a replayable
-    registrar pickle. Because the micro pass composes destructively, a pre-micro checkpoint is the only way to score
-    the <code>non_rigid</code> stage separately. <b>(d)</b> The <b>STARE tiled</b> backend registers each moving slide
+    graph with valis-wsi 1.2.0 at its defaults — DISK + LightGlue features at 512&nbsp;px for step 1, a dense
+    optical-flow field at 2048&nbsp;px for step 2, no micro-registration — changing only the registration channel
+    (index 0, the nuclear channel); it runs on a Bio-Formats JVM with a fixed 10&nbsp;GB heap and emits a replayable
+    registrar pickle, plus a post-<code>register()</code> checkpoint that lets QC score <code>non_rigid</code>
+    separately from <code>rigid</code>. <b>(d)</b> The <b>STARE tiled</b> backend registers each moving slide
     independently to the reference with a DISK + LightGlue + RANSAC euclidean fit on a shared thumbnail (step 1), then one
     phase-correlation per tile assembled into a TRE-gated bilinear mesh (step 2), in NumPy/scikit-image, with torch +
     kornia only for the step-1 matcher, across four Nextflow processes whose peak memory is a function of parameters
@@ -1034,7 +1001,7 @@
     <code>subworkflows/local/register_patient.nf</code>, <code>subworkflows/local/adapters/*.nf</code>,
     <code>modules/local/register.nf</code>, <code>modules/local/tiled_*.nf</code>, <code>bin/register.py</code>,
     <code>bin/tiled_{coarse,reg_tile,solve,stitch}.py</code>,
-    <code>bin/utils/{valis_config,coarse_align,tile_grid,tile_residual,tiled_manifest,mesh_field,tiled_warp,tre_report}.py</code>,
+    <code>bin/utils/{valis_preflight,jvm_cache,coarse_align,tile_grid,tile_residual,tiled_manifest,mesh_field,tiled_warp,tre_report}.py</code>,
     <code>bin/warp_seg_qc.py</code>, <code>lib/WarpBackends.groovy</code>, <code>conf/modules.config</code>,
     <code>nextflow.config</code>).</span>
   </p>

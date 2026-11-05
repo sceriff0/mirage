@@ -412,9 +412,8 @@ jobs:
         # the build context, the Docker Hub repository (mirage-<dir>) and the reference
         # in modules/local/*.nf all say the same word;
         # tests/test_container_image_naming.py asserts that agreement.
-        # VALIS is intentionally absent: it uses the maintained upstream image
-        # cdgatenbee/valis-wsi:1.0.0 (its from-source libvips build is heavy and not
-        # worth re-hosting).
+        # VALIS is here as `valis`: upstream's cdgatenbee/valis-wsi:1.2.0, digest-pinned,
+        # with only the fixes that let a user who is not root run it (containers/valis).
         include: ${{ fromJson(needs.resolve.outputs.matrix) }}
 
     steps:

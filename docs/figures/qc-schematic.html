@@ -542,24 +542,24 @@
       <caption style="font-family:var(--mono);font-size:.63rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);text-align:left;padding:0 0 7px;">one warp process, two backends — lib/WarpBackends.groovy, keyed on the <code>method</code> input</caption>
       <thead><tr><th>&nbsp;</th><th>valis <span class="tag-def">default</span></th><th>tiled <span class="tag-alt">method=tiled</span></th></tr></thead>
       <tbody>
-        <tr><td class="rk">container</td><td>cdgatenbee/valis-wsi:1.0.0</td><td>bolt3x/mirage-tiled:1.0.0</td></tr>
-        <tr><td class="rk">stages</td><td>native · rigid · non_rigid · micro</td><td>native · rigid · refined</td></tr>
+        <tr><td class="rk">container</td><td>bolt3x/mirage-valis:1.0.0</td><td>bolt3x/mirage-tiled:1.0.0</td></tr>
+        <tr><td class="rk">stages</td><td>native · rigid · non_rigid <i>(no micro: VALIS runs at its defaults)</i></td><td>native · rigid · refined</td></tr>
         <tr><td class="rk">versionTools</td><td>valis · skimage · scipy</td><td>skimage · scipy</td></tr>
-        <tr><td class="rk">extra flags</td><td>moving/reference name · <code>--micro-reg</code> · optional
+        <tr><td class="rk">extra flags</td><td>moving/reference name · <code>--micro-reg 0</code> · optional
           <code>--checkpoint-dir</code> · <b><code>--jvm-heap-gb 8</code></b></td><td><code>--method tiled</code></td></tr>
         <tr><td class="rk">transform key</td><td>one registrar per <b>patient</b></td><td>one manifest per <b>moving slide</b></td></tr>
-        <tr><td class="rk">stage checkpoint</td><td>required — the micro pass composes destructively</td>
+        <tr><td class="rk">stage checkpoint</td><td>separates <code>non_rigid</code> from <code>rigid</code>; records that no micro stage ran</td>
           <td><i>none</i> — passed as <code>[]</code>, the null object</td></tr>
       </tbody>
     </table></div>
-    <p class="outnote"><b>The container cell above names the readable tag, not what actually runs.</b>
-      <code>cdgatenbee/valis-wsi:1.0.0</code> is the third-party base image; at runtime
-      <code>lib/WarpBackends.groovy</code> and <code>modules/local/register.nf</code> both pin it to a digest of
-      that same build (<code>@sha256:eac27cc5…</code>, resolved 2026-09-02) rather than the mutable tag — a
-      supply-chain hardening (R6). This cell keeps the human-readable tag because a bare digest is unreadable in
-      a supplement. <code>bolt3x/mirage-tiled:1.0.0</code>, and every <code>bolt3x/mirage-*</code> image named
-      elsewhere in this figure, are the pipeline's own published, content-descriptive tags and are not
-      digest-pinned — R6 pins only the externally-sourced base image.</p>
+    <p class="outnote"><b>The valis container is upstream's VALIS, made runnable.</b>
+      <code>bolt3x/mirage-valis:1.0.0</code> (<code>containers/valis</code>) is <code>cdgatenbee/valis-wsi:1.2.0</code>,
+      pinned to its digest (<code>@sha256:4fd20b68…</code>, read 2026-10-11) in the Dockerfile — a supply-chain
+      hardening (R6) — with only the fixes a user who is not root needs under Apptainer; no Python package is
+      added or moved. <code>lib/WarpBackends.groovy</code> and <code>modules/local/register.nf</code> name the
+      same image, so the registrar pickle loads in the VALIS that wrote it. <code>bolt3x/mirage-tiled:1.0.0</code>,
+      and every <code>bolt3x/mirage-*</code> image named elsewhere in this figure, are the pipeline's own
+      published, content-descriptive tags.</p>
     <p class="outnote"><b>The per-cell residual CSV is never published.</b> <code>WARP_SEG_QC</code>'s
       <code>publishDir</code> carries <code>pattern: "*_seg_qc.json"</code> and replaces the process-level
       default, so <code>*_reg_residuals.csv</code> — an optional <code>output:</code> emit — reaches
@@ -738,7 +738,6 @@
         <table class="pr">
           <tr><td class="k">seg_method</td><td class="v">instantseg</td><td class="d">SEG_QC_SEGMENT is SEGMENT aliased</td></tr>
           <tr><td class="k">simplify_tolerance</td><td class="v">1.0</td><td class="d">SEG_QC_GEOJSON <code>--tolerance</code>; must equal EXTRACT_CELL_PROPERTIES'</td></tr>
-          <tr><td class="k">reg_micro_reg</td><td class="v">2</td><td class="d">WARP_SEG_QC <code>--micro-reg</code>: whether 'rigid' includes micro-rigid</td></tr>
           <tr><td class="k">seg_qc_pairing</td><td class="v">lsa</td><td class="d">WARP_SEG_QC <code>--pairing</code>; backend-independent, a tunable in <code>ext.args</code></td></tr>
           <tr><td class="k">seg_qc_match_radius_factor</td><td class="v">1.5</td><td class="d">WARP_SEG_QC <code>--match-radius-factor</code>; same <code>ext.args</code> line</td></tr>
           <tr><td class="k">registration_method</td><td class="v">valis</td><td class="d">read once, in registration.nf; reaches SEG_QC as an argument</td></tr>

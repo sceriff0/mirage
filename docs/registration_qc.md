@@ -92,7 +92,11 @@ established in an earlier run. That is the drift the mode exists to detect.
 
 ## Why the correspondence is fixed, and fixed *there*
 
-VALIS applies four transform states in this order:
+VALIS's transform states, in order. REGISTER runs valis-wsi 1.2.0 at its defaults, which run
+**no micro-registration** (no `MicroRigidRegistrar`, no `register_micro()`), so the pipeline
+scores `native`, `rigid` and `non_rigid`; `rigid` is the plain affine, and the `micro` row below
+is only ever reported for a registrar that did run a micro pass (e.g. one made by the tuned
+configuration archived at `archive/valis-mirage-tuned`):
 
 | Stage | What it is | Where it comes from |
 |---|---|---|
@@ -166,8 +170,7 @@ Per stage, over the fixed pairs:
 
 `delta_vs_anchor` reports each stage minus `rigid`. **A positive displacement delta means that
 stage made the alignment worse** — which is exactly the failure this design exists to surface,
-since micro-registration is caught-and-continued in `bin/register.py` and would otherwise fail
-silently.
+since a stage that hurts the alignment would otherwise go unnoticed.
 
 ## The REGISTER stage checkpoint
 
@@ -177,10 +180,11 @@ VALIS composes its stages destructively:
 - `register_micro()` does `fwd_dxdy = fwd_dxdy + micro_residual` and writes it back onto the
   same attribute.
 
-So a finished registrar pickle holds **one** field that is rigid + non-rigid + micro, and no
-reader can recover the intermediate. REGISTER therefore snapshots each slide's forward
-displacement field at the only moment it exists — after `register()` returns, before
-`register_micro()` is called — into `reg_stage_checkpoint/`. Fields are at non-rigid
+So a registrar pickle that ran a micro pass holds **one** field that is rigid + non-rigid +
+micro, and no reader can recover the intermediate. REGISTER snapshots each slide's forward
+displacement field after `register()` returns into `reg_stage_checkpoint/`. It runs no micro
+pass, so the checkpoint always records `micro_registration: false`: its field is the final one,
+and the QC reports `non_rigid` and omits `micro`. Fields are at non-rigid
 registration resolution (a few thousand pixels a side), not slide resolution: tens of MB.
 
 Writing it can never fail a registration; it is QC input, and REGISTER's own success does not

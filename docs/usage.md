@@ -83,7 +83,7 @@ last two come from `site.config` — see [Make a site config](installation.md#si
 | `dry_run` | param | no | Validate inputs and the samplesheet, then exit without running tasks. Boolean — set it in a `-params-file` (`params/dry_run.json`), never on the CLI; see [Boolean parameters](#boolean-parameters). |
 | `--cleanup_level` | param | no | Which published outputs to keep: `none` (default — everything, re-enterable by `--start` or `add_cycle`) or `final` (final artifacts only; intermediates are never published). |
 | `cleanup_work` | param | no | Delete `work/` after a successful run. **On by default**; incompatible with `-resume`. Boolean — set it in a `-params-file`, never on the CLI; see [Boolean parameters](#boolean-parameters). |
-| `-profile` | option | no | Execution/config profiles, comma-combined (e.g. `slurm,singularity`). `tma` is a data-shape profile for tissue-microarray cores (REGISTER memory, JVM heap and keypoint count; it sets no registration tier); add it to the site profiles, e.g. `slurm,singularity,tma`. See [Tiers](parameters.md#tiers). |
+| `-profile` | option | no | Execution/config profiles, comma-combined (e.g. `slurm,singularity`). |
 | `-params-file` | option | no | JSON preset of parameters, e.g. `params/full_pipeline.json`. |
 | `-resume` | option | no | Reuse cached results from a previous run's `work/`. |
 | `-c` | option | yes on a cluster | Layer your `site.config` (required `max_cpus`/`max_memory`, SLURM fields). See [Make a site config](installation.md#size-your-run). |
@@ -545,8 +545,10 @@ key grammar is a cross-repository contract — see
 ??? failure "Out-of-memory / exit code 137 or 140"
     Almost always the job exceeded its memory/time grant. Raise `--max_memory`,
     `--max_cpus`, `--max_time`; MIRAGE auto-retries on `104,134,135,137,139,140,143`
-    with scaled resources. For registration specifically, drop to
-    `--memory_mode low` and lower `--reg_max_image_dim`.
+    with scaled resources. For VALIS registration, which runs at
+    valis-wsi's defaults and has no size settings, `REGISTER` doubles its memory on each
+    retry up to 512 GB; on a smaller node use `--registration_method tiled` (STARE), whose
+    every step is bounded by a parameter.
 
 ??? failure "The run seems to hang at startup"
     Usually Nextflow pulling large container images on first run. Every
