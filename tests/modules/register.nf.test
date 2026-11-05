@@ -264,7 +264,9 @@ nextflow_process {
                     "no rendered REGISTER .command.sh found under the task work dir" },
                 { assert calls.every { c -> removed.every { !c.contains(it + ' ') } },
                     "a VALIS setting is rendered again: " + calls.join(' --- ') },
-                { assert calls.every { it.contains('--reference P001_ref.ome.tiff') },
+                // REGISTER passes the STAGED path (stageAs 'ref/*' -> ref/<name>); register.py
+                // takes its basename and finds the copy under --input-dir.
+                { assert calls.every { it =~ /--reference (\S+\/)?P001_ref\.ome\.tiff / },
                     "the reference did not reach register.py: " + calls.join(' --- ') },
                 // Fixed heap: 10 GB (VALIS's own), clamped by task.memory - 4 on a small runner.
                 { assert calls.every { c ->
