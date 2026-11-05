@@ -1,5 +1,8 @@
 """REGISTER runs valis-wsi 1.2.0 at its defaults, with ONE argument that is not VALIS's.
 
+(Its other mode, `reg_valis_mode hires`, is VALIS's own high-resolution example; it is pinned
+by tests/test_register_valis_modes.py. This file pins the default.)
+
 Ruling 2026-11-05: MIRAGE's VALIS mode is the benchmark's ``valis120`` call --
 ``Valis(src, dst, img_list=..., reference_img_f=...)``, ``register()``, every slide warped in
 the reference frame. The tuned 1.0.0 configuration (tiers, SuperPoint/SuperGlue, keypoint cap,
@@ -92,24 +95,40 @@ def test_register_is_called_with_exactly_register_kwargs():
 
 
 def test_the_registrar_gets_the_slides_and_the_reference_and_nothing_else():
+    """At the default mode. The one other thing the constructor can be given is
+    constructor_kwargs(valis_mode), which is {} at `default` and the hires example's
+    MicroRigidRegistrar at `hires` (tests/test_register_valis_modes.py)."""
     calls = _calls(_function("valis_registration"), "Valis")
     assert len(calls) == 1, f"expected one registration.Valis(...) call, found {len(calls)}"
-    kwargs = sorted(str(k.arg) for k in calls[0].keywords)
+    kwargs = sorted(str(k.arg) for k in calls[0].keywords if k.arg is not None)
     assert kwargs == ["img_list", "reference_img_f"], (
         f"Valis() is given {kwargs}; every constructor argument except the slides and the "
         "reference must be VALIS's default (no tier sizes, detector, matcher, "
-        "align_to_reference, micro-rigid registrar)."
+        "align_to_reference); a mode's own argument goes through constructor_kwargs()."
     )
+    splats = [ast.unparse(k.value) for k in calls[0].keywords if k.arg is None]
+    assert splats == ["constructor_kwargs(valis_mode)"], splats
     assert len(calls[0].args) == 2, "Valis(src_dir, dst_dir, ...) positional arguments"
+    default_branch = ast.unparse(_function("constructor_kwargs"))
+    assert default_branch.rstrip().endswith("return {}"), (
+        "constructor_kwargs() must return {} for the default mode"
+    )
 
 
-def test_no_micro_registration_runs():
+def test_the_default_mode_runs_no_micro_registration():
+    """register_micro() runs only when register_micro_kwargs() returns kwargs, which it does
+    only at `hires`; nothing of the tuned configuration is back."""
     fn = _function("valis_registration")
-    assert not _calls(fn, "register_micro"), "register_micro() is called again"
-    src = REGISTER_PY.read_text()
-    for gone in ("MicroRigidRegistrar", "SuperGlue", "SuperPoint", "MEMORY_PRESETS"):
+    assert len(_calls(fn, "register_micro")) == 1
+    micro = ast.unparse(_function("register_micro_kwargs"))
+    assert "if valis_mode != 'hires':\n        return None" in micro
+    for gone in ("SuperGlue", "SuperPoint", "MEMORY_PRESETS"):
         assert gone not in ast.unparse(fn), f"{gone} is back in valis_registration"
-    assert "valis_micro_rigid" not in src
+    assert "valis_micro_rigid" not in REGISTER_PY.read_text()
+    names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+    assert "MicroRigidRegistrar" not in names, (
+        "MicroRigidRegistrar must reach Valis() only through constructor_kwargs('hires')"
+    )
 
 
 def test_a_name_match_on_dapi_would_pick_a_decoy_over_the_nuclear_channel():

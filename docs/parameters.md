@@ -107,15 +107,30 @@ tuned VALIS 1.0.0 configuration this replaced (`memory_mode` tiers, SuperPoint/S
 keypoint cap, micro-registration, `reg_max_image_dim`, the `tma` profile) is archived at the git
 tag `archive/valis-mirage-tuned`.
 
+**`reg_valis_mode hires`** swaps in VALIS's *own* other configuration, its high-resolution
+example (valis-wsi 1.2.0 `docs/examples.rst`), **as shipped**: `MicroRigidRegistrar` in the
+`Valis()` constructor, then `register_micro(max_non_rigid_registration_dim_px=micro_reg_size)`
+after `register()`, with `micro_reg_size = floor(0.25 × the smallest slide's longest side)`
+(on slides under 8192 px a side that is ≤ 2048, VALIS's own non-rigid size, and `register_micro`
+returns without registering). Everything else is as at `default`: the channel by index 0
+(passed to `register_micro` too, which otherwise matches "dapi" by name), the reference-frame
+warp. VALIS 1.2.0's known micro-pass defect (on its non-tiled path every slide's micro image is
+prepared with the *last* slide's field) is **not** fixed. It costs memory: `REGISTER` asks
+128 GB on its first attempt instead of 64 (see [Resources](resources.md)).
+
 | Parameter | Default | Description |
 |---|---|---|
+| `reg_valis_mode` | `default` | VALIS's own configuration: `default` (`register()` at valis-wsi 1.2.0's defaults, no micro pass) or `hires` (its high-resolution example, as shipped; above). |
 | `reg_jvm_heap_gb` | `null` | Bio-Formats JVM heap (GB) for VALIS. `null` = a fixed 10 GB at every attempt, VALIS's own value. |
 | `reg_qc` | `2` | Registration QC depth: `0` = none, `1` = the [before/after DAPI overlay](registration_qc.md#the-reg_qc-1-overlay-is-a-beforeafter-pair) only, `2` = that overlay + [staged segmentation-overlap metrics](registration_qc.md). |
 
 At `reg_qc = 2` the pipeline segments each slide's DAPI on its **native** image, pairs the
 nuclei once after rigid registration, and then re-scores those same pairs after every later
 stage — so per-pair IoU and centroid residual can be attributed to `rigid` and `non_rigid`
-individually (VALIS runs no micro-registration, so no `micro` stage is reported). See [Staged registration QC](registration_qc.md) for the output schema
+individually. At `reg_valis_mode default` VALIS runs no micro-registration, so no `micro`
+stage is reported; at `hires` the checkpoint is taken after `register()` and before
+`register_micro()`, so `non_rigid` and `micro` are reported as separate stages (and `micro`
+is dropped again if `register_micro` turned out to be a no-op). See [Staged registration QC](registration_qc.md) for the output schema
 and how to read it.
 
 ### Tiled / STARE (`registration_method=tiled`)

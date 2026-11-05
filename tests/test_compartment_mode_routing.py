@@ -354,7 +354,9 @@ ALLOWED_LINES = {
         # shipped model became a pinned Hugging Face snapshot.
         # 1231 -> 1204 (2026-11-05): STARE's cost tiers were removed, and the four TILED_*
         # closures above this line lost their inlined tier table.
-        1204: (
+        # 1204 -> 1211 (2026-11-05): REGISTER's memory comment grew by seven lines when its
+        # first attempt became per-mode (reg_valis_mode default 64 GB, hires 128 GB).
+        1211: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

@@ -112,12 +112,17 @@ real slide. Changing either number changes an unguarded figure, so change it her
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `REGISTER` | `8` | `64 GB × 2^(attempt − 1)` (64 → 128 → 256 → 512 GB) | `24.h × attempt` | `withName` |
+| `REGISTER` | `8` | `64 GB × 2^(attempt − 1)` (64 → 128 → 256 → 512 GB); at `reg_valis_mode hires` `128 GB × 2^(attempt − 1)` (128 → 256 → 512 → 1024 GB) | `24.h × attempt` | `withName` |
 
-`REGISTER` pins its own retry budget (at most four attempts, so the ramp stops at its 512 GB rung) rather than inheriting a profile's, and every rung is still clamped by `max_memory`.
+`REGISTER` pins its own retry budget (at most four attempts, so the ramp stops at its fourth rung) rather than inheriting a profile's, and every rung is still clamped by `max_memory`.
+The first rung is sized per mode from peak RSS measured per case on the 8-case regbench
+cohort (VALIS 1.2.0, 4 CPUs): `default` median 31.6 GB, max 51.4 → 64 GB; `hires` median
+81.7 GB, max 106.4 → 128 GB, the smallest rung of the same doubling ramp above the cohort's max.
 
 `REGISTER` runs valis-wsi 1.2.0 at its defaults (rigid 512 px, non-rigid 2048 px, VALIS's own
-detector and matcher, no micro-registration) with a fixed 10 GB Bio-Formats JVM heap at every
+detector and matcher, no micro-registration), or at `reg_valis_mode hires` its high-resolution
+example (`MicroRigidRegistrar`, then `register_micro` at 0.25 × the smallest slide's longest
+side), with a fixed 10 GB Bio-Formats JVM heap at every
 attempt (`reg_jvm_heap_gb` overrides it). The old `tma` profile and its keypoint cap, CPU bound
 and heap pin were settings of the tuned VALIS 1.0.0 configuration and went with it (git tag
 `archive/valis-mirage-tuned`).

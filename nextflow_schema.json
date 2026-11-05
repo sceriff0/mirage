@@ -172,6 +172,15 @@
                     "minimum": 0.1,
                     "maximum": 10
                 },
+                "reg_valis_mode": {
+                    "type": "string",
+                    "default": "default",
+                    "description": "VALIS's own configuration: 'default' = register() at valis-wsi 1.2.0's defaults; 'hires' = valis-wsi 1.2.0's high-resolution example as shipped (MicroRigidRegistrar, then register_micro at floor(0.25 x the smallest slide's longest side)). REGISTER asks 128 GB on its first attempt under hires.",
+                    "enum": [
+                        "default",
+                        "hires"
+                    ]
+                },
                 "reg_jvm_heap_gb": {
                     "type": [
                         "integer",

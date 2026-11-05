@@ -543,12 +543,12 @@
       <thead><tr><th>&nbsp;</th><th>valis <span class="tag-def">default</span></th><th>tiled <span class="tag-alt">method=tiled</span></th></tr></thead>
       <tbody>
         <tr><td class="rk">container</td><td>bolt3x/mirage-valis:1.0.0</td><td>bolt3x/mirage-tiled:1.0.0</td></tr>
-        <tr><td class="rk">stages</td><td>native · rigid · non_rigid <i>(no micro: VALIS runs at its defaults)</i></td><td>native · rigid · refined</td></tr>
+        <tr><td class="rk">stages</td><td>native · rigid · non_rigid <i>(no micro at <code>reg_valis_mode default</code>)</i>; + micro at <code>hires</code></td><td>native · rigid · refined</td></tr>
         <tr><td class="rk">versionTools</td><td>valis · skimage · scipy</td><td>skimage · scipy</td></tr>
-        <tr><td class="rk">extra flags</td><td>moving/reference name · <code>--micro-reg 0</code> · optional
+        <tr><td class="rk">extra flags</td><td>moving/reference name · <code>--micro-reg 0</code> (<code>2</code> at hires) · optional
           <code>--checkpoint-dir</code> · <b><code>--jvm-heap-gb 8</code></b></td><td><code>--method tiled</code></td></tr>
         <tr><td class="rk">transform key</td><td>one registrar per <b>patient</b></td><td>one manifest per <b>moving slide</b></td></tr>
-        <tr><td class="rk">stage checkpoint</td><td>separates <code>non_rigid</code> from <code>rigid</code>; records that no micro stage ran</td>
+        <tr><td class="rk">stage checkpoint</td><td>separates <code>non_rigid</code> from <code>rigid</code> (and from <code>micro</code> at hires); records whether a micro stage ran</td>
           <td><i>none</i> — passed as <code>[]</code>, the null object</td></tr>
       </tbody>
     </table></div>

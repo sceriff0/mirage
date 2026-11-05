@@ -135,7 +135,8 @@ Chips give real defaults. Every process runs in a pinned container and emits
         <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
           <div class="ox">Feature-based rigid + non-rigid warp (JVM / Bio-Formats), resolving all
             slides into a shared space: valis-wsi 1.2.0 at its defaults, with the nuclear
-            channel (index 0) passed as the registration channel. No micro-registration.</div>
+            channel (index 0) passed as the registration channel. No micro-registration
+            (<code>reg_valis_mode hires</code>: VALIS's own high-resolution example, with both micro passes).</div>
           <div class="pp"><span>valis-wsi <b>1.2.0</b></span><span>rigid / non-rigid <b>512 / 2048 px</b></span><span>JVM heap <b>10 GB</b></span></div></div>
         <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
           <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial is

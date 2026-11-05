@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VALIS registration for the WSI pipeline: valis-wsi 1.2.0 at its defaults.
+"""VALIS registration for the WSI pipeline: valis-wsi 1.2.0, its default or its hires example.
 
 MIRAGE's VALIS mode is the benchmark's ``valis120`` call (``benchmarks/regbench/methods/
 valis.py`` on the benchmarking branch)::
@@ -23,8 +23,25 @@ cache guard, the fixed JVM heap (started through ``slide_io.init_jvm`` because 1
 ``registration.init_jvm`` ignores the size it is given), the staged-QC checkpoint, the
 registrar pickle WARP_SEG_QC reads, and writing every channel.
 
+``--valis-mode hires`` (``params.reg_valis_mode``) is valis-wsi 1.2.0's OWN high-resolution
+example, as shipped (``docs/examples.rst:122-149`` at v1.2.0; the benchmark's
+``valis120_hires`` row, ``benchmarks/regbench/methods/valis.py`` on ``regbench-paper``)::
+
+    registrar = registration.Valis(src_dir, dst_dir, img_list=..., reference_img_f=...,
+                                   micro_rigid_registrar_cls=MicroRigidRegistrar)
+    registrar.register(if_processing_kwargs={"channel": 0, "adaptive_eq": True})
+    registrar.register_micro(max_non_rigid_registration_dim_px=micro_reg_size,
+                             if_processing_kwargs={"channel": 0, "adaptive_eq": True})
+
+with ``micro_reg_size = floor(0.25 x the smallest slide's longest side)``, computed as the
+example computes it (``micro_reg_size()``). Nothing else changes: the same channel by index
+(passed to ``register_micro`` too, which picks its channel by the same name match), the same
+warp in the reference frame. VALIS 1.2.0's known micro-pass defect (on the non-tiled path every
+slide's micro image is prepared with the LAST slide's field) is NOT fixed: ruling 2026-11-05,
+hires is upstream's example as shipped. ``default`` runs no micro pass at all.
+
 The tuned configuration this replaced (VALIS 1.0.0, SuperPoint/SuperGlue, tiers, micro-
-registration) is archived at the git tag ``archive/valis-mirage-tuned``.
+registration at 0.125) is archived at the git tag ``archive/valis-mirage-tuned``.
 
 Usage:
     python register.py --input-dir ./preprocessed --out ./registered --reference panel1.ome.tif
@@ -55,7 +72,15 @@ from logger import get_logger
 # Module-level logger
 logger = get_logger(__name__)
 
-__all__ = ["main", "REGISTRATION_CHANNEL", "register_kwargs"]
+__all__ = [
+    "main",
+    "REGISTRATION_CHANNEL",
+    "VALIS_MODES",
+    "constructor_kwargs",
+    "micro_reg_size",
+    "register_kwargs",
+    "register_micro_kwargs",
+]
 
 from progress import PhaseReporter, ProgressTracker  # noqa: E402
 from retry import RetryContext, default_cleanup  # noqa: E402
@@ -76,6 +101,7 @@ os.environ.setdefault("XDG_CACHE_HOME", "/tmp/xdg_cache")
 # VALIS library imports
 from valis import registration, slide_io  # noqa: E402
 from valis import warp_tools as valis_warp_tools  # noqa: E402
+from valis.micro_rigid_registrar import MicroRigidRegistrar  # noqa: E402
 
 # VALIS-free (tifffile only), but named for what it guards; it sits below the
 # numba guard with the other valis imports so tests/test_numba_guard.py's
@@ -102,6 +128,83 @@ def register_kwargs() -> dict:
     }
 
 
+# reg_valis_mode: VALIS's own two configurations, and nothing of MIRAGE's. Mirrored by the
+# schema's reg_valis_mode enum (tests/test_register_valis_modes.py).
+VALIS_MODES = ("default", "hires")
+
+# valis-wsi 1.2.0 docs/examples.rst:134, the high-resolution example: the micro pass runs at a
+# quarter of the smallest slide's longest side.
+MICRO_REG_FRACTION = 0.25
+
+
+def _check_mode(valis_mode: str) -> None:
+    if valis_mode not in VALIS_MODES:
+        raise ValueError(f"valis mode {valis_mode!r} is not one of {VALIS_MODES}")
+
+
+def micro_reg_size(slide_dimensions_wh) -> int:
+    """The hires example's micro-registration size, statement for statement.
+
+    ``slide_dimensions_wh`` is each slide's ``Slide.slide_dimensions_wh`` (one (w, h) row per
+    pyramid level, level 0 first). examples.rst:141-146 at v1.2.0::
+
+        img_dims = np.array([slide_obj.slide_dimensions_wh[0] for slide_obj in
+                             registrar.slide_dict.values()])
+        min_max_size = np.min([np.max(d) for d in img_dims])
+        micro_reg_size = np.floor(min_max_size*micro_reg_fraction).astype(int)
+    """
+    img_dims = np.array([dims[0] for dims in slide_dimensions_wh])
+    min_max_size = np.min([np.max(d) for d in img_dims])
+    return int(np.floor(min_max_size * MICRO_REG_FRACTION).astype(int))
+
+
+def constructor_kwargs(valis_mode: str) -> dict:
+    """``Valis(...)``'s arguments beyond the slides and the reference: none at ``default``;
+    the hires example's ``micro_rigid_registrar_cls=MicroRigidRegistrar`` at ``hires``."""
+    _check_mode(valis_mode)
+    if valis_mode == "hires":
+        return {"micro_rigid_registrar_cls": MicroRigidRegistrar}
+    return {}
+
+
+def register_micro_kwargs(valis_mode: str, slide_dimensions_wh) -> Optional[dict]:
+    """``register_micro()``'s arguments, or None: ``default`` runs no micro pass.
+
+    At ``hires``: the example's ``max_non_rigid_registration_dim_px=micro_reg_size`` plus the
+    same registration channel ``register()`` gets (``register_micro`` re-processes the slides
+    and would otherwise pick its channel by VALIS's name match on "dapi")."""
+    _check_mode(valis_mode)
+    if valis_mode != "hires":
+        return None
+    return {
+        "max_non_rigid_registration_dim_px": micro_reg_size(slide_dimensions_wh),
+        **register_kwargs(),
+    }
+
+
+def repair_fwd_dxdy(registrar) -> int:
+    """Recompute a missing ``fwd_dxdy`` from ``bk_dxdy``; returns how many slides it repaired.
+
+    NonRigidTileRegistrar produces fwd_dxdy as pyvips.Image, but the Slide setter silently
+    rejects pyvips types. Run after every non-rigid pass (``register()``, and
+    ``register_micro()`` at hires)."""
+    repaired_count = 0
+    for slide_name, slide_obj in registrar.slide_dict.items():
+        if slide_obj.bk_dxdy is not None and slide_obj.fwd_dxdy is None:
+            bk = slide_obj.bk_dxdy
+            if isinstance(bk, np.ndarray):
+                logger.warning(
+                    f"  [{slide_name}] fwd_dxdy is None — recomputing from bk_dxdy inverse"
+                )
+                slide_obj.fwd_dxdy = valis_warp_tools.get_inverse_field(bk)
+                repaired_count += 1
+            else:
+                logger.warning(
+                    f"  [{slide_name}] fwd_dxdy is None and bk_dxdy is pyvips — cannot repair in-place"
+                )
+    return repaired_count
+
+
 def start_jvm(heap_gb: int) -> int:
     """Start Bio-Formats' JVM with ``heap_gb`` before VALIS can start it.
 
@@ -116,6 +219,7 @@ def start_jvm(heap_gb: int) -> int:
     point_jvm_cache_off_readonly_home()
     slide_io.init_jvm(mem_gb=int(heap_gb))
     return int(heap_gb)
+
 
 def validate_input_slides(input_dir: str) -> Tuple[List[str], List[str]]:
     """Validate input slides before registration.
@@ -235,8 +339,10 @@ def valis_registration(
     reference_markers: Optional[List[str]] = None,
     jvm_heap_gb: int = 10,
     stage_checkpoint_dir: Optional[str] = None,
+    valis_mode: str = "default",
 ) -> int:
-    """Register the slides in ``input_dir`` with valis-wsi 1.2.0 at its defaults.
+    """Register the slides in ``input_dir`` with valis-wsi 1.2.0: its defaults, or its
+    high-resolution example (``valis_mode="hires"``).
 
     Parameters
     ----------
@@ -253,16 +359,22 @@ def valis_registration(
     jvm_heap_gb : int, optional
         Bio-Formats JVM heap, GB. Default 10, VALIS's own value.
     stage_checkpoint_dir : str, optional
-        Where to snapshot each slide's displacement field after registration. Consumed by
-        WARP_SEG_QC (reg_qc=2), which reads it to report the 'non_rigid' stage separately
-        from 'rigid'. No micro-registration runs, so the checkpoint always records that
-        there is no distinct 'micro' stage. None (default) writes nothing.
+        Where to snapshot each slide's displacement field after ``register()`` and before
+        any micro pass. Consumed by WARP_SEG_QC (reg_qc=2), which reads it to report the
+        'non_rigid' stage separately from 'rigid' and, at ``hires``, from 'micro'. At
+        ``default`` no micro pass runs, so the checkpoint records that there is no distinct
+        'micro' stage. None (default) writes nothing.
+    valis_mode : str, optional
+        ``"default"`` (``register()`` only) or ``"hires"`` (upstream's high-resolution
+        example: ``MicroRigidRegistrar`` in the constructor, then ``register_micro()`` at
+        ``micro_reg_size()``). See the module docstring.
 
     Returns
     -------
     int
         Exit code (0 for success)
     """
+    _check_mode(valis_mode)
     reporter = PhaseReporter()
 
     # ========================================================================
@@ -286,7 +398,14 @@ def valis_registration(
     results_dir = os.path.dirname(os.path.abspath(out)) if os.path.dirname(out) else "."
 
     logger.info("=" * 70)
-    logger.info("VALIS Registration Configuration: valis-wsi defaults")
+    logger.info(
+        "VALIS Registration Configuration: "
+        + (
+            "valis-wsi defaults"
+            if valis_mode == "default"
+            else "valis-wsi high-resolution example (hires)"
+        )
+    )
     logger.info("=" * 70)
     logger.info(
         f"  Rigid resolution: {registration.DEFAULT_MAX_PROCESSED_IMG_SIZE}px (default)"
@@ -294,7 +413,14 @@ def valis_registration(
     logger.info(
         f"  Non-rigid resolution: {registration.DEFAULT_MAX_NON_RIGID_REG_SIZE}px (default)"
     )
-    logger.info("  align_to_reference: False (default); micro-registration: none")
+    if valis_mode == "default":
+        logger.info("  align_to_reference: False (default); micro-registration: none")
+    else:
+        logger.info(
+            "  align_to_reference: False (default); MicroRigidRegistrar inside register(), "
+            f"then register_micro() at {MICRO_REG_FRACTION} x the smallest slide's longest side"
+        )
+    logger.info(f"  Valis() extra kwargs: {constructor_kwargs(valis_mode)}")
     logger.info(f"  register() kwargs: {register_kwargs()}")
     logger.info("=" * 70)
 
@@ -391,6 +517,7 @@ def valis_registration(
         results_dir,
         img_list=slide_files,
         reference_img_f=os.path.join(input_dir, ref_image),
+        **constructor_kwargs(valis_mode),
     )
 
     # ========================================================================
@@ -416,22 +543,7 @@ def valis_registration(
         logger.info("Registration completed")
         logger.info(f"\nRegistration errors:\n{error_df}")
         # ---- Safety net: repair missing fwd_dxdy ----
-        # NonRigidTileRegistrar produces fwd_dxdy as pyvips.Image, but the
-        # Slide setter silently rejects pyvips types. Recompute from bk_dxdy.
-        repaired_count = 0
-        for slide_name, slide_obj in registrar.slide_dict.items():
-            if slide_obj.bk_dxdy is not None and slide_obj.fwd_dxdy is None:
-                bk = slide_obj.bk_dxdy
-                if isinstance(bk, np.ndarray):
-                    logger.warning(
-                        f"  [{slide_name}] fwd_dxdy is None — recomputing from bk_dxdy inverse"
-                    )
-                    slide_obj.fwd_dxdy = valis_warp_tools.get_inverse_field(bk)
-                    repaired_count += 1
-                else:
-                    logger.warning(
-                        f"  [{slide_name}] fwd_dxdy is None and bk_dxdy is pyvips — cannot repair in-place"
-                    )
+        repaired_count = repair_fwd_dxdy(registrar)
         if repaired_count > 0:
             logger.info(
                 f"  Repaired fwd_dxdy for {repaired_count} slides — re-measuring error"
@@ -590,13 +702,23 @@ def valis_registration(
         f"  All {len(registrar.slide_dict)} slides have valid transformation matrices"
     )
 
+    # The micro pass, if this mode runs one: None at default. Sized now, from the
+    # registrar's slides, so the checkpoint below can record whether one is about to run.
+    micro_kwargs = register_micro_kwargs(
+        valis_mode, [s.slide_dimensions_wh for s in registrar.slide_dict.values()]
+    )
+
     # ========================================================================
     # Staged-QC checkpoint (reg_qc >= 2)
     # ========================================================================
-    # WARP_SEG_QC reads it to report 'non_rigid' separately from 'rigid'. No micro-
-    # registration runs, so the field saved here IS the final field, and the checkpoint says
-    # so (micro_registration=False): the QC then reports no 'micro' stage that would be a
-    # byte-for-byte duplicate of 'non_rigid'.
+    # WARP_SEG_QC reads it to report 'non_rigid' separately from 'rigid' (and, at hires,
+    # from 'micro'). This is the only instant the post-non-rigid, pre-micro state exists:
+    # register_micro() composes its residual into the same fields destructively. At default
+    # no micro pass runs, so the field saved here IS the final field, and the checkpoint
+    # says so (micro_registration=False): the QC then reports no 'micro' stage that would be
+    # a byte-for-byte duplicate of 'non_rigid'. At hires it says a micro pass is about to
+    # run, and is corrected after the fact if register_micro() turns out to be a no-op.
+    # slide.M is final here at both modes: MicroRigidRegistrar runs INSIDE register().
     #
     # Never allowed to fail a registration: this is QC input, and QC here is non-gating.
     if stage_checkpoint_dir:
@@ -606,7 +728,7 @@ def valis_registration(
             manifest = write_checkpoint(
                 registrar,
                 stage_checkpoint_dir,
-                micro_registration=False,
+                micro_registration=micro_kwargs is not None,
             )
             n_fields = sum(1 for e in manifest["slides"].values() if e.get("field"))
             logger.info(
@@ -620,6 +742,52 @@ def valis_registration(
             logger.info(
                 "Continuing; reg_qc=2 will fall back to reporting rigid vs final only."
             )
+
+    # ========================================================================
+    # Micro-registration: hires only (upstream's high-resolution example)
+    # ========================================================================
+    if micro_kwargs is not None:
+        # register_micro() re-runs measure_error() and OVERWRITES {name}_summary.csv with
+        # post-micro numbers, so the pre-micro feature TRE is saved first: the QC report
+        # reads *_summary_premicro.csv to isolate VALIS's own non-rigid TRE. A QC artifact:
+        # never fails the registration.
+        try:
+            premicro_f = os.path.join(
+                registrar.data_dir, f"{registrar.name}_summary_premicro.csv"
+            )
+            error_df.to_csv(premicro_f, index=False)
+            logger.info(f"Saved the pre-micro error summary to {premicro_f}")
+        except Exception as e:
+            logger.warning(f"[WARN] Could not save the pre-micro error summary: {e}")
+
+        reporter.enter_phase("micro")
+        logger.info(
+            "Starting register_micro("
+            + ", ".join(f"{k}={v!r}" for k, v in micro_kwargs.items())
+            + ")"
+        )
+        # Not caught: a failure here fails the task (and climbs REGISTER's retry ramp)
+        # rather than shipping a hires run that silently lacks its micro pass.
+        micro_registrar, micro_error = registrar.register_micro(**micro_kwargs)
+        # An early return hands back (None, error_df): VALIS's non-rigid pass already ran at
+        # this size or larger (slides under 4 x 2048 px), so nothing was registered.
+        micro_ran = micro_registrar is not None
+        if micro_ran:
+            logger.info(f"Micro-registration completed\n{micro_error}")
+            repaired = repair_fwd_dxdy(registrar)
+            if repaired:
+                logger.info(
+                    f"  Repaired fwd_dxdy for {repaired} slides after register_micro"
+                )
+        else:
+            logger.warning(
+                "register_micro() returned without registering: the first non-rigid pass "
+                "already ran at this size or larger, so the result is register()'s."
+            )
+        if stage_checkpoint_dir:
+            from stage_checkpoint import set_micro_registration
+
+            set_micro_registration(stage_checkpoint_dir, micro_ran)
 
     # ========================================================================
     # Warp and Save Phase
@@ -882,7 +1050,7 @@ def valis_registration(
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
-        description="VALIS (valis-wsi 1.2.0, defaults) registration for WSI processing",
+        description="VALIS (valis-wsi 1.2.0: defaults or its hires example) registration for WSI processing",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -918,6 +1086,14 @@ def parse_args() -> argparse.Namespace:
         help="Bio-Formats JVM heap in GB (VALIS's own value is 10).",
     )
     parser.add_argument(
+        "--valis-mode",
+        choices=VALIS_MODES,
+        default="default",
+        help="'default': register() at valis-wsi's defaults. 'hires': valis-wsi's own "
+        "high-resolution example (MicroRigidRegistrar, then register_micro at 0.25 x the "
+        "smallest slide's longest side), as shipped.",
+    )
+    parser.add_argument(
         "--stage-checkpoint-dir",
         type=str,
         default=None,
@@ -941,6 +1117,7 @@ def main() -> int:
             reference_markers=args.reference_markers,
             jvm_heap_gb=args.jvm_heap_gb,
             stage_checkpoint_dir=args.stage_checkpoint_dir,
+            valis_mode=args.valis_mode,
         )
     except Exception as e:
         logger.error(f"[FAIL] Registration failed: {e}")

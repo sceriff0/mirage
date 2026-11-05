@@ -979,7 +979,8 @@
     2's capture radius. <b>(c)</b> The default <b>VALIS</b> backend registers all of a patient's slides together as one
     graph with valis-wsi 1.2.0 at its defaults — DISK + LightGlue features at 512&nbsp;px for step 1, a dense
     optical-flow field at 2048&nbsp;px for step 2, no micro-registration — changing only the registration channel
-    (index 0, the nuclear channel); it runs on a Bio-Formats JVM with a fixed 10&nbsp;GB heap and emits a replayable
+    (index 0, the nuclear channel); <code>reg_valis_mode hires</code> runs VALIS's own high-resolution example
+    instead (micro-rigid, then <code>register_micro</code> at 0.25 × the smallest slide's longest side); it runs on a Bio-Formats JVM with a fixed 10&nbsp;GB heap and emits a replayable
     registrar pickle, plus a post-<code>register()</code> checkpoint that lets QC score <code>non_rigid</code>
     separately from <code>rigid</code>. <b>(d)</b> The <b>STARE tiled</b> backend registers each moving slide
     independently to the reference with a DISK + LightGlue + RANSAC euclidean fit on a shared thumbnail (step 1), then one

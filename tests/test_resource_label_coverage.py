@@ -819,6 +819,37 @@ def _doc_size_linear(cell: str):
     return coefficient, addend, leftover
 
 
+# A flat ramp whose first-attempt magnitude a STRING PARAM selects (REGISTER's per
+# reg_valis_mode request): `(params.reg_valis_mode == 'hires' ? 128.GB : 64.GB) * (2 ** ...)`.
+# Each branch is itself a flat request, so each is evaluated, not pattern-matched.
+PARAM_SELECTED_RE = re.compile(
+    r"^\(\s*params\.(\w+)\s*==\s*'([^']*)'\s*\?\s*(\d+(?:\.\d+)?)\s*\.GB\s*:"
+    r"\s*(\d+(?:\.\d+)?)\s*\.GB\s*\)\s*(\*.*)$",
+    re.S,
+)
+
+
+def _param_selected_mismatch(m: re.Match, expr: str, cell: str) -> str | None:
+    param, value, when_gb, else_gb, rest = m.groups()
+    branches = {}
+    for label, gb in ((value, when_gb), ("otherwise", else_gb)):
+        values = expr_values_per_attempt(f"{gb}.GB {rest}")
+        if values is None:
+            return f"`{expr}`'s {label} branch is not a flat request this guard can evaluate"
+        branches[label] = values
+    if param not in cell or value not in cell:
+        return f"does not name what selects the request (`{param}` = `{value}`)"
+    documented = _doc_magnitude_counts(cell)
+    every = {v for values in branches.values() for v in values}
+    extra = sorted(set(documented) - every)
+    if extra:
+        return f"states {extra} GB, which neither branch of `{expr}` takes on any attempt"
+    for label, values in branches.items():
+        if values[0] not in documented:
+            return f"never states the {label} branch's attempt-1 value {values[0]} GB"
+    return None
+
+
 def memory_cell_mismatch(expr: str, cell: str) -> str | None:
     """Return why `cell` misstates `expr`, or None if it states it correctly.
 
@@ -848,6 +879,10 @@ def memory_cell_mismatch(expr: str, cell: str) -> str | None:
       refusal because the shape is genuinely checkable and a refusal would need
       an exemption that checks nothing.
     """
+    selected = PARAM_SELECTED_RE.match(expr.strip())
+    if selected:
+        return _param_selected_mismatch(selected, expr, cell)
+
     values = expr_values_per_attempt(expr)
     if values is not None:
         documented = _doc_magnitude_counts(cell)
@@ -1182,7 +1217,19 @@ def test_memory_cell_mismatch_compares_pairs_not_pooled_numbers():
         memory_cell_mismatch(linear, "`f \u00d7 8 GB \u00d7 attempt + 7 GB`") or ""
     )
 
-    # Anything that is none of the three known shapes must refuse loudly rather
+    # A param-selected flat ramp (REGISTER per reg_valis_mode): BOTH branches must be stated.
+    selected = "(params.reg_valis_mode == 'hires' ? 128.GB : 64.GB) * (2 ** (task.attempt - 1))"
+    both = "`64 GB` (64 -> 512); at `reg_valis_mode hires` `128 GB` (128 -> 1024)"
+    assert memory_cell_mismatch(selected, both) is None
+    assert "attempt-1" in (
+        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` from 256 GB") or ""
+    )
+    assert "selects" in (memory_cell_mismatch(selected, "`64 GB`, `128 GB`") or "")
+    assert "neither branch" in (
+        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` `96 GB`") or ""
+    )
+
+    # Anything that is none of the known shapes must refuse loudly rather
     # than fall through to a looser comparison.
     assert "cannot be checked" in (
         memory_cell_mismatch("Runtime.getRuntime().maxMemory()", "`64 GB`") or ""
