@@ -372,7 +372,10 @@ ALLOWED_LINES = {
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1281
         # 1281 -> 1254 (2026-11-05): STARE's cost tiers were removed, and the four TILED_*
         # closures above this line lost their inlined tier table.
-        1254: (
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1254
+        # 1254 -> 1261 (2026-11-05): REGISTER's memory comment grew by seven lines when its
+        # first attempt became per-mode (reg_valis_mode default 64 GB, hires 128 GB).
+        1261: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

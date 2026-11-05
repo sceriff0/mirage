@@ -92,11 +92,13 @@ established in an earlier run. That is the drift the mode exists to detect.
 
 ## Why the correspondence is fixed, and fixed *there*
 
-VALIS's transform states, in order. REGISTER runs valis-wsi 1.2.0 at its defaults, which run
-**no micro-registration** (no `MicroRigidRegistrar`, no `register_micro()`), so the pipeline
-scores `native`, `rigid` and `non_rigid`; `rigid` is the plain affine, and the `micro` row below
-is only ever reported for a registrar that did run a micro pass (e.g. one made by the tuned
-configuration archived at `archive/valis-mirage-tuned`):
+VALIS's transform states, in order. At `reg_valis_mode default` REGISTER runs valis-wsi 1.2.0
+at its defaults, which run **no micro-registration** (no `MicroRigidRegistrar`, no
+`register_micro()`), so the pipeline scores `native`, `rigid` and `non_rigid`, and `rigid` is the
+plain affine. At `reg_valis_mode hires` (valis-wsi's own high-resolution example) both micro
+passes run, so all four rows below are scored, and `rigid` is affine ∘ micro-rigid
+(`MicroRigidRegistrar` refines `slide.M` inside `register()`; the record says so with
+`micro_reg: 2`, `rigid_includes_micro_rigid: true`):
 
 | Stage | What it is | Where it comes from |
 |---|---|---|
@@ -182,9 +184,13 @@ VALIS composes its stages destructively:
 
 So a registrar pickle that ran a micro pass holds **one** field that is rigid + non-rigid +
 micro, and no reader can recover the intermediate. REGISTER snapshots each slide's forward
-displacement field after `register()` returns into `reg_stage_checkpoint/`. It runs no micro
-pass, so the checkpoint always records `micro_registration: false`: its field is the final one,
-and the QC reports `non_rigid` and omits `micro`. Fields are at non-rigid
+displacement field after `register()` returns, and before any `register_micro()`, into
+`reg_stage_checkpoint/`. At `default` no micro pass runs, so the checkpoint records
+`micro_registration: false`: its field is the final one, and the QC reports `non_rigid` and
+omits `micro`. At `hires` it records `true` (corrected to `false` after the fact if
+`register_micro` returned without registering), so `non_rigid` is the checkpoint's pre-micro
+field and `micro` is the pickle's final one: a post-micro field is never labelled
+`non_rigid`. Fields are at non-rigid
 registration resolution (a few thousand pixels a side), not slide resolution: tens of MB.
 
 Writing it can never fail a registration; it is QC input, and REGISTER's own success does not
@@ -192,7 +198,7 @@ depend on it. The QC process that *reads* it is gating, though — `GENERATE_REG
 carries `retry-then-fail`, so if that process itself dies the run fails. When the checkpoint is
 merely missing, the QC still runs and reports `native`, `rigid` and `micro`, sets
 `stages_separable: false`, and records a `note` saying why `non_rigid` is absent. When
-micro-registration did not run (skipped, or it raised and was caught), the checkpoint records
+micro-registration did not run (`default`, or a `hires` `register_micro` that was a no-op), the checkpoint records
 that and the QC omits the `micro` stage rather than reporting a byte-for-byte duplicate of
 `non_rigid`.
 

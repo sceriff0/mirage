@@ -264,6 +264,10 @@ nextflow_process {
                     "no rendered REGISTER .command.sh found under the task work dir" },
                 { assert calls.every { c -> removed.every { !c.contains(it + ' ') } },
                     "a VALIS setting is rendered again: " + calls.join(' --- ') },
+                // reg_valis_mode 'default' renders nothing: the command is byte-identical to
+                // the one before the option existed (the hires case below renders the flag).
+                { assert calls.every { !it.contains('--valis-mode') },
+                    "the default mode rendered a mode flag: " + calls.join(' --- ') },
                 // REGISTER passes the STAGED path (stageAs 'ref/*' -> ref/<name>); register.py
                 // takes its basename and finds the copy under --input-dir.
                 { assert calls.every { it =~ /--reference (\S+\/)?P001_ref\.ome\.tiff / },
@@ -275,6 +279,68 @@ nextflow_process {
                     "the JVM heap is not the fixed <= 10 GB: " + calls.join(' --- ') },
                 // Truncation guard: a backslash-newline followed by an empty line would end the
                 // shell command early and run the rest as separate commands.
+                { assert calls.every { !it.contains('\\\n\n') },
+                    "register.py invocation is truncated by a blank line: " + calls.join(' --- ') }
+            )
+        }
+    }
+
+    test("Should run valis-wsi's hires example under reg_valis_mode hires - rendered command") {
+
+        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so a stub
+        // run cannot see whether the mode reached register.py.
+        //
+        // reg_valis_mode = 'hires' is valis-wsi 1.2.0's own high-resolution example
+        // (MicroRigidRegistrar + register_micro, built inside register.py and pinned by
+        // tests/test_register_valis_modes.py). Its whole rendered footprint is ONE flag,
+        // `--valis-mode hires`, sharing the stage-checkpoint line; nothing else changes. The
+        // default case above asserts the flag's absence, so `default` stays byte-identical.
+        tag "stub"
+
+        when {
+            params {
+                reg_valis_mode = 'hires'
+            }
+            process {
+                """
+                input[0] = [
+                    [patient_id: 'P001'],
+                    'P001',
+                    file('$projectDir/tests/testdata/P001_ref.ome.tiff', checkIfExists: true),
+                    [
+                        file('$projectDir/tests/testdata/P001_mov1.ome.tiff', checkIfExists: true)
+                    ],
+                    [
+                        [patient_id: 'P001', is_reference: true, channels: ['DAPI', 'PANCK', 'SMA']],
+                        [patient_id: 'P001', is_reference: false, channels: ['DAPI', 'PANCK', 'SMA']]
+                    ]
+                ]
+                """
+            }
+        }
+
+        then {
+            def rendered = []
+            new File("$workDir").eachFileRecurse { f ->
+                if (f.name == '.command.sh' && f.text.contains('register.py')) {
+                    rendered << f.text
+                }
+            }
+            def calls = rendered.collect { it.substring(it.indexOf('register.py \\')) }
+
+            assertAll(
+                { assert rendered.size() >= 1,
+                    "no rendered REGISTER .command.sh found under the task work dir" },
+                { assert calls.every { it.contains('--valis-mode hires') },
+                    "reg_valis_mode 'hires' did not reach register.py: " + calls.join(' --- ') },
+                // reg_qc defaults to 2, so the pre-micro checkpoint is still requested: hires
+                // scores non_rigid (the checkpoint) apart from micro (the pickle).
+                { assert calls.every { it.contains('--valis-mode hires --stage-checkpoint-dir reg_stage_checkpoint') },
+                    "the hires flag must share the stage-checkpoint line: " + calls.join(' --- ') },
+                { assert calls.every { !it.contains('--valis-mode default') },
+                    "only hires renders a mode flag: " + calls.join(' --- ') },
+                { assert rendered.every { it.contains('valis-wsi high-resolution example (hires)') },
+                    "the settings banner does not name the hires example: " + rendered.join(' --- ') },
                 { assert calls.every { !it.contains('\\\n\n') },
                     "register.py invocation is truncated by a blank line: " + calls.join(' --- ') }
             )

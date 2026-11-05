@@ -93,6 +93,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`reg_valis_mode`: VALIS gets exactly two options, `default` and `hires`, both VALIS's
+  own.** `default` (the default) is unchanged: `register()` at valis-wsi 1.2.0's defaults,
+  the same rendered command. `hires` is valis-wsi 1.2.0's high-resolution example
+  (`docs/examples.rst`), as shipped and as the benchmark's `valis120_hires` row runs it:
+  `micro_rigid_registrar_cls=MicroRigidRegistrar` in `Valis(...)`, `register()`, then
+  `register_micro(max_non_rigid_registration_dim_px=floor(0.25 × the smallest slide's
+  longest side))`. The registration channel (index 0) and the `crop="reference"` warp are
+  the same as at `default`; the channel is also passed to `register_micro`, which would
+  otherwise pick its own by VALIS's name match on "dapi". VALIS 1.2.0's known micro-pass
+  defect is NOT fixed (ruling 2026-11-05). `REGISTER` asks **128 GB** on its first attempt
+  under `hires` (128 → 256 → 512 → 1024 GB; `default` keeps 64 → 512): measured peak RSS
+  on the 8-case regbench cohort at 4 CPUs was median 81.7 / max 106.4 GB for hires
+  against 31.6 / 51.4 GB for the default. Staged registration QC (`reg_qc = 2`) gets its
+  `micro` stage back under `hires`: the checkpoint is taken after `register()` and before
+  `register_micro()` (and corrected if `register_micro` was a no-op, as on slides under
+  8192 px a side), so `non_rigid` is the pre-micro field and `micro` the final one, and
+  `WARP_SEG_QC` records `micro_reg: 2`; the pre-micro VALIS error summary is saved as
+  `*_summary_premicro.csv` for the QC report. `add_cycle` registers through the same
+  `REGISTER`, so it honours `reg_valis_mode` too.
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
   now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
   samplesheet validator, called from `workflows/mirage.nf` before any process is

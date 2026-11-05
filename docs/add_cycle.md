@@ -47,6 +47,10 @@ nextflow run . -profile <profile> \
 - `--input`: same schema as a preprocessing start (`patient_id,path_to_file,is_reference,channels`),
   one row per new-cycle slide, `is_reference=false`, a `params.nuclear_markers`
   channel present (default `DAPI`/`CELLTOX`, matched case-insensitively).
+- `--registration_method valis` is required (STARE is refused in this mode). The new cycle
+  registers through the same `REGISTER` process as a linear run, so `--reg_valis_mode`
+  (`default` | `hires`) applies here too; pass the value the prior run used if its cycles
+  should be registered the same way.
 - `--prior_outdir`: the previous run's `--outdir`.
 - `--outdir`: a FRESH directory; the complete combined outputs (all markers,
   all cycles) are written here. The prior outdir is left intact.
