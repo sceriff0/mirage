@@ -53,13 +53,19 @@ workflow MIRAGE {
     // Cross-parameter and filesystem rules that no JSON Schema can express
     // (--stop ordering, samplesheet semantics, add_cycle prerequisites) stay
     // below in Groovy.
+    //
+    // A RETIRED param first (STARE's reg_tiled_mode, removed 2026-11-04): it is in
+    // validation.ignoreParams so nf-schema passes it, and this refusal -- naming the retired
+    // row's four knob values -- is what the user sees. 'high' is a no-op and only warns.
+    def retiredWarning = ParamUtils.checkRetiredParams(params)
+    if (retiredWarning) log.warn(retiredWarning)
     validateParameters()
 
     ParamUtils.validateOutdir(params.outdir)
-    // Tier vs per-knob-override consistency for BOTH registration backends. Cross-parameter,
+    // STARE's COARSE thumbnail floor (neither backend has cost tiers). Cross-parameter,
     // so it belongs here rather than in the schema; runs before any process is instantiated.
     ParamUtils.validatePixelSize(params)
-    ParamUtils.validateRegPresets(params)
+    ParamUtils.validateStareKnobs(params)
     // --cleanup_level against --mode. add_cycle must PRODUCE a re-enterable tree, so a
     // cleaning level is refused outright rather than discovered by the next cycle.
     ParamUtils.validateCleanup(params)

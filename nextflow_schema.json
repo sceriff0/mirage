@@ -181,17 +181,6 @@
                     "default": null,
                     "minimum": 1
                 },
-                "reg_tiled_mode": {
-                    "type": "string",
-                    "default": "high",
-                    "description": "STARE/tiled cost/accuracy tier. Table: lib/RegPresets.groovy RegPresets.STARE. 'custom' starts from 'high' and applies the reg_tiled_* overrides you set.",
-                    "enum": [
-                        "high",
-                        "medium",
-                        "low",
-                        "custom"
-                    ]
-                },
                 "reg_tiled_nuclear_index": {
                     "type": [
                         "integer",
@@ -202,19 +191,15 @@
                     "minimum": 0
                 },
                 "reg_tiled_tile": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "description": "tile core size (px): one TILED_REG_TILE task per tile (the mesh resolution is reg_tiled_stride). null = from reg_tiled_mode.",
+                    "type": "integer",
+                    "default": 2048,
+                    "description": "tile core size (px): one TILED_REG_TILE task per tile (the mesh resolution is reg_tiled_stride).",
                     "minimum": 16
                 },
                 "reg_tiled_halo": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "description": "tile read halo (px). null = from reg_tiled_mode.",
+                    "type": "integer",
+                    "default": 256,
+                    "description": "SOLVE's range-gate default (reg_tiled_max_disp when null) and COARSE's anchor warning threshold (px).",
                     "minimum": 0
                 },
                 "reg_tiled_max_disp": {
@@ -228,26 +213,22 @@
                 },
                 "reg_tiled_stride": {
                     "type": "integer",
-                    "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). Not tier-owned. The per-tile read box is the core plus 3*stride on each side.",
+                    "description": "STARE only: REG_TILE's vector-lattice stride (px). One displacement vector per lattice node, node k centred at W/2 + k*stride on the slide-global lattice with window W = 2*stride (50 % overlap). The per-tile read box is the core plus 3*stride on each side.",
                     "default": 64,
                     "minimum": 16
                 },
                 "reg_tiled_out_tile": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
-                    "description": "streaming stitch write-tile size (px). null = from reg_tiled_mode.",
+                    "type": "integer",
+                    "default": 1024,
+                    "description": "streaming stitch write-tile size (px).",
                     "minimum": 16,
                     "multipleOf": 16
                 },
                 "reg_tiled_coarse_max_dim": {
-                    "type": [
-                        "integer",
-                        "null"
-                    ],
+                    "type": "integer",
+                    "default": 1024,
                     "minimum": 0,
-                    "description": "COARSE anchor refine thumbnail longest side (px); the rotation sweep runs at 256 px. null = from reg_tiled_mode."
+                    "description": "COARSE anchor refine thumbnail longest side (px); the rotation sweep runs at 256 px. Below 256 is refused at launch."
                 }
             }
         },

@@ -556,7 +556,6 @@ UNREPOINTED_NF_SOURCE_READERS = {
     "tests/test_nullable_numeric_params_no_elvis.py": _UNREPOINTED_REASON,
     "tests/test_pixel_size_is_passed.py": _UNREPOINTED_REASON,
     "tests/test_process_alias_config.py": _UNREPOINTED_REASON,
-    "tests/test_reg_presets_inlined_in_config.py": _UNREPOINTED_REASON,
     "tests/test_seg_backends.py": _UNREPOINTED_REASON,
     "tests/test_seg_backends_ctx_params.py": _UNREPOINTED_REASON,
     "tests/test_seg_qc_geojson_equivalence.py": _UNREPOINTED_REASON,

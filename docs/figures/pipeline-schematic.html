@@ -377,14 +377,11 @@
               <div class="pp" style="margin-top:6px"><span>valis-wsi <b>1.2.0</b></span><span>rigid <b>512</b></span><span>nonrigid <b>2048</b></span><span>JVM heap <b>10 GB</b></span></div></div>
             <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
               <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial = channel 0.
-                <b>Not</b> laptop-sized at the shipped tier — COARSE asks 48 GB at
-                <code>reg_tiled_mode=high</code>, ~5 GB at <code>low</code>.
-                Step 2 fans out to one task per tile — the only shape it has. Its geometry knobs are
-                <b>tier-owned</b>: each is declared <code>null</code> and resolved at runtime from
-                <code>reg_tiled_mode</code>'s row, because Nextflow evaluates the <code>params{}</code> block
-                <i>before</i> merging CLI arguments, so a preset lookup written there could never see
-                <code>--reg_tiled_mode low</code>.</div>
-              <div class="pp" style="margin-top:6px"><span>mode <b>high</b></span><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>coarse_max_dim <b>2048</b></span><span>stride <b>64</b></span></div></div>
+                COARSE asked 48 GB while its matcher was a U-Net; its FFT anchor now asks 2 GB.
+                Step 2 fans out to one task per tile — the only shape it has. Its geometry knobs
+                carry plain defaults and are set directly; STARE has one default configuration (the
+                <code>reg_tiled_mode</code> cost tiers were removed).</div>
+              <div class="pp" style="margin-top:6px"><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>coarse_max_dim <b>1024</b></span><span>stride <b>64</b></span></div></div>
           </div>
           <div class="mod"><div class="n">GENERATE_REGISTRATION_QC <span class="tag tag-on">reg_qc≥1</span></div>
             <div class="x">Nuclear-channel overlay, registered vs reference.</div></div>
@@ -690,7 +687,7 @@
           <code>reg_tiled_out_tile</code> for STITCH, each the measured linear fit doubled and floored at 4 GB;
           <code>reg_tiled_coarse_max_dim</code> for COARSE, whose matcher is a U-Net and therefore
           linear in thumbnail AREA (<code>GB ≈ 1.1 + 7.3·Mpx</code>, ×1.5, floored at 4 GB) — 48 GB at the
-          shipped <b>high</b> tier, 5 GB at <b>low</b>;
+          then-shipped <b>high</b> tier (STARE has had no tiers since 2026-11-04);
           <code>preproc_tile_size</code> for TILE_FOR_BASIC (floor 6 GB) and APPLY_PROFILES (floor 8 GB, plus
           a small term linear in channel count — the fitted flatfield/darkfield planes, held for the whole
           run); one decoded plane (4× the largest single channel file) plus a <code>pyramid_scale</code> /
@@ -701,9 +698,8 @@
           plus <code>--gpus all</code> (Docker) or <code>--nv</code> (Singularity);
           <code>SEG_QC_GEOJSON</code> is pure-CPU contour tracing and asks for none. Three of STARE's four
           processes fit in 4 / 1 / 4 GB — JVM-free and tile-streamed. <code>TILED_COARSE</code> does not:
-          its DISK matcher is a U-Net, so it asks 48 GB at the shipped <b>high</b> tier and ~5 GB at
-          <b>low</b>. STARE is a cluster backend at its default tier; <code>--reg_tiled_mode low</code> is
-          what makes it workstation-viable.</p>
+          its DISK matcher is a U-Net, so it asked 48 GB; its FFT anchor now asks 2 GB, and STARE has one
+          default configuration (the cost tiers were removed).</p>
       </div>
 
     </div>
@@ -773,10 +769,9 @@
         </table>
         <h4>Registration — tiled / STARE</h4>
         <table class="pr">
-          <tr><td class="k">reg_tiled_mode</td><td class="v">high</td><td class="d">tier: high | medium | low | custom</td></tr>
-          <tr><td class="k">reg_tiled_tile</td><td class="v nul">null</td><td class="d">tile core + mesh (px) — tier: 2048/1024/512</td></tr>
-          <tr><td class="k">reg_tiled_halo</td><td class="v nul">null</td><td class="d">per-tile read halo (px) — tier: 256/192/128</td></tr>
-          <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="v nul">null</td><td class="d">anchor thumbnail (px) — tier: 2048/1024/512</td></tr>
+          <tr><td class="k">reg_tiled_tile</td><td class="v">2048</td><td class="d">tile core (px)</td></tr>
+          <tr><td class="k">reg_tiled_halo</td><td class="v">256</td><td class="d">range-gate default + anchor warning (px)</td></tr>
+          <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="v">1024</td><td class="d">anchor refine thumbnail (px)</td></tr>
           <tr><td class="k">reg_tiled_stride</td><td class="v">64</td><td class="d">one vector per stride px (mesh res.)</td></tr>
         </table>
       </div>

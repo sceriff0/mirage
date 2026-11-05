@@ -163,6 +163,34 @@ nextflow_pipeline {
         }
     }
 
+    // STARE's cost tiers were removed 2026-11-04. reg_tiled_mode is in validation.ignoreParams
+    // so nf-schema lets it through, and ParamUtils.checkRetiredParams (before
+    // validateParameters) refuses it, naming the retired row's knob values to set instead --
+    // an old `low` must never silently run the high values.
+    test("Should refuse a retired --reg_tiled_mode low and name the knobs to set instead") {
+        tag "stub"
+        options "-stub"
+
+        when {
+            params {
+                input          = "$projectDir/tests/testdata/test_input.csv"
+                outdir         = "$outputDir"
+                start          = "preprocessing"
+                reg_tiled_mode = "low"
+            }
+        }
+
+        then {
+            def report = (workflow.stdout + workflow.stderr).join('\n') + (workflow.errorReport ?: '') + (workflow.errorMessage ?: '')
+            assertAll(
+                { assert workflow.failed },
+                { assert report.contains("reg_tiled_mode") },
+                { assert report.contains("reg_tiled_tile 512, reg_tiled_halo 128"),
+                    "the refusal must name the retired low row's values: " + report }
+            )
+        }
+    }
+
     /*
      * Valid values must still be accepted — without this, a validator that
      * rejects EVERYTHING would satisfy all six tests above.

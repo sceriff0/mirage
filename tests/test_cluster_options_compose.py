@@ -22,8 +22,8 @@ a crashed GPU path.
 
 And there is nowhere shared to put the derivation: conf/*.config cannot see
 lib/*.groovy, and NF26's strict parser forbids a helper shared between blocks.
-So the account/qos clause is inlined -- the same forced duplication as the
-RegPresets tables -- and what this file guards is the thing duplication
+So the account/qos clause is inlined -- the same forced duplication as
+any closure that needs a lib/ rule -- and what this file guards is the thing duplication
 actually costs: the two copies drifting apart, silently, because neither one
 mentions the other at runtime.
 """

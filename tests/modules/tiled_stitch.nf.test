@@ -85,7 +85,10 @@ nextflow_process {
                 // pixel size still reaches the stitch: it is stamped both as TIFF resolution
                 // tags and, now, as OME PhysicalSize
                 { assert rendered.every { it.contains('--pixel-size') },
-                    "--pixel-size is no longer rendered" }
+                    "--pixel-size is no longer rendered" },
+                // the reg_tiled_out_tile default (the former 'high' row; STARE has no tiers)
+                { assert rendered.every { it.contains('--out-tile 1024') },
+                    "--out-tile is not the 1024 default: " + rendered.join(' --- ') }
             )
         }
     }
