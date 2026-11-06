@@ -16,4 +16,4 @@ tifffile
 # requirements/constraints.txt only constrains packages more than one image installs
 # (tests/test_ci_stack_pinned.py::test_every_constrained_package_is_installed_by_more_than_one_image).
 # 3.11.0 matches containers/convert/Dockerfile's own pin.
-h5py==3.11.0
+h5py==3.16.0
