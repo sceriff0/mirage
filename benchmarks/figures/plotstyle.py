@@ -207,6 +207,8 @@ def save(fig, path, data=None, formats=("pdf", "png", "svg"), close=True):
     for ext in formats:
         out = stem.with_suffix(f".{ext}")
         fig.savefig(out)
+        if ext == "svg":
+            editable_svg(out)
         written.append(out)
     if data is not None:
         csv = stem.parent / f"{stem.name}_source_data.csv"
@@ -215,3 +217,35 @@ def save(fig, path, data=None, formats=("pdf", "png", "svg"), close=True):
     if close:
         plt.close(fig)
     return written
+
+
+def editable_svg(path):
+    """Rewrite every style="..." that carries the CSS `font:` shorthand into plain SVG
+    presentation attributes (font-family="Arial" font-size font-weight text-anchor fill ...).
+    Affinity, Illustrator, Word and PowerPoint read those attributes but not the shorthand,
+    which they replace by their default font at their default size."""
+    import re
+
+    def attrs(m):
+        decls = [d.strip() for d in m.group(1).split(";") if d.strip()]
+        if not any(d.startswith("font:") for d in decls):
+            return m.group(0)
+        out = []
+        for d in decls:
+            k, _, v = d.partition(":")
+            k, v = k.strip(), v.strip()
+            if k == "font":
+                bits = v.split()
+                if bits[0] in ("bold", "700", "italic", "normal"):
+                    w = bits.pop(0)
+                    if w in ("bold", "700"):
+                        out.append('font-weight="bold"')
+                out.append(f'font-family="Arial" font-size="{bits[0]}"')
+            else:
+                out.append(f'{k}="{v}"')
+        return " ".join(out)
+
+    p = Path(path)
+    t = re.sub(r'style="([^"]*)"', attrs, p.read_text())
+    assert "font:" not in t, "a font shorthand survived"
+    p.write_text(t)

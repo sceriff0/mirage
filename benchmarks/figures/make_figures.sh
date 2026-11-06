@@ -31,7 +31,7 @@ CROP_COLUMNS="${CROP_COLUMNS-4}"
 CROP_UM="${CROP_UM-150}"
 CROP_AT="${CROP_AT-}"                       # X,Y in reference px
 
-# Supplementary Fig. S5: the same, rows before / VALIS / STARE, one column per moving
+# Extended Data Fig. 5: the same, rows before / VALIS / STARE, one column per moving
 # round (64 round pairs over 8 cases: 8 per case), the same crop choice
 CROPS_ALL_METHODS="${CROPS_ALL_METHODS-VALIS=$VALIS,STARE=$STARE}"
 CROPS_ALL_PATIENT="${CROPS_ALL_PATIENT-$CROP_PATIENT}"
@@ -53,11 +53,11 @@ SEG_GEOJSON="${SEG_GEOJSON-}"               # <run>/geojson/<patient>_cells.geoj
 SEG_ZOOM_UM="${SEG_ZOOM_UM-150}"
 SEG_ZOOM_AT="${SEG_ZOOM_AT-}"               # X,Y in image px
 
-# Supplementary Fig. S6: Dice and centroid distance by case and by moving round, the
+# Extended Data Fig. 6 (earlier rendering): Dice and centroid distance by case and by moving round, the
 # methods of its legend in box order
 CASE_ROUND_METHODS="${CASE_ROUND_METHODS-Unregistered=initial,STARE=$STARE,VALIS=$VALIS,PALOM=palom,DeeperHistReg=deeperhistreg_hr_fluo_cpu,ASHLAR=ashlar}"
 
-# Supplementary Fig. S7: one registered slide segmented by each backend (top row first);
+# Extended Data Fig. 7: one registered slide segmented by each backend (top row first);
 # the image is the slide the three runs segmented (SEG_IMAGE by default)
 SEG_BACKENDS=()                             # e.g. (CellSAM=<run>/geojson/<p>_cells.geojson
                                             #       InstanSeg=... StarDist=...)

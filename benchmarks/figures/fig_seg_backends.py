@@ -1,4 +1,4 @@
-"""Supplementary Fig. S7: one region of a registered slide segmented by each backend, and
+"""Extended Data Fig. 7: one region of a registered slide segmented by each backend, and
 the pairwise agreement of their whole-cell masks.
 
     python -m benchmarks.figures.fig_seg_backends --image <run>/pyramid/<patient>.ome.tif \

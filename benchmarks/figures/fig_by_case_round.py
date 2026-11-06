@@ -1,4 +1,4 @@
-"""Supplementary Fig. S6: registration accuracy by case and by round pair, per method.
+"""Extended Data Fig. 6 (an earlier rendering; submitted: ed_fig6_by_case_round.py): registration accuracy by case and by round pair, per method.
 
     python -m benchmarks.figures.fig_by_case_round <REGBENCH_OUT>/tables \
         --cases <REGBENCH_CASES> --outdir figures/by_case_round

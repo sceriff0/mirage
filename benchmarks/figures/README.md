@@ -33,19 +33,44 @@ These scripts do NOT run in the scorer's image, which has no matplotlib or panda
 import `benchmarks.regbench` from this checkout, so every score is computed by the
 harness's own code.
 
+**The manuscript's panels, as submitted.** Each of these is the script that drew the
+submitted panel, copied unchanged; run on the tables below, each writes a
+`*_source_data.csv` byte-identical to the one submitted (checked 2026-11-06):
+
+| Manuscript | Script | Reads |
+|---|---|---|
+| Fig. 2c | `fig2c_peak_rss.py <REGBENCH_OUT>/tables/synthetic <out>` (`--no-hires` for the variant without the high-resolution example) | `stare_stage_peaks.csv`, `synthetic_cost.csv` of the synthetic run |
+| Fig. 3b–e | `fig3bcde_benchmark.py <REGBENCH_OUT>/tables <out>` | `cells.csv`, `resources.csv` of the cohort run |
+| Extended Data Fig. 6 | `ed_fig6_by_case_round.py <REGBENCH_OUT>/tables <out>` (writes `Figure_S6.*`, the name it was drafted under) | `cells.csv` of the cohort run |
+| every accuracy number of the text, Supplementary Table 2 and Supplementary Note 6 | `python -m benchmarks.regbench.paper.accuracy_stats <REGBENCH_OUT>/tables` | `cells.csv`, `cells_nuclei.csv`, `ashlar_discard.csv` |
+
+Both metrics are tested on every one of the 64 protocol round pairs, against the same five
+(VALIS, PALOM, ASHLAR, DeeperHistReg and the unregistered condition), Holm over the five
+(ruling 2026-11-05: no readable-displacement filter).
+
+**The results are not in this repository** (the input slides cannot be shared; Data
+availability). `<REGBENCH_OUT>/tables` is what `regbench score` writes. The manuscripts' cohort
+tables are the 78-pair scoring the paper's runs produced (local copy
+`new_results/partial-20261103-1350/tables`, ignored by git, despite the folder's name the
+complete one); the synthetic tables are `new_results/out-20261104/tables/synthetic`.
+
+**Older renderings and the other panels.** The scripts below came first; where one draws a
+panel that has a script above, the one above is what was submitted. Names follow the
+manuscript (Extended Data Figs. 4–7 were drafted as Supplementary Figs. S4–S7, Supplementary
+Note 6 as Section S8, Supplementary Table 2 as Table S2).
+
 | Script | Reproduces | Reads |
 |---|---|---|
 | `fig_synthetic_cost.py` | Not a paper figure: peak RSS and CPU time vs input size per patient on the COHORT, VALIS vs STARE (`make_figures.sh cost`; despite its name it reads `COST_DATASET`, the cohort by default) | `tables/summary_resources.csv`, `tables/resources.csv` |
-| `fig_rss_vs_size.py` | Fig. 2c: peak RSS vs slide size on the synthetic matrix, STARE per task, VALIS at its defaults (`--valis`, default `valis120`, solid) and at the high-resolution example of its documentation (`--valis-hires`, default `valis120_hires`, dotted), the cohort's slides overlaid, the node line dashed (`--node-gb 200` for the paper). Not in `make_figures.sh` (it reads the synthetic run's tables too). `regbench plots fig2c_cost_vs_input` draws the same panel from `paper/` | `<synthetic>/tables/resources.csv`, `tables/resources.csv` |
+| `fig_rss_vs_size.py` | An earlier Fig. 2c (log y axis; submitted: `fig2c_peak_rss.py`): peak RSS vs slide size on the synthetic matrix, STARE per task, VALIS at its defaults (`--valis`, default `valis120`, solid) and at the high-resolution example of its documentation (`--valis-hires`, default `valis120_hires`, dotted), the cohort's slides overlaid, the node line dashed (`--node-gb 200` for the paper). Not in `make_figures.sh` (it reads the synthetic run's tables too). `regbench plots fig2c_cost_vs_input` draws the same panel from `paper/` | `<synthetic>/tables/resources.csv`, `tables/resources.csv` |
 | `fig_stare_seam.py` | Fig. 2b: one round pair after STARE, an inset across a tile boundary and single-cell insets. Not in `make_figures.sh` (the case and tile corner are chosen by hand) | cases, the STARE result's written image |
-| `regbench plots figS_synth_cost_scaling` (`benchmarks/regbench/paper/cost_plots.py`, not a script here) | Supplementary Fig. S4: wall-clock time vs slide size on the synthetic matrix, log-log, the fitted exponent per method (its wall panel) | `paper/` of the synthetic set |
-| `fig_cohort_scores.py` | Fig. 3b–e: Dice, centroid distance, peak RSS, CPU time per method; paired Wilcoxon vs STARE, Holm-corrected | `tables/cells.csv`, `tables/summary_resources.csv` |
+| `regbench plots figS_synth_cost_scaling` (`benchmarks/regbench/paper/cost_plots.py`, not a script here) | Extended Data Fig. 4: wall-clock time on the synthetic matrix, log-log, the fitted exponent per run (its wall panel). Its x axis is the moving image in gigapixels (area), not px per side | `paper/` of the synthetic set |
+| `fig_cohort_scores.py` | An earlier Fig. 3b–e (78 pairs, centroid distance against four; submitted: `fig3bcde_benchmark.py`): Dice, centroid distance, peak RSS, CPU time per method; paired Wilcoxon vs STARE, Holm-corrected | `tables/cells.csv`, `tables/summary_resources.csv` |
 | `fig_crop_grid.py` | Fig. 3a: one patient's rounds, the same crop unregistered and after each method, Dice per crop | cases, results' written images, `warped.npz` |
-| `fig_crop_grid.py` (`make_figures.sh crops_all`) | Supplementary Fig. S5: the same, rows before / VALIS / STARE, one column per moving round | as Fig. 3a |
+| `fig_crop_grid.py` (`make_figures.sh crops_all`) | Extended Data Fig. 5: the same, rows before / VALIS / STARE, one column per moving round | as Fig. 3a |
 | `fig_overlay.py` | Fig. 1c (its "before" file: the overview, the three fields boxed) and Fig. 4b (before and after STARE): a case's DAPI, three zooms: translation, rotation, deformation | cases, one result's `warped.npz` and images |
-| `fig_by_case_round.py` (`by_case_round`) | Supplementary Fig. S6: Dice (a, b) and residual centroid distance (c, d, log) per method, grouped by case and by moving round (its markers); `by_case_round_medians.csv` holds each group's medians and best method, to check the legend's "8 of 8 cases" | `tables/cells.csv`, the cases' `case.json` |
-| `fig_seg_backends.py` (`seg_backends`) | Supplementary Fig. S7: one region segmented by each backend (rows), whole-cell outlines yellow and nuclear outlines cyan over DAPI, 50 µm bars; b, the pairwise Dice of the whole-cell masks (the polygons filled) | the slide, one `geojson/<patient>_cells.geojson` per backend run |
-| `benchmarks/regbench/paper/accuracy_stats.py` (`python -m benchmarks.regbench.paper.accuracy_stats <REGBENCH_OUT>/tables`) | Not a figure: every accuracy NUMBER of the text, on all 78 pairs and on the 64 protocol pairs: Table S2's accuracy columns, the M0 gain, bare-nuclei / MNN / exact-component Dice (Supp. Section S8), per-case winners, and the Wilcoxon tests of Fig. 3b,c with Holm (Dice against five methods, centroid distance against four: the unregistered condition is not tested) | `tables/cells.csv`, `tables/cells_nuclei.csv`, `tables/ashlar_discard.csv` |
+| `fig_by_case_round.py` (`by_case_round`) | An earlier Extended Data Fig. 6 (submitted: `ed_fig6_by_case_round.py`): Dice (a, b) and residual centroid distance (c, d, log) per method, grouped by case and by moving round (its markers); `by_case_round_medians.csv` holds each group's medians and best method, to check the legend's "8 of 8 cases" | `tables/cells.csv`, the cases' `case.json` |
+| `fig_seg_backends.py` (`seg_backends`) | Extended Data Fig. 7: one region segmented by each backend (rows), whole-cell outlines yellow and nuclear outlines cyan over DAPI, 50 µm bars; b, the pairwise Dice of the whole-cell masks (the polygons filled) | the slide, one `geojson/<patient>_cells.geojson` per backend run |
 | `fig_segmentation.py` | Fig. 4c: a slide's DAPI with the pipeline's StarDist outlines in a zoomed inset | `pyramid/<patient>.ome.tif`, `geojson/<patient>_cells.geojson` |
 
 ## How each choice is made (all deterministic, all pinnable)
