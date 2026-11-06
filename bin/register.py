@@ -2,7 +2,7 @@
 """VALIS registration for the WSI pipeline: valis-wsi 1.2.0, its default or its hires example.
 
 MIRAGE's VALIS mode is the benchmark's ``valis120`` call (``benchmarks/regbench/methods/
-valis.py`` on the benchmarking branch)::
+valis.py`` on the benchmarking branch) except for how the registration channel is chosen::
 
     registrar = registration.Valis(src_dir, dst_dir, img_list=<the patient's slides>,
                                    reference_img_f=<the reference slide>)
@@ -16,6 +16,9 @@ it by a fuzzy NAME match on ``"dapi"`` (``slide_io.get_channel_index``), falling
 index 0 with only a warning. The pipeline's conversion puts the nuclear channel at index 0
 under whatever name the samplesheet gives it, so the index is passed explicitly and a
 decoy channel named like "DAPI_x" can never win. ``adaptive_eq=True`` is VALIS's default.
+The benchmark does NOT pass the channel: it calls ``register()`` with no arguments and lets
+VALIS's name match pick it (``CHANNEL = "dapi"`` in its adapter). On the paper's cohort both
+choices resolve to the same channel, DAPI at index 0.
 
 Not settings, and kept: the pyramid-level -1 reader clamp (``bin/utils/valis_preflight.py``;
 the defect is still present in 1.2.0, registration.py:3952-3954), the read-only-$HOME JVM
