@@ -112,17 +112,18 @@ def test_every_plot_writes_all_formats_or_a_placeholder(paper):
 
 # the synthetic set's figures (T32) are placeholders without tables/synthetic/, which the
 # cohort fixture does not have (test_synthetic_set.py draws them from the set's tables)
-MISSING = {"figS_cpu_scaling", "figS_end_to_end", "public_dice_best", "public_landmarks_best",
-           "figS_synth_cost_scaling", "figS_synth_cross_scaling", "figS_synth_vs_cohort"}
+# (figS_cpu_scaling, public_dice_best, public_landmarks_best, figS_synth_cross_scaling and
+# figS_synth_vs_cohort were here too until they were archived, 2026-11-06)
+MISSING = {"figS_end_to_end", "figS_synth_cost_scaling"}
 
 
 def test_a_missing_input_is_a_placeholder_that_names_the_table_and_path(paper):
-    res = plots.PLOTS["figS_cpu_scaling"](paper, paper / "figures")
+    res = plots.PLOTS["figS_end_to_end"](paper, paper / "figures")
     assert res["placeholder"] is True
-    rows = _source(res, "figS_cpu_scaling")
-    assert rows[0]["table"] == "cpu_scaling"
-    assert rows[0]["expected_path"].endswith("cpu_scaling.csv")
-    assert (paper / "figures" / "figS_cpu_scaling.png").stat().st_size > 0
+    rows = _source(res, "figS_end_to_end")
+    assert rows[0]["table"] == "end_to_end"
+    assert rows[0]["expected_path"].endswith("end_to_end.csv")
+    assert (paper / "figures" / "figS_end_to_end.png").stat().st_size > 0
 
 
 def test_all_variants_has_more_boxes_than_best(paper):
@@ -178,7 +179,7 @@ def test_the_cli_writes_the_figures_folder(paper, capsys):
     from benchmarks.regbench import cli
 
     out = paper.parent
-    assert cli.main(["plots", "--out", str(out), "--only", "fig3b_dice_best,figS_cpu_scaling"]) == 0
+    assert cli.main(["plots", "--out", str(out), "--only", "fig3b_dice_best,figS_end_to_end"]) == 0
     assert (out / "paper" / "figures" / "fig3b_dice_best.pdf").is_file()
     assert "placeholder" in capsys.readouterr().out
 
@@ -200,13 +201,3 @@ def test_the_nuclei_best_rows_never_replace_the_outlines_ones(paper):
     assert {r["row"] for r in _source(res, "")} == {"stare", "valis120_hires", "ashlar_clean"}
 
 
-def test_an_excluded_runs_na_rows_are_drawn_nowhere(paper):
-    """T29 fix 2: excluded runs are rows of NA in stare_tiers; Fig. 3d draws none of them
-    (an excluded medium-tier STARE run must not take the tier's slot)."""
-    st = schema.read(paper / "stare_tiers.csv")
-    st.append(schema.empty_row("stare_tiers", source="regbench", dataset="multiplex",
-                               row="stare_gone", tier="medium", stride=64, sprep="none",
-                               set="outlines", pooling="common", excluded_reason="x"))
-    schema.write(paper / "stare_tiers.csv", "stare_tiers", st)
-    tiers = plots.PLOTS["fig3d_stare_tiers"](paper, paper / "figures")
-    assert tiers["n"]["medium"] == 10  # stare_medium's cases, not the excluded row's 0

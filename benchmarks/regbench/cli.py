@@ -1,7 +1,8 @@
 """``python -m benchmarks.regbench``: prepare cases, run a method, score everything.
 
-``prepare <dataset>``  write the cases of ``multiplex`` or ``hyreco`` (subset A and,
-                       when it is there, subset B, in one set), idempotent
+``prepare <dataset>``  write the cases of ``multiplex``, idempotent (``prepare hyreco``,
+                       ``cross-runs`` and ``cpu-scaling`` are ARCHIVED with HyReCo and the CPU
+                       cross: benchmarks/archive/regbench/cli_archived.txt)
 ``list``               the number of prepared cases of a dataset (sizes a SLURM array), their
                        ids (``--ids``) or their patients (``--groups``)
 ``run``                register ONE case (``--case-id``), ONE patient (``--group``), or the
@@ -27,12 +28,6 @@
 ``local``              STARE's stages on ONE cohort slide on a laptop, stored as
                        ``<run>_laptop`` with the machine's spec in its run.json
                        (``local.py``)
-``cross-runs``         the CPU cross's rows: each family's best-Dice row of a scored main
-                       run (DeeperHistReg's best CPU row), one ``family<TAB>row`` line each
-                       and the ``--rows`` line (``paper/cpu_scaling.py``)
-``cpu-scaling``        the CPU-scaling table: the cross's rows at 4 and 8 CPUs, per
-                       patient and repeat (``paper/cpu_scaling.py``); ``--main MAIN``
-                       takes the rows from ``cross-runs``; a GPU row is refused
 ``plots``              the paper's figures from the paper tables (``paper/plots.py``);
                        ``--tables DIR --to DIR`` draws them from any folder of the paper's
                        CSVs (a ``collect`` folder: drafts)
@@ -147,48 +142,6 @@ def build_parser():
         help="`shrink`: for a slide with no bare nuclei, use its outline with the "
         "10 px rim taken off (labelled shrunk_outlines, exact: false; too small "
         "where cells touch). Never used unless given",
-    )
-
-    hy = prepare_sub.add_parser(
-        "hyreco",
-        help="HyReCo's re-stained pairs (a public landmark set, scored apart: "
-        "regbench.landmarks)",
-    )
-    common(hy)
-    hy.add_argument(
-        "--data-root",
-        required=True,
-        help="a folder holding HyReCo/{HE,PHH3} (subset A) and, when downloaded, "
-        "HyReCo-Additional/{HE,PHH3} (subset B), as download/hyreco.sh leaves it",
-    )
-    hy.add_argument(
-        "--pixel-size-um",
-        type=float,
-        default=None,
-        help="a measured pixel size (default: the file's, else the paper's 0.24)",
-    )
-    hy.add_argument(
-        "--proxy",
-        default=None,
-        choices=("luminance", "haematoxylin"),
-        help="STARE's one-channel proxy (default luminance)",
-    )
-    hy.add_argument(
-        "--reduce",
-        type=int,
-        default=None,
-        choices=(1, 2),
-        help="block-average the proxy (default 1, native)",
-    )
-    hy.add_argument(
-        "--allow-incomplete",
-        action="store_true",
-        help="prepare the pairs that are there and mark every case so",
-    )
-    hy.add_argument(
-        "--count",
-        action="store_true",
-        help="print the number of pairs of the subsets that are there",
     )
 
     nu = sub.add_parser(
@@ -829,31 +782,6 @@ def build_parser():
     ov.add_argument("--case-id", default=None, help="draw this case (default: chosen by rule)")
     ov.add_argument("--roi-um", type=float, default=300.0, help="side of the field, in um")
     ov.add_argument("--dataset", default="multiplex", choices=DATASETS)
-
-    cr = sub.add_parser(
-        "cross-runs",
-        help="the CPU cross's rows (benchmarks/regbench/paper/cpu_scaling.py): each "
-        "family's best-Dice row of the scored MAIN run (tables.best_of), DeeperHistReg's "
-        "best CPU row; refused when MAIN has no scored tables",
-    )
-    cr.add_argument("--out", required=True, help="the MAIN results folder (scored)")
-    cr.add_argument("--dataset", default="multiplex", choices=DATASETS)
-
-    cs = sub.add_parser(
-        "cpu-scaling",
-        help="the CPU-scaling table (benchmarks/regbench/paper/cpu_scaling.py): wall time, "
-        "CPU-hours and peak memory of the cross's rows at 4 and 8 CPUs, per patient and "
-        "repeat (a folder's rep<k> subfolders, REGBENCH_REPEAT), e.g. --point 4=OUT_C4 "
-        "--point 8=OUT_C8 --main MAIN --to O/paper/cpu_scaling.csv; a GPU row is refused",
-    )
-    cs.add_argument("--point", action="append", required=True, metavar="CPUS=OUT",
-                    help="a results folder that ran at CPUS; repeat, also for one count")
-    cs.add_argument("--rows", default=None,
-                    help="result names, comma-separated (default: --main's cross-runs)")
-    cs.add_argument("--main", default=None,
-                    help="the scored MAIN run the rows are chosen from (cross-runs)")
-    cs.add_argument("--to", required=True)
-    cs.add_argument("--dataset", default="multiplex", choices=DATASETS + COST_ONLY_SETS)
 
     co = sub.add_parser(
         "collect",
@@ -1526,7 +1454,8 @@ def _verdict(a):
 def _no_case_scoring(dataset):
     """Why ``dataset`` has no per-case record and no tissue piece, or None when it has
     them. A cost-only set (T32) is scored from its resources alone; a landmark set's
-    scorer (``regbench.landmarks``) reads its landmarks and the results, never a per-case
+    scorer (``regbench.landmarks``, archived with HyReCo; no set of that kind is in
+    ``PUBLIC`` now) reads its landmarks and the results, never a per-case
     record or a tissue piece (final review I3: the launcher submits neither job for it)."""
     from . import variants
 
@@ -1758,14 +1687,6 @@ def _main(a):
         from .paper import collect
 
         return collect.main(a)
-    if a.cmd == "cpu-scaling":
-        from .paper import cpu_scaling
-
-        return cpu_scaling.main(a)
-    if a.cmd == "cross-runs":
-        from .paper import cpu_scaling
-
-        return cpu_scaling.main_cross_runs(a)
     if a.cmd == "list":
         return _list(a)
     if a.cmd == "run":

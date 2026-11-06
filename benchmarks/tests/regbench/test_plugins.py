@@ -89,34 +89,15 @@ def probe(tmp_path, switch, with_plugin=True):
 
 
 def public_counts():
-    """The public run list, derived from the tables: (runs, GPU runs, per patient, cohort
-    result names). The runs are the cohort's own list (``runs_for(None)``; the table has as
-    many rows). STARE: every stride x level of the cohort regime, by name, and the two tier
-    runs (two result names each); ASHLAR: its cells (one each); the others are written out
-    below."""
-    from benchmarks.regbench import regimes as rg
-    from benchmarks.regbench import variants
-    from benchmarks.regbench.methods import ashlar
-
-    tiers = {f"stare_{t}" for t in variants.STARE_TIERS}  # stare_medium, stare_low
-    # 2 VALIS (1.2.0 twice) + 8 DeeperHistReg + PALOM
-    others = 11
-    other_names = 3 + 3 + 8 + 2  # valis120, valis120_hires, dhr (one row per run), palom
-    # STARE's FULL cross on the cohort (user ruling 2026-10-20): every tier x stride x
-    # level cell of the cohort regime (the stride-64 baseline of a tier is its tier run)
-    cohort = {
-        variants.stare_tier_cell(t, s_, k, lv)[0]
-        for t in ("high", *variants.STARE_TIERS)
-        for k, lv in rg.stare_levels(rg.COHORT_REGIME)
-        for s_ in variants.STARE_STRIDES
-    } | tiers
-    # counts(), the table and the expected names are the cohort's own list (runs_for(None))
-    # + stare_local4 (T31 R2: STARE in one job of 4 CPUs, a cost row of stare's; two
-    # result names, like every STARE run: stare_local4 and stare_local4_rigid)
-    local4 = len(variants.LOCAL_4CPU)
-    cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS) + local4
-    names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS) + 2 * local4
-    return cohort_runs, 4, 2 + len(ashlar.ASHLAR_CELLS), names
+    """The public run list: (runs, GPU runs, per patient, cohort result names). Since the
+    2026-11-06 archive the active runs are the reported ones (``variants.REPORTED_RUNS``;
+    the rest of the design is paused, benchmarks/archive/README.md), written out here:
+    STARE twice (``stare``, ``stare_local4``: two result names each), VALIS 1.2.0 twice
+    (three names each, both per patient), DeeperHistReg's four HR runs (one name each, two
+    on a GPU), ASHLAR twice (one name each, per patient) and PALOM (two names)."""
+    runs = 2 + 2 + 4 + 2 + 1
+    names = 2 * 2 + 3 * 2 + 4 + 2 + 2
+    return runs, 2, 2 + 2, names
 
 
 def public(got):

@@ -1807,17 +1807,14 @@ def write_all(out, dataset=COHORT, cases_root=None):
     """Write every table of ``WRITTEN`` and ``losses.csv`` (the paper stage's losses,
     ALWAYS written); ``{table name: path}``."""
     from .. import losses
-    from . import landmarks
 
     if variants.is_cost_only_set(dataset):
         # the synthetic scaling set (T32): its cost tables alone (paper.synthetic)
         from . import synthetic
 
         return synthetic.write_all(out, dataset)
-    if landmarks.is_landmark_set(dataset):
-        # a public landmark set has its own tables (paper.landmarks): its scorer wrote
-        # no cells, so the cohort's tables would be empty
-        return landmarks.write_all(out, dataset)
+    # (a public landmark set's own tables, paper.landmarks, are archived with HyReCo:
+    # benchmarks/archive/regbench/paper/landmarks.py)
     built = build(out, dataset, cases_root)
     target = _paper_dir(out, dataset)
     target.mkdir(parents=True, exist_ok=True)

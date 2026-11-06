@@ -3,14 +3,12 @@
 #SBATCH --output=regbench-prepare-%j.log
 # Prepare one dataset's cases. Arguments are passed to `regbench prepare`, e.g.
 #   sbatch -c 4 --mem=64G -t 8:00:00 prepare.sbatch multiplex --manifest rounds.csv --diameter 24
-#   sbatch -c 8 --mem=32G -t 1-00:00:00 --export=ALL,REGBENCH_REPO=<repo>,\
-#       REGBENCH_CASES_HYRECO=<cases>,REGBENCH_BIND=<data root>,REGBENCH_PREPARE_IMAGE=STARE_REGBENCH \
-#       prepare.sbatch hyreco --data-root <data root>
+#   (the hyreco example is archived: benchmarks/archive/regbench/cli_archived.txt)
 # The cases go where the launcher reads them (env.sh: regbench_cases_of): the cohort's
 # under REGBENCH_CASES, a public dataset's under REGBENCH_CASES_<NAME>, which this job
 # binds into the image; the data a public dataset is prepared from is bound through
 # REGBENCH_BIND. submit_cohort.sh --prepare submits it as ONE job per dataset (for
-# hyreco with REGBENCH_HYRECO_DATA, which it binds). Submitted by hand as an array
+# the archived hyreco, REGBENCH_HYRECO_DATA). Submitted by hand as an array
 # (--array=0-N), each task prepares the case of its index (SLURM_ARRAY_TASK_ID).
 set -euo pipefail
 : "${REGBENCH_REPO:?export REGBENCH_REPO (this repository) before sbatch}"

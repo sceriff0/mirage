@@ -521,8 +521,9 @@ def test_the_cli_prints_the_results_estimate_of_the_selected_stare_runs(tmp_path
     default = synth.GRIDS["default"]
     assert cli.main(["synth", "--to", str(to), "--results-estimate"]) == 0
     out = capsys.readouterr().out
-    assert str(synth.results_estimate(default, 9)["total_bytes"]) in out
-    assert "9 STARE run(s)" in out and "VALIS" in out
+    # the set's one STARE run (`stare`; its eight other cells are archived, 2026-11-06)
+    assert str(synth.results_estimate(default, 1)["total_bytes"]) in out
+    assert "1 STARE run(s)" in out and "VALIS" in out
     # the runs a launch selected: only its STARE runs of the set count
     argv = ["synth", "--to", str(to), "--results-estimate", "--runs", "stare valis120 x"]
     assert cli.main(argv) == 0
@@ -533,4 +534,4 @@ def test_the_cli_prints_the_results_estimate_of_the_selected_stare_runs(tmp_path
     capsys.readouterr()
     assert cli.main(["synth", "--to", str(to), "--results-estimate"]) == 0
     out = capsys.readouterr().out
-    assert str(synth.results_estimate((64, 128), 9)["total_bytes"]) in out
+    assert str(synth.results_estimate((64, 128), 1)["total_bytes"]) in out

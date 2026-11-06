@@ -454,32 +454,6 @@ def fig3c_displacement_best(paper_dir, fig_dir):
     return _result(files, n)
 
 
-# ── Fig. 3d ──────────────────────────────────────────────────────────────────
-def fig3d_stare_tiers(paper_dir, fig_dir):
-    got, missing = _need(paper_dir, pp="per_pair.csv", st="stare_tiers.csv")
-    if missing:
-        return _placeholder(fig_dir, "fig3d_stare_tiers", missing)
-    picks = {}
-    for r in got["st"]:
-        if (not tables.is_headline(r) or tables.is_cost_only(r.get("row"))
-                or r.get("excluded_reason") not in (None, "", schema.NA)):
-            continue  # a cost row is no tier of STARE's (T31 fix C1)
-        if _num(r.get("stride")) == 64 and (r.get("sprep") or "none") == "none":
-            picks[r["tier"]] = r["row"]
-    by_row = _drop_empty_cases({row: _cases(got["pp"], row) for row in picks.values()})
-    groups, n = [], {}
-    for tier in TIERS:
-        row = picks.get(tier)
-        cs = list(by_row.get(row, {}).values()) if row else []
-        for c in cs:
-            c["row_name"] = row
-        n[tier] = len(cs)
-        if cs:
-            groups.append((tier, "stare", cs))
-    files = _distribution(fig_dir, "fig3d_stare_tiers", groups,
-                          "Matched-pair Dice (outlines, unitless)", "dice", ylim=(-0.03, 1.03),
-                          width="single", aspect=0.9)
-    return _result(files, n)
 
 
 # ── Fig. 3e, 3f, 2c, the CPU cross and end to end: paper/cost_plots.py (T31) ──────
@@ -530,108 +504,10 @@ def figS_pipeline_cost_fits(paper_dir, fig_dir):
     return _result(files, {f"{r['backend']}:{r['process']}": int(_num(r["n"])) for r in ok})
 
 
-# ── public datasets ──────────────────────────────────────────────────────────
-def _public_dirs(paper_dir):
-    """The dataset folders under ``paper_dir`` that hold a ``per_pair.csv`` (the public
-    nuclei datasets), or ``paper_dir`` itself when it is such a dataset's folder."""
-    base = Path(paper_dir)
-    subs = sorted(p for p in base.iterdir() if p.is_dir() and (p / "per_pair.csv").is_file()) \
-        if base.is_dir() else []
-    if subs:
-        return subs
-    rows = _read(base / "per_pair.csv")
-    if rows and _dataset(rows) != tables.COHORT:
-        return [base]
-    return []
 
 
-def public_dice_best(paper_dir, fig_dir):
-    dirs = _public_dirs(paper_dir)
-    if not dirs:
-        return _placeholder(fig_dir, "public_dice_best",
-                            [("per_pair (a public nuclei dataset)",
-                              Path(paper_dir) / "<dataset>" / "per_pair.csv"),
-                             ("method_best", Path(paper_dir) / "<dataset>" / "method_best.csv")])
-    _style()
-    colors = _colors(fig_dir)
-    fig, axes = ps.figure(width="double", nrows=1, ncols=len(dirs), aspect=0.9 if len(dirs) < 3 else 1.3,
-                          sharey=True)
-    n, data = {}, []
-    for ax, d in zip(axes, dirs):
-        pp, best = _read(d / "per_pair.csv"), _read(d / "method_best.csv")
-        if pp is None or best is None:
-            ax.axis("off")
-            ax.text(0, 1, f"{d.name}: missing\n{d / 'method_best.csv'}", va="top",
-                    fontsize=ps.TICK_PT)
-            continue
-        groups, nn = _best_cases(pp, best)
-        labels = []
-        for i, (lab, f, cs, row) in enumerate(groups):
-            _draw_group(ax, i, [c["dice"] for c in cs], colors[f], seed=i)
-            labels.append(_tick(lab, cs, sum(c["zeroed"] for c in cs)))
-            for c in cs:
-                data.append({"dataset": d.name, "family": f, "row": row, "case_id": c["case_id"],
-                             "dice": c["dice"], "zeroed": c["zeroed"]})
-        _group_axes(ax, labels)
-        for t in ax.get_xticklabels():
-            t.set_rotation(90)
-        ax.set_title(d.name)
-        ax.set_ylim(-0.03, 1.03)
-        n.update({f"{d.name}:{f}": v for f, v in nn.items()})
-    axes[0].set_ylabel("Matched-pair Dice (outlines, unitless)")
-    ps.panel_labels(axes)
-    files = _save(fig, fig_dir, "public_dice_best",
-                  _Table(["dataset", "family", "row", "case_id", "dice", "zeroed"], data))
-    return _result(files, n)
 
 
-def public_landmarks_best(paper_dir, fig_dir):
-    """Per landmark dataset, the best row of each family (lowest ``rtre_median_med``):
-    the table has the median over pairs of the median relative TRE, not the pairs."""
-    base = Path(paper_dir)
-    rows = []
-    paths = [base / "public_landmarks.csv"] + (
-        sorted(base.glob("*/public_landmarks.csv")) if base.is_dir() else [])
-    for p in paths:
-        rows += _read(p) or []
-    if not rows:
-        return _placeholder(fig_dir, "public_landmarks_best",
-                            [("public_landmarks", base / "public_landmarks.csv")])
-    # every pair of each set (HyReCo `all_pairs`), not a subset's rows
-    # and only a method's rows: `initial` (no registration) has no family
-    rows = [r for r in rows if _fin(r.get("rtre_median_med")) and r.get("family")
-            and r["family"] != "NA"
-            and r.get("set", "all_pairs") in ("all_pairs", "", None)]
-    datasets = sorted({r["dataset"] for r in rows})
-    _style()
-    colors = _colors(fig_dir, extra=sorted({r["family"] for r in rows if r.get("family")}))
-    fig, axes = ps.figure(width="double", nrows=1, ncols=len(datasets), aspect=1.0, sharey=False)
-    n, data = {}, []
-    for ax, ds in zip(axes, datasets):
-        best = {}
-        for r in rows:
-            if r["dataset"] != ds:
-                continue
-            f = r["family"]
-            if f not in best or _num(r["rtre_median_med"]) < _num(best[f]["rtre_median_med"]):
-                best[f] = r
-        fams = sorted(best, key=lambda f: _num(best[f]["rtre_median_med"]))
-        for i, f in enumerate(fams):
-            r = best[f]
-            ax.scatter([_num(r["rtre_median_med"])], [i], s=14, color=colors[f], linewidths=0)
-            data.append({"dataset": ds, "family": f, "row": r["row"], "n_pairs": r.get("n_pairs"),
-                         "rtre_median_med": _num(r["rtre_median_med"])})
-        ax.set_yticks(range(len(fams)))
-        ax.set_yticklabels([f"{_label(f)}\nn={best[f].get('n_pairs')} pairs" for f in fams])
-        ax.set_ylim(len(fams) - 0.4, -0.6)
-        ax.set_xlim(left=0)
-        ax.set_xlabel("Median relative TRE over pairs (fraction of image diagonal)")
-        ax.set_title(ds)
-        n[ds] = len(fams)
-    ps.panel_labels(axes)
-    files = _save(fig, fig_dir, "public_landmarks_best",
-                  _Table(["dataset", "family", "row", "n_pairs", "rtre_median_med"], data))
-    return _result(files, n)
 
 
 # ── the synthetic scaling set (T32, supplementary, cost only) ────────────────
@@ -777,129 +653,25 @@ def figS_synth_cost_scaling(paper_dir, fig_dir):
 QUANTITY_MARKER = {"cpu_h_used": "o", "wall_s": "s", "peak_rss_gb": "^", "gb_h_used": "D"}
 
 
-def figS_synth_cross_scaling(paper_dir, fig_dir):
-    """STARE's tier x stride cross and the three VALIS runs on the same axes: each run's
-    fitted exponent (``synthetic_scaling``: the quantity grows as gigapixels^slope) with
-    its 95% interval, one marker per quantity; a run without a fit is named, not drawn."""
-    from .. import variants
-
-    name = "figS_synth_cross_scaling"
-    got, missing = _synth_need(paper_dir, "synthetic_scaling")
-    if missing:
-        return _placeholder(fig_dir, name, missing)
-    scaling = [r for r in got["synthetic_scaling"] if not r.get("excluded_reason")]
-    order = [r for r in variants.SYNTHETIC_RUNS]
-    finals = tables.terminal_rows("synthetic")
-    rows = [finals.get(r, r) for r in order]
-    rows += sorted({r["row"] for r in scaling} - set(rows))
-    _style()
-    colors = _colors(fig_dir, extra=sorted({_run_style(r)[0] for r in rows}))
-    fig, (ax,) = ps.figure(width="double", aspect=0.45)
-    data, n, labels = [], {}, []
-    keys = [k for k, _ in SYNTH_QUANTITIES]
-    for i, row in enumerate(rows):
-        fam, _, _, label = _run_style(row)
-        drawn = 0
-        for j, key in enumerate(keys):
-            f = next((r for r in scaling if r["row"] == row and r["quantity"] == key), None)
-            if f is None or not _flag(f.get("fit_ok")) or not _fin(f.get("slope")):
-                continue
-            x = i + (j - 1.5) * 0.15
-            y = _num(f["slope"])
-            lo, hi = _num(f.get("slope_ci_low")), _num(f.get("slope_ci_high"))
-            if math.isfinite(lo) and math.isfinite(hi):
-                ax.plot([x, x], [lo, hi], color=colors[fam], lw=0.7)
-            ax.scatter([x], [y], s=14, marker=QUANTITY_MARKER[key], color=colors[fam],
-                       label=key if i == 0 or key not in n else None)
-            n[key] = n.get(key, 0) + 1
-            drawn += 1
-            data.append({"row": row, "quantity": key, "slope": y, "slope_ci_low": f.get(
-                "slope_ci_low"), "slope_ci_high": f.get("slope_ci_high"),
-                "n_sizes_used": f.get("n_sizes_used")})
-        labels.append(label if drawn else f"{label}\n(no fit)")
-    ax.set_xticks(range(len(rows)))
-    ax.set_xticklabels(labels, rotation=90)
-    ax.axhline(1.0, color="0.6", lw=0.6, ls="--")
-    ax.set_ylabel("Fitted exponent on gigapixels (95% interval)")
-    handles = [matplotlib.lines.Line2D([], [], ls="", marker=QUANTITY_MARKER[k], color="0.3",
-                                       label=lab) for k, lab in SYNTH_QUANTITIES]
-    ax.legend(handles=handles, fontsize=ps.TICK_PT - 1)
-    ps.panel_labels([ax])
-    _synth_caveat(fig, scaling)
-    files = _save(fig, fig_dir, name, _Table(
-        ["row", "quantity", "slope", "slope_ci_low", "slope_ci_high", "n_sizes_used"], data))
-    return _result(files, n)
 
 
-def figS_synth_vs_cohort(paper_dir, fig_dir):
-    """The synthetic fit at the cohort's median and largest patient against the cohort's
-    measured cost of the same row, log-log, y = x drawn; a hollow marker is a fit used
-    outside the sizes it was made on (``extrapolated``)."""
-    name = "figS_synth_vs_cohort"
-    got, missing = _synth_need(paper_dir, "synthetic_extrapolation")
-    if missing:
-        return _placeholder(fig_dir, name, missing)
-    rows = [r for r in got["synthetic_extrapolation"] if not r.get("excluded_reason")
-            and _fin(r.get("fitted")) and _fin(r.get("measured_cohort"))
-            and _num(r["fitted"]) > 0 and _num(r["measured_cohort"]) > 0]
-    if not rows:
-        return _placeholder(fig_dir, name, [(
-            "synthetic_extrapolation: no row with both a fitted and a measured cohort value "
-            "(a fit of >= 3 sizes, and the cohort's cost tables)",
-            _synth_path(paper_dir, f"{SYNTH}/synthetic_extrapolation.csv"))])
-    _style()
-    colors = _colors(fig_dir, extra=sorted({_run_style(r["row"])[0] for r in rows}))
-    fig, axes = ps.figure(width="double", nrows=2, ncols=2, aspect=0.95)
-    axes = np.asarray(axes).reshape(-1)
-    data, n = [], {}
-    for ax, (key, ylab) in zip(axes, SYNTH_QUANTITIES):
-        mine = [r for r in rows if r["quantity"] == key]
-        vals = []
-        for r in mine:
-            x, y = _num(r["measured_cohort"]), _num(r["fitted"])
-            hollow = _flag(r.get("extrapolated"))
-            ax.scatter([x], [y], s=16, marker="o" if r["at"] == "cohort_median" else "^",
-                       facecolor="none" if hollow else colors[_run_style(r["row"])[0]],
-                       edgecolor=colors[_run_style(r["row"])[0]], linewidths=0.7,
-                       label=f"{_run_style(r['row'])[3]} ({r['at'].replace('cohort_', '')})")
-            vals += [x, y]
-            data.append({"quantity": key, "row": r["row"], "at": r["at"], "measured": x,
-                         "fitted": y, "extrapolated": hollow, "at_gpx": r.get("at_gpx")})
-        if vals:
-            lo, hi = min(vals) / 1.5, max(vals) * 1.5
-            ax.plot([lo, hi], [lo, hi], color="0.5", lw=0.6, ls="--", label="y = x")
-            ax.legend(fontsize=ps.TICK_PT - 1)
-        n[key] = len(mine)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_xlabel(f"Cohort, measured: {ylab} (log10)")
-        ax.set_ylabel(f"Synthetic fit: {ylab} (log10)")
-    ps.panel_labels(list(axes))
-    fig.text(0.0, 0.0, "circle: the cohort's median patient; triangle: its largest; hollow: "
-             "extrapolated outside the synthetic sizes", fontsize=ps.TICK_PT - 1)
-    files = _save(fig, fig_dir, name, _Table(
-        ["quantity", "row", "at", "measured", "fitted", "extrapolated", "at_gpx"], data))
-    return _result(files, n)
 
 
+# Figures the 261105 manuscripts do not show (fig3d_stare_tiers, public_dice_best,
+# public_landmarks_best, figS_synth_cross_scaling, figS_synth_vs_cohort, figS_cpu_scaling) are
+# ARCHIVED in benchmarks/archive/regbench/paper/plots_archived.py (ruling 2026-11-06).
 PLOTS = {
     "fig3b_dice_best": fig3b_dice_best,
     "fig3b_dice_best_nuclei": fig3b_dice_best_nuclei,
     "fig3b_dice_all": fig3b_dice_all,
     "fig3c_displacement_best": fig3c_displacement_best,
-    "fig3d_stare_tiers": fig3d_stare_tiers,
     "fig3e_peak_rss_best": None,  # cost_plots.FIGURES, filled in below
     "fig3f_cpu_wall_best": None,
     "fig2c_cost_vs_input": None,
-    "figS_cpu_scaling": None,
     "figS_end_to_end": None,
     "figS_pipeline_cost_fits": figS_pipeline_cost_fits,
-    "public_dice_best": public_dice_best,
-    "public_landmarks_best": public_landmarks_best,
     # T32: the synthetic scaling set (supplementary, cost only)
     "figS_synth_cost_scaling": figS_synth_cost_scaling,
-    "figS_synth_cross_scaling": figS_synth_cross_scaling,
-    "figS_synth_vs_cohort": figS_synth_vs_cohort,
 }
 
 
@@ -914,20 +686,16 @@ NEEDS = {
     "fig3b_dice_all": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
     "fig3c_displacement_best": {"per_pair.csv": ("displacement_um_p50",),
                                 "method_best.csv": ("best_row",)},
-    "fig3d_stare_tiers": {"per_pair.csv": ("dice_matched",), "stare_tiers.csv": ("row",)},
     "fig3e_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
     "fig3f_cpu_wall_best": {"method_best.csv": ("best_row",),
                             "cost_points.csv": ("cpu_h_used", "wall_s")},
     "fig2c_cost_vs_input": {"method_best.csv": ("best_row",), "cost_points.csv": ("input_gpx",),
                             "cost_fits.csv": ("slope",)},
-    "figS_cpu_scaling": {"cpu_scaling.csv": ("wall_s",)},
     "figS_end_to_end": {"end_to_end.csv": ("estimate_s_med",)},
     "figS_pipeline_cost_fits": {"pipeline_cost_fits.csv": ("slope",)},
     # a `synthetic/` table is read from the set's folder (synthetic_dir)
     "figS_synth_cost_scaling": {"synthetic/synthetic_cost.csv": ("cpu_h_used",),
                                 "synthetic/synthetic_scaling.csv": ("quantity",)},
-    "figS_synth_cross_scaling": {"synthetic/synthetic_scaling.csv": ("slope",)},
-    "figS_synth_vs_cohort": {"synthetic/synthetic_extrapolation.csv": ("fitted",)},
 }
 
 

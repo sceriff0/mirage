@@ -375,7 +375,7 @@ def test_stare_tiers_defaults_and_options(scored, monkeypatch):
     assert (t["stare_s128_clahe"]["stride"], t["stare_s128_clahe"]["sprep"]) == (128, "clahe")
 
 
-def test_primary_of_reads_the_dataset():
+def test_primary_of_reads_the_dataset(pre_archive):
     from benchmarks.regbench import regimes
 
     public = next(d for d, reg in regimes.DATASET_REGIME.items()
@@ -628,7 +628,7 @@ def test_a_best_row_carries_its_candidates_and_says_it_is_a_ceiling(scored):
             assert r["n_candidates"] == schema.NA and r["in_sample_selection"] is False
 
 
-def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
+def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort(pre_archive):
     """WT4: the real family map, not a toy one: every terminal row of a family that has
     a row competes (the audit's counts, WD1)."""
     # stare: 27 since the full cross on the cohort (tier x stride x level, 2026-10-20)
@@ -643,7 +643,7 @@ def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
         "n_candidates"] == want[variants.family(pp[0]["row"])] - 1
 
 
-def test_deeperhistregs_primary_is_its_best_as_drawn_row():
+def test_deeperhistregs_primary_is_its_best_as_drawn_row(pre_archive):
     """Ruling 193 (user 2026-10-18 'the best one'): DeeperHistReg's primary is
     the dataset's method_best row, said and flagged in-sample; variants.PRIMARY's
     placeholder is not what the tables use."""
@@ -733,28 +733,3 @@ def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
     tables.write_all(scored, "multiplex")
 
 
-def test_a_landmark_datasets_excluded_runs_are_na_rows_too(tmp_path):
-    """T29 (M8) on a landmark dataset: the runs its excluded_runs.csv names (a public
-    dataset's list: variants.excluded_for) are NA rows with the reason."""
-    from benchmarks.regbench.paper import landmarks
-
-    t = tmp_path / "tables" / "hyreco"
-    t.mkdir(parents=True)
-    (t / "hyreco_pairs.csv").write_text("method,pair_id\n")
-    ex = variants.excluded_for("hyreco")
-    assert ex  # the ruling of 2026-10-19: every method but STARE runs its defaults only
-    with open(t / "excluded_runs.csv", "w", newline="") as fh:
-        w = csv.writer(fh)
-        w.writerow(["run", "reason"])
-        w.writerows(ex)
-    built = landmarks.build(tmp_path, "hyreco")
-    got = {r["row"]: r for r in built["public_landmarks"]}
-    name, reason = ex[0]
-    final = list(variants.variants_of(variants.run_of(name)))[-1]
-    assert got[final]["excluded_reason"] == reason and got[final]["set"] == "all_pairs"
-    assert len(got) == len(ex)
-    fams = {r["family"] for r in built["method_best"]}
-    assert tables.family_of(final) in fams
-    for name in landmarks.LANDMARK_WRITTEN:
-        for r in built[name]:
-            assert set(r) == set(schema.columns(name)), name

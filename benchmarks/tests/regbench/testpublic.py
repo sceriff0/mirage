@@ -36,12 +36,16 @@ REPO = Path(__file__).resolve().parents[3]
 SLURM = REPO / "benchmarks" / "regbench" / "slurm"
 
 _SITECUSTOMIZE = """\
+import os
 import sys
 
 sys.path.insert(0, {repo!r})
 from benchmarks.tests.regbench import testpublic
 
-testpublic.register()
+if os.environ.get("REGBENCH_TEST_PUBLIC") == "1":
+    testpublic.register()
+if os.environ.get("REGBENCH_TEST_PRE_ARCHIVE") == "1":
+    testpublic.pre_archive()
 """
 
 
@@ -64,6 +68,25 @@ def register(setitem=None, setattr_=None):
         setattr_(cli, "ALL_DATASETS", cli.ALL_DATASETS + tuple(SPECS))
 
 
+def pre_archive():
+    """Every paused run active again, for good (a launcher subprocess): the design as it
+    stood before the 2026-11-06 archive, as conftest's ``pre_archive`` fixture gives a
+    test in this process. The launcher's own lists are not touched."""
+    from benchmarks.regbench import variants
+
+    variants.RUNS = tuple(r._replace(active=True) for r in variants.RUNS)
+
+
+def sitecustomize_dir(tmp):
+    """A folder holding the ``sitecustomize.py`` above: put on a launcher's PYTHONPATH,
+    every python it starts registers the test sets (``REGBENCH_TEST_PUBLIC=1``) and/or
+    re-activates the paused runs (``REGBENCH_TEST_PRE_ARCHIVE=1``)."""
+    site = Path(tmp) / "sitecustomize_dir"
+    site.mkdir(parents=True, exist_ok=True)
+    (site / "sitecustomize.py").write_text(_SITECUSTOMIZE.format(repo=str(REPO)))
+    return site
+
+
 def patched_launcher(tmp):
     """``(script, env)``: a copy of the slurm folder in ``tmp`` whose launcher lists the
     two datasets (``PUBLIC_DATASETS`` and ``PUBLIC_KINDS``), and the environment that
@@ -80,10 +103,9 @@ def patched_launcher(tmp):
     text = text.replace(old_names, f'PUBLIC_DATASETS="{names} ')
     text = text.replace(old_kinds, f'PUBLIC_KINDS="{kinds} ')
     script.write_text(text)
-    site = Path(tmp) / "sitecustomize_dir"
-    site.mkdir()
-    (site / "sitecustomize.py").write_text(_SITECUSTOMIZE.format(repo=str(REPO)))
+    site = sitecustomize_dir(tmp)
     return script, {
         "REGBENCH_REPO": str(REPO),
+        "REGBENCH_TEST_PUBLIC": "1",
         "PYTHONPATH": os.pathsep.join([str(site), *filter(None, [os.environ.get("PYTHONPATH")])]),
     }

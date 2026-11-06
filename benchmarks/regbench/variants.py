@@ -30,7 +30,8 @@ preprocessing row. ``runs --dataset <name>`` prints the list in the same columns
 its entry) stays implemented and tested, and its names still resolve, but it is not
 launched, not expected by ``score``, not counted and not printed by ``runs`` (``runs
 --all`` prints it, with ``0`` in column 13). Taking the flag off again is the whole
-re-activation. No run is paused today. ``check()`` refuses a list in which a paused run
+re-activation. The paused runs are the ARCHIVED_RUNS (below): every run the 261105
+manuscripts do not report. ``check()`` refuses a list in which a paused run
 writes a primary row, makes the selfcheck an active run is checked by, or is what an
 active run waits for; it runs at import and before every list this module hands out.
 
@@ -106,7 +107,16 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from . import COST_ONLY_KINDS, PUBLIC, base_name, methods, plugins, public_of, regimes
+from . import (
+    ARCHIVED_PUBLIC,
+    COST_ONLY_KINDS,
+    PUBLIC,
+    base_name,
+    methods,
+    plugins,
+    public_of,
+    regimes,
+)
 from .methods import ashlar as _ashlar
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
@@ -220,10 +230,12 @@ def _stare_tier_runs():
 # FULL cross (ruling 2026-10-19): tier {high, medium, low} x stride ``STARE_STRIDES`` x
 # every level of the regime, 45 runs; every other method its defaults only
 # (``_LANDMARK_DEFAULTS``).
+# Read from the ARCHIVED sets too (HyReCo is archived since 2026-11-06): the runs it made
+# stay in RUNS, paused (ARCHIVED_RUNS), rather than disappearing with the set.
 LANDMARK_REGIMES = tuple(
     dict.fromkeys(
         regimes.DATASET_REGIME[name]
-        for name, spec in PUBLIC.items()
+        for name, spec in {**PUBLIC, **ARCHIVED_PUBLIC}.items()
         if spec["kind"] == "landmarks"
     )
 )
@@ -396,6 +408,37 @@ RUNS = (
     Run("palom", None, {}, "PALOM", False, None),
 )
 
+# ── what the paper reports (the 261105 manuscripts; user ruling 2026-11-06) ──────────────
+# The main text and Supplementary Table S2 report these runs and no others: STARE at its
+# defaults (its rigid stage M0 is the anchor-only row) and as one 4-CPU job
+# (Supplementary Section S9), VALIS 1.2.0 at its default and at its documentation's
+# high-resolution example (each with its rigid / non-rigid / micro stages), PALOM (its
+# affine stage is a row of its own), DeeperHistReg's high-resolution preset with and
+# without the fluorescence setting on CPU and on GPU, and ASHLAR as shipped, plain and
+# with the moving pseudo-FOVs placed by M0. Every other run is ARCHIVED, not deleted
+# (user ruling "still don't delete, archive if you can"): it stays in RUNS, built,
+# resolvable by name and tested, but paused (``active=False``: not launched, not
+# expected, not counted). Its results, if any exist, are untouched. Re-activating one is
+# taking its name out of ARCHIVED_RUNS' complement, i.e. adding it to REPORTED_RUNS.
+# The state before this ruling is at the tag archive/integrate-benchmarking-pre-prune-2026-11-06.
+REPORTED_RUNS = (
+    "stare",
+    "stare_local4",
+    "valis120",
+    "valis120_hires",
+    "deeperhistreg_hr_cpu",
+    "deeperhistreg_hr_gpu",
+    "deeperhistreg_hr_fluo_cpu",
+    "deeperhistreg_hr_fluo_gpu",
+    "ashlar",
+    "affine_ashlar",
+    "palom",
+)
+RUNS = tuple(
+    r if (r.label or r.method) in REPORTED_RUNS else r._replace(active=False) for r in RUNS
+)
+ARCHIVED_RUNS = tuple((r.label or r.method) for r in RUNS if not r.active)
+
 # Runs of a private method plug-in (regbench.plugins): none unless one is enabled.
 RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
 
@@ -497,8 +540,11 @@ NOT_ON = {
 # nothing else (``valis_mirage`` left with its row, 2026-11-05). These are existing RUNS entries: no run is added for it, so the cohort's and the
 # other datasets' run lists are what they were. Every other run is in the set's
 # excluded_runs.csv with SYNTHETIC_REASON (excluded_for).
-SYNTHETIC_RUNS = (
-    "stare",
+# The paper reports STARE at its defaults and the two VALIS runs on this set (Fig. 2c,
+# Supplementary Fig. S4); STARE's eight other tier x stride cells are ARCHIVED (paused
+# runs, ARCHIVED_SYNTHETIC_RUNS) since the 261105 manuscripts (ruling 2026-11-06).
+SYNTHETIC_RUNS = ("stare", "valis120", "valis120_hires")
+ARCHIVED_SYNTHETIC_RUNS = (
     "stare_s128_none",
     "stare_s256_none",
     "stare_medium",
@@ -507,12 +553,10 @@ SYNTHETIC_RUNS = (
     "stare_low",
     "stare_low_s128_none",
     "stare_low_s256_none",
-    "valis120",
-    "valis120_hires",
 )
 SYNTHETIC_REASON = (
-    "synthetic: STARE (tier x stride, no prep) and VALIS (1.2.0 default, 1.2.0 hires) "
-    "only (user 2026-10-19)"
+    "synthetic: STARE at its defaults and VALIS (1.2.0 default, 1.2.0 hires) only "
+    "(user 2026-10-19; the paper's set, 261105 manuscripts)"
 )
 # the CPU cross on the synthetic set (T32): these runs at 4 and 8 CPUs, at these sizes.
 # VALIS's is valis120, the paper's comparator (it was valis_mirage until that row was
@@ -720,7 +764,7 @@ def active_runs():
 
 
 def paused_names():
-    """The names of the paused runs, in the order of ``RUNS`` (none today)."""
+    """The names of the paused runs, in the order of ``RUNS`` (``ARCHIVED_RUNS``)."""
     return [run_name(r) for r in RUNS if not r.active]
 
 

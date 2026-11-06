@@ -1,0 +1,101 @@
+ARCHIVED parts of benchmarks/regbench/cli.py (user ruling 2026-11-06).
+
+``prepare hyreco`` (HyReCo, an archived public dataset), and ``cross-runs`` /
+``cpu-scaling`` (the 4- and 8-CPU cross, archived with paper/cpu_scaling.py): the 261105
+manuscripts report neither. Kept verbatim (parser blocks, dispatch and their docstring
+lines), NOT imported, run, linted or tested (benchmarks/archive/README.md). The working
+code is at the tag archive/integrate-benchmarking-pre-prune-2026-11-06.
+
+# ===== parser: prepare hyreco (benchmarks/regbench/cli.py) =====
+    hy = prepare_sub.add_parser(
+        "hyreco",
+        help="HyReCo's re-stained pairs (a public landmark set, scored apart: "
+        "regbench.landmarks)",
+    )
+    common(hy)
+    hy.add_argument(
+        "--data-root",
+        required=True,
+        help="a folder holding HyReCo/{HE,PHH3} (subset A) and, when downloaded, "
+        "HyReCo-Additional/{HE,PHH3} (subset B), as download/hyreco.sh leaves it",
+    )
+    hy.add_argument(
+        "--pixel-size-um",
+        type=float,
+        default=None,
+        help="a measured pixel size (default: the file's, else the paper's 0.24)",
+    )
+    hy.add_argument(
+        "--proxy",
+        default=None,
+        choices=("luminance", "haematoxylin"),
+        help="STARE's one-channel proxy (default luminance)",
+    )
+    hy.add_argument(
+        "--reduce",
+        type=int,
+        default=None,
+        choices=(1, 2),
+        help="block-average the proxy (default 1, native)",
+    )
+    hy.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="prepare the pairs that are there and mark every case so",
+    )
+    hy.add_argument(
+        "--count",
+        action="store_true",
+        help="print the number of pairs of the subsets that are there",
+    )
+
+
+# ===== parsers: cross-runs, cpu-scaling (benchmarks/regbench/cli.py) =====
+    cr = sub.add_parser(
+        "cross-runs",
+        help="the CPU cross's rows (benchmarks/regbench/paper/cpu_scaling.py): each "
+        "family's best-Dice row of the scored MAIN run (tables.best_of), DeeperHistReg's "
+        "best CPU row; refused when MAIN has no scored tables",
+    )
+    cr.add_argument("--out", required=True, help="the MAIN results folder (scored)")
+    cr.add_argument("--dataset", default="multiplex", choices=DATASETS)
+
+    cs = sub.add_parser(
+        "cpu-scaling",
+        help="the CPU-scaling table (benchmarks/regbench/paper/cpu_scaling.py): wall time, "
+        "CPU-hours and peak memory of the cross's rows at 4 and 8 CPUs, per patient and "
+        "repeat (a folder's rep<k> subfolders, REGBENCH_REPEAT), e.g. --point 4=OUT_C4 "
+        "--point 8=OUT_C8 --main MAIN --to O/paper/cpu_scaling.csv; a GPU row is refused",
+    )
+    cs.add_argument("--point", action="append", required=True, metavar="CPUS=OUT",
+                    help="a results folder that ran at CPUS; repeat, also for one count")
+    cs.add_argument("--rows", default=None,
+                    help="result names, comma-separated (default: --main's cross-runs)")
+    cs.add_argument("--main", default=None,
+                    help="the scored MAIN run the rows are chosen from (cross-runs)")
+    cs.add_argument("--to", required=True)
+    cs.add_argument("--dataset", default="multiplex", choices=DATASETS + COST_ONLY_SETS)
+
+
+# ===== dispatch: cpu-scaling, cross-runs (benchmarks/regbench/cli.py) =====
+    if a.cmd == "cpu-scaling":
+        from .paper import cpu_scaling
+
+        return cpu_scaling.main(a)
+    if a.cmd == "cross-runs":
+        from .paper import cpu_scaling
+
+        return cpu_scaling.main_cross_runs(a)
+
+# ===== module docstring: cross-runs, cpu-scaling (benchmarks/regbench/cli.py) =====
+``cross-runs``         the CPU cross's rows: each family's best-Dice row of a scored main
+                       run (DeeperHistReg's best CPU row), one ``family<TAB>row`` line each
+                       and the ``--rows`` line (``paper/cpu_scaling.py``)
+``cpu-scaling``        the CPU-scaling table: the cross's rows at 4 and 8 CPUs, per
+                       patient and repeat (``paper/cpu_scaling.py``); ``--main MAIN``
+                       takes the rows from ``cross-runs``; a GPU row is refused
+
+# ===== module docstring: prepare (with hyreco) (benchmarks/regbench/cli.py) =====
+``prepare <dataset>``  write the cases of ``multiplex`` or ``hyreco`` (subset A and,
+                       when it is there, subset B, in one set), idempotent
+

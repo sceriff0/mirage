@@ -91,9 +91,10 @@ def test_an_all_na_plot_is_a_placeholder_naming_its_table_and_columns(collection
     src = (to / "fig3c_displacement_best_draft_source_data.csv").read_text()
     assert "per_pair" in src and "displacement_um_p50" in src
     # a table with no row at all is named too
-    res = got["figS_cpu_scaling"]
+    # (figS_cpu_scaling was the example until it was archived, 2026-11-06)
+    res = got["figS_end_to_end"]
     assert res["placeholder"]
-    assert "cpu_scaling" in (to / "figS_cpu_scaling_draft_source_data.csv").read_text()
+    assert "end_to_end" in (to / "figS_end_to_end_draft_source_data.csv").read_text()
 
 
 def test_overlays_without_their_images_are_placeholders_naming_them(collection, tmp_path):

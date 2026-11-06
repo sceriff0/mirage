@@ -262,3 +262,4 @@ benchmarks/regbench/private/
 
 # site-specific HyReCo download job (cluster paths, login-cookie handling): never tracked
 benchmarks/regbench/download/hyreco.sbatch
+benchmarks/archive/regbench/download/hyreco.sbatch

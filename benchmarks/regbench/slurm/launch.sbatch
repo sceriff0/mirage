@@ -284,7 +284,7 @@ mkdir -p "$REGBENCH_ROOT" "$REGBENCH_INPUTS" "$REGBENCH_CASES" "$REGBENCH_OUT" |
 inputs_only=0
 case " $* " in *" --inputs "*) inputs_only=1 ;; esac
 # the datasets a --prepare names (the launcher's default, the cohort, when none): only
-# the cohort's prepare runs StarDist, so a prepare of public sets alone (hyreco) never
+# the cohort's prepare runs StarDist, so a prepare of public sets alone never
 # resolves its image (a node without network would stop on an image it never uses)
 prep_sets=multiplex prev=""
 for a in "$@"; do [ "$prev" = --datasets ] && prep_sets="$a"; prev="$a"; done

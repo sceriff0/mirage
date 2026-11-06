@@ -25,13 +25,23 @@ METHODS = (
 _BF_LANDMARKS = {"kind": "landmarks", "modality": "brightfield"}
 _NUCLEI = {"kind": "nuclei", "modality": "fluorescence"}
 PUBLIC = {
+    # T32 (user 2026-10-19): generated locally (`regbench synth`), never downloaded; COST
+    # only -- the scorer never runs nuclei, pairs or landmarks on it (score.SYNTHETIC).
+    # The paper's synthetic matrix (Fig. 2c, Supplementary Fig. S4).
+    "synthetic": {"kind": "synthetic", "modality": "fluorescence"},
+}
+# ARCHIVED public datasets (user ruling 2026-11-06, "still don't delete, archive if you
+# can"): the 261105 manuscripts report none of them. They are not in PUBLIC, so no
+# launcher, scorer or table takes them (a name of one is refused as an unknown dataset);
+# their entries are kept here as they were, and HyReCo's own code (its case writer, its
+# download script and the landmark scorer) is under benchmarks/archive/ (README there).
+# The machinery a public set runs through stays and is tested on the test-only sets of
+# benchmarks/tests/regbench/testpublic.py. Re-activating one is moving its entry back.
+ARCHIVED_PUBLIC = {
     "hyreco": dict(_BF_LANDMARKS),
     "mcmicro": {**_NUCLEI, "raw_tiles": True},
     "phenocycler": {**_NUCLEI, "raw_tiles": True},
     "rashid": {**_NUCLEI, "raw_tiles": True},
-    # T32 (user 2026-10-19): generated locally (`regbench synth`), never downloaded; COST
-    # only -- the scorer never runs nuclei, pairs or landmarks on it (score.SYNTHETIC)
-    "synthetic": {"kind": "synthetic", "modality": "fluorescence"},
 }
 KINDS = ("landmarks", "tissue", "nuclei")
 # the kinds whose sets are scored for cost alone (no accuracy table of any kind)

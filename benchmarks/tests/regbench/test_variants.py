@@ -138,7 +138,7 @@ def by_name():
     return {variants.run_name(r): r for r in variants.RUNS}
 
 
-def test_runs_produce_exactly_the_designs_variants():
+def test_runs_produce_exactly_the_designs_variants(pre_archive):
     assert len(set(EXPECTED)) == len(EXPECTED)
     assert variants.expected_variants() == EXPECTED
 
@@ -164,7 +164,7 @@ def test_expected_variants_go_through_the_methods_own_naming(monkeypatch):
 N_RUNS = 63  # T31: + stare_local4; 2026-10-20: + 16 cells of STARE's full cross
 
 
-def test_counts():
+def test_counts(pre_archive):
     n_runs = len(_stare_names()) + len(LOCAL_4CPU) + N_OTHER_RUNS + len(ashlar.ASHLAR_CELLS)
     assert variants.counts() == (n_runs, len(GPU), len(PER_PATIENT))
     cohort = variants.runs_for(None)
@@ -290,7 +290,7 @@ def test_the_primary_list_is_the_plans():
     assert variants.PRIMARY[2] is variants.PRIMARY_DEEPERHISTREG
 
 
-def test_the_high_resolution_rows_are_primary_and_the_defaults_stay_in_their_family():
+def test_the_high_resolution_rows_are_primary_and_the_defaults_stay_in_their_family(pre_archive):
     """A family's name need not be its primary's: `valis120` and `valis120_hires` share
     the family `valis120`, whose primary is now `valis120_hires`."""
     assert variants.family("valis120") == "valis120"
@@ -331,7 +331,7 @@ def test_every_variant_has_a_family_and_the_longest_prefix_wins():
     assert variants.family("initial") is None
 
 
-def test_the_anchored_rows_share_a_family_that_is_not_ashlars():
+def test_the_anchored_rows_share_a_family_that_is_not_ashlars(pre_archive):
     anchored = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "stare"]
     plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
     assert "affine_ashlar" in anchored and "affine_ashlar_clean" in anchored
@@ -471,7 +471,7 @@ def rows(capsys, *args):
     return [line.split("\t") for line in capsys.readouterr().out.splitlines()]
 
 
-def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(capsys):
+def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(pre_archive, capsys):
     assert variants.RUNS_COLUMNS == COLUMNS
     for column in COLUMNS:  # the order is documented where the launcher's author looks
         assert column in variants.__doc__
@@ -500,7 +500,7 @@ def test_runs_prints_one_tab_separated_line_per_run_in_the_documented_order(caps
     assert all(field for r in got for field in r)
 
 
-def test_runs_lines_carry_what_the_launcher_passes_back(capsys):
+def test_runs_lines_carry_what_the_launcher_passes_back(pre_archive, capsys):
     got = {r[0]: dict(zip(COLUMNS, r)) for r in rows(capsys)}
     assert got["stare"] == {
         "name": "stare",
@@ -581,7 +581,7 @@ def test_runs_header_names_the_columns(capsys):
 
 
 # ── `score` on the command line expects the whole list ────────────────────────
-def test_score_passes_the_expected_variants_and_the_primary_rows(monkeypatch):
+def test_score_passes_the_expected_variants_and_the_primary_rows(pre_archive, monkeypatch):
     from benchmarks.regbench import score as score_module
 
     seen = {}
@@ -611,19 +611,47 @@ def pause(monkeypatch, *names):
     monkeypatch.setattr(variants, "RUNS", paused)
 
 
-def test_no_run_is_paused_today():
+# the runs the 261105 manuscripts report (ruling 2026-11-06): the only ACTIVE ones. Every
+# other run of the design is paused (``active=False``, archived), not removed
+REPORTED = [
+    "stare", "stare_local4", "valis120", "valis120_hires",
+    "deeperhistreg_hr_gpu", "deeperhistreg_hr_cpu",
+    "deeperhistreg_hr_fluo_gpu", "deeperhistreg_hr_fluo_cpu",
+    "ashlar", "affine_ashlar", "palom",
+]  # fmt: skip
+REPORTED_EXPECTED = [
+    "stare_rigid", "stare", "stare_local4_rigid", "stare_local4",
+    "valis120_rigid", "valis120", "valis120_micro",
+    "valis120_hires_rigid", "valis120_hires_nonrigid", "valis120_hires",
+    "deeperhistreg_hr_gpu", "deeperhistreg_hr_cpu",
+    "deeperhistreg_hr_fluo_gpu", "deeperhistreg_hr_fluo_cpu",
+    "ashlar", "affine_ashlar", "palom_affine", "palom",
+]  # fmt: skip
+
+
+def test_the_active_runs_are_the_reported_and_the_rest_are_archived():
     assert variants.Run._fields[-2:] == ("active", "regimes")
     assert variants.Run._field_defaults == {
         "active": True,
         "regimes": tuple(rg.REGIMES),
     }
-    assert [r for r in variants.RUNS if not r.active] == []
-    assert variants.paused_names() == []
-    assert variants.active_runs() == variants.RUNS
+    assert sorted(variants.REPORTED_RUNS) == sorted(REPORTED)
+    assert [variants.run_name(r) for r in variants.runs_for(None)] == [
+        variants.run_name(r) for r in variants.RUNS if variants.run_name(r) in REPORTED
+    ]
+    assert {variants.run_name(r) for r in variants.active_runs()} == set(REPORTED)
+    # nothing removed: the whole design (99 runs) is still in RUNS, the rest paused
+    assert len(variants.RUNS) == 99
+    assert variants.paused_names() == list(variants.ARCHIVED_RUNS)
+    assert len(variants.ARCHIVED_RUNS) == 99 - len(REPORTED) == 88
+    assert not set(variants.ARCHIVED_RUNS) & set(REPORTED)
+    assert variants.expected_variants() == REPORTED_EXPECTED
+    # 11 cohort runs, 2 on a GPU, 4 per patient (the two VALIS, the two ASHLAR)
+    assert variants.counts() == (11, 2, 4)
     variants.check()
 
 
-def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, capsys):
+def test_a_paused_run_is_not_expected_not_counted_and_not_printed(pre_archive, monkeypatch, capsys):
     pause(monkeypatch, "valis120", "deeperhistreg_fluo_gpu")
     variants.check()
     assert variants.paused_names() == ["valis120", "deeperhistreg_fluo_gpu"]
@@ -676,7 +704,7 @@ def test_a_paused_run_is_not_expected_not_counted_and_not_printed(monkeypatch, c
     assert rows(capsys, "--all", "--header")[0] == list(COLUMNS)
 
 
-def test_score_does_not_expect_a_paused_run(monkeypatch):
+def test_score_does_not_expect_a_paused_run(pre_archive, monkeypatch):
     from benchmarks.regbench import score as score_module
 
     pause(monkeypatch, "deeperhistreg_cpu")
@@ -689,7 +717,7 @@ def test_score_does_not_expect_a_paused_run(monkeypatch):
     assert len(seen["expected"]) == len(EXPECTED) - 1
 
 
-def test_reactivating_is_one_field(monkeypatch):
+def test_reactivating_is_one_field(pre_archive, monkeypatch):
     pause(monkeypatch, "valis120")
     assert len(variants.expected_variants()) == len(EXPECTED) - 3
     monkeypatch.setattr(
@@ -715,7 +743,7 @@ def test_reactivating_is_one_field(monkeypatch):
     ],
 )
 def test_a_paused_run_cannot_write_a_primary_row_or_check_an_active_run(
-    monkeypatch, name, why
+    pre_archive, monkeypatch, name, why
 ):
     pause(monkeypatch, name)
     with pytest.raises(ValueError, match=why):
@@ -727,7 +755,7 @@ def test_a_paused_run_cannot_write_a_primary_row_or_check_an_active_run(
         variants.runs_table()
 
 
-def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
+def test_a_paused_run_cannot_be_what_an_active_run_waits_for(pre_archive, monkeypatch):
     """`stare` is primary, so the `after` rule is shown on a list where it is not."""
     # every STARE cell is checked by `stare`, so they are paused with it (the
     # brightfield regimes' cells too, which the cohort's counts never held)
@@ -751,7 +779,7 @@ def test_a_paused_run_cannot_be_what_an_active_run_waits_for(monkeypatch):
     )
 
 
-def test_a_checked_run_may_be_paused_while_its_checker_runs(monkeypatch):
+def test_a_checked_run_may_be_paused_while_its_checker_runs(pre_archive, monkeypatch):
     pause(monkeypatch, "ashlar_clean", "affine_ashlar_clean")
     variants.check()
     plain = [n for n, c in ashlar.ASHLAR_CELLS.items() if c[0] == "none"]
@@ -1103,7 +1131,7 @@ def test_ashlar_checkers_and_families_follow_the_affine_factor():
         assert r.after == ("stare" if anchored else None)
 
 
-def test_runs_for_takes_a_dataset_by_its_regime():
+def test_runs_for_takes_a_dataset_by_its_regime(pre_archive):
     names = {variants.run_name(r) for r in variants.runs_for("multiplex")}
     assert "stare_clahe" in names and "stare_percentile" in names
     assert not any("grey" in n or "haem" in n for n in names)
@@ -1196,7 +1224,7 @@ COHORT_RUNS_SHA256_BEFORE_CROSS = (
 )
 
 
-def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
+def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes(pre_archive):
     import hashlib
 
     assert [variants.run_name(r) for r in variants.runs_for(None)] == COHORT_RUNS
@@ -1207,7 +1235,7 @@ def test_the_cohorts_run_list_is_the_one_before_the_brightfield_regimes():
         assert hashlib.sha256(lines.encode()).hexdigest() == COHORT_RUNS_SHA256
 
 
-def test_the_stare_tiers_are_runs_checked_by_stare():
+def test_the_stare_tiers_are_runs_checked_by_stare(pre_archive):
     for name, tier in (("stare_medium", "medium"), ("stare_low", "low")):
         run = variants.run_of(name)
         assert run.method == "stare" and run.opts == {"tier": tier}
@@ -1253,7 +1281,7 @@ LANDMARK_OTHERS = (
 
 
 @pytest.mark.parametrize("ds", LANDMARK_SETS)
-def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(ds):
+def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(pre_archive, ds):
     names = [variants.run_name(r) for r in variants.runs_for(ds)]
     stare = [n for n in names if variants.run_of(n).method == "stare"]
     assert len(names) == 49 and len(stare) == 45
@@ -1274,7 +1302,7 @@ def test_a_landmark_set_runs_stares_whole_cross_and_the_others_defaults(ds):
 HYRECO_STARE_ROW = "stare_haem_none"
 
 
-def test_hyreco_runs_the_45_stare_cells_and_the_5_defaults():
+def test_hyreco_runs_the_45_stare_cells_and_the_5_defaults(pre_archive):
     names = [variants.run_name(r) for r in variants.runs_for("hyreco")]
     want_stare = [
         f"stare_{t}{'' if s == 64 else f'_s{s}'}_{lk}".replace("stare_high", "stare")
@@ -1302,7 +1330,7 @@ def test_hyreco_runs_the_45_stare_cells_and_the_5_defaults():
         assert name in names, name
 
 
-def test_runs_dataset_hyreco_prints_50_lines(capsys):
+def test_runs_dataset_hyreco_prints_50_lines(pre_archive, capsys):
     from benchmarks.regbench import cli
 
     assert cli.main(["runs", "--dataset", "hyreco"]) in (0, None)
@@ -1317,11 +1345,11 @@ def test_the_new_level_runs_on_no_other_dataset():
 
 
 @pytest.mark.parametrize("ds", ["mcmicro", "phenocycler", "rashid", None])
-def test_the_cohort_and_the_fluorescence_sets_keep_their_72(ds):
+def test_the_cohort_and_the_fluorescence_sets_keep_their_72(pre_archive, ds):
     assert len(variants.runs_for(ds)) == N_RUNS == 63
 
 
-def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
+def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort(pre_archive):
     assert variants.default_order(None) == list(variants.DEFAULT_ORDER)
     assert variants.default_order("multiplex") == list(variants.DEFAULT_ORDER)
     for ds in LANDMARK_SETS:
@@ -1334,7 +1362,7 @@ def test_stare_comes_first_on_a_public_set_and_ashlar_on_the_cohort():
     assert variants.default_order("mcmicro")[0] == "stare"
 
 
-def test_the_cohort_runs_stare_full_cross():
+def test_the_cohort_runs_stare_full_cross(pre_archive):
     """User ruling 2026-10-20: on the cohort STARE runs the FULL cross, tier {high,
     medium, low} x stride {64, 128, 256} x every cohort level (none, clahe, percentile):
     27 cells, as HyReCo's landmark regime does, plus the cost row stare_local4. A cell
@@ -1357,7 +1385,7 @@ def test_the_cohort_runs_stare_full_cross():
     assert by["stare_low_s256_percentile"].opts["stride"] == "256"
 
 
-def test_the_full_cross_only_adds_lines():
+def test_the_full_cross_only_adds_lines(pre_archive):
     """The cohort's full STARE cross (2026-10-20) ADDS 16 runs and moves no other: the
     cohort's table without them is byte-identical to the one before."""
     import hashlib

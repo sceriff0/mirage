@@ -29,10 +29,10 @@
 # job; a complete set is reused, a planned one is continued. It is then launched by name
 # (--datasets synthetic) and scored for cost alone: no per-case or tissue scoring.
 #
-# HyReCo (`hyreco`, the one landmark set): download/hyreco.sh fetches the FULL set by
-# default, the core zip and both Additional zips (HYRECO_ADDITIONAL=0: the core zip
-# alone), and `prepare hyreco` puts subset A and subset B into one cases folder
-# (REGBENCH_CASES_HYRECO). This launcher reads neither the download nor its switch.
+# HyReCo (`hyreco`, the landmark set) and the public fluorescence sets (mcmicro,
+# phenocycler, rashid) are ARCHIVED (benchmarks/archive/README.md): the 261105
+# manuscripts report none of them, so they are not in PUBLIC_DATASETS and every launch
+# naming them is refused. The hyreco branches below are kept, unreachable, as the record.
 #
 # --dry-run (or REGBENCH_DRY=1) prints every sbatch command with its dependencies, a job
 # name in angle brackets standing for each job id, and submits nothing.
@@ -424,20 +424,21 @@ DRY="${REGBENCH_DRY:-0}"
 # The cohort (multiplex) is the default dataset; the public datasets are named on request
 # (regbench.PUBLIC, in its order; test_submit_cohort.py holds the two equal).
 DEFAULT_DATASETS="multiplex"
-PUBLIC_DATASETS="hyreco mcmicro phenocycler rashid synthetic"
+PUBLIC_DATASETS="synthetic"
 # each public dataset's kind (regbench.PUBLIC), and the kinds score() can score
 # (score.SCORED_KINDS); a test keeps both equal to Python. Methods never run ahead of their
 # scorer: a dataset of a kind not scored is refused up front (every kind is, since Task 21)
-PUBLIC_KINDS="hyreco=landmarks mcmicro=nuclei phenocycler=nuclei rashid=nuclei synthetic=synthetic"
-SCORED_KINDS="tissue nuclei landmarks synthetic"
+PUBLIC_KINDS="synthetic=synthetic"
+SCORED_KINDS="tissue nuclei synthetic"
 # the public datasets scored for COST alone (cli.COST_ONLY_SETS; a test keeps them equal):
 # named only (never in --cases-there's yes), prepared here (synth.sbatch), and given no
 # per-case or tissue scoring job
 COST_ONLY_SETS="synthetic"
 # the public LANDMARK sets (kind landmarks; a test keeps them equal to regbench.PUBLIC):
-# their scorer (regbench.landmarks) reads no per-case record and no tissue piece, so they
-# are given no per-case scoring job, and no tissue job when they are all a call scores
-LANDMARK_SETS="hyreco"
+# their scorer (regbench.landmarks, archived) reads no per-case record and no tissue piece, so they
+# are given no per-case scoring job, and no tissue job when they are all a call scores.
+# None since the archive (hyreco: benchmarks/archive/README.md); the branches stay.
+LANDMARK_SETS=""
 prepare=0 inputs=0 score_only=0 preflight_only=0 only_runs="" datasets="$DEFAULT_DATASETS"
 compute_all=0 compute_only=0 cases_there=0
 ORIG_ARGS=("$@")  # REGBENCH_REPEAT starts this script again with them
@@ -602,8 +603,9 @@ DATASETS_SAID="the cohort is multiplex; the public datasets are ${PUBLIC_DATASET
 for ds in $datasets; do
     [ "$ds" = multiplex ] && continue
     has "$PUBLIC_DATASETS" "$ds" || die "--datasets '$ds': no such dataset ($DATASETS_SAID). Nothing was submitted."
-    [ "$prepare" != 1 ] || has "$COST_ONLY_SETS $LANDMARK_SETS" "$ds" || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex), the synthetic set and the landmark set (hyreco) only. Nothing was submitted."
-    # hyreco is prepared from the folder download/hyreco.sh unpacked into, read INSIDE the
+    [ "$prepare" != 1 ] || has "$COST_ONLY_SETS $LANDMARK_SETS" "$ds" || die "--prepare --datasets '$ds': this launcher prepares the cohort (multiplex) and the synthetic set only (the landmark set, hyreco, is archived). Nothing was submitted."
+    # ARCHIVED, unreachable (hyreco is not in PUBLIC_DATASETS): hyreco was prepared from
+    # the folder benchmarks/archive/regbench/download/hyreco.sh unpacked into, read INSIDE the
     # image: named in REGBENCH_HYRECO_DATA, checked here, bound below (REGBENCH_BIND)
     if [ "$prepare" = 1 ] && [ "$ds" = hyreco ]; then
         [ -n "${REGBENCH_HYRECO_DATA:-}" ] || die "--prepare --datasets hyreco needs REGBENCH_HYRECO_DATA: the folder download/hyreco.sh unpacked into (HyReCo/{HE,PHH3}, and HyReCo-Additional/{HE,PHH3} when downloaded). Nothing was submitted."
@@ -1559,7 +1561,7 @@ if [ "$prepare" = 1 ]; then
                 continue
                 ;;
             hyreco)
-                # ONE job: subset A and, when it was downloaded, subset B into
+                # ARCHIVED, unreachable (not in PUBLIC_DATASETS). ONE job: subset A and, when it was downloaded, subset B into
                 # REGBENCH_CASES_HYRECO (prepare.sbatch binds that folder); the data root
                 # is read inside the image, so it is bound through REGBENCH_BIND, which
                 # --export=ALL carries to the job

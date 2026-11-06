@@ -10,6 +10,7 @@ The fixture is two patients: P1 with three rounds, P2 with one (four cases).
 from __future__ import annotations
 
 import csv
+import functools
 import importlib
 import json
 import os
@@ -18,6 +19,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -27,12 +29,23 @@ import pytest
 from benchmarks.regbench import ladder, resources, stages, variants
 from benchmarks.regbench.cases import Case, write_json
 
+# The launcher's mechanics are tested on the WHOLE design (every paused run active, in
+# this process and in every python the launcher starts: _launch_command), as they were
+# before the 2026-11-06 archive; the reported list alone has its own test below
+pytestmark = pytest.mark.usefixtures("pre_archive_runs")
+
 REPO = Path(__file__).resolve().parents[3]
 SLURM = REPO / "benchmarks" / "regbench" / "slurm"
 SCRIPT = SLURM / "submit_cohort.sh"
 GPU = "--gres=gpu:nvidia_h200:1"
-# the cohort's list: its regime's runs (the bf-only STARE runs are not submitted for it)
-RUNS = {variants.run_name(r): r for r in variants.runs_for(None)}
+# the cohort's list: its regime's runs (the bf-only STARE runs are not submitted for it),
+# of the WHOLE design: every paused run active, as pre_archive_runs and the launcher's
+# python see it (the module-level constants are made before any fixture runs)
+RUNS = {
+    variants.run_name(r): r
+    for r in (r_._replace(active=True) for r_ in variants.RUNS)
+    if variants._in_regime(None, r)
+}
 # the runs whose selfcheck checks a run (reported, never a gate)
 CHECKERS = sorted({variants.checked_by(n) for n in RUNS})
 # the runs whose registration is several jobs per round: their last job (the writer) has
@@ -186,13 +199,26 @@ def site(tmp_path_factory):
     return tmp, cases, fake
 
 
-def launch(site, *args, env=None, dry=True, log="calls", script=None):
-    argv, base, out = _launch_command(site, args, env, dry, log, script)
+def launch(site, *args, env=None, dry=True, log="calls", script=None, archived=True):
+    argv, base, out = _launch_command(site, args, env, dry, log, script, archived)
     done = subprocess.run(argv, env=base, capture_output=True, text=True, cwd=REPO)
     return done, Path(base["SBATCH_LOG"]), out
 
 
-def _launch_command(site, args, env, dry, log, script=None):
+@functools.lru_cache(maxsize=None)
+def _pre_archive_site():
+    """The sitecustomize folder (``testpublic.sitecustomize_dir``) that re-activates the
+    paused runs in every python a launcher starts: made once per session."""
+    from . import testpublic
+
+    return str(testpublic.sitecustomize_dir(tempfile.mkdtemp(prefix="regbench-prearchive-")))
+
+
+def _launch_command(site, args, env, dry, log, script=None, archived=True):
+    """The launcher's command and environment. ``archived`` (the default): the WHOLE
+    design, every paused run active again (``testpublic.pre_archive``), which these tests
+    of the launcher's mechanics are written against; ``archived=False``: the run list as
+    it ships, the reported runs alone (test_the_launcher_submits_the_reported_runs_only)."""
     tmp, cases, fake = site
     out = tmp / f"out-{log}"
     base = {
@@ -215,6 +241,11 @@ def _launch_command(site, args, env, dry, log, script=None):
         SBATCH_LOG=str(tmp / f"{log}.tsv"),
     )
     base.update(env or {})
+    if archived:
+        base["REGBENCH_TEST_PRE_ARCHIVE"] = "1"
+        base["PYTHONPATH"] = os.pathsep.join(
+            [*filter(None, [base.get("PYTHONPATH")]), _pre_archive_site()]
+        )
     for key in [k for k, v in base.items() if v is None]:
         del base[key]
     argv = ["bash", str(script or SCRIPT), *(["--dry-run"] if dry else []), *args]
@@ -597,7 +628,11 @@ def test_a_run_the_list_leaves_out_is_not_submitted(site, monkeypatch, tmp_path)
         "elif a[:1] == ['list']:\n"
         "    print('4 2 3' if 'multiplex' in a else '0 0 0')\n"
     )
-    done, _, _ = launch(site, env={"REGBENCH_REPO": str(tmp_path)}, log="left-out")
+    # archived=False: the stub package IS the run list here; the pre-archive
+    # sitecustomize would import the real one ahead of it
+    done, _, _ = launch(
+        site, env={"REGBENCH_REPO": str(tmp_path)}, log="left-out", archived=False
+    )
     ran = {j.args[0] for j in jobs_of(done).values() if j.script == "run_rung.sbatch"}
     assert "deeperhistreg_cpu" not in ran and ran == set(RUNS) - {"deeperhistreg_cpu"}
 
@@ -702,7 +737,7 @@ def test_a_dataset_of_no_kind_is_refused_up_front_in_one_line(site, named):
     assert done.returncode == 2
     lines = [x for x in done.stderr.splitlines() if x.strip()]
     assert len(lines) == 1 and "the cohort is multiplex" in lines[0], lines
-    assert "the public datasets are hyreco, mcmicro" in lines[0]
+    assert "the public datasets are synthetic" in lines[0]  # the others are archived
     assert "usage" not in done.stderr.lower() and "cannot list" not in done.stderr
     assert not _sbatch_lines(done.stdout)
 
@@ -727,7 +762,7 @@ def test_a_public_dataset_is_refused_by_prepare(site, public_launcher, tmp_path)
         env={"REGBENCH_CASES_NUCSET": str(tmp_path)}, log="ds-prep",
     )  # fmt: skip
     assert done.returncode == 2
-    assert "prepares the cohort (multiplex), the synthetic set and the landmark set (hyreco) only" in done.stderr
+    assert "prepares the cohort (multiplex) and the synthetic set only" in done.stderr
     assert not _sbatch_lines(done.stdout)
 
 
@@ -782,7 +817,8 @@ def test_a_public_dataset_alone_selects_no_cohort_only_run(site, public_launcher
     assert not ran & {"ashlar", "palom", "stare_clahe"}, ran
 
 
-# the landmark set (hyreco) launches: test_submit_landmarks.py (ruling 2026-10-19)
+# the landmark set (hyreco) launches: test_submit_landmarks.py (ruling 2026-10-19), archived
+# with the set on 2026-11-06 (benchmarks/archive/tests/regbench/)
 
 
 def test_the_launchers_kinds_are_regbench_public_and_scored_kinds():
@@ -4737,9 +4773,10 @@ def test_a_synthetic_launch_prints_its_results_estimate_and_the_free_space(site,
     done, _, out = launch(site, "--datasets", "synthetic", env=env, log="syn-disk")
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()
-    est = synth.results_estimate(synth.GRIDS["default"], 9)
+    # the set's one STARE run (`stare`; its eight other STARE cells are archived)
+    est = synth.results_estimate(synth.GRIDS["default"], 1)
     (said,) = [i for i, x in enumerate(lines) if x.startswith("# synthetic: results")]
-    assert str(est["total_bytes"]) in lines[said] and "9 STARE run(s)" in lines[said]
+    assert str(est["total_bytes"]) in lines[said] and "1 STARE run(s)" in lines[said]
     (free,) = [i for i, x in enumerate(lines) if x.startswith("# synthetic: free space of REGBENCH_OUT")]
     assert str(out) in lines[free] and "bytes" in lines[free]
     first = next(i for i, x in enumerate(lines) if x.startswith("sbatch "))
@@ -4834,3 +4871,16 @@ def test_selfcheck_first_holds_every_run_until_every_selfcheck_has_ended(site, d
     bad, _, _ = launch(site, env={"REGBENCH_SELFCHECK_FIRST": "yes"}, log="scbad")
     assert bad.returncode != 0
     assert "REGBENCH_SELFCHECK_FIRST must be 0 or 1" in bad.stdout + bad.stderr
+
+
+def test_the_launcher_submits_the_reported_runs_only(site):
+    """The run list as it ships (``archived=False``: no run re-activated, in this process
+    or the launcher's): the cohort's default submission registers with the runs the 261105
+    manuscripts report and nothing else (the paused runs are archived, 2026-11-06)."""
+    done, _, _ = launch(site, log="reported-only", archived=False)
+    assert done.returncode == 0, done.stderr[-3000:]
+    jobs = jobs_of(done)
+    ran = {j.args[0] for j in [*jobs.values(), *jobs.later.values()]
+           if j.script == "run_rung.sbatch"}  # fmt: skip
+    assert ran == set(variants.REPORTED_RUNS)
+    assert not ran & set(variants.ARCHIVED_RUNS)

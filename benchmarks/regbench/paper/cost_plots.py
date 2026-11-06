@@ -609,63 +609,6 @@ def fig2c_cost_vs_input(paper_dir, fig_dir):
         n, losses=losses, legend=legend)
 
 
-# ── supplementary: the CPU cross ─────────────────────────────────────────────
-def figS_cpu_scaling(paper_dir, fig_dir):
-    name = "figS_cpu_scaling"
-    got, missing = P._need(paper_dir, cs="cpu_scaling.csv")
-    if missing:
-        return P._placeholder(fig_dir, name, missing)
-    P._style()
-    fams = sorted({r.get("family") for r in got["cs"] if r.get("family")})
-    colors = P._colors(fig_dir, extra=fams)
-    fig, axes = ps.figure(width="double", nrows=1, ncols=3, aspect=0.45)
-    data, n, losses = [], {}, []
-    # rule 4 (T31 fix M6): every axis names its clock (a table before I5: wall_clock)
-    clocks = ", ".join(sorted({r.get("clock") or r.get("wall_clock") for r in got["cs"]}
-                              - {None, "", "NA"})) or "not recorded"
-    for ax, key, ylab in ((axes[0], "speedup_vs_4", f"Speed-up against 4 CPUs\n(wall on {clocks})"),
-                          (axes[1], "cpu_h_used", f"CPU-hours per patient\n(clock: {clocks})"),
-                          (axes[2], "peak_rss_gb", f"Peak memory (GB) per patient\n(clock: {clocks})")):
-        lines = {}
-        for r in got["cs"]:
-            v, c = P._num(r.get(key)), P._num(r.get("cpus"))
-            if not (math.isfinite(v) and math.isfinite(c)):
-                losses.append(losses_mod.row(
-                    stage="paper", dataset=r.get("dataset") or "", patient_id=r.get("patient_id") or "",
-                    run=r.get("row") or "", cause="plot_points_dropped", effect="dropped",
-                    detail=f"{name} ({key}): no figure", source="paper/cpu_scaling.csv"))
-                continue
-            fam = r.get("family") or "stare"
-            lines.setdefault((fam, r["row"], r.get("patient_id")), {}).setdefault(c, []).append(v)
-        for (fam, row, pid), by in lines.items():
-            cs = sorted(by)
-            med = [float(np.median(by[c])) for c in cs]
-            lo = [float(np.min(by[c])) for c in cs]
-            hi = [float(np.max(by[c])) for c in cs]
-            ax.plot(cs, med, color=colors.get(fam, ps.GREY), lw=0.6, marker="o", ms=2)
-            ax.vlines(cs, lo, hi, color=colors.get(fam, ps.GREY), lw=0.5)
-            n[f"{key}:{row}"] = n.get(f"{key}:{row}", 0) + 1
-            for c, m, a, b in zip(cs, med, lo, hi):
-                data.append({"panel": key, "family": fam, "row": row, "patient_id": pid,
-                             "cpus": c, "median_over_repeats": m, "min": a, "max": b,
-                             "n_repeats": len(by[c])})
-        if key == "speedup_vs_4" and data:
-            cs = sorted({d["cpus"] for d in data})
-            ax.plot(cs, [c / 4.0 for c in cs], color=ps.LIGHT_GREY, lw=0.8, ls=":", label="ideal")
-        ax.set_xscale("log", base=2)
-        ax.set_xticks(sorted({d["cpus"] for d in data}) or [4, 8])
-        ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-        ax.set_xlabel("CPUs (one job, log2)")
-        ax.set_ylabel(ylab)
-    fig.legend(handles=[matplotlib.lines.Line2D([], [], color=colors.get(f, ps.GREY), label=P._label(f))
-                        for f in fams],
-               title="Best-Dice row of each family (CPU rows only);\none line per patient, "
-                     "bar: the spread over repeats", loc="outside right center")
-    ps.panel_labels(list(axes))
-    files = P._save(fig, fig_dir, name, P._Table(
-        ["panel", "family", "row", "patient_id", "cpus", "median_over_repeats", "min", "max",
-         "n_repeats"], data))
-    return P._result(files, n, losses=losses)
 
 
 # ── supplementary: end to end ────────────────────────────────────────────────
@@ -730,7 +673,6 @@ FIGURES = {
     "fig3e_peak_rss_best": fig3e_peak_rss_best,
     "fig3f_cpu_wall_best": fig3f_cpu_wall_best,
     "fig2c_cost_vs_input": fig2c_cost_vs_input,
-    "figS_cpu_scaling": figS_cpu_scaling,
     "figS_end_to_end": figS_end_to_end,
 }
 

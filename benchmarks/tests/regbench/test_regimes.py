@@ -132,7 +132,7 @@ _ADDED_SINCE = {"bf_same": (("none_haem", ("haem", "none")),)}
 _MERGED = {"hyreco_a": "hyreco", "hyreco_b": "hyreco"}
 
 
-def test_the_remaining_datasets_regimes_are_those_of_e898d763():
+def test_the_remaining_datasets_regimes_are_those_of_e898d763(pre_archive):
     from benchmarks.regbench import COST_ONLY_KINDS, PUBLIC
 
     now = {_MERGED.get(d, d) for d in _AT_E898D763}

@@ -162,8 +162,9 @@ NUCLEI_TABLES = (
     "nonband_cells",
     "nonband_summary",
 )
-# The landmark set's own tables (``tables/<dataset>/``): HyReCo's (``regbench.landmarks``),
-# named here so that ``TABLES`` holds every one.
+# The landmark set's own tables (``tables/<dataset>/``): HyReCo's, written by the ARCHIVED
+# benchmarks/archive/regbench/landmarks.py. Kept in ``TABLES`` so a clear still removes an
+# older scoring's files and table_schema keeps their columns; nothing writes them now.
 HYRECO_TABLES = (
     "hyreco_pairs",
     "hyreco_points",
@@ -5450,13 +5451,15 @@ NO_SCORER_YET = (
     "of this harness yet and comes in a later task. Nothing was scored or written"
 )
 KIND_SCORER = {
-    "landmarks": "the landmark scoring (regbench.landmarks)",
+    "landmarks": "the landmark scoring (archived: benchmarks/archive/regbench/landmarks.py)",
     "tissue": "the tissue-level block (regbench.tissue)",
     "nuclei": "the matched cells, as the cohort",
     "synthetic": "the cost alone (resources and paper.synthetic's tables)",
 }
-# the kinds whose scorer exists: a dataset of any other kind is refused (``score``)
-SCORED_KINDS = ("tissue", "nuclei", "landmarks", "synthetic")
+# the kinds whose scorer exists: a dataset of any other kind is refused (``score``).
+# ``landmarks`` is archived with HyReCo (benchmarks/archive/README.md): its scorer
+# (_score_landmarks) lives in benchmarks/archive/regbench/score_archived.py
+SCORED_KINDS = ("tissue", "nuclei", "synthetic")
 
 
 def tables_dir(out, dataset=None, dev=False):
@@ -5554,17 +5557,6 @@ def _score_tissue(
     print(text)
     print(f"tables -> {tables}")
     return {**tis, "excluded_runs": left_out, "losses": block["losses"]}
-
-
-def _score_landmarks(tables, cases_root, out, dataset, workers=1, expected=None,
-                     primary=None):  # fmt: skip
-    """The landmark scorer of a public ``landmarks`` dataset (HyReCo's,
-    ``regbench.landmarks``), into ``tables``."""
-    from . import landmarks
-
-    return landmarks.score(
-        cases_root, out, dataset, workers, expected, primary, tables=tables
-    )
 
 
 # T32: the synthetic scaling set (regbench.PUBLIC["synthetic"]) is scored for COST only:
@@ -5756,9 +5748,8 @@ def score(
     ``<out>/tables/<dataset>/`` (``tables_dir``), so no row of a public dataset ever
     reaches a table of the cohort. A public dataset goes to the scorer of its ``kind``
     (``PUBLIC[base_name]["kind"]``): ``nuclei`` to the cells (every table of ``TABLES``),
-    ``tissue`` to the tissue-level block, ``landmarks`` to the landmark scorer (HyReCo's
-    ``regbench.landmarks``); a kind whose scorer this
-    harness does not have (none since Task 21 of plan F) would be refused with
+    ``tissue`` to the tissue-level block; a kind whose scorer this harness does not
+    have (``landmarks``, archived with HyReCo) is refused with
     ``SystemExit`` before anything is read or written. ``expected`` and ``primary`` apply to every dataset of the call (the
     command line scores each public dataset in a call of its own, with its own lists:
     ``variants.expected_variants(dataset)``, ``variants.primary_for(dataset)``).
@@ -5798,10 +5789,6 @@ def score(
         if kind_of(ds) == "tissue":
             done["public"][ds] = _score_tissue(
                 where, cases_root, out, ds, workers, dev, expected
-            )
-        elif kind_of(ds) == "landmarks":
-            done["public"][ds] = _score_landmarks(
-                where, cases_root, out, ds, workers, expected, primary
             )
         elif kind_of(ds) == "synthetic":
             done["public"][ds] = _score_synthetic(

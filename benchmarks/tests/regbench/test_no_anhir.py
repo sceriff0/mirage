@@ -28,12 +28,9 @@ ROOT = Path(__file__).resolve().parents[3]
 FREEZE = Path(__file__).with_name("method_code_freeze.json")
 SCOPE = ("benchmarks/regbench", "docs/figures/regbench-harness.html")
 # (path, the exact line fragment): quotes of a paper, not the dataset
-QUOTED = {
-    (
-        "benchmarks/regbench/landmarks.py",
-        '"ANHIR, not tuned on HyReCo; licensed software, no public code",',
-    ),
-}
+# (the one quote, in the HyReCo landmark scorer, left SCOPE with it on 2026-11-06:
+# benchmarks/archive/regbench/landmarks.py)
+QUOTED: set[tuple[str, str]] = set()
 WORD = re.compile("anhir", re.IGNORECASE)
 
 

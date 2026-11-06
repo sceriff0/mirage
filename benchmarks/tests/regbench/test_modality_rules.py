@@ -229,7 +229,7 @@ def test_the_rgb_container_keeps_the_decoded_values(tmp_path, kind):
         assert np.array_equal(tif.pages[0].asarray(), want)
 
 
-def test_ashlars_excluded_run_reason_on_hyreco_names_no_removed_set():
+def test_ashlars_excluded_run_reason_on_hyreco_names_no_removed_set(pre_archive):
     """Final review: the reason excluded_runs.csv writes for ASHLAR on HyReCo keeps the
     adapter's meaning and rulings but no longer names ANHIR (removed 2026-10-19); the
     frozen adapter text itself is unchanged."""

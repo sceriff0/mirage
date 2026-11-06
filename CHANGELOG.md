@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tuned VALIS configuration it ran. The row and image are at the git tag
   `archive/regbench-valis-mirage` (benchmarking 0090a1c8); the pipeline configuration at
   `archive/valis-mirage-tuned`.
+- **The registration benchmark keeps only what the 261105 manuscripts report; the rest is
+  archived, not deleted.** The active run list is the 11 reported runs
+  (`variants.REPORTED_RUNS`: `stare`, `stare_local4`, `valis120`, `valis120_hires`,
+  DeeperHistReg's four HR runs, `ashlar`, `affine_ashlar`, `palom`); the other 88 runs of the
+  design (STARE's tier x stride x level cross, ASHLAR's factorial, DeeperHistReg's
+  default-parameter runs) stay in `variants.RUNS` with `active=False`
+  (`variants.ARCHIVED_RUNS`). HyReCo, MCMICRO, PhenoCycler and Rashid move from
+  `regbench.PUBLIC` to `regbench.ARCHIVED_PUBLIC`; HyReCo's case writer, download scripts and
+  landmark scorer, the CPU-count cross (`cross-runs`, `cpu-scaling`) and six figure functions
+  no figure of the paper uses are moved with `git mv` into `benchmarks/archive/`, which is
+  neither run, linted nor collected (its README lists every item and how to restore it). The
+  pre-archive tree is the tag `archive/integrate-benchmarking-pre-prune-2026-11-06`.
 - **New image `bolt3x/mirage-valis:1.0.0` (`containers/valis`) for `REGISTER` and
   `WARP_SEG_QC`'s VALIS path.** It is upstream's `cdgatenbee/valis-wsi:1.2.0`, digest-pinned,
   with only the four fixes a non-root user needs under Apptainer (Python under a 0700 `/root`,

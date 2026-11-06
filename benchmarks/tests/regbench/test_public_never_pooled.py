@@ -57,7 +57,7 @@ def test_the_cohort_is_still_the_default():
     assert DATASETS == ("multiplex",)
 
 
-def test_the_public_lookup_reads_the_base_name():
+def test_the_public_lookup_reads_the_base_name(pre_archive):
     assert base_name("mcmicro@raw") == "mcmicro" and base_name("nucset") == "nucset"
     assert public_of("mcmicro@raw") is PUBLIC["mcmicro"]
     assert public_of("multiplex") is None and public_of(None) is None
@@ -71,7 +71,7 @@ def test_the_public_lookup_reads_the_base_name():
 
 
 @pytest.mark.parametrize("name", ["hyreco", "tissueset"])
-def test_brightfield_public_sets_leave_out_ashlar_and_palom(name):
+def test_brightfield_public_sets_leave_out_ashlar_and_palom(pre_archive, name):
     kept = {variants.run_name(r) for r in variants.runs_for(name)}
     assert not any(n.startswith(("ashlar", "affine_ashlar", "palom")) for n in kept)
     why = dict(variants.excluded_for(name))
@@ -194,7 +194,9 @@ def test_a_tissue_set_goes_to_the_tissue_block(tmp_path):
     assert not (out / "tables" / "cells.csv").exists()
 
 
-def test_the_command_line_refuses_an_unscored_kind_before_scoring(tmp_path, monkeypatch):
+def test_the_command_line_refuses_an_unscored_kind_before_scoring(
+    pre_archive, tmp_path, monkeypatch
+):
     """``score --dataset multiplex hyreco`` with no landmark scorer: nothing is written, the
     cohort's tables neither (every kind of PUBLIC has a scorer since Task 21, so the
     refusal is exercised with landmarks taken out of SCORED_KINDS)."""
@@ -214,21 +216,6 @@ def test_every_public_kind_has_a_scorer():
     assert {spec["kind"] for spec in PUBLIC.values()} <= set(score.SCORED_KINDS)
 
 
-@pytest.mark.parametrize("name", ["hyreco"])
-def test_a_landmark_set_is_scored_into_its_own_tables_never_the_cohorts(tmp_path, name):
-    """Task 21: HyReCo is scored alone into ``tables/<name>/``."""
-    from benchmarks.regbench import cli
-
-    fixtures = pathlib.Path(__file__).resolve().parent / "fixtures" / name
-    root, out, made = scored_cohort.build(tmp_path)
-    flag = ["--data-root", str(fixtures), "--allow-incomplete"]
-    assert cli.main(["prepare", name, *flag, "--cases", str(root)]) == 0
-    score.score(root, out, datasets=["multiplex", name], **scored_cohort.SCORE_KW)
-    assert (out / "tables" / name / f"{name}_pairs.csv").is_file()
-    for path in (out / "tables").glob("*.csv"):
-        assert name not in path.read_text(), path.name
-
-
 @pytest.mark.parametrize("name", REMOVED)
 def test_no_module_of_a_removed_dataset_is_left(name):
     assert not (RB / "datasets" / f"{name}.py").exists()
@@ -246,13 +233,6 @@ def test_the_known_truth_spec_stays_gone():
     """``truth.py`` is back as the landmark scorers' error statistics (Task 21); the
     known-truth specification it once read is not."""
     assert not (RB / "truth_spec.json").exists()
-
-
-def test_the_landmark_scorer_writes_only_its_own_tables():
-    """Task 21 brought HyReCo's scorer back: every table it writes is named for its
-    dataset, so none can be taken for a cohort table."""
-    mod = importlib.import_module("benchmarks.regbench.landmarks")
-    assert mod.TABLES and all(t.startswith("hyreco_") for t in mod.TABLES)
 
 
 def test_no_preprocessing_selection():
@@ -287,12 +267,13 @@ def test_the_arms_and_sweep_layers_are_gone():
         check=True,
     ).stdout.split()
     allowed = ("benchmarks/__init__.py", "benchmarks/README.md")
-    # benchmarks/figures/: the publication figures (merged from benchmarking, 0090a1c8)
-    allowed_dirs = ("benchmarks/ashlar/", "benchmarks/figures/", "benchmarks/regbench/",
-                    "benchmarks/tests/")
+    # benchmarks/figures/: the publication figures (merged from benchmarking, 0090a1c8);
+    # benchmarks/archive/: what the paper does not report, kept, not run (2026-11-06)
+    allowed_dirs = ("benchmarks/archive/", "benchmarks/ashlar/", "benchmarks/figures/",
+                    "benchmarks/regbench/", "benchmarks/tests/")
     stray = [f for f in tracked if f not in allowed and not f.startswith(allowed_dirs)]
     assert not stray, (
-        f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,figures,regbench,tests}}: {stray}"
+        f"tracked files outside benchmarks/{{__init__.py,README.md,archive,ashlar,figures,regbench,tests}}: {stray}"
     )
 
 

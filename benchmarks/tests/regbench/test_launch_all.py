@@ -279,9 +279,10 @@ def test_the_launch_stage_names_its_datasets_and_compute_all(site, tmp_path):
     done, calls, _ = _head(site, tmp_path, "--all", "--dry-run", state="prepared")
     assert done.returncode == 0, done.stderr[-3000:]
     assert not calls
-    # no public dataset has cases here: each is said to be left out, and why
+    # the public sets were left out here, each with why, until they were archived
+    # (2026-11-06): the launcher no longer knows them, so it names none of them
     for ds in ("mcmicro", "phenocycler", "rashid", "hyreco"):
-        assert re.search(rf"left out: .*\b{ds}\b", done.stdout), ds
+        assert not re.search(rf"\b{ds}\b", done.stdout), ds
     assert '--datasets "multiplex"' in done.stdout
     assert "--compute-all" in done.stdout and "rb-score-compute" in done.stdout
     # its peak, from the settings and the run list, before the first sbatch

@@ -153,8 +153,9 @@ inputs and compute-all.
 been built, so `--all` cannot run it. The public datasets the user has not prepared are also
 left out: their data is downloaded and prepared by hand (see "State"), and `--all`
 includes each one only when its cases are prepared under `REGBENCH_CASES_<NAME>`, saying
-which datasets it left out and why. The landmark set (HyReCo) is launched like any other
-public set once its cases are prepared ("Landmark set", below).
+which datasets it left out and why. Since 2026-11-06 the only public set is the synthetic
+one (never in `--all`): HyReCo, MCMICRO, PhenoCycler and Rashid are ARCHIVED, since the
+261105 manuscripts report none of them (`benchmarks/archive/README.md`).
 
 ## The rule
 
@@ -190,11 +191,12 @@ each method's section give them in full. In short:
 
 `regbench` is the official, and the only, benchmarking harness of Mirage. It scores
 registration methods on the user's cyclic-IF cohort (`multiplex`), which is what every
-command takes by default. The public datasets of the paper (`regbench.PUBLIC`: HyReCo,
-MCMICRO, PhenoCycler, Rashid) are named only on request and are
-scored BESIDE the cohort, each into tables of its own, never pooled with it (see "Public
-datasets"); HyReCo has a download script (`download/`) and a landmark scorer of its own
-("Landmark set"); the other public sets are downloaded and prepared by hand. The
+command takes by default. A public dataset (`regbench.PUBLIC`) is named only on request
+and scored BESIDE the cohort, into tables of its own, never pooled with it (see "Public
+datasets"). Since 2026-11-06 `PUBLIC` holds the synthetic scaling set alone: HyReCo (with
+its download script and landmark scorer), MCMICRO, PhenoCycler and Rashid are ARCHIVED in
+`regbench.ARCHIVED_PUBLIC` and `benchmarks/archive/`, because the 261105 manuscripts report
+none of them (`benchmarks/archive/README.md`; nothing was deleted). The
 generated rungs of the earlier harnesses are gone. **Nothing here has run on the
 cluster**: every part is tested against stand-ins (small trees laid out like the pipeline's
 published output, a stand-in `segment.py` / `nextflow`, recording stand-ins for each
@@ -216,7 +218,7 @@ step with the run list, `score.TABLES` and the launcher's job names).
 | selfcheck and realcheck (`selfcheck.py`) | here. **Reported, never a gate** (see "selfcheck and realcheck"). Really run for `stare` only; for every other method only with fake methods |
 | off-seam rows (`<variant>:non_<owner>`, `nonband_*.csv`) | here for ASHLAR's moving-side mask and PALOM's reference-side mask |
 | tissue-level agreement of the written images (`tissue.py`, secondary) | here. Run on drawn images and fake methods' images only |
-| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 47 runs (STARE strides x preprocessing levels and its medium and low tiers, ASHLAR's 24 cells, VALIS 1.2.0, DeeperHistReg, PALOM), five primary rows |
+| the run list (`variants.py`, `python -m benchmarks.regbench runs`) | here: 11 active runs on the cohort, the ones the 261105 manuscripts report (`variants.REPORTED_RUNS`: `stare`, `stare_local4`, VALIS 1.2.0 twice, DeeperHistReg's four HR runs, `ashlar`, `affine_ashlar`, PALOM), five primary rows. The rest of the design (STARE's tier x stride x level cross, ASHLAR's factorial, DeeperHistReg's default-parameter runs: 88 runs) is paused, `variants.ARCHIVED_RUNS` |
 | the cohort launcher (`slurm/submit_cohort.sh`, `ladder.py`) | here, as in "Running the cohort on a cluster". **Never submitted**: tested through its dry run and through a stand-in `sbatch` that records its calls |
 | cost by step (`cost.py`, `cost_end_to_end.csv`, secondary) | here: every number in it is measured by this benchmark |
 | full pipeline cost (`compute_all.py`, `trace.py`, `slurm/compute_all.sbatch`, `pipeline_cost*.csv`, secondary) | here, as in "Cost". Reads Nextflow traces of the whole pipeline run per patient and backend; tested on generated traces, never run |
@@ -238,11 +240,10 @@ cells.py       nuclei of a native slide: label images, cell GeoJSON
 pairs.py       the scores of one (case, variant), on bin/utils/cell_pairs.py
 resources.py   the allocation, the process-tree monitor, out-of-memory detection
 methods/       one module per method, and the driver that runs any of them
-datasets/      multiplex writes the cohort's cases; hyreco the landmark set's pairs
-landmark_io.py the landmarks of a case (truth.npz), written before case.json
-landmarks.py   HyReCo's scorer (<out>/tables/hyreco/)
-truth.py       per-pair error statistics of a landmark scorer; notrun.py its not-run pairs
-download/      hyreco.sh: fetch and unpack the landmark set (common.sh: rb_fetch)
+datasets/      multiplex writes the cohort's cases (hyreco's writer is archived)
+landmark_io.py the landmarks of a case (truth.npz), written before case.json (frozen; no
+               landmark set is active since HyReCo's scorer, landmarks.py, truth.py,
+               notrun.py and download/ moved to benchmarks/archive/regbench/)
 score.py       reads files only; writes <out>/tables, and keeps what it computed for each
                case under <out>/cache/scores ("Records: a case is scored once")
 selfcheck.py   do a method's points follow the image its own writer produced?
@@ -355,9 +356,14 @@ A run's options are `--opt key=value` items, and a key its method does not read 
 refused by `run`, `stage`, `stages` and `selfcheck` before any work, with the keys it
 does read (each adapter's `OPTIONS` constant, plus the driver's `workers` and
 `stage_images`): a mistyped option is never a default run under another name.
-63 runs on the cohort, 4 on a GPU, 26 per patient (`variants.counts()`; the list is generated from
-tables, so the totals move with the tables; `test_variants.py` pins the total as the
-literal `N_RUNS`, which a change to the list must update). The cohort has one
+11 runs on the cohort, 2 on a GPU, 4 per patient (`variants.counts()`): the runs the
+261105 manuscripts report, `variants.REPORTED_RUNS`, are the only active ones (ruling
+2026-11-06). The whole design is still in `RUNS` (99 runs, 63 of them the cohort's), the
+other 88 paused (`active=False`, `variants.ARCHIVED_RUNS`; `runs --all` lists them):
+restoring one is adding its name to `REPORTED_RUNS`. The list is generated from tables, so
+the totals move with the tables; `test_variants.py` pins the whole design's cohort list
+as the literal `N_RUNS` (checked with every run active, the `pre_archive` fixture) and the
+reported list as `REPORTED`. The cohort has one
 regime (`regimes.COHORT_REGIME`, cyclic IF). `regimes.py` also names the brightfield
 regime (`bf_same`: one section re-stained; `bf_consecutive`, consecutive sections, was
 removed with its only dataset on 2026-10-19) and the regime of every dataset of the paper; a run carries the
@@ -1550,15 +1556,18 @@ and freed.
 
 ### Public datasets (`<out>/tables/<dataset>/`)
 
-A public dataset (`regbench.PUBLIC`) is scored on its own, never pooled with the cohort:
-`score --dataset mcmicro` (or `--dataset multiplex mcmicro`) writes the cohort's tables into
+A public dataset (`regbench.PUBLIC`) is scored on its own, never pooled with the cohort.
+Since 2026-11-06 the only one is the synthetic set (cost only, below); the machinery here
+is kept for the archived sets (`regbench.ARCHIVED_PUBLIC`) and tested on the test-only
+sets of `benchmarks/tests/regbench/testpublic.py`. With MCMICRO as it was:
+`score --dataset mcmicro` (or `--dataset multiplex mcmicro`) wrote the cohort's tables into
 `<out>/tables/` as always and MCMICRO's into `<out>/tables/mcmicro/`; a table of the cohort never
 holds a row of a public dataset. `paper --dataset <name>` reads `<out>/tables/<name>/` and
 writes `<out>/paper/<name>/`. Each public dataset is scored with its own run list
 (`variants.expected_variants(<name>)`, `variants.primary_for(<name>)`), and goes to the
 scorer of its `kind`: `nuclei` (MCMICRO, PhenoCycler, Rashid) to the matched cells,
 every table above; `tissue` (no dataset has this kind now) to the tissue-level block alone;
-`landmarks` (HyReCo) to its own landmark scorer ("Landmark set", below). A kind
+`landmarks` (HyReCo, archived with its scorer: no longer in `score.SCORED_KINDS`). A kind
 with no scorer would be refused with a message naming the dataset, and nothing written. A
 set of unstitched tiles is named `<name>@<front end>` and is looked up by its
 base name (`regbench.base_name`). On a brightfield dataset ASHLAR and PALOM have no input
@@ -1659,131 +1668,16 @@ By hand, the same three steps are `regbench synth --source S --to D --plan`, `--
 for every `I` below `--units`, and `--finish` (`--status` says `absent`, `planned` or
 `complete`).
 
-**Its CPU cross** runs `stare` and `valis120` at 4 and 8 CPUs on the 4096 and 32768 px
-patients, as the cohort's cross does (one folder per count, two repeats). The subset's
-cases are symlinks: bind the original folder too. The cross folders (`out_synth_c4`,
-`out_synth_c8`) hold no cohort, so the `synthetic_extrapolation` their scorer writes is NOT
-the one to use (its rows say "cohort not scored in this REGBENCH_OUT"); the cross's own
-table, `cpu_scaling.csv`, goes beside the set's paper tables in the cohort's folder.
+**Its CPU cross** (`stare` and `valis120` at 4 and 8 CPUs, `cpu-scaling`) is ARCHIVED: the
+261105 manuscripts do not report it. Its text is in
+`benchmarks/archive/regbench/README_archived.md`.
 
-```bash
-regbench_py STARE_REGBENCH subset-cases --dataset synthetic \
-    --cases "$REGBENCH_CASES_SYNTHETIC" --groups s04096,s32768 --to "$ROOT/cases_synthetic_cross"
-for c in 4 8; do
-    REGBENCH_CPUS=$c REGBENCH_REPEAT=2 REGBENCH_STARE_EXECUTION=local \
-    REGBENCH_OUT=$ROOT/out_synth_c$c REGBENCH_CASES_SYNTHETIC=$ROOT/cases_synthetic_cross \
-    REGBENCH_BIND=$ROOT/cases_synthetic \
-        benchmarks/regbench/slurm/submit_cohort.sh --datasets synthetic \
-        --runs "stare valis120" -- <site options>
-done
-regbench_py STARE_REGBENCH cpu-scaling --dataset synthetic --rows stare,valis120 \
-    --point 4=$ROOT/out_synth_c4 --point 8=$ROOT/out_synth_c8 \
-    --to "$ROOT/out/paper/synthetic/cpu_scaling.csv"
-```
+### Landmark set (`hyreco`): ARCHIVED
 
-### Landmark set (`hyreco`)
-
-HyReCo is scored on its manual landmarks by a scorer of its own (`regbench.landmarks`),
-into `<out>/tables/hyreco/` (`score.HYRECO_TABLES`), never into a cohort table. The other
-landmark set of Task 21 was removed with its scorer, its download script and its regime
-(`bf_consecutive`) by the user's ruling of 2026-10-19: it is in no figure of the
-manuscript. Rulings 2026-10-19:
-
-- **HyReCo, the full set and the Additional set** (`regbench.landmarks`): ONE dataset,
-  `hyreco`. `prepare hyreco --data-root <dir>` reads subset A (`HyReCo/{HE,PHH3}`) and
-  subset B (`HyReCo-Additional/{HE,PHH3}`) into one cases folder, case ids `a_<id>` and
-  `b_<id>`; the download script fetches both by default. An id both subsets list is kept
-  in both and flagged (`shared_id`, counted as `n_shared_id`); nothing is dropped. The
-  summary has three sets, `all_pairs`, `subset_a` and `subset_b`, and the authors'
-  published numbers stand beside them (`hyreco_published`), never inside. Errors are in
-  micrometres (per-pair median, and one pooled median over all landmarks); each pair row
-  also carries the median and maximum rTRE (TRE over the target image's diagonal) and
-  robustness; a pair the method failed on counts at its unregistered landmarks.
-- **Nothing blocks.** A landmark sanity check that fails (a landmark outside its image,
-  two landmark files of different lengths, a pixel size off the published one) is a flag
-  on the pair (`flags`, `n_flagged`) and a `landmark_flagged` row of `losses.csv`; the
-  pair is scored. A pair prepare could not read, or whose images are not there
-  (`--allow-incomplete`), is a row of `prepare_dropped.csv`. A result whose `run.json:
-  truth_sha256` is not the case's `truth.npz` as it is now was made for other landmarks:
-  it is `not run` on the case (`*_not_run.csv`, a `stale_result` loss), in no statistic.
-- **Run list, 50 runs.** STARE runs its whole cross: tier {high, medium, low} x stride
-  {64, 128, 256} x the five levels of `bf_same` (`regimes.stare_levels`: `none` (grey,
-  STARE unchanged), `haem_clahe`, `grey_clahe`, `haem_percentile` and `haem_none`), 45
-  runs. The other methods run their defaults only: `valis120`,
-  `valis120_hires`, `deeperhistreg_gpu`, `deeperhistreg_hr_gpu`; every other run is listed
-  in `excluded_runs.csv` with the ruling as its reason. The cohort keeps its 72 runs and
-  the fluorescence sets theirs; `RUNS` holds 108 (the cohort's 72, `bf_same`'s 12 high-tier
-  cells and its 24 medium and low cells not shared with the cohort). Since 2026-10-20 the
-  cohort runs STARE's FULL cross too (user ruling): tier {high, medium, low} x stride
-  {64, 128, 256} x level {none, clahe, percentile}, 27 cells plus `stare_local4`; the four
-  `none` cells of medium and low at stride 128 and 256 are one run of both regimes. On a public set `runs --order default` puts
-  STARE first; on the cohort ASHLAR stays first.
-- **The manuscript's HyReCo STARE row** (Fig. 3f) is `stare_haem_none`: haematoxylin from
-  colour deconvolution, high tier, stride 64, NO intensity preprocessing (`--opt
-  proxy=haem --opt sprep=none`; level `none_haem` of `bf_same`, added by the user's
-  ruling of 2026-10-19). The harness has no per-dataset primary row, so `stare` (grey, no
-  preprocessing) stays STARE's primary in `summary.md`; the manuscript's row is read by
-  its name: the `row` column of `public_landmarks` / `public_landmark_pairs`, and
-  `hyreco_summary.csv`'s `method` column.
-- **Paper tables** (`paper --dataset hyreco`): `public_landmarks` (one row per set and
-  row), `public_landmark_pairs` (one row per pair and row) and `method_best`: each
-  family's lowest median over pairs of the per-pair median rTRE, every terminal row of the
-  family a candidate (STARE's 45), chosen on these same pairs (`in_sample_selection`
-  True). A family with no row scored has no best row (`NA`).
-
-Getting the data (nothing in the repository downloads it for you):
-
-```bash
-# HyReCo: the IEEE DataPort links, one `url<TAB>name[<TAB>md5]` line each. By default the
-# FULL set is fetched: HyReCo.zip (233.36 GB) AND HyReCo-Additional-HE.zip and -PHH3.zip
-# (273.73 + 232.58 GB); the free-space hint is twice their sum, 1479.3 GB.
-# HYRECO_ADDITIONAL=0 fetches HyReCo.zip alone (a quick core-only download, 466.7 GB).
-# prepare takes subset B whenever it is there
-HYRECO_URLS=hyreco_urls.tsv benchmarks/regbench/download/hyreco.sh /data/hyreco
-
-REGBENCH_CASES_HYRECO=/data/cases_hyreco benchmarks/regbench/slurm/submit_cohort.sh --datasets hyreco
-```
-
-With the full set, the script checks after the unzip that subset B landed in
-`HyReCo-Additional/HE` and `HyReCo-Additional/PHH3` (the folders `prepare hyreco` reads),
-each non-empty; if not, it fails and names the top-level folders the two Additional zips
-really hold, so they can be moved there by hand.
-
-**Preparing HyReCo is ONE sbatch job** (`slurm/prepare.sbatch`, in the scorer's image
-`STARE_REGBENCH`): subset A and, when it is there, subset B, into `REGBENCH_CASES_HYRECO`
-(the folder `submit_cohort.sh --datasets hyreco` reads; never `REGBENCH_CASES`, which is
-the cohort's). The data root is read INSIDE the image, so it must be bound. The launcher
-does both for you: `--prepare --datasets hyreco` needs `REGBENCH_HYRECO_DATA` (the
-folder `hyreco.sh` unpacked into; refused before any sbatch when it is not set or has no
-`HyReCo/HE` and `HyReCo/PHH3`), adds it to `REGBENCH_BIND` and submits the one job
-`rb-prepare-hyreco` (`--export=ALL`; its size `REGBENCH_PREPARE_MEM`, 64G, and
-`REGBENCH_PREPARE_TIME`, 24 h). Through the head job, from the folder the benchmark lives
-in (`REGBENCH_ROOT` is `regbench/` under it; the head finds the images):
-
-```bash
-cd /beegfs/scratch/ieo7660
-sbatch --export=ALL,REGBENCH_CASES_HYRECO=/beegfs/scratch/ieo7660/regbench/cases_hyreco,REGBENCH_HYRECO_DATA=/beegfs/scratch/ieo7660/hyreco \
-    ~/pipelines/mirage/benchmarks/regbench/slurm/launch.sbatch --prepare --datasets hyreco
-```
-
-Or the same prepare job by hand, with nothing in between (name the image's path, the
-cases folder and the data root yourself; `REGBENCH_BIND` binds the data root):
-
-```bash
-sbatch -c 8 --mem=32G -t 1-00:00:00 \
-    --export=ALL,REGBENCH_REPO=$HOME/pipelines/mirage,REGBENCH_CASES_HYRECO=/beegfs/scratch/ieo7660/regbench/cases_hyreco,REGBENCH_BIND=/beegfs/scratch/ieo7660/hyreco,REGBENCH_PREPARE_IMAGE=STARE_REGBENCH,REGBENCH_SIF_STARE_REGBENCH=<the stare-regbench .sif> \
-    ~/pipelines/mirage/benchmarks/regbench/slurm/prepare.sbatch hyreco --data-root /beegfs/scratch/ieo7660/hyreco
-```
-
-Either way the job writes `prepared-hyreco.ok` beside the cases when the whole prepare
-ended ok. Then launch the set by name (`--datasets hyreco`, with the same
-`REGBENCH_CASES_HYRECO`).
-
-The download is resumable (`curl -C -` into `<name>.part`; an md5 given on the line must
-match before the file takes its name), and a failure stops the script, never swallowed.
-The committed fixture (`benchmarks/tests/regbench/fixtures/hyreco/`) holds made-up images
-and landmarks in the dataset's layout; its `README.md` cites where every format detail
-comes from.
+HyReCo, its download, its preparation and its landmark scorer are archived since
+2026-11-06 (the 261105 manuscripts report no landmark set): `benchmarks/archive/README.md`
+says what moved, and this section's old text is in
+`benchmarks/archive/regbench/README_archived.md`.
 
 ### Off the seams
 
@@ -3154,7 +3048,7 @@ submission into `REGBENCH_OUT`, as `--score-only` does.
 
 **The cohort (`multiplex`) is the default**, and the default submission is the cohort
 alone. `--datasets` may also name a public dataset (`regbench.PUBLIC`), whose prepared
-cases are under `REGBENCH_CASES_<NAME>` (the name in capitals, e.g. `REGBENCH_CASES_MCMICRO`;
+cases are under `REGBENCH_CASES_<NAME>` (the name in capitals, e.g. `REGBENCH_CASES_SYNTHETIC`;
 refused up front when it is not set). Such a dataset gets its own run list (`runs --dataset
 <name>`), and the scorer scores it into `<out>/tables/<name>/`. `--prepare` prepares the
 cohort only; any other name is refused.
@@ -3616,76 +3510,12 @@ patient's rounds. `--runs` takes any subset of run names; the selfchecks a subse
 behind are submitted with it. A run whose results another reads but which is not in the
 subset is assumed to be under `$REGBENCH_OUT` already, and the script says so.
 
-### The CPU cross
+### The CPU cross: ARCHIVED
 
-4 CPUs is every method's allocation. The CPU cross runs each family's BEST-DICE row
-again, at 4 AND at 8 CPUs, on a few patients, to show what more CPUs buy: speed-up,
-CPU-hours and peak memory per patient (user ruling 2026-10-16: `REGBENCH_CPUS` exists
-for this alone; user ruling 2026-10-18: 4 and 8 CPUs only, not 16; the cross's rows
-are the best-Dice rows, DeeperHistReg's among its CPU rows, T31 R12).
-
-- **The rows**: `regbench cross-runs --out MAIN [--dataset multiplex]` prints each
-  family's best-Dice row of the MAIN run's tables (`tables.best_of`, the paper's own
-  rule), DeeperHistReg's among its CPU rows, one `family<TAB>row` line each and a
-  `# --rows a,b,...` line. It refuses a MAIN with no scored cells table.
-  `regbench cpu-scaling --main MAIN` takes the same list; `--rows` names others. A GPU
-  row is refused (`cpu_scaling.build`): the cross measures CPUs, and a GPU row's host
-  side is not the method. `stare_local4` is never one (it is a cost row of `stare`).
-- **The patients** are a rule: the smallest, median and largest by total moving
-  gigapixels (the sum of `mov_hw` over a patient's rounds, ties by name; `subset.py`).
-  `regbench pick-patients --cases C [--n 3]` prints them, one `patient<TAB>gpx` line
-  each, under `# rule: ...`; for an `--n` other than 3, evenly spaced ranks with both
-  ends.
-- **Their cases** are a folder of symlinks to the prepared case folders (and a copy of
-  `manifest.csv`): `regbench subset-cases --cases C --groups P1,P2,P3 --to D`. It
-  refuses a `D` that is not empty. Nothing is prepared again.
-- **Both counts, the same submission style** (T31 R13): every cross row runs at 4 AND
-  at 8 CPUs, each count in its own folder (`out_c4`, `out_c8`), so no point is the main
-  run's result under another load. Each point is run twice: `REGBENCH_REPEAT=2` is the
-  same submission into `rep1/` and `rep2/` of the folder (each repeat its own results;
-  `rep2`'s first jobs wait `afterany` for `rep1`'s last ones, its scorers, so the two
-  never share the nodes' time with each other: the figure draws their spread).
-- **`REGBENCH_CPUS`** (4 or 8; anything else, 16 included, stops the launch before any `sbatch`)
-  is every ladder task's `--cpus-per-task`, recorded in `run.json` as
-  `cpus_requested`. The selfchecks and the prepare, settle, tissue and score jobs keep
-  their own allocation. `stare_local4` is dropped from a launch at 8 CPUs
-  (`submit_dropped.csv`, `run_config`): it is the 4-CPU row by definition.
-- **`REGBENCH_STARE_EXECUTION=local`** makes every STARE run one job per case on the
-  ordinary ladder: its stages start inside that job (`run --stages local`, option
-  `workers=$REGBENCH_CPUS`, so the tiles run that many at a time). There is no stage
-  chain and no tile submitter. The launch prints `# STARE: stages run inside one job
-  of N CPUs (local)`. Such a result's reuse key has the execution `local`, so it is
-  never reused for a staged result, and a staged one is never reused for it.
-- **What `cpu_scaling` checks, per point** (never hidden): `cpus_checked` (every
-  record's `cpus_requested` against the point's count: `yes`, or `no: <seen>`),
-  `cpu_model` and `cpu_model_matches` (one CPU model over every count and repeat of the
-  patient), and `n_patients_incomplete` (patients not complete at every count, left
-  out and counted). Speed-up is taken inside one (row, execution, repeat) only.
-
-```bash
-regbench_py STARE_REGBENCH cross-runs --out "$MAIN"          # the rows
-regbench_py STARE_REGBENCH pick-patients --cases "$REGBENCH_CASES"
-regbench_py STARE_REGBENCH subset-cases --cases "$REGBENCH_CASES" \
-    --groups <the three patients> --to "$ROOT/cases_cross"
-RUNS="<the rows cross-runs printed, space-separated>"
-for c in 4 8; do
-    REGBENCH_CPUS=$c REGBENCH_REPEAT=2 REGBENCH_STARE_EXECUTION=local \
-    REGBENCH_OUT=$ROOT/out_c$c REGBENCH_CASES=$ROOT/cases_cross \
-        benchmarks/regbench/slurm/submit_cohort.sh --runs "$RUNS" -- <site options>
-done
-regbench_py STARE_REGBENCH cpu-scaling --main "$MAIN" \
-    --point 4=$ROOT/out_c4 --point 8=$ROOT/out_c8 --to "$MAIN/paper/cpu_scaling.csv"
-```
-
-Never point a `local` launch at the main `REGBENCH_OUT`: its STARE results have another
-reuse key, so every STARE unit there would run again and replace the staged result.
-The launcher refuses it before any `sbatch` when the folder holds a STARE result of its
-stage jobs (`regbench staged-results --out O` lists them); a staged launch over `local`
-results is not refused, and `stare_local4` (its own reuse key) never triggers it.
-Without `REGBENCH_CPUS`, `REGBENCH_STARE_EXECUTION`, `REGBENCH_REPEAT` and
-`REGBENCH_WAVES` the launcher submits exactly what it submitted before the cross
-existed, plus `stare_local4`'s own jobs (T31 R2). A test compares the default dry run
-with the one from the launcher at 275edda0, `stare_local4`'s jobs set aside.
+`cross-runs` and `cpu-scaling` are archived since 2026-11-06 (the 261105 manuscripts
+report no CPU-count cross); the section's old text is in
+`benchmarks/archive/regbench/README_archived.md`, and the parsers in
+`benchmarks/archive/regbench/cli_archived.txt`.
 
 ### The preflight, and what every image is started with
 

@@ -21,6 +21,10 @@ from benchmarks.regbench.paper import tables as T
 from benchmarks.tests.regbench import test_synth as ts
 
 SIZES = (64, 128, 256)
+# the set's runs (variants.SYNTHETIC_RUNS): what the paper reports on it (Fig. 2c,
+# Supplementary Fig. S4); its eight other STARE cells are archived (2026-11-06)
+THREE = {"stare", "valis120", "valis120_hires"}
+# the set's runs as designed (2026-10-19), THREE and the archived cells
 ELEVEN = {
     "stare",
     "stare_s128_none",
@@ -52,24 +56,26 @@ def test_the_set_is_public_cost_only_and_fluorescence():
     )
 
 
-def test_the_synthetic_run_list_is_exactly_the_eleven_runs():
+def test_the_synthetic_run_list_is_exactly_the_three_reported_runs():
     got = {variants.run_name(r) for r in variants.runs_for("synthetic")}
-    assert got == ELEVEN == set(variants.SYNTHETIC_RUNS)
+    assert got == THREE == set(variants.SYNTHETIC_RUNS)
+    assert set(variants.SYNTHETIC_RUNS) | set(variants.ARCHIVED_SYNTHETIC_RUNS) == ELEVEN
+    assert len(variants.ARCHIVED_SYNTHETIC_RUNS) == 8
 
 
 def test_every_other_run_is_excluded_with_the_reason():
     why = dict(variants.excluded_for("synthetic"))
     every = {variants.run_name(r) for r in variants.active_runs()}
-    assert set(why) == every - ELEVEN
-    assert set(why.values()) == {
-        "synthetic: STARE (tier x stride, no prep) and VALIS (1.2.0 default, 1.2.0 hires) "
-        "only (user 2026-10-19)"
+    assert set(why) == every - THREE
+    assert set(why.values()) == {variants.SYNTHETIC_REASON} == {
+        "synthetic: STARE at its defaults and VALIS (1.2.0 default, 1.2.0 hires) only "
+        "(user 2026-10-19; the paper's set, 261105 manuscripts)"
     }
     rows = score.excluded_rows(["synthetic"])
-    assert {r["run"] for r in rows} == every - ELEVEN
+    assert {r["run"] for r in rows} == every - THREE
 
 
-def test_the_cohort_and_hyreco_run_lists_are_unchanged():
+def test_the_cohort_and_hyreco_run_lists_are_unchanged(pre_archive):
     """No run was added for the set: the 99 runs, the cohort's 63 (the full STARE cross,
     2026-10-20), HyReCo's 49 (each nine, nine and one fewer since the valis_mirage row was
     retired on 2026-11-05)."""
@@ -81,7 +87,7 @@ def test_the_cohort_and_hyreco_run_lists_are_unchanged():
 
 
 def test_the_cpu_cross_names_two_runs_of_the_set_at_two_sizes():
-    assert set(variants.SYNTHETIC_CROSS_RUNS) <= ELEVEN
+    assert set(variants.SYNTHETIC_CROSS_RUNS) <= THREE
     assert set(variants.SYNTHETIC_CROSS_SIZES) <= set(synth.GRIDS["default"])
 
 
@@ -168,7 +174,6 @@ def test_the_scorer_never_reads_pairs_or_nuclei(built, monkeypatch, tmp_path):
         "case_jobs",
         "_score_cells",
         "_score_tissue",
-        "_score_landmarks",
     ):
         monkeypatch.setattr(score, name, boom)
     monkeypatch.setattr(score.pairs, "score_pair", boom, raising=False)
@@ -426,14 +431,12 @@ def test_the_cli_scores_the_set_alone(built):
     assert (Path(out) / "tables" / "synthetic" / "synthetic_cost.csv").is_file()
 
 
-def test_the_cross_commands_take_the_set():
+def test_subset_cases_takes_the_set():
+    """(``cpu-scaling``, the other command of the CPU cross, is archived: its half of this
+    test is in benchmarks/archive/tests/regbench/test_synthetic_set_archived.py.)"""
     from benchmarks.regbench import cli
 
     p = cli.build_parser()
-    a = p.parse_args(
-        ["cpu-scaling", "--point", "4=x", "--to", "y", "--dataset", "synthetic"]
-    )
-    assert a.dataset == "synthetic"
     a = p.parse_args(
         [
             "subset-cases",
@@ -493,7 +496,8 @@ from benchmarks.regbench.paper import cost_plots  # noqa: E402
 from benchmarks.regbench.paper import plots as P  # noqa: E402
 from benchmarks.tests.regbench.test_cost_figures import paper  # noqa: E402,F401
 
-SYNTH_FIGS = ("figS_synth_cost_scaling", "figS_synth_cross_scaling", "figS_synth_vs_cohort")
+# (figS_synth_cross_scaling and figS_synth_vs_cohort are archived: plots_archived.py)
+SYNTH_FIGS = ("figS_synth_cost_scaling",)
 
 
 def test_the_synthetic_figures_are_registered_in_plots_and_needs():
@@ -508,22 +512,10 @@ def test_the_synthetic_figures_draw_from_the_sets_tables(built, scored, tmp_path
     figs = tmp_path / "figs"
     # from the scorer's tables/synthetic/ beside paper/, and from paper/synthetic/
     for where in (Path(out) / "paper", Path(out) / "paper" / "synthetic"):
-        for name in SYNTH_FIGS[:2]:
+        for name in SYNTH_FIGS:
             res = P.draw(name, where, figs)
             assert not res.get("placeholder"), (where, name)
             assert res["n"] and Path(res["files"][0]).is_file()
-    # no cohort cost yet: the extrapolation has no measured value, a placeholder
-    res = P.draw("figS_synth_vs_cohort", Path(out) / "paper", figs)
-    assert res.get("placeholder")
-    # with the cohort's cost points, drawn: fitted against measured, y = x
-    _cohort_points(out, [(0.0005, 1e-6), (0.001, 2e-6), (0.004, 9e-6)])
-    T.write_all(out, "synthetic")
-    res = P.draw("figS_synth_vs_cohort", Path(out) / "paper", figs)
-    assert not res.get("placeholder")
-    src = _read(next(f for f in res["files"] if f.endswith("_source_data.csv")))
-    assert {r["row"] for r in src} == {"stare"} and {r["at"] for r in src} == set(S.AT)
-    (Path(out) / "paper" / "cost_points.csv").unlink()
-    T.write_all(out, "synthetic")
 
 
 def test_without_the_set_every_synthetic_figure_is_a_placeholder_naming_it(tmp_path):

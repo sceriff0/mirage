@@ -62,3 +62,44 @@ def public_datasets(monkeypatch):
     from . import testpublic
 
     testpublic.register(monkeypatch.setitem, monkeypatch.setattr)
+
+
+@pytest.fixture
+def pre_archive_runs(monkeypatch):
+    """Every paused run active again for one test (``variants.RUNS`` only; the public sets
+    as they ship): the run list the launcher's tests are written against, beside a
+    launcher started with ``testpublic.pre_archive`` (test_submit_cohort)."""
+    from benchmarks.regbench import variants
+
+    monkeypatch.setattr(
+        variants, "RUNS", tuple(r._replace(active=True) for r in variants.RUNS)
+    )
+
+
+@pytest.fixture
+def pre_archive(pre_archive_runs, monkeypatch):
+    """The design as it stood before the 2026-11-06 archive (benchmarks/archive/README.md),
+    for one test: every paused run active again, and the archived public sets
+    (``regbench.ARCHIVED_PUBLIC``) back in ``regbench.PUBLIC`` in their old order, with the
+    ``variants.NOT_ON`` rules and ``cli.ALL_DATASETS`` derived from them at import.
+
+    The tests that take it check the paused cross and the archived sets as the record
+    they are: restoring a run is one field, and these keep that true. What the paper
+    reports is checked WITHOUT it (``test_variants.test_the_active_runs_are_the_reported``).
+    """
+    from benchmarks import regbench
+    from benchmarks.regbench import cli, variants
+
+    now = dict(regbench.PUBLIC)
+    regbench.PUBLIC.clear()
+    regbench.PUBLIC.update({**regbench.ARCHIVED_PUBLIC, **now})
+    for name, spec in regbench.ARCHIVED_PUBLIC.items():
+        if spec["modality"] == "brightfield":
+            rules = variants._FLUO_ON_RGB
+            if spec["kind"] == "landmarks":
+                rules = rules + variants._DEFAULTS_ONLY
+            monkeypatch.setitem(variants.NOT_ON, name, rules)
+    monkeypatch.setattr(cli, "ALL_DATASETS", regbench.DATASETS + tuple(regbench.PUBLIC))
+    yield
+    regbench.PUBLIC.clear()
+    regbench.PUBLIC.update(now)
