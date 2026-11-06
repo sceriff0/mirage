@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scores `native`, `rigid` and `non_rigid` (there is no micro stage). Results are not comparable
   with registrations made by the old configuration, which is archived at the git tag
   `archive/valis-mirage-tuned`.
+- **The registration benchmark's `valis_mirage` row is retired** (with its eight
+  `valis_mirage_<tier>_m<depth>` runs) and its image `containers/valis100`, together with the
+  tuned VALIS configuration it ran. The row and image are at the git tag
+  `archive/regbench-valis-mirage` (benchmarking 0090a1c8); the pipeline configuration at
+  `archive/valis-mirage-tuned`.
 - **New image `bolt3x/mirage-valis:1.0.0` (`containers/valis`) for `REGISTER` and
   `WARP_SEG_QC`'s VALIS path.** It is upstream's `cdgatenbee/valis-wsi:1.2.0`, digest-pinned,
   with only the four fixes a non-root user needs under Apptainer (Python under a 0700 `/root`,

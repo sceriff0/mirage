@@ -9,7 +9,6 @@ METHODS = (
     "stare",
     "valis",
     "deeperhistreg",
-    "valis_mirage",
     "ashlar",
     "palom",
 )

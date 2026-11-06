@@ -427,9 +427,9 @@ def test_a_writer_jvm_heap_error_climbs_only_without_a_fixed_heap():
     # a JVM with no -Xmx (ASHLAR's) sizes its heap from the job: it climbs
     assert methods.writer_cause(heap) == "writer_oom"
     assert methods.writer_cause("MemoryError: Unable to allocate") == "writer_oom"
-    from benchmarks.regbench.methods import ashlar, valis, valis_mirage
+    from benchmarks.regbench.methods import ashlar, valis
 
-    assert valis.FIXED_JVM_HEAP and valis_mirage.FIXED_JVM_HEAP
+    assert valis.FIXED_JVM_HEAP
     assert not getattr(ashlar, "FIXED_JVM_HEAP", False)
 
 

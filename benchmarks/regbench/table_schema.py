@@ -218,8 +218,7 @@ _TABLE_LIST = [
        ("row", "", "the result name (a variant of a run)"),
        ("family", "", "the method the row is shown under (variants.family)"),
        ("set", "", "outlines (headline) or nuclei"),
-       ("stage", "", "initial, rigid, micro_rigid, nonrigid, micro or final (R18: micro_rigid "
-                     "is VALIS depth >= 1's _rigid row; micro exists at depth 2 only)"),
+       ("stage", "", "initial, rigid, nonrigid, micro or final"),
        ("tool_version", "", "the package version the run recorded (run.json info.version)"),
        ("frame", "", "reference or moving: where the two sets were compared"),
        ("dice_matched", "1", "matched-pair Dice over all pairs of the case"),
@@ -393,24 +392,11 @@ _TABLE_LIST = [
         "its RSS follows it and grows with the rung"),
        ("jvm_peak_heap_gb", "GB", "the JVM's own peak heap use: NA, not measured (the reason)"),
        ("prior_cpu_h", "CPU-h", "an affine-anchored ASHLAR row: what the row it reads cost up "
-        "to that stage (STARE's COARSE, or the valis_mirage _rigid row), median, common patients"),
+        "to that stage (STARE's COARSE), median, common patients"),
        ("with_prior_cpu_h", "CPU-h", "the row's own cpu_h_used plus its prior, summed per "
         "common patient, then the median (never a median plus a median)"),
        ("n_prior_rounds_missing", "count", "rounds of the common patients with no "
         "stare_stage_peaks line: their prior is a lower bound")),
-    _t("valis_stages", ("dataset", "row", "stage", "set", "pooling"),
-       "Dice by VALIS stage, per VALIS run (tier x micro)",
-       ("dataset", "", ""), ("row", "", "the run's final result name"),
-       ("memory_mode", "", "high, medium or low"), ("micro_reg", "", "0, 1 or 2"),
-       ("stage", "", "initial, rigid (depth 0), micro_rigid (the _rigid row at depth 1 and 2: "
-                     "affine + micro-rigid), nonrigid, or micro (depth 2 only); R18"),
-       ("stage_row", "", "result name of the stage; NA when the run has no such stage"),
-       _SET, _POOLING, _N_UNITS, _EXCLUDED,
-       ("dice_med", "1", ""), ("dice_q25", "1", ""), ("dice_q75", "1", ""),
-       *_DICE_RULES,
-       ("n_dice_zeroed", "count", "cases with no matched pair (0 in dice_med, left out of "
-        "dice_skip_med)"),
-       ("n_pairs", "count", ""), ("disp_um_med", "um", ""), *_FULL),
     _t("stare_tiers", ("dataset", "row", "set", "pooling"),
        "Dice and cost per STARE run (tier, stride, prep)",
        ("dataset", "", ""), ("row", "", ""), ("tier", "", ""), ("stride", "px", ""),

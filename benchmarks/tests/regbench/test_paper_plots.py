@@ -10,7 +10,7 @@ pytest.importorskip("matplotlib")
 
 from benchmarks.regbench.paper import plots, schema, tables  # noqa: E402
 
-FAMILY = {"stare": "stare", "stare_medium": "stare", "valis_mirage": "valis_mirage",
+FAMILY = {"stare": "stare", "stare_medium": "stare", "valis120_hires": "valis120",
           "ashlar": "ashlar", "ashlar_clean": "ashlar", "initial": None}
 PATIENTS = [f"P{i}" for i in range(5)]
 CASES = [(p, f"{p}_r{k}") for p in PATIENTS for k in (1, 2)]
@@ -33,7 +33,7 @@ def paper(tmp_path, monkeypatch):
     d = tmp_path / "paper"
     d.mkdir()
     pp = []
-    level = {"stare": 0.9, "stare_medium": 0.8, "valis_mirage": 0.7, "ashlar": 0.5, "ashlar_clean": 0.6}
+    level = {"stare": 0.9, "stare_medium": 0.8, "valis120_hires": 0.7, "ashlar": 0.5, "ashlar_clean": 0.6}
     for row, base in level.items():
         for i, (p, c) in enumerate(CASES):
             dice = base - 0.01 * i
@@ -52,7 +52,7 @@ def paper(tmp_path, monkeypatch):
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="stare",
                          best_row="stare", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex",
-                         family="valis_mirage", best_row="valis_mirage", set="outlines"),
+                         family="valis120", best_row="valis120_hires", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="ashlar",
                          best_row="ashlar_clean", set="outlines"),
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family="palom",
@@ -61,7 +61,7 @@ def paper(tmp_path, monkeypatch):
         # written AFTER the outlines' rows: a reader keyed on family alone would take these
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family=f,
                          best_row=r, set="nuclei")
-        for f, r in (("stare", "stare_medium"), ("valis_mirage", "valis_mirage"),
+        for f, r in (("stare", "stare_medium"), ("valis120", "valis120_hires"),
                      ("ashlar", "ashlar"), ("palom", None))
     ]
     schema.write(d / "method_best.csv", "method_best", best)
@@ -70,25 +70,6 @@ def paper(tmp_path, monkeypatch):
                          row="stare", which="best", peak_rss_unit="per task (largest job)",
                          device="cpu"),
     ])
-    vs = []
-    for tier, depth in (("high", 2), ("low", 0)):
-        row = f"valis_{tier}"
-        for stage in plots.STAGES:
-            has = stage in ("initial", "nonrigid") or (stage == "micro" and depth == 2) \
-                or (stage == "rigid" and depth == 0) or (stage == "micro_rigid" and depth >= 1)
-            vs.append(schema.empty_row("valis_stages", source="regbench", dataset="multiplex",
-                                       row=row, memory_mode=tier, micro_reg=str(depth), stage=stage,
-                                       stage_row=("x" if has else None),
-                                       dice_med=0.5 if has else None, n_pairs=10,
-                                       set="outlines", pooling="common"))
-            # the other slots (T29) are in the same table: never drawn over the headline
-            for set_, pooling in (("outlines", "case"), ("nuclei", "common")):
-                vs.append(schema.empty_row(
-                    "valis_stages", source="regbench", dataset="multiplex", row=row,
-                    memory_mode=tier, micro_reg=str(depth), stage=stage, set=set_,
-                    pooling=pooling, stage_row=("x" if has else None),
-                    dice_med=0.1 if has else None, n_pairs=10))
-    schema.write(d / "valis_stages.csv", "valis_stages", vs)
     schema.write(d / "stare_tiers.csv", "stare_tiers", [
         schema.empty_row("stare_tiers", source="regbench", dataset="multiplex", row="stare",
                          tier="high", stride=64, sprep="none"),
@@ -96,7 +77,7 @@ def paper(tmp_path, monkeypatch):
                          tier="medium", stride=64, sprep="none"),
     ])
     cost = []
-    for row, fam in (("stare", "stare"), ("valis_mirage", "valis_mirage"), ("ashlar_clean", "ashlar")):
+    for row, fam in (("stare", "stare"), ("valis120_hires", "valis120"), ("ashlar_clean", "ashlar")):
         for i, p in enumerate(PATIENTS):
             cost.append(schema.empty_row("cost_points", source="regbench", dataset="multiplex",
                                          family=fam, row=row, unit_kind="patient", unit_id=p,
@@ -150,7 +131,7 @@ def test_all_variants_has_more_boxes_than_best(paper):
     every = plots.PLOTS["fig3b_dice_all"](paper, figs)
     rows = lambda res: {r["row"] for r in _source(res, "")}  # noqa: E731
     assert len(rows(every)) > len(rows(best))
-    assert rows(best) == {"stare", "valis_mirage", "ashlar_clean"}
+    assert rows(best) == {"stare", "valis120_hires", "ashlar_clean"}
 
 
 def test_a_family_with_no_rows_is_absent_but_counted_zero(paper):
@@ -183,14 +164,6 @@ def test_an_excluded_row_never_enters(paper):
     assert res["n"]["stare"] == 9
 
 
-def test_valis_stage_a_run_lacks_is_a_gap_not_a_point(paper):
-    res = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
-    rows = _source(res, "")
-    low = {r["stage"]: r["dice_med"] for r in rows if r["row"] == "valis_low"}
-    assert low["micro"] in ("", "NA", "nan") and low["micro_rigid"] in ("", "NA", "nan")
-    assert low["rigid"] not in ("", "NA", "nan")
-
-
 def test_colours_are_locked_across_figures(paper):
     import json
 
@@ -214,7 +187,7 @@ def test_fig3b_has_a_nuclei_panel_from_the_nuclei_best_rows(paper):
     res = plots.PLOTS["fig3b_dice_best_nuclei"](paper, paper / "figures")
     assert not res.get("placeholder", False)
     rows = _source(res, "")
-    assert {r["row"] for r in rows} == {"stare_medium", "valis_mirage", "ashlar"}
+    assert {r["row"] for r in rows} == {"stare_medium", "valis120_hires", "ashlar"}
     # the nuclei's values, never the outlines': stare_medium's nuclei are 0.6 - 0.01 i
     got = sorted(float(r["dice"]) for r in rows if r["row"] == "stare_medium")
     assert got[-1] == pytest.approx(0.6)
@@ -224,26 +197,16 @@ def test_fig3b_has_a_nuclei_panel_from_the_nuclei_best_rows(paper):
 def test_the_nuclei_best_rows_never_replace_the_outlines_ones(paper):
     # the outlines' figure reads the headline rows only, though the nuclei's come later
     res = plots.PLOTS["fig3b_dice_best"](paper, paper / "figures")
-    assert {r["row"] for r in _source(res, "")} == {"stare", "valis_mirage", "ashlar_clean"}
-    st = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
-    drawn = {r["dice_med"] for r in _source(st, "")} - {"", "NA", "nan"}
-    assert drawn == {"0.5"}
+    assert {r["row"] for r in _source(res, "")} == {"stare", "valis120_hires", "ashlar_clean"}
 
 
 def test_an_excluded_runs_na_rows_are_drawn_nowhere(paper):
-    """T29 fix 2: excluded runs are rows of NA in valis_stages and stare_tiers; Fig. 3d
-    draws none of them (an excluded medium-tier STARE run must not take the tier's slot)."""
-    vs = schema.read(paper / "valis_stages.csv")
-    vs.append(schema.empty_row("valis_stages", source="regbench", dataset="multiplex",
-                               row="valis_gone", memory_mode="medium", micro_reg="1",
-                               set="outlines", pooling="common", excluded_reason="x"))
-    schema.write(paper / "valis_stages.csv", "valis_stages", vs)
+    """T29 fix 2: excluded runs are rows of NA in stare_tiers; Fig. 3d draws none of them
+    (an excluded medium-tier STARE run must not take the tier's slot)."""
     st = schema.read(paper / "stare_tiers.csv")
     st.append(schema.empty_row("stare_tiers", source="regbench", dataset="multiplex",
                                row="stare_gone", tier="medium", stride=64, sprep="none",
                                set="outlines", pooling="common", excluded_reason="x"))
     schema.write(paper / "stare_tiers.csv", "stare_tiers", st)
-    got = plots.PLOTS["fig3d_valis_stages"](paper, paper / "figures")
-    assert "valis_gone" not in {r["row"] for r in _source(got, "")}
     tiers = plots.PLOTS["fig3d_stare_tiers"](paper, paper / "figures")
     assert tiers["n"]["medium"] == 10  # stare_medium's cases, not the excluded row's 0

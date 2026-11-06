@@ -407,7 +407,7 @@ PAPER_FULL = (
 
 def test_the_paper_tables_carry_them_from_the_schema(scored_out, monkeypatch):
     _, out, _ = scored_out
-    for name in ("method_summary", "valis_stages", "stare_tiers"):
+    for name in ("method_summary", "stare_tiers"):
         assert set(PAPER_FULL) <= set(schema.columns(name)), name
     per_pair_cols = (
         "dice_matched_full_lsa",

@@ -99,12 +99,9 @@ def public_counts():
     from benchmarks.regbench.methods import ashlar
 
     tiers = {f"stare_{t}" for t in variants.STARE_TIERS}  # stare_medium, stare_low
-    # 11 VALIS (the pipeline's at 3 tiers x 3 micro depths, 1.2.0 twice) + 8 DeeperHistReg
-    # + PALOM
-    others = 20
-    other_names = (
-        9 * 3 + 3 + 3 + 8 + 2
-    )  # valis_mirage x 9, valis120, valis120_hires, dhr (one row per run), palom
+    # 2 VALIS (1.2.0 twice) + 8 DeeperHistReg + PALOM
+    others = 11
+    other_names = 3 + 3 + 8 + 2  # valis120, valis120_hires, dhr (one row per run), palom
     # STARE's FULL cross on the cohort (user ruling 2026-10-20): every tier x stride x
     # level cell of the cohort regime (the stride-64 baseline of a tier is its tier run)
     cohort = {
@@ -119,7 +116,7 @@ def public_counts():
     local4 = len(variants.LOCAL_4CPU)
     cohort_runs = len(cohort) + others + len(ashlar.ASHLAR_CELLS) + local4
     names = 2 * len(cohort) + other_names + len(ashlar.ASHLAR_CELLS) + 2 * local4
-    return cohort_runs, 4, 11 + len(ashlar.ASHLAR_CELLS), names
+    return cohort_runs, 4, 2 + len(ashlar.ASHLAR_CELLS), names
 
 
 def public(got):

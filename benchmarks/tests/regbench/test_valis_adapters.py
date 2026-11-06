@@ -1,12 +1,11 @@
-"""The VALIS adapters, without VALIS.
+"""The VALIS adapter, without VALIS.
 
 VALIS is not installed where this suite runs, so everything here runs against
 ``fake_valis``: a recording stand-in that keeps VALIS's geometry conventions and draws
 images the way its writer is written to (see that module). What these tests pin:
 
 * the exact call sequence and arguments of each row (``valis120`` is upstream's default
-  call, ``valis120_hires`` upstream's example, ``valis_mirage`` the pipeline's own
-  function, really executed from ``bin/register.py``);
+  call, ``valis120_hires`` upstream's example);
 * the point-map algebra against the emulated writer, in the selfcheck's own comparison,
   and that a wrong direction, swapped axes, an offset and a wrongly rounded crop are each
   reported ``inconsistent``;
@@ -17,7 +16,6 @@ What they cannot pin is VALIS itself: ``test_external_methods.py`` holds the tes
 need the real package, skipped here.
 """
 
-import ast
 import json
 import math
 import os
@@ -38,13 +36,11 @@ from benchmarks.regbench.mapping import MOV_TO_REF, REF_TO_MOV, PointMap
 from benchmarks.regbench.methods import _valis_points as vp
 from benchmarks.regbench.methods import _valis_writer_field as wf
 from benchmarks.regbench.methods import valis as valis120
-from benchmarks.regbench.methods import valis_mirage
 
 from . import fake_valis as fv
 
 ROOT = Path(__file__).resolve().parents[3]
 SMALL = (512, 640)
-MIRAGE = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
 V120 = ("valis120_rigid", "valis120", "valis120_micro")
 HIRES = ("valis120_hires_rigid", "valis120_hires_nonrigid", "valis120_hires")
 
@@ -91,17 +87,15 @@ def run_json(out, variant, case):
 
 # ── names ─────────────────────────────────────────────────────────────────────
 def test_registered_and_named():
-    assert "valis" in METHODS and "valis_mirage" in METHODS
-    assert valis120.SCOPE == valis_mirage.SCOPE == "group"
+    assert "valis" in METHODS and "valis_mirage" not in METHODS  # retired 2026-11-05
+    assert valis120.SCOPE == "group"
     assert valis120.VARIANTS == ("valis_rigid", "valis", "valis_micro")
-    assert valis_mirage.VARIANTS == MIRAGE
-    assert valis120.SELFCHECK_SUBPROCESS and valis_mirage.SELFCHECK_SUBPROCESS
-    assert methods.scope_of("valis") == methods.scope_of("valis_mirage") == "group"
-    assert methods.variant_names("valis_mirage") == list(MIRAGE)
+    assert valis120.SELFCHECK_SUBPROCESS
+    assert methods.scope_of("valis") == "group"
     assert methods.variant_names("valis", "valis120") == list(V120)
     # the one label whose names do not follow the replace rule
     assert methods.variant_names("valis", "valis120_hires") == list(HIRES)
-    assert not hasattr(valis120, "register") and not hasattr(valis_mirage, "register")
+    assert not hasattr(valis120, "register")
 
 
 def test_a_label_table_of_the_wrong_length_is_refused():
@@ -116,7 +110,7 @@ def test_a_label_table_of_the_wrong_length_is_refused():
 def test_modules_import_without_valis_or_torch():
     code = (
         "import sys\n"
-        "from benchmarks.regbench.methods import valis, valis_mirage, _valis_points\n"
+        "from benchmarks.regbench.methods import valis, _valis_points\n"
         "bad = [m for m in ('valis', 'torch', 'pyvips', 'jpype') if m in sys.modules]\n"
         "raise SystemExit(','.join(bad) or 0)\n"
     )
@@ -129,15 +123,13 @@ def test_modules_import_without_valis_or_torch():
 def test_selfcheck_sizes_reach_every_stage():
     """The default pair alone would leave stages unrun: 1.2.0's ``register_micro`` returns
     early unless its size exceeds the first pass's 2048 px (``registration.py:4862-4871``),
-    and the hires size is a quarter of the slide; the pipeline's is an eighth. The large
-    pair is also the only one whose field is applied at a scale near the cohort's."""
-    for name in ("valis", "valis120", "valis120_hires", "valis_mirage"):
+    and the hires size is a quarter of the slide. The large pair is also the only one whose field is applied at a scale near the cohort's."""
+    for name in ("valis", "valis120", "valis120_hires"):
         sizes = sc.sizes_for(name)
         assert sizes[0] == (sc.DEFAULT_HW, None), name
         ref_hw, mov_hw = sizes[-1]
         smallest_long_side = min(max(ref_hw), max(mov_hw))
         assert smallest_long_side >= 29000, name
-        assert math.floor(smallest_long_side * 0.125) > 2048  # valis_mirage's micro
         assert math.floor(smallest_long_side * valis120.MICRO_REG_FRACTION) > 2048
         assert smallest_long_side / 2048 > 14  # the first field, scaled up 14x
         # one patient of three slides, before the large pair
@@ -398,7 +390,7 @@ def test_only_the_valis_adapters_carry_the_writers_field():
     for name in METHODS:
         files = {p.name for p in methods.code_files(name)}
         assert ("_valis_writer_field.py" in files) == (
-            name in ("valis", "valis_mirage")
+            name == "valis"
         )
 
 
@@ -1017,38 +1009,7 @@ def billed(calls):
     return out
 
 
-def pipeline_stand_in():
-    """The steps of ``bin/register.py::valis_registration`` that touch VALIS, in order,
-    for the one test that needs the adapter's generator in THIS process."""
-    registration = sys.modules["valis.registration"]
-
-    def valis_registration(input_dir, out, reference, **kwargs):
-        reg = registration.Valis(
-            input_dir,
-            os.path.dirname(out),
-            reference_img_f=reference,
-            align_to_reference=True,
-            crop="reference",
-        )
-        reg.register()
-        reg.register_micro(reference_img_f=reference, align_to_reference=True)
-        for name, slide in reg.slide_dict.items():
-            slide.warp_and_save_slide(
-                src_f=slide.src_f,
-                dst_f=os.path.join(out, f"{name}_registered.ome.tiff"),
-                level=0,
-                non_rigid=True,
-                crop="reference",
-                interp_method=kwargs["interp_method"],
-            )
-        registration.kill_jvm()
-        return 0
-
-    return types.SimpleNamespace(valis_registration=valis_registration)
-
-
-@pytest.mark.parametrize("method", ["valis", "valis_mirage"])
-def test_only_valis_own_work_is_billed(tmp_path, pair, monkeypatch, method):
+def test_only_valis_own_work_is_billed(tmp_path, pair):
     """Copying fields, the point path, the valid box and the writer all run with the
     clock paused; what is left running is VALIS registering."""
     cases = patient(tmp_path, pair)
@@ -1059,12 +1020,7 @@ def test_only_valis_own_work_is_billed(tmp_path, pair, monkeypatch, method):
         "stage_images": "1",
         "native_dir": lambda case_id, variant: home / variant / case_id,
     }
-    if method == "valis":
-        gen = valis120.register_group(cases, tmp_path / "work", opts)
-    else:
-        fv.install(monkeypatch.setitem, version="1.0.0", rounding="trunc")
-        monkeypatch.setattr(valis_mirage, "pipeline", pipeline_stand_in)
-        gen = valis_mirage.register_group(cases, tmp_path / "work", opts)
+    gen = valis120.register_group(cases, tmp_path / "work", opts)
     seen = []
     for case_id, variant, pmap, info in gen:
         fv.record("pause")  # the driver, at the yield
@@ -1081,381 +1037,9 @@ def test_only_valis_own_work_is_billed(tmp_path, pair, monkeypatch, method):
     assert order.count("pause") == order.count("resume")
 
 
-# ── VALIS 1.0.0 through the pipeline's own function ───────────────────────────
-def function_signature():
-    """``valis_registration``'s parameters and defaults, read from the source text."""
-    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
-    (fn,) = [
-        n
-        for n in tree.body
-        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
-    ]
-    names = [a.arg for a in fn.args.args]
-    defaults = [ast.literal_eval(d) for d in fn.args.defaults]
-    return names, dict(zip(names[len(names) - len(defaults) :], defaults))
-
-
-def test_shipped_arguments_match_the_function_signature():
-    names, defaults = function_signature()
-    # every parameter is passed, by ARGS or per run, and nothing else is
-    assert sorted(names) == sorted([*valis_mirage.ARGS, *valis_mirage.RUN_ARGS])
-    assert not set(valis_mirage.ARGS) & set(valis_mirage.RUN_ARGS)
-    # the shipped values are the function's own defaults ...
-    for key, value in valis_mirage.ARGS.items():
-        assert defaults[key] == value, key
-    # ... and nextflow.config's, for the three the module passes from params
-    config = (ROOT / "nextflow.config").read_text()
-    for needle in (
-        "memory_mode                = 'high'",
-        "reg_micro_reg_fraction     = 0.125",
-        "reg_max_image_dim          = 4000",
-        "reg_micro_reg              = 2 ",
-    ):
-        assert needle in config, needle
-
-
-def test_the_jvm_heap_is_valis_own_at_every_rung():
-    """User ruling 2026-10-21: not the module's scaled formula, VALIS's literal 10."""
-    heap = valis_mirage.jvm_heap_gb
-    for mem, attempt in ((16, 1), (64, 2), (128, 3), (256, 3), (512, 4), (700, 5)):
-        host = {"mem_requested_gb": float(mem), "attempt": attempt}
-        assert heap({}, host) == 10, mem
-    assert heap({}, {"mem_requested_gb": None, "attempt": 1}) == 10
-    assert heap({"jvm_heap_gb": "20"}, {"mem_requested_gb": 64.0, "attempt": 2}) == 20
-
-
-def test_register_micro_wrapper_always_delegates():
-    seen, state = [], {}
-
-    def original(self, *args, **kwargs):
-        seen.append((self, args, kwargs))
-        return "micro", "errors"
-
-    def broken(registrar, kwargs):
-        raise RuntimeError("the snapshot failed")
-
-    wrapped = valis_mirage.register_micro_wrapper(original, broken, state)
-    out = wrapped("registrar", 1, tile_wh=2048)
-    assert out == ("micro", "errors")
-    assert seen == [("registrar", (1,), {"tile_wh": 2048})]  # once, arguments untouched
-    assert "the snapshot failed" in state["capture_error"]
-    assert "Traceback" in state["capture_traceback"]
-    assert state["micro_called"] is True and state["micro_ran"] is True
-
-    def failing(self, *args, **kwargs):
-        raise ValueError("no SimpleElastix")
-
-    state = {}
-    wrapped = valis_mirage.register_micro_wrapper(failing, lambda r, k: None, state)
-    with pytest.raises(ValueError, match="no SimpleElastix"):
-        wrapped("registrar")  # the pipeline's own except sees its own error
-    assert state["micro_called"] is True and "micro_ran" not in state
-    assert "no SimpleElastix" in state["micro_error"]
-
-
-def test_the_wrappers_are_removed_after_the_call():
-    class Owner:
-        def method(self):
-            return "original"
-
-    before = Owner.method
-    with valis_mirage._replaced(Owner, "method", lambda f: lambda self: "wrapped"):
-        assert Owner().method() == "wrapped"
-        assert Owner.method.__name__ == "method"
-    assert Owner.method is before
-    with pytest.raises(RuntimeError):
-        with valis_mirage._replaced(Owner, "method", lambda f: lambda self: "w"):
-            raise RuntimeError("the call failed")
-    assert Owner.method is before
-
-
-def run_mirage(work, fake=None, opts=None, env=None, rounds=1):
-    """``valis_mirage``'s selfcheck in a fresh process: the REAL ``bin/register.py`` on
-    the fake VALIS. Returns the answer and the process."""
-    work = Path(work)
-    work.mkdir(parents=True, exist_ok=True)
-    request = {
-        "method": "valis_mirage",
-        "work": str(work),
-        "size": list(SMALL),
-        "rounds": rounds,
-        "opts": {"workers": 4, **(opts or {})},
-        "fake": {"version": "1.0.0", "rounding": "trunc", **(fake or {})},
-        "env": {"REGBENCH_MEM_GB": "64", "REGBENCH_ATTEMPT": "2", **(env or {})},
-    }
-    (work / "request.json").write_text(json.dumps(request))
-    environ = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_")}
-    environ["PYTHONPATH"] = os.pathsep.join(
-        [str(ROOT), environ.get("PYTHONPATH", "")]
-    ).rstrip(os.pathsep)
-    done = subprocess.run(
-        [sys.executable, fv.__file__, str(work / "request.json")],
-        cwd=ROOT,
-        env=environ,
-        capture_output=True,
-        text=True,
-        timeout=900,
-    )
-    assert (work / "answer.json").exists(), done.stdout[-3000:] + done.stderr[-3000:]
-    return json.loads((work / "answer.json").read_text()), done
-
-
-def mirage_run_json(work, variant):
-    path = Path(work) / "out" / variant / "selfcheck" / "pair_512x640" / "run.json"
-    return json.loads(path.read_text())
-
-
-@pytest.fixture(scope="module")
-def mirage(tmp_path_factory):
-    work = tmp_path_factory.mktemp("mirage")
-    answer, done = run_mirage(work)
-    return types.SimpleNamespace(
-        work=work, answer=answer, calls=answer["calls"], log=done.stdout + done.stderr
-    )
-
-
-def named(calls, name):
-    return [c for c in calls if c["call"] == name]
-
-
-def test_valis_mirage_points_follow_the_images_the_pipeline_wrote(mirage):
-    rec = mirage.answer["selfcheck"]
-    assert rec["status"] == sc.OK, mirage.log[-3000:]
-    assert rec["variants"] == dict.fromkeys(MIRAGE, sc.OK)
-    for name, v in rec["pairs"][0]["variants"].items():
-        assert v["err_px_p95"] < 0.25 and v["direction"] == REF_TO_MOV, name
-    assert "REGISTRATION COMPLETED SUCCESSFULLY" in mirage.log
-
-
-def test_valis_mirage_takes_a_patient_of_three_slides_in_one_run(tmp_path_factory):
-    """The pipeline's function on one patient with two moving rounds, as on the cohort."""
-    answer, done = run_mirage(tmp_path_factory.mktemp("mirage3"), rounds=2)
-    rec = answer["selfcheck"]
-    assert rec["status"] == sc.OK, (done.stdout + done.stderr)[-3000:]
-    assert rec["variants"] == dict.fromkeys(MIRAGE, sc.OK)
-    assert [p["case_id"] for p in rec["pairs"]] == ROUNDS
-    for p in rec["pairs"]:
-        for name, v in p["variants"].items():
-            assert v["err_px_p95"] < 0.25 and v["direction"] == REF_TO_MOV, name
-    assert len(named(answer["calls"], "Valis")) == 1
-    assert len(named(answer["calls"], "register")) == 1
-
-
-def test_the_pipelines_settings_reach_valis(mirage):
-    (built,) = named(mirage.calls, "Valis")
-    assert Path(built["src_dir"]).name == "preprocessed"
-    assert built["dst_dir"] == str(Path(built["src_dir"]).parent)
-    assert built["kwargs"] == {
-        "reference_img_f": "reference.ome.tif",
-        "align_to_reference": True,
-        "crop": "reference",
-        "max_processed_image_dim_px": 2048,
-        "max_non_rigid_registration_dim_px": 2048,
-        "max_image_dim_px": 4000,
-        "feature_detector_cls": "SuperPointFD",
-        "matcher": "SuperGlueMatcher",
-        "non_rigid_registrar_cls": "OpticalFlowWarper",
-        "affine_optimizer_cls": None,
-        "micro_rigid_registrar_cls": "MicroRigidRegistrar",
-        "create_masks": True,
-    }
-    assert [c["kwargs"] for c in named(mirage.calls, "register")] == [{}]
-    assert [c["kwargs"] for c in named(mirage.calls, "register_micro")] == [
-        {
-            "max_non_rigid_registration_dim_px": math.floor(max(SMALL) * 0.125),
-            "reference_img_f": "reference.ome.tif",
-            "align_to_reference": True,
-            "tile_wh": 2048,
-        }
-    ]
-    # VALIS's own heap at every rung, not the module's formula (ruling 2026-10-21)
-    assert [c["mem_gb"] for c in named(mirage.calls, "init_jvm")] == [10]
-    assert mirage.answer["cpu_count"] == 4  # what VALIS's pools were left with
-    assert not named(mirage.calls, "get_inverse_field")
-
-
-def test_the_pipelines_writer_drew_the_final_image_and_nothing_was_changed(mirage):
-    final = [
-        c
-        for c in named(mirage.calls, "warp_and_save_slide")
-        if c["dst_f"].endswith("_registered.ome.tiff")
-    ]
-    assert [c["slide"] for c in final] == ["moving", "reference"]
-    for c in final:
-        assert (c["level"], c["non_rigid"], c["crop"]) == (0, True, "reference")
-        assert c["interp_method"] == "bicubic" and c["generation"] == 1
-        assert Path(c["dst_f"]).parent.name == "registered_slides"
-    stage = [
-        c
-        for c in named(mirage.calls, "warp_and_save_slide")
-        if not c["dst_f"].endswith("_registered.ome.tiff")
-    ]
-    # the selfcheck's stage images: written before the micro pass, moving slide only
-    assert [(c["non_rigid"], c["generation"], c["slide"]) for c in stage] == [
-        (False, 0, "moving"),
-        (True, 0, "moving"),
-    ]
-    order = [c["call"] for c in mirage.calls]
-    assert order.index("register_micro") > max(
-        i
-        for i, c in enumerate(mirage.calls)
-        if c["call"] == "warp_and_save_slide" and c["generation"] == 0
-    )
-    assert order[-1] == "kill_jvm" or "kill_jvm" in order
-
-
-def test_valis_mirage_records_what_ran(mirage):
-    run = mirage_run_json(mirage.work, "valis_mirage")
-    info = run["info"]
-    assert info["version"] == "1.0.0" and info["points"] == "image"
-    assert info["ARGS"] == valis_mirage.ARGS
-    assert info["run_args"]["jvm_heap_gb"] == 10 and info["run_args"]["n_cpus"] == 4
-    assert info["run_args"]["reference"] == "reference.ome.tif"
-    assert info["workers_seen"] == 4 and info["cpus"]["valis_pool_threads"] == 3
-    assert info["micro_called"] and info["micro_ran"] and not info["repair_fired"]
-    assert info["slides_written"] == ["moving", "reference"]
-    assert info["slides_placed"] == {
-        "reference.ome.tif": "hard link",
-        "moving.ome.tif": "hard link",
-    }
-    # placing the slides is the benchmark's own arrangement: timed, clock paused
-    assert 0 <= info["place_s"] < run["register_s"]
-    assert info["cost_after_register"]["wall_s"] <= run["register_s"]
-    assert info["nuclear_channel"]["moving"] == {"index": 0, "name": "DAPI"}
-    assert info["stage"]["crop_round"] == "probe" and run["problem"] == ""
-    native = run["native"]
-    (path,) = native["files"]
-    assert Path(path).name == "moving_registered.ome.tiff"
-    assert Path(path).parent.name == "native" and Path(path).exists()
-    assert "origin_xy" not in native and len(native["valid_box"]) == 4
-    assert native["writer_kwargs"]["crop"] == "reference" and run["write_s"] > 0
-    assert run["direction"] == REF_TO_MOV and run["workers"] == 4
-    # the earlier stages carry the same matrix and their own fields
-    rigid = mirage_run_json(mirage.work, "valis_mirage_rigid")["info"]["stage"]
-    first = mirage_run_json(mirage.work, "valis_mirage_nonrigid")["info"]["stage"]
-    assert rigid["field_shape"] is None and first["field_shape"] is not None
-    assert first["field_shape"] != info["stage"]["field_shape"]
-
-
-def test_a_micro_pass_the_pipeline_swallowed_is_reported(tmp_path):
-    """The pipeline logs a failed micro pass and carries on; the row must say so, and its
-    points must still follow the image that was then written."""
-    answer, done = run_mirage(tmp_path / "w", fake={"micro_raises": True})
-    rec = answer["selfcheck"]
-    assert rec["variants"] == dict.fromkeys(MIRAGE, sc.OK), done.stdout[-2000:]
-    run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["info"]["micro_called"] and not run["info"]["micro_ran"]
-    assert "the micro pass did not run" in run["problem"]
-    assert "fake micro pass fails" in run["problem"]
-    assert mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["problem"] == ""
-
-
-def test_a_register_the_pipelines_valis_swallowed_keeps_its_cause(tmp_path):
-    """Valis.register() swallows, bin/register.py raises a fixed text: the memory cause
-    VALIS printed must still reach run.json: a Java heap error is jvm_heap (the heap is
-    VALIS's fixed 10 GB, ruling 2026-10-21), never the method's plain exception."""
-    _, done = run_mirage(tmp_path / "w", fake={"fail_register": JAVA_OOM})
-    for variant in MIRAGE:
-        run = mirage_run_json(tmp_path / "w", variant)
-        assert run["ok"] is False and run["cause"] == "jvm_heap", done.stdout[-2000:]
-        assert JAVA_OOM in run["error"] and "swallowed" in run["error"]
-
-
-def test_another_swallowed_register_of_the_pipeline_stays_an_exception(tmp_path):
-    text = "need at least one array to concatenate"
-    run_mirage(tmp_path / "w", fake={"fail_register": text})
-    run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["cause"] == "exception" and text in run["error"]
-
-
-def test_a_micro_pass_that_ran_out_of_memory_fails_the_full_row(tmp_path):
-    """bin/register.py catches a Java out-of-memory inside the micro pass and writes the
-    non-rigid result. That is not the full method: the row fails with `jvm_heap` (the
-    heap is fixed: final), and the non-rigid row keeps its own result."""
-    run_mirage(tmp_path / "w", fake={"micro_raises": JAVA_OOM})
-    final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert final["ok"] is False and final["cause"] == "jvm_heap"
-    assert (
-        "micro pass ran out of memory" in final["error"] and JAVA_OOM in final["error"]
-    )
-    assert mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["ok"] is True
-    assert mirage_run_json(tmp_path / "w", "valis_mirage_rigid")["ok"] is True
-
-
-def test_a_slide_the_pipeline_did_not_write_fails_its_round(tmp_path):
-    """F15: the pipeline's writer failed for the slide (it catches that per slide and
-    goes on): the row is the writer's failure, with the writer's own error."""
-    answer, done = run_mirage(tmp_path / "w", fake={"skip_write": ["moving"]})
-    rec = answer["selfcheck"]
-    assert rec["status"] == sc.CRASHED
-    for variant in MIRAGE:
-        run = mirage_run_json(tmp_path / "w", variant)
-        assert run["ok"] is False and run["cause"] == "writer", variant
-        assert "the fake writer refuses moving" in run["error"]
-        assert "the pipeline's writer failed for moving" in run["error"]
-
-
-@pytest.mark.parametrize(
-    "fake, cause",
-    [
-        ({"write_error": "MemoryError"}, "writer_oom"),
-        # VALIS 1.0.0's tile worker: the Java heap error printed, another raised (F16).
-        # The heap is VALIS's fixed 10 GB (ruling 2026-10-21): no climb, the writer's
-        ({"printed": JAVA_OOM}, "writer"),
-    ],
-)
-def test_a_writer_that_ran_out_of_memory_on_a_slide(tmp_path, fake, cause):
-    """F15, F16: a host memory failure of the pipeline's writer is writer_oom, the unit
-    goes up a rung; a Java heap failure is the writer's, final."""
-    run_mirage(tmp_path / "w", fake={"skip_write": ["moving"], **fake})
-    run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["ok"] is False and run["cause"] == cause
-
-
-def test_a_java_heap_error_valis_printed_inside_register_is_jvm_heap(tmp_path):
-    """F16: VALIS 1.0.0 hands print_warning only the UnboundLocalError; the Java heap
-    error went to stdout. The row is jvm_heap: the heap is fixed, a rung cannot help."""
-    unbound = "local variable 'tile' referenced before assignment"
-    _, done = run_mirage(
-        tmp_path / "w", fake={"fail_register": unbound, "printed": JAVA_OOM}
-    )
-    run = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert run["ok"] is False and run["cause"] == "jvm_heap", done.stdout[-2000:]
-    assert JAVA_OOM in run["error"] and unbound in run["error"]
-    assert JAVA_OOM in done.stdout  # still printed: the tee passes everything on
-
-
-def test_a_micro_pass_whose_memory_error_valis_printed_fails_the_full_row(tmp_path):
-    """F16: the micro pass raised something else; the Java heap error was printed."""
-    run_mirage(
-        tmp_path / "w",
-        fake={"micro_raises": "UnboundLocalError: tile", "printed": JAVA_OOM},
-    )
-    final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert final["ok"] is False and final["cause"] == "jvm_heap"
-
-
-def test_a_capture_of_the_benchmark_that_failed_is_the_benchmarks(monkeypatch):
-    """F18: the final transform was not captured because the benchmark's own probe or
-    field load failed: benchmark / benchmark_oom, never the method's exception."""
-    state = {
-        "errors": {"m": ["ValueError: probe off by 2 px"]},
-        "capture_causes": {"m": ["exception"]},
-        "write_errors": {},
-    }
-    written = {"path": "x.ome.tiff"}
-    got = valis_mirage._not_written({}, state, "m", written)
-    assert got["cause"] == "benchmark" and "not captured" in got["error"]
-    state["capture_causes"]["m"] = ["oom"]
-    assert (
-        valis_mirage._not_written({}, state, "m", written)["cause"] == "benchmark_oom"
-    )
-    # a slide the function never wrote, with no writer error: the method's
-    assert "cause" not in valis_mirage._not_written({}, {"errors": {}}, "m", None)
-
-
 def test_printed_memory_errors_are_kept_and_everything_passes_on(capsys):
-    """F16: the tee keeps the chunks that name memory, bounded, and prints all."""
+    """F16 (written for the retired ``valis_mirage`` row; the helper stays in
+    ``_valis_points``): the tee keeps the chunks that name memory, bounded, and prints all."""
     from benchmarks.regbench.methods import _valis_points as vp
 
     with vp.printed_errors(most=2) as kept:
@@ -1467,7 +1051,7 @@ def test_printed_memory_errors_are_kept_and_everything_passes_on(capsys):
     assert "reading tile 3" in capsys.readouterr().out
 
 
-def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
+def test_placing_the_slides_is_outside_the_clock(
     tmp_path, pair, monkeypatch
 ):
     """A copy of every slide (two file systems) must not be billed as VALIS's time."""
@@ -1492,20 +1076,15 @@ def test_placing_the_slides_is_outside_the_clock_for_both_adapters(
     assert took >= 0.6 and billed < 0.3 and how == {"moving.ome.tif": "copy"}
     # without the driver's monitor (a call outside a run) it still times the step
     assert vp.place_slides_unbilled([pair["moving"]], tmp_path / "in", {})[2] >= 0.6
-    for adapter in (valis120, valis_mirage):
-        source = inspect.getsource(adapter)
-        assert "vp.place_slides_unbilled(" in source and "place_s" in source
-        assert "vp.place_slides(" not in source
-    for name in ("valis", "valis_mirage"):
-        assert "info.place_s" in cost.CLOCK[name]["reading"]
+    source = inspect.getsource(valis120)
+    assert "vp.place_slides_unbilled(" in source and "place_s" in source
+    assert "vp.place_slides(" not in source
+    assert "info.place_s" in cost.CLOCK["valis"]["reading"]
 
 
 # ── a brightfield case: VALIS's own processing, recorded (methods.NO_BRIGHTFIELD) ──
-@pytest.mark.parametrize("module", [valis120, valis_mirage])
-def test_a_brightfield_case_is_accepted_and_valis_own_reading_recorded(
-    tmp_path, pair, module, monkeypatch
-):
-    """Both adapters have an input rule for a brightfield case (VALIS chooses its own
+def test_a_brightfield_case_is_accepted_and_valis_own_reading_recorded(tmp_path, pair):
+    """The adapter has an input rule for a brightfield case (VALIS chooses its own
     processing from its reader's is_rgb). Here the slides are the fluorescence pair
     labelled brightfield, which VALIS reads as fluorescence: every row still runs, and
     says so (``problem``); no channel is looked for (``nuclear_channel`` None)."""
@@ -1514,266 +1093,12 @@ def test_a_brightfield_case_is_accepted_and_valis_own_reading_recorded(
     cases = [
         dataclasses.replace(c, modality="brightfield") for c in patient(tmp_path, pair)
     ]
-    if module is valis_mirage:
-        fv.install(monkeypatch.setitem, version="1.0.0", rounding="trunc")
-        monkeypatch.setattr(valis_mirage, "pipeline", pipeline_stand_in)
-    rows = list(module.register_group(cases, tmp_path / "work", {"workers": 2}))
+    rows = list(valis120.register_group(cases, tmp_path / "work", {"workers": 2}))
     assert len(rows) == 6 and all(pm is not None for _, _, pm, _ in rows)
     for _, _, _, info in rows:
         assert info["modality"] == "brightfield" and info["nuclear_channel"] is None
         assert set(info["valis_img_type"].values()) == {"fluorescence"}
         assert "not brightfield" in info["problem"]
-
-
-# ── the pipeline's three tiers x micro-registration depth 0, 1, 2 ─────────────
-# the shipped call, written out: nextflow.config's defaults as modules/local/register.nf
-# passes them. `valis_mirage` (high, depth 2) is made with exactly this.
-SHIPPED_ARGS = {
-    "reference_markers": None,
-    "memory_mode": "high",
-    "max_processed_dim": None,
-    "max_non_rigid_dim": None,
-    "micro_reg_fraction": 0.125,
-    "max_image_dim_px": 4000,
-    "micro_reg": 2,
-    "interp_method": "bicubic",
-    "stage_checkpoint_dir": None,
-    "max_keypoints": None,
-}
-
-
-def test_the_shipped_call_is_unchanged():
-    assert valis_mirage.call_args({}) == valis_mirage.ARGS == SHIPPED_ARGS
-    assert list(valis_mirage.call_args({})) == list(SHIPPED_ARGS)
-    # the primary's own label and options name the same call
-    assert valis_mirage.call_args({"label": "valis_mirage"}) == SHIPPED_ARGS
-    assert valis_mirage.call_args({"label": ""}) == SHIPPED_ARGS
-
-
-def _preset_rows():
-    """bin/utils/valis_config.py ``MEMORY_PRESETS``, read from the source without
-    importing VALIS: ``{tier: {key: the value's source text}}``."""
-    import re
-
-    src = (ROOT / "bin" / "utils" / "valis_config.py").read_text()
-    table = src[src.index("MEMORY_PRESETS = {") :]
-    table = table[: table.index("\n}\n")]
-    rows = {}
-    for tier in ("high", "medium", "low"):
-        body = table[table.index(f'"{tier}": {{') :]
-        body = body[: body.index("\n    }")]
-        rows[tier] = dict(re.findall(r'^\s+"(\w+)": (.+?),$', body, re.M))
-    return rows
-
-
-# the preset keys a row may differ in: the two sizes, and two keys nothing reads
-SIZE_KEYS = ("max_processed_image_dim_px", "max_non_rigid_registration_dim_px")
-DEAD_KEYS = ("tile_wh", "tile_buffer")  # nextflow.config:241-244
-
-
-def test_the_tiers_and_depths_are_the_pipelines():
-    assert valis_mirage.TIERS == ("high", "medium", "low")
-    assert valis_mirage.MICRO == (0, 1, 2)
-    rows = _preset_rows()
-    assert set(rows) == set(valis_mirage.TIERS)
-    assert {t: tuple(int(r[k]) for k in SIZE_KEYS) for t, r in rows.items()} == {
-        "high": (2048, 2048),
-        "medium": (1024, 1024),
-        "low": (512, 512),
-    }
-    # the rows differ in the two sizes and in two keys no code reads, nothing else
-    keys = set().union(*rows.values())
-    differ = {k for k in keys if len({r.get(k) for r in rows.values()}) > 1}
-    assert differ == {*SIZE_KEYS, *DEAD_KEYS}
-    assert "max_image_dim_px" not in keys  # so the call's 4000 stands at every tier
-    import re
-
-    read = set()
-    for path in ("bin/register.py", "bin/utils/valis_config.py"):
-        text = (ROOT / path).read_text()
-        read |= set(re.findall(r'preset\[\s*"(\w+)"\s*\]', text))
-        read |= set(re.findall(r'preset\.get\(\s*"(\w+)"', text))
-    assert read & differ == set(SIZE_KEYS)
-    # modules/local/register.nf: of every param its script: block reads, memory_mode
-    # is the only one that names a tier. The three tier-owned overrides are null by
-    # default (rendered only when set), so at a named tier the rendered command
-    # differs in --memory-mode alone.
-    nf = (ROOT / "modules" / "local" / "register.nf").read_text()
-    script = nf[nf.index("script:") : nf.index("stub:")]
-    read_nf = set(re.findall(r"params\.(\w+)", script))
-    assert read_nf == {
-        "memory_mode",
-        "reg_jvm_heap_gb",
-        "reg_max_image_dim",
-        "reg_micro_reg",
-        "reg_micro_reg_fraction",
-        "reg_qc",
-        "reg_valis_max_keypoints",
-        "reg_valis_max_non_rigid_dim",
-        "reg_valis_max_processed_dim",
-        "skip_registration_qc",
-    }
-    config = (ROOT / "nextflow.config").read_text()
-
-    def default(name):
-        (value,) = re.findall(rf"^\s+{name}\s+=\s+(\S+)", config, re.M)
-        return value
-
-    assert default("memory_mode") == "'high'"
-    for name in (
-        "reg_valis_max_processed_dim",
-        "reg_valis_max_non_rigid_dim",
-        "reg_valis_max_keypoints",
-        "reg_jvm_heap_gb",
-    ):
-        assert default(name) == "null", name
-    assert (default("reg_max_image_dim"), default("reg_micro_reg_fraction")) == (
-        "4000",
-        "0.125",
-    )
-    assert "--memory-mode ${memory_mode}" in script
-    assert "--max-image-dim ${max_image_dim}" in script
-    assert "--micro-reg-fraction ${micro_reg_fraction}" in script
-
-
-@pytest.mark.parametrize("tier", ["high", "medium", "low"])
-@pytest.mark.parametrize("micro", [0, 1, 2])
-def test_a_tier_and_depth_reach_the_pipelines_function(tier, micro):
-    got = valis_mirage.call_args({"memory_mode": tier, "micro_reg": str(micro)})
-    assert got["memory_mode"] == tier and got["micro_reg"] == micro
-    assert isinstance(got["micro_reg"], int)
-    assert {k: v for k, v in got.items() if k not in ("memory_mode", "micro_reg")} == {
-        k: v for k, v in SHIPPED_ARGS.items() if k not in ("memory_mode", "micro_reg")
-    }
-    # its own label agrees with it
-    label = (
-        "valis_mirage"
-        if (tier, micro) == ("high", 2)
-        else f"valis_mirage_{tier}_m{micro}"
-    )
-    assert (
-        valis_mirage.call_args(
-            {"memory_mode": tier, "micro_reg": str(micro), "label": label}
-        )
-        == got
-    )
-
-
-def test_other_values_are_refused():
-    with pytest.raises(ValueError):
-        valis_mirage.call_args({"memory_mode": "custom"})
-    with pytest.raises(ValueError):
-        valis_mirage.call_args({"micro_reg": "3"})
-    with pytest.raises(ValueError):
-        valis_mirage.call_args({"micro_reg": "-1"})
-
-
-def test_a_label_naming_another_tier_or_depth_is_refused():
-    with pytest.raises(ValueError, match="label"):
-        valis_mirage.call_args({"label": "valis_mirage_low_m0"})
-    with pytest.raises(ValueError, match="label"):
-        valis_mirage.call_args(
-            {"memory_mode": "low", "micro_reg": "1", "label": "valis_mirage_low_m0"}
-        )
-    with pytest.raises(ValueError, match="label"):
-        valis_mirage.call_args({"memory_mode": "low", "label": "valis_mirage"})
-
-
-@pytest.mark.parametrize(
-    "label", ["valis_mirage_try2", "valis_mirage_high", "valis_mirage_low_m9", "mine"]
-)
-def test_a_free_label_runs_the_shipped_call_or_its_options(label):
-    """Only a label of the grid's form (``valis_mirage_<tier>_m<0-2>``, or the primary's
-    own ``valis_mirage``) names a cell; any other label is free."""
-    assert valis_mirage.call_args({"label": label}) == SHIPPED_ARGS
-    got = valis_mirage.call_args(
-        {"label": label, "memory_mode": "low", "micro_reg": "0"}
-    )
-    assert (got["memory_mode"], got["micro_reg"]) == ("low", 0)
-
-
-def test_each_depth_names_the_stages_it_has():
-    """R18: ``valis_registration``'s docstring (bin/register.py:253-257 when written).
-    Depth 1 is micro-RIGID only; a non-rigid `micro`
-    stage exists only at depth 2."""
-    assert valis_mirage.STAGES_AT_DEPTH == {
-        0: ("rigid", "nonrigid"),
-        1: ("rigid", "micro_rigid", "nonrigid"),
-        2: ("rigid", "micro_rigid", "nonrigid", "micro"),
-    }
-    import ast
-
-    tree = ast.parse((ROOT / "bin" / "register.py").read_text())
-    (fn,) = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "valis_registration"
-    ]
-    doc = " ".join(ast.get_docstring(fn).split())
-    said = doc[doc.index("micro_reg : int") :]
-    said = said[: said.index("stage_checkpoint_dir")]
-    assert "0 = neither micro pass" in said
-    assert "1 = micro-rigid only" in said
-    assert "2 = also the micro non-rigid pass" in said
-
-
-def test_a_low_tier_at_depth_0_reaches_valis_and_has_no_micro_pass(tmp_path):
-    """The real bin/register.py on the stand-in VALIS, at memory_mode=low, micro_reg=0:
-    the low row's sizes reach Valis, no micro-rigid registrar, no register_micro, and
-    the final row is the non-rigid row (with no problem: depth 0 has no micro pass)."""
-    answer, done = run_mirage(
-        tmp_path / "w", opts={"memory_mode": "low", "micro_reg": "0"}
-    )
-    log = (done.stdout + done.stderr)[-3000:]
-    (built,) = named(answer["calls"], "Valis")
-    assert built["kwargs"]["max_processed_image_dim_px"] == 512, log
-    assert built["kwargs"]["max_non_rigid_registration_dim_px"] == 512
-    assert built["kwargs"]["max_image_dim_px"] == 4000
-    assert built["kwargs"]["micro_rigid_registrar_cls"] is None
-    assert not named(answer["calls"], "register_micro")
-    final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    nonrigid = mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")
-    rigid = mirage_run_json(tmp_path / "w", "valis_mirage_rigid")
-    info = final["info"]
-    assert info["ARGS"]["memory_mode"] == "low" and info["ARGS"]["micro_reg"] == 0
-    assert info["ARGS"] == {**SHIPPED_ARGS, "memory_mode": "low", "micro_reg": 0}
-    assert info["implementation"]["tier"] == "low"
-    assert info["implementation"]["micro_reg"] == 0
-    assert info["implementation"]["stages"] == ["rigid", "nonrigid"]
-    assert "memory_mode=low, micro_reg=0" in info["implementation"]["parameters"]
-    assert not info["micro_called"] and not info["micro_ran"]
-    assert final["ok"] and nonrigid["ok"] and rigid["ok"]
-    assert final["problem"] == "" and nonrigid["problem"] == ""
-    assert final["info"]["stage"] == nonrigid["info"]["stage"]
-    assert rigid["info"]["stage"]["field_shape"] is None
-    assert nonrigid["info"]["stage"]["field_shape"] is not None
-
-
-def test_depth_1_has_the_micro_rigid_registrar_and_no_micro_pass(tmp_path):
-    answer, done = run_mirage(
-        tmp_path / "w", opts={"memory_mode": "medium", "micro_reg": "1"}
-    )
-    (built,) = named(answer["calls"], "Valis")
-    assert built["kwargs"]["max_processed_image_dim_px"] == 1024, done.stdout[-2000:]
-    assert built["kwargs"]["micro_rigid_registrar_cls"] == "MicroRigidRegistrar"
-    assert not named(answer["calls"], "register_micro")
-    final = mirage_run_json(tmp_path / "w", "valis_mirage")
-    assert final["info"]["implementation"]["stages"] == [
-        "rigid",
-        "micro_rigid",
-        "nonrigid",
-    ]
-    assert final["problem"] == ""
-    assert (
-        final["info"]["stage"]
-        == mirage_run_json(tmp_path / "w", "valis_mirage_nonrigid")["info"]["stage"]
-    )
-
-
-def test_the_shipped_run_records_its_four_stages(mirage):
-    impl = mirage_run_json(mirage.work, "valis_mirage")["info"]["implementation"]
-    assert impl["tier"] == "high" and impl["micro_reg"] == 2
-    assert impl["stages"] == ["rigid", "micro_rigid", "nonrigid", "micro"]
 
 
 def test_the_jvm_heap_at_the_fifth_rung():

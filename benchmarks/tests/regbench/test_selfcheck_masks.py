@@ -425,7 +425,7 @@ def test_a_wrong_shape_fails_the_variant(tmp_path, monkeypatch):
 def test_two_pairs_have_a_moving_slide_larger_than_the_reference():
     first, swapped = sc.sizes_for("deeperhistreg_hr_gpu")
     assert swapped == (first[1], first[0]) and swapped[1][1] > swapped[0][1]
-    for name in ("valis_mirage", "valis120", "valis120_hires"):
+    for name in ("valis120", "valis120_hires"):
         ref_hw, mov_hw = sc.sizes_for(name)[1]
         assert mov_hw[0] > ref_hw[0] and mov_hw[1] > ref_hw[1]
         # odd overhang: a centred placement is half a pixel off the grid

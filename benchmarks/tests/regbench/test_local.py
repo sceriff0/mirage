@@ -86,7 +86,7 @@ def test_local_writes_a_laptop_result_with_the_machine_and_submission(cohort):
 def test_local_refuses_a_non_stare_run_and_a_missing_case(cohort, capsys):
     root, out = cohort
     with pytest.raises(SystemExit) as e:
-        local.main(_args(root, out, run="valis_mirage"))
+        local.main(_args(root, out, run="valis120_hires"))
     assert e.value.code == 2
     bad = _args(root, out)
     bad.case_id = "nope"

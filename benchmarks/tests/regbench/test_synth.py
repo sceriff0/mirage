@@ -524,7 +524,7 @@ def test_the_cli_prints_the_results_estimate_of_the_selected_stare_runs(tmp_path
     assert str(synth.results_estimate(default, 9)["total_bytes"]) in out
     assert "9 STARE run(s)" in out and "VALIS" in out
     # the runs a launch selected: only its STARE runs of the set count
-    argv = ["synth", "--to", str(to), "--results-estimate", "--runs", "stare valis_mirage x"]
+    argv = ["synth", "--to", str(to), "--results-estimate", "--runs", "stare valis120 x"]
     assert cli.main(argv) == 0
     out = capsys.readouterr().out
     assert str(synth.results_estimate(default, 1)["total_bytes"]) in out

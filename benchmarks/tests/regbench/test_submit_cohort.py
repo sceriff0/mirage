@@ -497,14 +497,14 @@ def test_the_launch_job_finds_or_pulls_every_image_and_never_uses_path_python(
     done = subprocess.run(argv, env=base, capture_output=True, text=True)
     assert "unknown option --no-such-option" in done.stdout + done.stderr  # started
     pulled = pulls.read_text().split()
-    assert len(pulled) == 4 and not any("palom" in r or "ashlar" in r for r in pulled)
+    assert len(pulled) == 3 and not any("palom" in r or "ashlar" in r for r in pulled)
     assert not any("stardist" in r for r in pulled)  # --prepare only
     assert f"PALOM -> {images}/bolt3x-mirage-palom-1.0.0.img" in done.stdout
     assert f"ASHLAR -> {images}/regbench/ashlar.sif" in done.stdout
     assert (images / "bolt3x-mirage-stare-regbench-1.0.0.img").exists()
-    # containers/valis100, never the pipeline's bare upstream image (no zarr inside)
-    assert (images / "bolt3x-mirage-valis100-1.0.0.img").exists()
     assert not any(p.name.startswith("cdgatenbee-valis-wsi") for p in images.iterdir())
+    # the retired valis_mirage row's image (containers/valis100) is no longer pulled
+    assert not (images / "bolt3x-mirage-valis100-1.0.0.img").exists()
     # no runtime at all: said, and nothing started
     if not (shutil.which("apptainer") or shutil.which("singularity")):
         bare = {**base, "PATH": base["PATH"].split(":", 1)[1]}
@@ -866,7 +866,7 @@ def test_no_job_asks_for_more_than_seven_days(site):
         h, m, s = (int(v) for v in clock.split(":"))
         assert int(days) * 86400 + h * 3600 + m * 60 + s <= 7 * 86400, job.name
     # three rounds at three days each would be nine: capped at the site's maximum
-    assert rungs(jobs, "valis_mirage", suffix="-first")[0].opt("--time") == "7-00:00:00"
+    assert rungs(jobs, "valis120_hires", suffix="-first")[0].opt("--time") == "7-00:00:00"
     assert rungs(jobs, "palom")[0].opt("--time") == "3-00:00:00"
     # the last job of a staged round: one round's time plus the writer's 40 h
     assert rungs(jobs, "stare")[0].opt("--time") == "4-16:00:00"
@@ -1692,7 +1692,7 @@ def test_a_submission_leaves_its_id_for_score_only_which_never_replaces_it(site)
 
 
 # ── the order the runs are submitted in ───────────────────────────────────────
-USER_ORDER = "ashlar palom deeperhistreg valis120 stare valis_mirage"
+USER_ORDER = "ashlar palom deeperhistreg valis120 stare"
 ORDERS = (
     USER_ORDER,
     "affine_ashlar ashlar stare",  # an anchored family named BEFORE its anchor
@@ -1836,7 +1836,7 @@ def test_an_order_with_an_unknown_name_is_refused(site):
     )
     assert done.returncode == 2 and not _sbatch_lines(done.stdout) and not log.exists()
     assert "no family and no run named 'valis'" in done.stderr
-    assert "Families: stare, valis_mirage, valis120" in done.stderr
+    assert "Families: stare, valis120" in done.stderr
     assert "Nothing was submitted" in done.stderr
 
 
@@ -2640,7 +2640,7 @@ def test_the_stare_source_is_fetched_with_and_without_the_preflight(
     tag = asked[0].rsplit("/", 1)[1][: -len(".tar.gz")]  # the pinned release
     src = out / "cache" / f"stare-{tag}" / "src"
     assert (src / "stare" / "slide_io.py").read_text().startswith("WHAT")
-    line = f"# STARE source for the images without one (ASHLAR VALIS_MIRAGE) -> {src}"
+    line = f"# STARE source for the images without one (ASHLAR) -> {src}"
     assert line in done.stdout
     if preflight == "0":
         # skipped, said, and the launch goes on with the source in place
@@ -2815,7 +2815,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
 def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
     jobs, _, _ = dry
     real = {n: variants.realcheck_row(n) for n in RUNS if variants.realcheck_row(n)}
-    assert real == {"valis_mirage": "valis_mirage", "valis120_hires": "valis120_hires"}
+    assert real == {"valis120_hires": "valis120_hires"}
     settle = {n.strip("<>") for _, n in jobs["rb-settle"].deps}
     for run in real:
         first = rungs(jobs, run, suffix="-first")
@@ -2944,7 +2944,7 @@ def test_no_package_of_the_host_can_shadow_one_inside_an_image(tmp_path):
     """PYTHONNOUSERSITE=1 in every image, and a PYTHONPATH that holds the checkout (and
     the STARE source where the image has none) and nothing of the host's."""
     images = {r.image for r in variants.RUNS} | {variants.SCORER_IMAGE}
-    without = {"ASHLAR", "VALIS_MIRAGE"}  # pulled as their projects publish them
+    without = {"ASHLAR"}  # pulled as its project publishes it
     assert without <= images
     tag = re.search(
         r"tags/([^\s]+)\.tar\.gz", (REPO / "requirements" / "stare.txt").read_text()
@@ -4633,7 +4633,7 @@ def test_a_synthetic_launch_runs_its_list_and_has_no_case_or_tissue_scoring(site
     ran = {j.args[0] for j in [*jobs.values(), *jobs.later.values()]
            if j.script == "run_rung.sbatch"}  # fmt: skip
     assert ran and ran <= set(variants.SYNTHETIC_RUNS)
-    assert {"stare", "valis_mirage", "valis120_hires"} <= ran
+    assert {"stare", "valis120", "valis120_hires"} <= ran
     assert not any(n.startswith("rb-score-case") for n in jobs) and "rb-tissue" not in jobs
     assert jobs["rb-score"].args == ["score", "synthetic"]
     assert "<rb-settle>" in jobs["rb-score"].opt("--dependency")
@@ -4744,7 +4744,7 @@ def test_a_synthetic_launch_prints_its_results_estimate_and_the_free_space(site,
     assert str(out) in lines[free] and "bytes" in lines[free]
     first = next(i for i, x in enumerate(lines) if x.startswith("sbatch "))
     assert said < first and free < first
-    one, _, _ = launch(site, "--datasets", "synthetic", "--runs", "stare valis_mirage",
+    one, _, _ = launch(site, "--datasets", "synthetic", "--runs", "stare valis120",
                        env=env, log="syn-disk1")  # fmt: skip
     one_est = synth.results_estimate(synth.GRIDS["default"], 1)
     assert any(
@@ -4775,25 +4775,25 @@ def test_the_plan_job_is_handed_the_sources_realpath(site, tmp_path):
 def test_a_run_named_in_first_rung_starts_its_ladder_there(site):
     """REGBENCH_FIRST_RUNG: the named run's first array asks for that rung and its
     ladder never plans the rungs below; a run not named keeps the first rung."""
-    env = {"REGBENCH_FIRST_RUNG": "valis_mirage=256"}
-    done, _, _ = launch(site, "--runs", "valis_mirage palom", env=env, log="first-rung")
+    env = {"REGBENCH_FIRST_RUNG": "valis120=256"}
+    done, _, _ = launch(site, "--runs", "valis120 palom", env=env, log="first-rung")
     jobs = jobs_of(done)
-    first = jobs["rb-valis_mirage-multiplex-256g"]
+    first = jobs["rb-valis120-multiplex-256g"]
     assert first.opt("--mem") == "256G"
     every = {**jobs, **jobs.later}
-    mine = [n for n in every if n.startswith("rb-valis_mirage-multiplex-")]
+    mine = [n for n in every if n.startswith("rb-valis120-multiplex-")]
     assert not [n for n in mine if "-16g" in n or "-64g" in n], mine
     assert any("-512g" in n for n in mine) and any("-700g" in n for n in mine), mine
     assert "rb-palom-multiplex-16g" in jobs
-    assert "# memory ladder: valis_mirage starts at 256 GB" in done.stdout
+    assert "# memory ladder: valis120 starts at 256 GB" in done.stdout
 
 
 def test_first_rung_refuses_a_gb_that_is_not_a_rung(site):
-    done, log, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis_mirage=200"}, log="first-rung-bad")
+    done, log, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis120=200"}, log="first-rung-bad")
     assert done.returncode != 0
     assert "200 GB is not a rung" in done.stderr
     assert not log.exists() or "sbatch" not in log.read_text()
-    done, _, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis_mirage"}, log="first-rung-form")
+    done, _, _ = launch(site, env={"REGBENCH_FIRST_RUNG": "valis120"}, log="first-rung-form")
     assert done.returncode != 0 and "is not <run>=<GB>" in done.stderr
 
 

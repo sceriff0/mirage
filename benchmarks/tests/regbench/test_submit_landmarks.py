@@ -61,7 +61,7 @@ def test_the_set_runs_its_own_50_runs_stare_first(site, ds):
     assert not log.exists()
     ran = _laddered(jobs_of(done))
     want = [variants.run_name(r) for r in variants.runs_for(ds)]
-    assert len(ran) == 50 and set(ran) == set(want)
+    assert len(ran) == 49 and set(ran) == set(want)
     assert sum(variants.family(r) == "stare" for r in ran) == 45
     assert "stare_haem_none" in ran  # the manuscript's HyReCo STARE row
     assert ran[0] == "stare" and variants.family(ran[0]) == "stare"
@@ -71,7 +71,7 @@ def test_the_set_runs_its_own_50_runs_stare_first(site, ds):
         x for x in done.stdout.splitlines() if x.startswith(f"# run order ({ds}): ")
     ]
     assert line.split(": ", 1)[1].split() == ran
-    assert f"# {ds}: 50 run(s) of its own list" in done.stdout
+    assert f"# {ds}: 49 run(s) of its own list" in done.stdout
     assert f"{out}/tables/{ds}/" in done.stdout
 
 

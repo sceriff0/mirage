@@ -165,40 +165,15 @@ def test_terminal_rows_are_the_last_variant_of_each_run():
     # DeeperHistReg has ONE result per run: the run's own name
     assert rows["deeperhistreg_hr_gpu"] == "deeperhistreg_hr_gpu"
     assert not any("asdrawn" in v for v in rows.values())
-    assert rows["valis_mirage"] == "valis_mirage" and rows["palom"] == "palom"
-
-
-def test_valis_stages_are_honest_about_the_depth(scored, monkeypatch):
-    """R18: depth 1 is micro-RIGID only (inside the `_rigid` row); a non-rigid `micro`
-    stage exists only at depth 2; at depth 0 there is no micro stage at all."""
-    monkeypatch.setattr(tables, "family_of", variants.family)
-    monkeypatch.setattr(
-        tables, "terminal_rows",
-        lambda ds: {n: n for n in ("valis_mirage", "valis_mirage_high_m1",
-                                   "valis_mirage_low_m0")})
-    built = tables.build(scored, "multiplex")
-    st = {(r["row"], r["stage"]): r for r in built["valis_stages"]}
-    assert st[("valis_mirage", "micro")]["stage_row"] == "valis_mirage"
-    assert st[("valis_mirage", "micro_rigid")]["stage_row"] == "valis_mirage_rigid"
-    assert st[("valis_mirage", "rigid")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_high_m1", "micro_rigid")]["stage_row"] == "valis_mirage_high_m1_rigid"
-    assert st[("valis_mirage_high_m1", "micro")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "rigid")]["stage_row"] == "valis_mirage_low_m0_rigid"
-    assert st[("valis_mirage_low_m0", "micro_rigid")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "micro")]["stage_row"] == schema.NA
-    assert st[("valis_mirage_low_m0", "nonrigid")]["micro_reg"] == "0"
-    assert st[("valis_mirage_high_m1", "initial")]["stage_row"] == "initial"
-    allowed = schema.TABLES["valis_stages"].cols[schema.columns("valis_stages").index("stage")]
-    for stage in ("micro_rigid", "micro"):
-        assert stage in allowed.what
+    assert rows["valis120_hires"] == "valis120_hires" and rows["palom"] == "palom"
 
 
 def test_per_pair_stage_names(scored):
-    assert tables.stage_of("valis_mirage_high_m1_rigid") == "micro_rigid"
-    assert tables.stage_of("valis_mirage_low_m0_rigid") == "rigid"
-    assert tables.stage_of("valis_mirage_high_m1") == "nonrigid"
-    assert tables.stage_of("valis_mirage") == "micro"
-    assert tables.stage_of("valis_mirage_nonrigid") == "nonrigid"
+    assert tables.stage_of("valis120_hires_rigid") == "rigid"
+    assert tables.stage_of("valis120_hires_nonrigid") == "nonrigid"
+    assert tables.stage_of("valis120_hires") == "final"
+    assert tables.stage_of("valis120") == "nonrigid"  # an unsuffixed middle row
+    assert tables.stage_of("valis120_micro") == "micro"
     assert tables.stage_of("stare_rigid") == "rigid"
     assert tables.stage_of("stare") == "final"
     assert tables.stage_of("initial") == "initial"
@@ -215,7 +190,8 @@ def test_stare_tier_table_is_s3():
 def test_pipeline_params_lists_every_schema_param():
     rows = tables.pipeline_params()
     names = {r["name"] for r in rows}
-    assert {"registration_method", "reg_tiled_tile", "memory_mode", "pixel_size"} <= names
+    assert {"registration_method", "reg_tiled_tile", "pixel_size"} <= names
+    assert "memory_mode" not in names  # VALIS has no tiers since 2026-11-05
     assert len(names) == len(rows)
 
 
@@ -404,8 +380,8 @@ def test_primary_of_reads_the_dataset():
 
     public = next(d for d, reg in regimes.DATASET_REGIME.items()
                   if reg != regimes.COHORT_REGIME)
-    assert tables.primary_of("valis_mirage", "multiplex") == "valis_mirage"
-    assert tables.primary_of("valis_mirage", public) == "valis_mirage"  # runs as shipped
+    assert tables.primary_of("valis120", "multiplex") == "valis120_hires"
+    assert tables.primary_of("valis120", public) == "valis120_hires"  # runs as shipped
     # ASHLAR has no input rule for a brightfield case: never run there (excluded_for)
     assert tables.primary_of("ashlar", "multiplex") == "ashlar"
     assert tables.primary_of("ashlar", public) is None
@@ -629,9 +605,9 @@ def test_every_summary_row_has_its_set_and_pooling_and_the_headline_first(scored
             (s, p) for s in ("outlines", "nuclei") for p in tables.POOLINGS}
     head = [r for r in rows if tables.is_headline(r)]
     assert head and all((r["set"], r["pooling"]) == ("outlines", "common") for r in head)
-    for name in ("valis_stages", "stare_tiers", "cohort_counts", "method_best"):
+    for name in ("stare_tiers", "cohort_counts", "method_best"):
         assert "set" in schema.columns(name), name
-    for name in ("valis_stages", "stare_tiers"):
+    for name in ("stare_tiers",):
         assert "pooling" in schema.columns(name), name
     assert {r["unit"] for r in built["method_best"]} == {"patient"}
     assert {r["set"] for r in built["method_best"]} == {"outlines", "nuclei"}
@@ -656,7 +632,7 @@ def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort():
     """WT4: the real family map, not a toy one: every terminal row of a family that has
     a row competes (the audit's counts, WD1)."""
     # stare: 27 since the full cross on the cohort (tier x stride x level, 2026-10-20)
-    want = {"ashlar": 12, "affine_ashlar": 12, "stare": 27, "valis_mirage": 9,
+    want = {"ashlar": 12, "affine_ashlar": 12, "stare": 27,
             "deeperhistreg": 8, "valis120": 2, "palom": 1}
     rows = tables.terminal_rows("multiplex").values()
     pp = [_hand(t, "c1", "p1", 0.5) for t in rows]
@@ -710,13 +686,12 @@ def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
     """T29 (M8): a run of excluded_runs.csv is in the dataset's paper tables as a row of
     NA with the reason, never silently absent."""
     monkeypatch.setattr(tables, "family_of", lambda v: {
-        **FAMILY, "stare_gone": "stare", "palom_x": "palom", "stare_medium": "stare",
-        "valis_mirage_low_m0": "valis_mirage"}.get(v))
+        **FAMILY, "stare_gone": "stare", "palom_x": "palom", "stare_medium": "stare"}.get(v))
     with open(scored / "tables" / "excluded_runs.csv", "w", newline="") as fh:
         fh.write("run,reason\nstare_gone,not on this regime\npalom_x,defaults only\n"
-                 "stare_medium,one tier only\nvalis_mirage_low_m0,defaults only\n")
+                 "stare_medium,one tier only\n")
     built = tables.build(scored, "multiplex")
-    gone = {"stare_gone", "palom_x", "stare_medium", "valis_mirage_low_m0"}
+    gone = {"stare_gone", "palom_x", "stare_medium"}
     na = (None, schema.NA)
     # method_summary: one NA row per (set, pooling) slot, each with the reason
     ex = [r for r in built["method_summary"] if r["which"] == "excluded"]
@@ -727,12 +702,8 @@ def test_an_excluded_run_is_an_na_row_with_its_reason(scored, monkeypatch):
     assert s["stare_gone"]["excluded_reason"] == "not on this regime"
     assert s["stare_gone"]["family"] == "stare" and s["stare_gone"]["dice_med"] in na
     assert all(r["excluded_reason"] not in na for r in ex)
-    # valis_stages and stare_tiers: the family's excluded runs, a row of NA per slot,
-    # with the settings the method module gives them
-    vs = [r for r in built["valis_stages"] if r["row"] == "valis_mirage_low_m0"]
-    assert {(r["set"], r["pooling"]) for r in vs} == slots
-    assert all(r["excluded_reason"] == "defaults only" and r["dice_med"] in na for r in vs)
-    assert {(r["memory_mode"], r["micro_reg"]) for r in vs} == {("low", "0")}
+    # stare_tiers: the family's excluded runs, a row of NA per slot, with the settings
+    # the method module gives them
     st = [r for r in built["stare_tiers"] if r["row"] == "stare_medium"]
     assert {(r["set"], r["pooling"]) for r in st} == slots
     assert {(r["tier"], r["excluded_reason"]) for r in st} == {("medium", "one tier only")}

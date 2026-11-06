@@ -429,14 +429,13 @@ def test_inexact_and_shrunk_nuclei_are_marked_on_every_row_and_counted():
 
 
 def test_the_cohorts_caption_names_the_rows_tuned_on_it():
-    rows = [cell(m, "P1_r1", "P1") for m in ("stare", "valis_mirage", "palom")]
+    assert score.IN_SAMPLE == ("stare",)
+    rows = [cell(m, "P1_r1", "P1") for m in ("stare", "valis120_hires", "palom")]
     text = score.summary_markdown(score.summarise_cells(rows, ["stare"]), [], [])
-    assert "**In-sample: `stare` and `valis_mirage`.**" in text
+    assert "**In-sample: `stare`.** The settings of this row" in text
     assert "No other row was tuned on these slides." in text
     assert text.index("In-sample") < text.index("### All cases")
-    # one of the two alone, and none: the line names what is there
-    (line,) = score.in_sample_lines("multiplex", ["palom", "valis_mirage"])
-    assert line.startswith("**In-sample: `valis_mirage`.** The settings of this row")
+    # none: no caption
     assert score.in_sample_lines("multiplex", ["palom", "ashlar"]) == []
     # a dataset that is not the cohort the settings were chosen on has no caption
     assert score.in_sample_lines("elsewhere", ["stare"]) == []

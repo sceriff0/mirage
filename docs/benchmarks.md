@@ -36,13 +36,12 @@ more moving rounds. regbench builds its own inputs, so no other benchmark has to
 
 ## The runs
 
-`python -m benchmarks.regbench runs` prints the run list: 45 runs, of which six are the
+`python -m benchmarks.regbench runs` prints the run list: 47 runs, of which five are the
 primary rows the summary opens on.
 
 | method | primary row | other rows |
 |---|---|---|
 | STARE | `stare` | strides 64, 128, 256 x preprocessing none / CLAHE / percentile |
-| VALIS (the pipeline's call, 1.0.0) | `valis_mirage` | |
 | VALIS 1.2.0 as shipped | `valis120_hires` | `valis120` |
 | DeeperHistReg 1.0.1 | `deeperhistreg_hr_gpu` | eight labels, one row each: the image its writer draws, which sits about S/2 px plus a whole-pixel padding term (roughly 1 to 3 µm on the cohort) off its own registration |
 | ASHLAR 1.20.0 | `ashlar` | clean, affine-anchored and a 20-cell factorial |
@@ -80,7 +79,8 @@ scorer. It writes `pipeline_cost.csv`, `pipeline_cost_summary.csv` and
 
 - It runs at the shipped defaults of `nextflow.config` and the site profile, except
   `seg_method=stardist` and `pixel_size=0.325`. Registration therefore runs at the shipped
-  tier `memory_mode='high'` unless the site profile overrides it; the cost may differ from
+  STARE tier `reg_tiled_mode='high'`, and VALIS at valis-wsi 1.2.0's own defaults, unless
+  the site profile overrides them; the cost may differ from
   the site's production settings.
 - The `all` row's wall time is the **sum** of the per-patient values and includes SLURM
   queue time; the realtime-based CPU-hours do not. It is a different clock from the

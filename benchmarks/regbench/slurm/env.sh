@@ -17,7 +17,6 @@
 #
 #   REGBENCH_SIF_STARE_REGBENCH   containers/stare-regbench: STARE, and where `prepare`,
 #                                 `verdict`, `tissue` and `score` run (variants.SCORER_IMAGE)
-#   REGBENCH_SIF_VALIS_MIRAGE     containers/valis100 (the pipeline's VALIS 1.0.0 image + codecs)
 #   REGBENCH_SIF_VALIS120         containers/valis120 (VALIS 1.2.0)
 #   REGBENCH_SIF_DEEPERHISTREG    containers/deeperhistreg
 #   REGBENCH_SIF_ASHLAR           containers/ashlar120 (labsyspharm/ashlar:1.20.0 + imagecodecs)
@@ -37,9 +36,9 @@
 #                                    at every JVM start)
 #
 #   REGBENCH_STARE_SRC_IMAGES        images that have no `stare` package inside (default:
-#                                    ASHLAR VALIS_MIRAGE, the two pulled as their
-#                                    projects publish them). The harness reads every
-#                                    image through `stare.slide_io`, so for these the
+#                                    ASHLAR, pulled as its project publishes it). The
+#                                    harness reads every image through
+#                                    `stare.slide_io`, so for these the
 #                                    source of the release pinned in
 #                                    requirements/stare.txt is put on PYTHONPATH: pure
 #                                    Python only. The image must have what that code
@@ -102,7 +101,7 @@ REGBENCH_RESULTS_HOME="${HOME:-}/regbench_results"
 : "${REGBENCH_CPUS:=4}"
 : "${REGBENCH_MEM:=16G}"
 : "${REGBENCH_WRITABLE_TMPFS_IMAGES:=VALIS120}"
-: "${REGBENCH_STARE_SRC_IMAGES:=ASHLAR VALIS_MIRAGE}"
+: "${REGBENCH_STARE_SRC_IMAGES:=ASHLAR}"
 export REGBENCH_REPO REGBENCH_CASES REGBENCH_OUT REGBENCH_CPUS REGBENCH_MEM
 export REGBENCH_STARE_SRC_IMAGES
 

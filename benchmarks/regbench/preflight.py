@@ -38,7 +38,6 @@ COMMON = ("numpy", "tifffile", "zarr", "imagecodecs", "stare.slide_io")
 # the method's package (the name it is imported by)
 PACKAGE = {
     "stare": "stare",
-    "valis_mirage": "valis",
     "valis": "valis",
     "ashlar": "ashlar",
     "deeperhistreg": "deeperhistreg",

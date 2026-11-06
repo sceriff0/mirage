@@ -1,6 +1,6 @@
 """What a method's reuse key (and the method-code freeze) counts as its code:
 ``methods.code_files``. Pre-freeze review wave 1, findings F10 (ASHLAR's tile cutting),
-F14 (the pipeline code ``valis_mirage`` runs) and F23 (the driver's own imports)."""
+F23 (the driver's own imports)."""
 
 from __future__ import annotations
 
@@ -45,35 +45,6 @@ def test_every_import_of_the_driver_is_in_the_key_or_left_out_for_a_reason():
     classified = set(methods.DRIVER_CODE) | set(methods.DRIVER_CODE_LEFT_OUT)
     assert imported - classified == set()
     assert set(methods.DRIVER_CODE) & set(methods.DRIVER_CODE_LEFT_OUT) == set()
-
-
-def test_valis_mirage_key_holds_the_pipeline_code_it_runs():
-    """F14: valis_mirage loads bin/register.py by path; that file and every bin/utils
-    module it imports on the adapter's path are its code. The checkpoint writer is
-    imported only with a stage_checkpoint_dir, which the adapter never passes."""
-    files = rel("valis_mirage")
-    want = {
-        "bin/register.py",
-        *(
-            f"bin/utils/{m}.py"
-            for m in (
-                "image_utils",
-                "ome_io",
-                "jvm_cache",
-                "pixel_size",
-                "tiled_io",
-                "logger",
-                "progress",
-                "retry",
-                "valis_micro_rigid",
-                "valis_config",
-                "valis_preflight",
-            )
-        ),
-    }
-    assert want <= files, sorted(want - files)
-    assert "bin/utils/stage_checkpoint.py" not in files
-    assert "bin/utils/valis_stage_warp.py" not in files
 
 
 def test_ashlar_key_holds_the_code_that_cuts_its_tiles():

@@ -290,8 +290,9 @@ EXACT_HEADLINES = ("pair_fraction", "dice_matched")
 FULL_PAIRINGS = (("full_lsa", "_full_lsa"), ("full_mnn", "_mnn"))
 PAIRED_AGAINST = "stare"
 # The rows whose settings their authors chose on the cohort, with this metric: STARE's
-# tier and the pipeline's VALIS settings. Said in the caption of the cohort's tables.
-IN_SAMPLE = ("stare", "valis_mirage")
+# tier. Said in the caption of the cohort's tables. (The pipeline's tuned VALIS row,
+# `valis_mirage`, was the other one until it was retired on 2026-11-05.)
+IN_SAMPLE = ("stare",)
 IN_SAMPLE_DATASET = "multiplex"
 # said of every dataset, at every number of units: nothing here is a test
 DESCRIPTIVE = "descriptive; no ranking is claimed"
@@ -4311,7 +4312,7 @@ def in_sample_lines(dataset, methods):
     return [
         f"**In-sample: {names}.** The settings of "
         + ("these rows" if len(mine) > 1 else "this row")
-        + " (STARE's tier, the pipeline's VALIS settings) were chosen by their authors "
+        + " (STARE's tier) were chosen by their authors "
         "on this cohort with this metric, and the other results of the same runs "
         "share them. No other row was tuned on these slides. Their numbers below are "
         "those of a method scored on the data it was tuned on.\n"

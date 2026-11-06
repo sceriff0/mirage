@@ -27,8 +27,8 @@ FAMILY = {
     variants.STARE_LOCAL4: "stare",
     "dhr_gpu": "deeperhistreg",
     "dhr_cpu": "deeperhistreg",
-    "valis_a": "valis_mirage",
-    "valis_b": "valis_mirage",
+    "valis_a": "valis120",
+    "valis_b": "valis120",
 }
 
 
@@ -77,7 +77,7 @@ def paper(tmp_path, monkeypatch):
     schema.write(d / "method_best.csv", "method_best", [
         schema.empty_row("method_best", source="regbench", dataset="multiplex", family=f,
                          best_row=b)
-        for f, b in (("stare", "stare"), ("deeperhistreg", "dhr_gpu"), ("valis_mirage", "valis_b"))
+        for f, b in (("stare", "stare"), ("deeperhistreg", "dhr_gpu"), ("valis120", "valis_b"))
     ])
     schema.write(d / "cost_fits.csv", "cost_fits", [])
     return d
@@ -288,7 +288,7 @@ def test_fig2c_draws_the_common_patients_with_their_counts_and_no_gpu_row_on_cpu
                    peak_rss_gb=None, wall_s=None)]
     schema.write(paper / "cost_points.csv", "cost_points", pts)
     schema.write(paper / "cost_fits.csv", "cost_fits", [schema.empty_row(
-        "cost_fits", source="regbench", dataset="multiplex", family="valis_mirage",
+        "cost_fits", source="regbench", dataset="multiplex", family="valis120",
         row="valis_a", target="cpu_h_used", predictor="input_gpx", fit_ok=False)])
     res = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
     rows = _source(res)
@@ -311,7 +311,7 @@ def test_fig2c_draws_the_common_patients_with_their_counts_and_no_gpu_row_on_cpu
 def test_a_per_patient_methods_round_without_its_own_figure_is_a_point_that_says_so():
     res = [{"method": "valis_a", "group": "P1", "case_id": "P1_r1", "ok": "True",
             "unit": "patient", "register_s_per_round_from": "split"}]
-    pts, without = costs.round_points("valis_a", "valis_mirage", res, set(),
+    pts, without = costs.round_points("valis_a", "valis120", res, set(),
                                       (costs.PRIMARY, True, False), common={"P1"})
     assert without == 1
     assert [(p["unit_id"], p["status"], p["in_common"]) for p in pts] == [
@@ -346,12 +346,12 @@ def test_the_supplementary_cost_figures_name_their_clock_and_end_to_end_its_inte
     d = tmp_path / "paper"
     d.mkdir()
     schema.write(d / "end_to_end.csv", "end_to_end", [schema.empty_row(
-        "end_to_end", source="regbench", dataset="multiplex", family="valis_mirage",
+        "end_to_end", source="regbench", dataset="multiplex", family="valis120",
         row="valis_a", row_kind="primary", clock=costs.WHOLE, unit="patient", n_patients=3,
         estimate_s_med=600, estimate_s_ci_low=500, estimate_s_ci_high=700, write_s_med=60,
         write_s_ci_low=50, write_s_ci_high=70)])
     schema.write(d / "cpu_scaling.csv", "cpu_scaling", [schema.empty_row(
-        "cpu_scaling", source="regbench", family="valis_mirage", row="valis_a", cpus=c,
+        "cpu_scaling", source="regbench", family="valis120", row="valis_a", cpus=c,
         patient_id="P1", execution="one process", repeat=1, wall_s=w, wall_clock=costs.WHOLE,
         clock=costs.WHOLE, unit="patient", cpu_h_used=1.0, peak_rss_gb=2.0, speedup_vs_4=s)
         for c, w, s in ((4, 100, 1.0), (8, 60, 100 / 60))])

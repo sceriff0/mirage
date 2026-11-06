@@ -1,6 +1,6 @@
 """The synthetic scaling set end to end (T32): its run list, its COST-only scorer, its
 three tables, its refusals and its figures, on a test-only grid of tiny slides with two
-fake methods (``stare`` and ``valis_mirage``) run by the real driver."""
+fake methods (``stare`` and ``valis120_hires``) run by the real driver."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from benchmarks.regbench.paper import tables as T
 from benchmarks.tests.regbench import test_synth as ts
 
 SIZES = (64, 128, 256)
-TWELVE = {
+ELEVEN = {
     "stare",
     "stare_s128_none",
     "stare_s256_none",
@@ -31,7 +31,6 @@ TWELVE = {
     "stare_low",
     "stare_low_s128_none",
     "stare_low_s256_none",
-    "valis_mirage",
     "valis120",
     "valis120_hires",
 }
@@ -53,35 +52,36 @@ def test_the_set_is_public_cost_only_and_fluorescence():
     )
 
 
-def test_the_synthetic_run_list_is_exactly_the_twelve_runs():
+def test_the_synthetic_run_list_is_exactly_the_eleven_runs():
     got = {variants.run_name(r) for r in variants.runs_for("synthetic")}
-    assert got == TWELVE == set(variants.SYNTHETIC_RUNS)
+    assert got == ELEVEN == set(variants.SYNTHETIC_RUNS)
 
 
 def test_every_other_run_is_excluded_with_the_reason():
     why = dict(variants.excluded_for("synthetic"))
     every = {variants.run_name(r) for r in variants.active_runs()}
-    assert set(why) == every - TWELVE
+    assert set(why) == every - ELEVEN
     assert set(why.values()) == {
-        "synthetic: STARE (tier x stride, no prep) and VALIS (mirage, 1.2.0 default, "
-        "1.2.0 hires) only (user 2026-10-19)"
+        "synthetic: STARE (tier x stride, no prep) and VALIS (1.2.0 default, 1.2.0 hires) "
+        "only (user 2026-10-19)"
     }
     rows = score.excluded_rows(["synthetic"])
-    assert {r["run"] for r in rows} == every - TWELVE
+    assert {r["run"] for r in rows} == every - ELEVEN
 
 
 def test_the_cohort_and_hyreco_run_lists_are_unchanged():
-    """No run was added for the set: the 108 runs, the cohort's 72 (the full STARE cross,
-    2026-10-20), HyReCo's 50."""
-    assert len(variants.RUNS) == 108
-    assert len(variants.runs_for(None)) == 72
-    assert len(variants.runs_for("hyreco")) == 50
+    """No run was added for the set: the 99 runs, the cohort's 63 (the full STARE cross,
+    2026-10-20), HyReCo's 49 (each nine, nine and one fewer since the valis_mirage row was
+    retired on 2026-11-05)."""
+    assert len(variants.RUNS) == 99
+    assert len(variants.runs_for(None)) == 63
+    assert len(variants.runs_for("hyreco")) == 49
     assert variants.excluded_for(None) == []
     assert variants.runs_for("mcmicro") == variants.runs_for(None)
 
 
 def test_the_cpu_cross_names_two_runs_of_the_set_at_two_sizes():
-    assert set(variants.SYNTHETIC_CROSS_RUNS) <= TWELVE
+    assert set(variants.SYNTHETIC_CROSS_RUNS) <= ELEVEN
     assert set(variants.SYNTHETIC_CROSS_SIZES) <= set(synth.GRIDS["default"])
 
 
@@ -113,8 +113,8 @@ def built(tmp_path_factory):
     cs = list_cases(cases_root, "synthetic")
     for case in cs:
         methods.run_case(_fake("stare"), case, out)
-        if case.group != synth.patient_of(64):  # valis_mirage misses the smallest size
-            methods.run_case(_fake("valis_mirage"), case, out)
+        if case.group != synth.patient_of(64):  # valis120_hires misses the smallest size
+            methods.run_case(_fake("valis120_hires"), case, out)
     return cases_root, out, cs
 
 
@@ -197,8 +197,8 @@ def test_synthetic_cost_has_a_row_per_run_and_size(scored):
     # every Task 31 stem is a column, with clock and unit beside
     for stem in S.costs.STEMS:
         assert stem in rows[0]
-    # valis_mirage never ran on s00064: a row that says so, not a silent absence
-    v64 = [r for r in mine if r["row"] == "valis_mirage" and r["size_px"] == "64"]
+    # valis120_hires never ran on s00064: a row that says so, not a silent absence
+    v64 = [r for r in mine if r["row"] == "valis120_hires" and r["size_px"] == "64"]
     assert len(v64) == 1 and v64[0]["status"] == "not_run"
     # the ten runs that ran nowhere are rows of their status too
     assert {r["row"] for r in mine} == set(T.terminal_rows("synthetic").values())
@@ -225,10 +225,10 @@ def test_the_scaling_fits_three_sizes_and_says_why_not_with_two(scored):
     assert s["fit_ok"] == "True" and s["n_sizes_used"] == "3"
     assert s["sizes_used"] == "64|128|256" and s["min_n"] == "3"
     assert s["slope_ci_low"] is not None and s["n_repeats"] == "1"
-    v = by[("valis_mirage", "cpu_h_used")]
+    v = by[("valis120_hires", "cpu_h_used")]
     assert v["fit_ok"] == "False" and v["n_sizes_used"] == "2"
     assert "a fit needs 3" in v["no_fit_reason"]
-    nothing = by[("valis120_hires", "wall_s")]
+    nothing = by[("valis120_micro", "wall_s")]  # valis120's terminal row
     assert (
         nothing["fit_ok"] == "False" and "no size complete" in nothing["no_fit_reason"]
     )
@@ -548,7 +548,7 @@ def _synthetic_cost_rows(peaks):
 def test_fig2c_overlays_the_synthetic_peaks_and_draws_as_before_without_them(paper):  # noqa: F811
     # fig2c is a placeholder without a cost_fits row (as test_cost_figures writes one)
     schema.write(paper / "cost_fits.csv", "cost_fits", [schema.empty_row(
-        "cost_fits", source="regbench", dataset="multiplex", family="valis_mirage",
+        "cost_fits", source="regbench", dataset="multiplex", family="valis",
         row="valis_a", target="cpu_h_used", predictor="input_gpx", fit_ok=False)])
     before = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
     src_before = _read(next(f for f in before["files"] if f.endswith("_source_data.csv")))
@@ -558,8 +558,8 @@ def test_fig2c_overlays_the_synthetic_peaks_and_draws_as_before_without_them(pap
     schema.write(d / "synthetic_cost.csv", "synthetic_cost", _synthetic_cost_rows([
         ("stare", "stare", "peak_largest_job_gb", 4096, 1.5),
         ("stare", "stare", "peak_largest_job_gb", 8192, 2.5),
-        ("valis_mirage", "valis_mirage", "peak_rss_gb", 4096, 6.0),
-        ("valis_mirage", "valis_mirage", "peak_rss_gb", 8192, 20.0),
+        ("valis120_hires", "valis", "peak_rss_gb", 4096, 6.0),
+        ("valis120_hires", "valis", "peak_rss_gb", 8192, 20.0),
     ]))
     res = cost_plots.fig2c_cost_vs_input(paper, paper / "figures")
     src = _read(next(f for f in res["files"] if f.endswith("_source_data.csv")))
@@ -567,9 +567,7 @@ def test_fig2c_overlays_the_synthetic_peaks_and_draws_as_before_without_them(pap
     assert {(r["row"], r["unit_id"]) for r in synth_rows} == {
         ("synthetic:stare:peak_largest_job_gb", "s04096"),
         ("synthetic:stare:peak_largest_job_gb", "s08192"),
-        ("synthetic:valis_mirage:peak_rss_gb", "s04096"),
-        ("synthetic:valis_mirage:peak_rss_gb", "s08192"),
-    }
+    }  # a VALIS row's peak is not a series of fig. 2c (cost_plots.SYNTH_PEAKS)
     assert {r["panel"] for r in synth_rows} == {"patient:peak_rss_gb"}
     # the cohort's own points are untouched by the overlay
     assert [r for r in src if not r["row"].startswith("synthetic")] == src_before

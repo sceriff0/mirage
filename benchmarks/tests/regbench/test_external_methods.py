@@ -57,13 +57,6 @@ def test_valis120_hires_points_follow_its_images(tmp_path):
     assert variants == dict.fromkeys(names, selfcheck.OK), rec
 
 
-def test_valis_mirage_points_follow_the_pipelines_images(tmp_path):
-    need_valis("1.0.0")
-    variants, rec = _valis_selfcheck("valis_mirage", tmp_path)
-    names = ("valis_mirage_rigid", "valis_mirage_nonrigid", "valis_mirage")
-    assert variants == dict.fromkeys(names, selfcheck.OK), rec
-
-
 _PATIENT = """
 import json, sys
 from pathlib import Path

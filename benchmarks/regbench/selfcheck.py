@@ -180,17 +180,10 @@ SIZES = {
     # round, which is what every cohort patient is: VALIS orders the slides and, at
     # upstream's defaults (`valis120*`: `align_to_reference=False`), registers each to
     # its NEIGHBOUR in that order, so a round may reach the reference through the other
-    # round; the pipeline's settings (`valis_mirage`) register each to the reference.
-    # A pair cannot show either path apart from the other. Small on purpose (three
+    # round. A pair cannot show that path. Small on purpose (three
     # 2048 x 2560 slides, under the first rung); the large pair stays the one that
     # reaches the micro passes, and it stays last.
     "valis": [
-        (DEFAULT_HW, None),
-        VALIS_OVERHANG,
-        VALIS_PATIENT,
-        ((24000, 30000), (23000, 29000)),
-    ],
-    "valis_mirage": [
         (DEFAULT_HW, None),
         VALIS_OVERHANG,
         VALIS_PATIENT,

@@ -31,14 +31,14 @@ def test_valis_picking_channel_zero_on_a_celltox_round_is_flagged(tmp_path):
     out = tmp_path / "out"
     # VALIS's `dapi` regex: the reference has DAPI at 0; the moving round's names do
     # not match it once (two DAPI-like names), so VALIS fell to channel 0 (CELLTOX)
-    _record(out, "valis_mirage", case, method="valis_mirage", info={"nuclear_channel": {
+    _record(out, "valis120", case, method="valis", info={"nuclear_channel": {
         "P1_ref": {"index": 0, "name": "DAPI"},
         "P1_r1": {"index": 0, "name": "CELLTOX"}}})
     _record(out, "stare", case, method="stare", info={"nuclear_index": 2})
     _record(out, "palom", case, method="palom", native={"nuclear_channel": 2})
     got = {r["run"]: r for r in reg_channels.rows(
-        out, case, ["initial", "valis_mirage", "stare", "palom", "ashlar"])}
-    v = got["valis_mirage"]
+        out, case, ["initial", "valis120", "stare", "palom", "ashlar"])}
+    v = got["valis120"]
     assert (v["nuclear_channel_ref"], v["nuclear_channel_mov"]) == (0, 2)
     assert (v["registered_on_ref"], v["registered_on_mov"]) == (0, 0)
     assert v["registered_name_mov"] == "CELLTOX" and v["nuclear_name_mov"] == "DAPI"
@@ -58,11 +58,11 @@ def test_a_matching_stare_round_and_an_unmatched_valis_slide(tmp_path):
     case = _case(tmp_path, ref_channel=0, mov_channel=0)
     out = tmp_path / "out"
     _record(out, "stare", case, method="stare", info={"nuclear_index": 0})
-    _record(out, "valis_mirage", case, method="valis_mirage", info={"nuclear_channel": {
+    _record(out, "valis120", case, method="valis", info={"nuclear_channel": {
         "something_else": {"index": 1, "name": "CD8"}}})
-    got = {r["run"]: r for r in reg_channels.rows(out, case, ["stare", "valis_mirage"])}
+    got = {r["run"]: r for r in reg_channels.rows(out, case, ["stare", "valis120"])}
     assert got["stare"]["registration_channel_is_nuclear"] is True
-    v = got["valis_mirage"]
+    v = got["valis120"]
     assert v["registration_channel_is_nuclear"] == reg_channels.NOT_RECORDED
     assert "something_else" in v["note"]
 

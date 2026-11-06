@@ -454,10 +454,10 @@ def fig3f_cpu_wall_best(paper_dir, fig_dir):
 
 # ── Fig. 2c: scaling with the input ──────────────────────────────────────────
 # T32: what fig. 2c reads of the synthetic scaling set, against its size: STARE's
-# per-task peak (its largest stage job) and the pipeline VALIS's per-patient peak
+# per-task peak (its largest stage job). (The pipeline VALIS's per-patient peak was the
+# other series until the valis_mirage row was retired on 2026-11-05.)
 SYNTH_PEAKS = (
     ("stare", "peak_largest_job_gb", "STARE per-task peak (largest stage job)", "D"),
-    ("valis_mirage", "peak_rss_gb", "VALIS (MIRAGE) per-patient peak", "s"),
 )
 
 

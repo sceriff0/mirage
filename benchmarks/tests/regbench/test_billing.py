@@ -745,23 +745,21 @@ def test_the_jvm_heap_is_in_the_tables_as_the_run_recorded_it():
     set by nothing here."""
     base = {"dataset": "multiplex", "group": "P1", "case_id": "P1_r1"}
     asked = single(method="valis", info={"jvm_heap_gb": 60, "jvm_max_heap_gb": 60.0})
-    kept = single(
-        method="valis_mirage", info={"jvm_heap_gb": 60, "jvm_max_heap_gb": 10.0}
-    )
+    kept = single(method="valis", info={"jvm_heap_gb": 60, "jvm_max_heap_gb": 10.0})
     rows = [
         {**score.resource_row(asked), **base, "method": "valis120_hires"},
-        {**score.resource_row(kept), **base, "method": "valis_mirage"},
+        {**score.resource_row(kept), **base, "method": "valis120"},
         {**score.resource_row(single()), **base, "method": "palom"},
     ]
     assert (rows[0]["jvm_heap_asked_gb"], rows[0]["jvm_max_heap_gb"]) == (60.0, 60.0)
     assert (rows[1]["jvm_heap_asked_gb"], rows[1]["jvm_max_heap_gb"]) == (60.0, 10.0)
     assert rows[2]["jvm_heap_asked_gb"] == "" and rows[2]["jvm_max_heap_gb"] == ""
     per = {r["method"]: r for r in score.summarise_resources(rows)}
-    assert per["valis_mirage"]["jvm_max_heap_gb"] == 10.0
+    assert per["valis120"]["jvm_max_heap_gb"] == 10.0
     assert per["palom"]["jvm_max_heap_gb"] == ""
     (line,) = score.jvm_heap_lines(list(per.values()))
     assert "`valis120_hires` 60 GiB (asked 60)" in line
-    assert "`valis_mirage` 10 GiB (asked 60)" in line and "palom" not in line
+    assert "`valis120` 10 GiB (asked 60)" in line and "palom" not in line
     assert score.jvm_heap_lines([per["palom"]]) == []
     assert line in score.summary_markdown([], [], list(per.values()))
 

@@ -394,7 +394,7 @@ def main(argv=None):
     ap.add_argument("--cohort-dataset", default="multiplex")
     ap.add_argument(
         "--valis",
-        default="valis120,valis,valis_mirage",
+        default="valis120,valis",
         help="VALIS variant; comma-separated alternatives, first found wins",
     )
     ap.add_argument("--stare", default="stare", help="STARE variant (high tier)")

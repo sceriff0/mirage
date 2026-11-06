@@ -68,10 +68,10 @@ def test_the_verdicts_file_has_a_line_per_run_and_check(tmp_path, capsys):
     code, _, lines = _verdict(out, "stare")
     assert code == 0 and _line(lines, "stare")[2] == "inconsistent"
     # every run and both checks, one line each
-    _, _, lines = _verdict(out, "stare", "palom", "valis_mirage")
+    _, _, lines = _verdict(out, "stare", "palom", "valis120_hires")
     assert [x[:2] for x in lines] == [
         [run, check]
-        for run in ("stare", "palom", "valis_mirage")
+        for run in ("stare", "palom", "valis120_hires")
         for check in ("selfcheck", "realcheck")
     ]
 
@@ -120,7 +120,7 @@ def _row(status):
     return {"status": status}
 
 
-@pytest.mark.parametrize("run", ["valis_mirage", "valis120_hires", "stare", "ashlar"])
+@pytest.mark.parametrize("run", ["valis120", "valis120_hires", "stare", "ashlar"])
 @pytest.mark.parametrize("died", ["not_checked", "crashed"])
 def test_the_verdict_is_never_better_than_a_case_that_died(tmp_path, run, died):
     """One case ok on every row, another whose process died without a row: the record's
@@ -159,7 +159,7 @@ def test_the_verdict_is_never_better_than_a_case_that_died(tmp_path, run, died):
 
 
 @pytest.mark.parametrize(
-    "method, label", [("valis_mirage", None), ("valis", "valis120_hires")]
+    "method, label", [("valis", "valis120"), ("valis", "valis120_hires")]
 )
 @pytest.mark.parametrize(
     "code, died", [(-9, "not_checked"), (137, "not_checked"), (1, "crashed")]
@@ -250,37 +250,37 @@ def test_the_realcheck_verdict_reads_the_realcheck_rows_own_record(tmp_path):
     a_case(root, "P2_a", "P2")
 
     def real():
-        code, _, lines = _verdict(out, "valis_mirage")
+        code, _, lines = _verdict(out, "valis120_hires")
         assert code == 0
-        return _line(lines, "valis_mirage", "realcheck")
+        return _line(lines, "valis120_hires", "realcheck")
 
     assert real() == [
-        "valis_mirage", "realcheck", "not_checked", "-", "valis_mirage",
+        "valis120_hires", "realcheck", "not_checked", "-", "valis120_hires",
         "no realcheck of this submission beside an ok result",
     ]  # fmt: skip
     for case in first:
         write_json(
-            result_dir(out, "valis_mirage", case) / "realcheck.json", {"flag": False}
+            result_dir(out, "valis120_hires", case) / "realcheck.json", {"flag": False}
         )
     # a realcheck beside no run, or beside a failed one, answers for nothing: it is
     # what an earlier launch left behind (review item 13)
     assert real()[2] == "not_checked"
     for case in first:
-        write_json(result_dir(out, "valis_mirage", case) / "run.json", {"ok": False})
+        write_json(result_dir(out, "valis120_hires", case) / "run.json", {"ok": False})
     assert real()[2] == "not_checked"
     for case in first:
         write_json(
-            result_dir(out, "valis_mirage", case) / "run.json",
+            result_dir(out, "valis120_hires", case) / "run.json",
             {"ok": True, "submissions": ["s1"]},
         )
     # a flag on a row that is not the realcheck's
     write_json(
-        result_dir(out, "valis_mirage_rigid", first[0]) / "realcheck.json",
+        result_dir(out, "valis120_hires_rigid", first[0]) / "realcheck.json",
         {"flag": True},
     )
     assert real()[2::3] == ["ok", "-"]
     write_json(
-        result_dir(out, "valis_mirage", first[1]) / "realcheck.json", {"flag": True}
+        result_dir(out, "valis120_hires", first[1]) / "realcheck.json", {"flag": True}
     )
     assert real()[2::3] == ["flagged", "flagged on P1_b"]
     # a run without a realcheck has a line all the same, with nothing in it
@@ -293,13 +293,13 @@ def test_the_realcheck_verdict_reports_not_checked_for_a_record_of_another_submi
 ):
     root, out = tmp_path / "cases", tmp_path / "out"
     case = a_case(root, "P1_a", "P1")
-    d = result_dir(out, "valis_mirage", case)
+    d = result_dir(out, "valis120_hires", case)
     write_json(d / "realcheck.json", {"flag": True})
     write_json(d / "run.json", {"ok": True, "submissions": ["old"]})
-    _, _, lines = _verdict(out, "valis_mirage", submission="new")
-    assert _line(lines, "valis_mirage", "realcheck")[2] == "not_checked"
-    _, _, lines = _verdict(out, "valis_mirage", submission="old")
-    assert _line(lines, "valis_mirage", "realcheck")[2] == "flagged"
+    _, _, lines = _verdict(out, "valis120_hires", submission="new")
+    assert _line(lines, "valis120_hires", "realcheck")[2] == "not_checked"
+    _, _, lines = _verdict(out, "valis120_hires", submission="old")
+    assert _line(lines, "valis120_hires", "realcheck")[2] == "flagged"
 
 
 def test_the_selfcheck_verdict_reports_not_checked_for_a_record_of_another_submission(
@@ -332,8 +332,8 @@ VERDICTS = (
     "stare\trealcheck\t-\t-\t-\t-\n"
     "valis120\tselfcheck\tcrashed\t-\tvalis120_rigid,valis120\tno selfcheck record\n"
     "valis120\trealcheck\t-\t-\t-\t-\n"
-    "valis_mirage\tselfcheck\tok\t-\tvalis_mirage_rigid,valis_mirage\t-\n"
-    "valis_mirage\trealcheck\tflagged\t-\tvalis_mirage\tflagged on P1_r1\n"
+    "valis120_hires\tselfcheck\tok\t-\tvalis120_hires_rigid,valis120_hires\t-\n"
+    "valis120_hires\trealcheck\tflagged\t-\tvalis120_hires\tflagged on P1_r1\n"
 )
 
 
@@ -349,20 +349,20 @@ def test_the_summary_says_what_every_selfcheck_said(tmp_path):
     path.write_text(VERDICTS)
     got = score.score(root, out, ["multiplex"], with_tissue=False, verdicts=path)
     by_run = {g["run"]: g for g in got["launch"]}
-    assert set(by_run) == {"palom", "stare", "valis120", "valis_mirage"}
+    assert set(by_run) == {"palom", "stare", "valis120", "valis120_hires"}
     assert by_run["palom"]["selfcheck"] == "inconsistent"
-    assert by_run["valis_mirage"]["realcheck"] == "flagged"
+    assert by_run["valis120_hires"]["realcheck"] == "flagged"
     block = _section((out / "tables" / "summary.md").read_text())
     assert "- `palom`: selfcheck inconsistent; log /logs/rb-sc-palom.log" in block
     assert "- `stare`: selfcheck ok" in block
     assert "- `valis120`: selfcheck crashed; log no selfcheck record" in block
     assert (
-        "- `valis_mirage`: selfcheck ok; realcheck flagged (flagged on P1_r1)" in block
+        "- `valis120_hires`: selfcheck ok; realcheck flagged (flagged on P1_r1)" in block
     )
     with open(out / "tables" / "launch.csv", newline="") as fh:
         rows = list(csv.DictReader(fh))
     assert list(rows[0]) == ["run", "selfcheck", "realcheck", "reference", "log"]
-    assert [r["run"] for r in rows] == ["palom", "stare", "valis120", "valis_mirage"]
+    assert [r["run"] for r in rows] == ["palom", "stare", "valis120", "valis120_hires"]
 
     # through the command line
     cli.main(
@@ -499,18 +499,18 @@ def test_an_unreadable_realcheck_is_reported_unreadable_not_skipped(tmp_path):
     first, second = a_case(root, "P1_a", "P1"), a_case(root, "P1_b", "P1")
     for case in (first, second):
         write_json(
-            result_dir(out, "valis_mirage", case) / "run.json",
+            result_dir(out, "valis120_hires", case) / "run.json",
             {"ok": True, "submissions": ["s1"]},
         )
-    write_json(result_dir(out, "valis_mirage", first) / "realcheck.json", {"flag": False})
-    (result_dir(out, "valis_mirage", second) / "realcheck.json").write_text("{trunc")
-    _, _, lines = _verdict(out, "valis_mirage")
-    line = _line(lines, "valis_mirage", "realcheck")
+    write_json(result_dir(out, "valis120_hires", first) / "realcheck.json", {"flag": False})
+    (result_dir(out, "valis120_hires", second) / "realcheck.json").write_text("{trunc")
+    _, _, lines = _verdict(out, "valis120_hires")
+    line = _line(lines, "valis120_hires", "realcheck")
     assert line[2] == "unreadable"
     assert line[5] == "realcheck.json unreadable on P1_b"
     # a flag still wins the status, and the unreadable one is still said
-    write_json(result_dir(out, "valis_mirage", first) / "realcheck.json", {"flag": True})
-    _, _, lines = _verdict(out, "valis_mirage")
-    line = _line(lines, "valis_mirage", "realcheck")
+    write_json(result_dir(out, "valis120_hires", first) / "realcheck.json", {"flag": True})
+    _, _, lines = _verdict(out, "valis120_hires")
+    line = _line(lines, "valis120_hires", "realcheck")
     assert line[2] == "flagged"
     assert line[5] == "flagged on P1_a; realcheck.json unreadable on P1_b"

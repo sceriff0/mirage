@@ -83,10 +83,10 @@ cross too, tier x stride x level (45 runs: ``bf_same``'s five levels;
 ``stare_<tier>[_s<stride>]_<level>``, ``stare_tier_cell``), and every other method its
 defaults only (50 runs; rulings 2026-10-19). The manuscript's HyReCo STARE row (Fig. 3f)
 is ``stare_haem_none``: haematoxylin, high tier, stride 64, no intensity preprocessing.
-The pipeline's VALIS runs at its three tiers x micro-registration depth 0, 1, 2
-(``_valis_mirage_runs``): ``valis_mirage`` is (``high``, 2), the shipped call, and the
-other eight are ``valis_mirage_<tier>_m<depth>``, checked by ``valis_mirage``'s selfcheck,
-with no realcheck (only the primary row has one).
+The pipeline's tuned VALIS 1.0.0 row (``valis_mirage``, at three tiers x
+micro-registration depth 0, 1, 2) was retired on 2026-11-05 with that configuration; its
+adapter is at the git tag ``archive/regbench-valis-mirage`` (the configuration at
+``archive/valis-mirage-tuned``).
 
 **Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
 default setting AND at upstream's high-resolution one; the high-resolution row is the
@@ -97,8 +97,8 @@ are the one line to change for each.
 cluster: ``REGBENCH_SIF_<image>``. For an image this repository builds, the suffix is its
 directory under ``containers/`` in capitals with ``-`` written ``_`` (``BUILT_HERE``):
 ``REGBENCH_SIF_STARE_REGBENCH``, ``REGBENCH_SIF_VALIS120``, ``REGBENCH_SIF_DEEPERHISTREG``,
-``REGBENCH_SIF_PALOM``; the two that are their authors' published images plus the slide reader's
-codecs are ``REGBENCH_SIF_VALIS_MIRAGE`` and ``REGBENCH_SIF_ASHLAR`` (``PULLED``). ``SCORER_IMAGE`` names the one ``tissue`` and
+``REGBENCH_SIF_PALOM``; the one that is its authors' published image plus the slide reader's
+codecs is ``REGBENCH_SIF_ASHLAR`` (``PULLED``). ``SCORER_IMAGE`` names the one ``tissue`` and
 ``score`` run in.
 """
 
@@ -108,7 +108,6 @@ from typing import NamedTuple
 
 from . import COST_ONLY_KINDS, PUBLIC, base_name, methods, plugins, public_of, regimes
 from .methods import ashlar as _ashlar
-from .methods import valis_mirage as _valis_mirage
 
 # benchmarks.regbench.methods.deeperhistreg.HR_CONFIG, written out so that reading the
 # list starts no adapter; the tests hold the two equal.
@@ -300,33 +299,6 @@ def _stare_local4_runs():
     )
 
 
-def _valis_mirage_runs():
-    """The pipeline's VALIS at its three tiers x micro-registration depth 0, 1, 2
-    (``methods.valis_mirage.TIERS`` x ``MICRO``): ``valis_mirage`` (``high``, 2, the shipped
-    call, no options) first, then the other eight as ``valis_mirage_<tier>_m<depth>``.
-    Depth 1 is micro-rigid only; a non-rigid ``micro`` stage exists only at depth 2
-    (``methods.valis_mirage.STAGES_AT_DEPTH``)."""
-    out = [Run("valis_mirage", None, {}, "VALIS_MIRAGE", False, None)]
-    for t in _valis_mirage.TIERS:
-        for m in _valis_mirage.MICRO:
-            if (t, m) == (
-                _valis_mirage.ARGS["memory_mode"],
-                _valis_mirage.ARGS["micro_reg"],
-            ):
-                continue  # the shipped call: `valis_mirage` itself
-            out.append(
-                Run(
-                    "valis_mirage",
-                    f"valis_mirage_{t}_m{m}",
-                    {"memory_mode": t, "micro_reg": str(m)},
-                    "VALIS_MIRAGE",
-                    False,
-                    None,
-                )
-            )
-    return tuple(out)
-
-
 ASHLAR_AFFINES = _ashlar.AFFINES
 ASHLAR_NOISES = _ashlar.NOISE_FRACS
 ASHLAR_SHIFTS = _ashlar.MAX_SHIFTS_UM
@@ -354,7 +326,6 @@ RUNS = (
     *_stare_tier_runs(),
     *_stare_landmark_tier_runs(),
     *_stare_local4_runs(),
-    *_valis_mirage_runs(),
     Run("valis", "valis120", {}, "VALIS120", False, None),
     Run("valis", "valis120_hires", {"hires": "1"}, "VALIS120", False, None),
     Run(
@@ -437,7 +408,6 @@ PRIMARY_VALIS120 = "valis120_hires"
 PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_gpu"
 PRIMARY = (
     "stare",
-    "valis_mirage",
     PRIMARY_VALIS120,
     PRIMARY_DEEPERHISTREG,
     "ashlar",
@@ -452,7 +422,6 @@ PRIMARY = (
 FAMILY = {
     "stare": "stare",
     "ashlar_astare": "affine_ashlar",
-    "valis_mirage": "valis_mirage",
     "valis120": "valis120",
     "deeperhistreg": "deeperhistreg",
     "ashlar": "ashlar",
@@ -478,8 +447,6 @@ CHECKED_BY = {
     **{r.label: "stare" for r in _stare_landmark_tier_runs()},
     # STARE at 4 CPUs in one job: `stare` itself, another execution
     **{r.label: "stare" for r in _stare_local4_runs()},
-    # the pipeline's VALIS at its other tier x depth cells: the same adapter and point path
-    **{r.label: "valis_mirage" for r in _valis_mirage_runs() if r.label is not None},
 }
 
 # the private plug-in's key keeps its older name
@@ -501,11 +468,11 @@ _FLUO_ON_RGB = (
     ),
 )
 # Ruling 2026-10-19: on a landmark set every method but STARE runs its defaults only:
-# the pipeline's VALIS as shipped, VALIS 1.2.0 at both of upstream's settings, and
-# DeeperHistReg's two shipped configurations on the GPU. Its other rows (the pipeline
-# VALIS's tier x micro-registration cells, DeeperHistReg's CPU twins) are left out.
+# VALIS 1.2.0 at both of upstream's settings and DeeperHistReg's two shipped
+# configurations on the GPU. Its other rows (DeeperHistReg's CPU twins) are left out.
+# (The pipeline's tuned VALIS 1.0.0, ``valis_mirage``, was one of them until its row was
+# retired on 2026-11-05.)
 _LANDMARK_DEFAULTS = (
-    "valis_mirage",
     "valis120",
     "valis120_hires",
     "deeperhistreg_gpu",
@@ -526,8 +493,8 @@ NOT_ON = {
     if spec["modality"] == "brightfield"
 }
 # T32 (user 2026-10-19): the synthetic scaling set (regbench.PUBLIC["synthetic"], cost
-# only) runs STARE's tier x stride cross with no prep and the three VALIS runs, nothing
-# else. These are existing RUNS entries: no run is added for it, so the cohort's and the
+# only) runs STARE's tier x stride cross with no prep and the two VALIS 1.2.0 runs,
+# nothing else (``valis_mirage`` left with its row, 2026-11-05). These are existing RUNS entries: no run is added for it, so the cohort's and the
 # other datasets' run lists are what they were. Every other run is in the set's
 # excluded_runs.csv with SYNTHETIC_REASON (excluded_for).
 SYNTHETIC_RUNS = (
@@ -540,16 +507,17 @@ SYNTHETIC_RUNS = (
     "stare_low",
     "stare_low_s128_none",
     "stare_low_s256_none",
-    "valis_mirage",
     "valis120",
     "valis120_hires",
 )
 SYNTHETIC_REASON = (
-    "synthetic: STARE (tier x stride, no prep) and VALIS (mirage, 1.2.0 default, 1.2.0 "
-    "hires) only (user 2026-10-19)"
+    "synthetic: STARE (tier x stride, no prep) and VALIS (1.2.0 default, 1.2.0 hires) "
+    "only (user 2026-10-19)"
 )
-# the CPU cross on the synthetic set (T32): these runs at 4 and 8 CPUs, at these sizes
-SYNTHETIC_CROSS_RUNS = ("stare", "valis_mirage")
+# the CPU cross on the synthetic set (T32): these runs at 4 and 8 CPUs, at these sizes.
+# VALIS's is valis120, the paper's comparator (it was valis_mirage until that row was
+# retired on 2026-11-05).
+SYNTHETIC_CROSS_RUNS = ("stare", "valis120")
 SYNTHETIC_CROSS_SIZES = (4096, 32768)
 
 
@@ -565,11 +533,11 @@ for _dataset, _left_out in (plugins.get("NOT_ON", {}) or {}).items():
         for _name, _why in _left_out.items()
     )
 
-# The methods whose realcheck is run and REPORTED (never a gate): the two VALIS adapters.
-# Their point path is derived by the benchmark, not handed over by the package, so it is
-# also checked on a real case. It reads the run's PRIMARY row; a run of these methods
+# The methods whose realcheck is run and REPORTED (never a gate): the VALIS adapter.
+# Its point path is derived by the benchmark, not handed over by the package, so it is
+# also checked on a real case. It reads the run's PRIMARY row; a run of this method
 # without one has none.
-REALCHECK_METHODS = ("valis_mirage", "valis")
+REALCHECK_METHODS = ("valis",)
 
 # Image -> the build context under containers/ (images.json) for the ones this repository
 # builds, and the upstream reference for the ones it pulls.
@@ -582,8 +550,6 @@ BUILT_HERE = {
     "PALOM": "palom",
 }
 PULLED = {
-    "VALIS_MIRAGE": "cdgatenbee/valis-wsi 1.0.0 (the digest of modules/local/register.nf), "
-    "with the slide reader's codecs added: containers/valis100",
     "ASHLAR": "labsyspharm/ashlar:1.20.0, with imagecodecs added: containers/ashlar120",
 }
 

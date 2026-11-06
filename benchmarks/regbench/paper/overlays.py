@@ -23,10 +23,8 @@ cases are recorded too (their STARE row, ``rule`` beginning ``candidate case``).
 
 **The rigid stage** of a row is read from the run list, never from a hand list
 (``rigid_of``): the first result name of the row's run (``variants.variants_of``) when the
-run writes more than one and that name is a rigid stage (``tables.stage_of``: ``rigid`` or
-``micro_rigid``). STARE's ``<run>_rigid``, VALIS's ``<run>_rigid`` (at micro-registration
-depth 1 and 2 that row already holds the micro-rigid pass: titled ``after rigid (+
-micro-rigid)``), PALOM's ``palom_affine``. ASHLAR and DeeperHistReg write one row per run:
+run writes more than one and that name is a rigid stage (``tables.stage_of``: ``rigid``).
+STARE's ``<run>_rigid``, PALOM's ``palom_affine``. ASHLAR and DeeperHistReg write one row per run:
 their rigid panel says ``no rigid stage`` and nothing is drawn in it.
 
 **Panels**, each a two-colour nuclear overlay of the field (reference cyan, moving
@@ -91,7 +89,7 @@ from . import plotstyle as ps  # noqa: E402
 
 STAGES = ("initial", "rigid", "final")
 OVERLAYS = ("fig3a_overlays", "fig1c_overlay_before", "fig2b_overlay_stare")
-FIG3A_FAMILIES = ("stare", "valis_mirage", "palom", "deeperhistreg", "ashlar")
+FIG3A_FAMILIES = ("stare", "palom", "deeperhistreg", "ashlar")
 STARE_FAMILY = "stare"
 COHORT = tables.COHORT
 ROI_UM = 300.0
@@ -110,7 +108,6 @@ SCALE_BARS_UM = (1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000)
 BEFORE = "before"
 WHOLE = "after the whole transform"
 RIGID = "after rigid"
-RIGID_MICRO = "after rigid (+ micro-rigid)"
 NO_RIGID = "no rigid stage"
 
 ROI_RULE = (
@@ -325,14 +322,11 @@ def rigid_of(row):
     if len(names) < 2:
         return None
     first = names[0]
-    return first if tables.stage_of(first) in ("rigid", "micro_rigid") else None
+    return first if tables.stage_of(first) == "rigid" else None
 
 
 def rigid_title(row):
-    rigid = rigid_of(row)
-    if rigid is None:
-        return NO_RIGID
-    return RIGID_MICRO if tables.stage_of(rigid) == "micro_rigid" else RIGID
+    return NO_RIGID if rigid_of(row) is None else RIGID
 
 
 def stage_rows_of(row):

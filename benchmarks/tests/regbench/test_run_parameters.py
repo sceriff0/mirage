@@ -7,7 +7,7 @@ from benchmarks.regbench.methods import (
     deeperhistreg,
     palom,
     stare,
-    valis_mirage,
+    valis,
 )
 from benchmarks.regbench.paper import tables
 
@@ -26,16 +26,13 @@ def test_stare_names_its_tier_stride_and_preprocessing():
     assert _got("stare_clahe")["sprep"][0] == "clahe"
 
 
-def test_valis_names_its_sizes_and_micro_level():
-    got = _got("valis_mirage_low_m0")
-    assert got["memory_mode"][0] == "low" and got["micro_reg"][0] == 0
-    assert got["micro_reg_fraction"][0] == valis_mirage.ARGS["micro_reg_fraction"]
-    assert got["max_image_dim_px"][0] == valis_mirage.ARGS["max_image_dim_px"]
-    # the tier's sizes are the pipeline's MEMORY_PRESETS row, read from its source
-    assert got["max_processed_image_dim_px"][0] == 512
-    assert got["max_non_rigid_registration_dim_px"][0] == 512
-    assert "valis_config.py" in got["max_processed_image_dim_px"][1]
-    assert _got("valis_mirage")["max_processed_image_dim_px"][0] == 2048
+def test_valis_names_its_setting_and_micro_fraction():
+    # VALIS 1.2.0 at upstream's two settings (the tuned 1.0.0 row was retired 2026-11-05)
+    assert _got("valis120")["hires"][0] is False
+    assert _got("valis120_hires")["hires"][0] is True
+    got = _got("valis120")
+    assert got["micro_reg_fraction"][0] == valis.MICRO_REG_FRACTION
+    assert "methods.valis" in got["hires"][1]
 
 
 def test_palom_ashlar_and_deeperhistreg():

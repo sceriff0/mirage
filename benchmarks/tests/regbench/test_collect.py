@@ -79,9 +79,9 @@ def test_the_arm_row_table():
     assert m("tiled_low_s64") == "stare_low"
     assert m("tiled_high_s128") == "stare_s128_none"
     assert m("tiled_high_s256") == "stare_s256_none"
-    assert m("valis_high_micro2") == "valis_mirage"
-    assert m("valis_medium_micro0") == "valis_mirage_medium_m0"
-    assert m("valis_low_micro1") == "valis_mirage_low_m1"
+    # the VALIS arms stood for the retired valis_mirage rows: no regbench row now
+    assert m("valis_high_micro2") is None
+    assert m("valis_medium_micro0") is None
     assert m("tiled_medium_s128") is None
     assert m("ashlar_s15") is None
 
@@ -144,7 +144,7 @@ def test_arm_cost_points_from_the_trace(tmp_path):
     valis = [p for p in pts if p["source"] == "arms:valis_high_micro2"]
     tiled = [p for p in pts if p["source"] == "arms:tiled_high_s64"]
     (v,) = valis  # the FAILED task is not a cost point; CONVERT_IMAGE is not REGISTER
-    assert v["row"] == "valis_mirage" and v["unit_id"] == "REGISTER:P1"
+    assert v["row"] is None and v["unit_id"] == "REGISTER:P1"  # no regbench row
     assert float(v["wall_s"]) == 3600.0 and float(v["peak_rss_gb"]) == 2.0
     assert float(v["input_gb"]) == 1.5 and float(v["cpu_h_used"]) == 2.0
     # T31 P14: a tiled arm's point is its PATIENT (the TILED_* tasks summed), wall the
@@ -226,15 +226,15 @@ def test_regbench_cost_counts_one_launch_once(tmp_path):
     rb = tmp_path / "rb"
     res = {"resources": {"cpu_s": 7200, "peak_rss_mb": 2048}, "register_s": 100.0}
     for case in ("P1_r1", "P1_r2"):  # a per-patient launch: the same cost in every round
-        _run_json(rb, "valis_mirage", case, ok=True, unit="patient", group="P1",
+        _run_json(rb, "valis120_hires", case, ok=True, unit="patient", group="P1",
                   launch_id="L1", **res)
     _run_json(rb, "stare", "P1_r1", ok=True, unit="pair", group="P1", launch_id="L2", **res)
     _run_json(rb, "stare", "P1_r2", ok=False, unit="pair", group="P1", launch_id="L3")
     collect.run(tmp_path / "c", None, None, None, [rb], None)
     pts = schema.read(tmp_path / "c" / "cost_points.csv")
     got = {(p["row"], p["unit_kind"], p["unit_id"]) for p in pts}
-    assert got == {("valis_mirage", "patient", "P1"), ("stare", "round", "P1_r1")}
-    (v,) = [p for p in pts if p["row"] == "valis_mirage"]
+    assert got == {("valis120_hires", "patient", "P1"), ("stare", "round", "P1_r1")}
+    (v,) = [p for p in pts if p["row"] == "valis120_hires"]
     assert float(v["cpu_h_used"]) == 2.0 and float(v["peak_rss_gb"]) == 2.0
     assert float(v["wall_s"]) == 100.0
 

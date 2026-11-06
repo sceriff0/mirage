@@ -3,7 +3,7 @@
 SCORE SIDE ONLY: no method imports this module and no method's behaviour changes (the
 method files are frozen). It reads what each round's ``run.json`` already records:
 
-- the VALIS rows (``valis_mirage``, ``valis120``): ``info.nuclear_channel``, ``{slide name:
+- the VALIS rows (``valis120``, ``valis120_hires``): ``info.nuclear_channel``, ``{slide name:
   {index, name}}``, the channel VALIS's default fluorescence processor read on each slide
   (a ``dapi`` regular expression on the channel names, channel 0 on no match or several:
   a CELLTOX round can fall to channel 0). A slide is matched to the case's reference or

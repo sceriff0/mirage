@@ -264,7 +264,7 @@
 #   REGBENCH_FIRST_RUNG               "<run>=<GB> ...": the ladder of each named run starts
 #                                     at that rung (one of the rungs, 16 64 256 512 700)
 #                                     and never tries the ones below it; e.g.
-#                                     "valis_mirage=256 valis120=256 valis120_hires=256".
+#                                     "valis120=256 valis120_hires=256".
 #                                     A run not named starts at the first; one in no run
 #                                     list of the launch is said and ignored. A GB that
 #                                     is not a rung, or one no node can grant,

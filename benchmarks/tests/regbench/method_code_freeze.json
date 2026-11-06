@@ -82,30 +82,5 @@
       "bin/utils/jvm_cache.py"
     ],
     "fingerprint": "c0bbbeff36af9077d52d4157dc71087e718e13feca65df478459fcf584a93ed9"
-  },
-  "valis_mirage": {
-    "files": [
-      "benchmarks/regbench/cases.py",
-      "benchmarks/regbench/landmark_io.py",
-      "benchmarks/regbench/mapping.py",
-      "benchmarks/regbench/methods/__init__.py",
-      "benchmarks/regbench/methods/_valis_points.py",
-      "benchmarks/regbench/methods/_valis_writer_field.py",
-      "benchmarks/regbench/methods/valis_mirage.py",
-      "benchmarks/regbench/resources.py",
-      "bin/register.py",
-      "bin/utils/image_utils.py",
-      "bin/utils/jvm_cache.py",
-      "bin/utils/logger.py",
-      "bin/utils/ome_io.py",
-      "bin/utils/pixel_size.py",
-      "bin/utils/progress.py",
-      "bin/utils/retry.py",
-      "bin/utils/tiled_io.py",
-      "bin/utils/valis_config.py",
-      "bin/utils/valis_micro_rigid.py",
-      "bin/utils/valis_preflight.py"
-    ],
-    "fingerprint": "51ae4dc53bef71ec4b8507a4ac753beea84c7a1e87e93948b9619a58d900ebe6"
   }
 }
