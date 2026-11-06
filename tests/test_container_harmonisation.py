@@ -160,8 +160,20 @@ BASE_IMAGE_PROVIDES = {
     # is therefore entirely the base image's -- read from Docker Hub's registry 2026-10-11
     # (containers/valis/Dockerfile header; the dist-info names of upstream's layer 22).
     "valis": {
-        "valis-wsi", "valis", "numpy", "scipy", "scikit-image", "pandas", "tifffile",
-        "psutil", "torch", "torchvision", "kornia", "pyvips", "scyjava", "jpype1",
+        "valis-wsi",
+        "valis",
+        "numpy",
+        "scipy",
+        "scikit-image",
+        "pandas",
+        "tifffile",
+        "psutil",
+        "torch",
+        "torchvision",
+        "kornia",
+        "pyvips",
+        "scyjava",
+        "jpype1",
     },
 }
 
