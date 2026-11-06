@@ -39,6 +39,8 @@ SAFE_PIXEL_SIZE_CONSUMERS = {
     "PREFLIGHT_SCALE",  # the one place params.pixel_size is resolved to a number
     "CONVERT_IMAGE",  # given the raw slide; resolves 'auto' from its own OME metadata
     "TILED_STITCH",  # given the moving image; resolves 'auto' itself
+    "TILED_COARSE",  # given reference + moving; STARE reads 'auto' from their OME header
+    "TILED_REG_TILE",  # given reference + moving; STARE reads 'auto' from their OME header
     "APPLY_PROFILES",  # given --image; resolves 'auto' itself
     "SPLIT_CHANNELS",  # given the registered image; resolves 'auto' itself
     "MERGE_AND_PYRAMID",  # given a probe image; resolves 'auto' itself
