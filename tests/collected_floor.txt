@@ -768,4 +768,12 @@
 # (STARE package split, the launch rules, the regbench work) were never ratcheted in, and
 # conftest.py rejects a floor more than 50 below the count. The removal moved nothing here:
 # it deleted only benchmarks/tests/, which this pipeline-side count does not collect.
-2279
+#
+# LOWERED 2026-11-06 on `benchmarking` (2279 -> 2245, the ratchet's one sanctioned exception:
+# a DELIBERATE removal, recorded here). The VALIS 1.2.0 defaults port retired MIRAGE's VALIS
+# settings, the tiers and the `tma` profile, and deleted their seven guards with them:
+# test_micro_reg_default_is_two.py, test_micro_reg_gating.py,
+# test_reg_presets_inlined_in_config.py, test_tma_profile.py, test_valis_matching_bounds.py,
+# test_valis_micro_rigid.py, test_valis_tier_sizes.py. Measured: 2219 passed + 26 skipped
+# locally, 2214 passed + 31 skipped in CI (run 42219269543), 2245 collected both ways.
+2245
