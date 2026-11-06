@@ -250,37 +250,37 @@ def test_the_realcheck_verdict_reads_the_realcheck_rows_own_record(tmp_path):
     a_case(root, "P2_a", "P2")
 
     def real():
-        code, _, lines = _verdict(out, "valis120_hires")
+        code, _, lines = _verdict(out, "valis120")
         assert code == 0
-        return _line(lines, "valis120_hires", "realcheck")
+        return _line(lines, "valis120", "realcheck")
 
     assert real() == [
-        "valis120_hires", "realcheck", "not_checked", "-", "valis120_hires",
+        "valis120", "realcheck", "not_checked", "-", "valis120",
         "no realcheck of this submission beside an ok result",
     ]  # fmt: skip
     for case in first:
         write_json(
-            result_dir(out, "valis120_hires", case) / "realcheck.json", {"flag": False}
+            result_dir(out, "valis120", case) / "realcheck.json", {"flag": False}
         )
     # a realcheck beside no run, or beside a failed one, answers for nothing: it is
     # what an earlier launch left behind (review item 13)
     assert real()[2] == "not_checked"
     for case in first:
-        write_json(result_dir(out, "valis120_hires", case) / "run.json", {"ok": False})
+        write_json(result_dir(out, "valis120", case) / "run.json", {"ok": False})
     assert real()[2] == "not_checked"
     for case in first:
         write_json(
-            result_dir(out, "valis120_hires", case) / "run.json",
+            result_dir(out, "valis120", case) / "run.json",
             {"ok": True, "submissions": ["s1"]},
         )
     # a flag on a row that is not the realcheck's
     write_json(
-        result_dir(out, "valis120_hires_rigid", first[0]) / "realcheck.json",
+        result_dir(out, "valis120_rigid", first[0]) / "realcheck.json",
         {"flag": True},
     )
     assert real()[2::3] == ["ok", "-"]
     write_json(
-        result_dir(out, "valis120_hires", first[1]) / "realcheck.json", {"flag": True}
+        result_dir(out, "valis120", first[1]) / "realcheck.json", {"flag": True}
     )
     assert real()[2::3] == ["flagged", "flagged on P1_b"]
     # a run without a realcheck has a line all the same, with nothing in it
@@ -293,13 +293,13 @@ def test_the_realcheck_verdict_reports_not_checked_for_a_record_of_another_submi
 ):
     root, out = tmp_path / "cases", tmp_path / "out"
     case = a_case(root, "P1_a", "P1")
-    d = result_dir(out, "valis120_hires", case)
+    d = result_dir(out, "valis120", case)
     write_json(d / "realcheck.json", {"flag": True})
     write_json(d / "run.json", {"ok": True, "submissions": ["old"]})
-    _, _, lines = _verdict(out, "valis120_hires", submission="new")
-    assert _line(lines, "valis120_hires", "realcheck")[2] == "not_checked"
-    _, _, lines = _verdict(out, "valis120_hires", submission="old")
-    assert _line(lines, "valis120_hires", "realcheck")[2] == "flagged"
+    _, _, lines = _verdict(out, "valis120", submission="new")
+    assert _line(lines, "valis120", "realcheck")[2] == "not_checked"
+    _, _, lines = _verdict(out, "valis120", submission="old")
+    assert _line(lines, "valis120", "realcheck")[2] == "flagged"
 
 
 def test_the_selfcheck_verdict_reports_not_checked_for_a_record_of_another_submission(
@@ -499,18 +499,18 @@ def test_an_unreadable_realcheck_is_reported_unreadable_not_skipped(tmp_path):
     first, second = a_case(root, "P1_a", "P1"), a_case(root, "P1_b", "P1")
     for case in (first, second):
         write_json(
-            result_dir(out, "valis120_hires", case) / "run.json",
+            result_dir(out, "valis120", case) / "run.json",
             {"ok": True, "submissions": ["s1"]},
         )
-    write_json(result_dir(out, "valis120_hires", first) / "realcheck.json", {"flag": False})
-    (result_dir(out, "valis120_hires", second) / "realcheck.json").write_text("{trunc")
-    _, _, lines = _verdict(out, "valis120_hires")
-    line = _line(lines, "valis120_hires", "realcheck")
+    write_json(result_dir(out, "valis120", first) / "realcheck.json", {"flag": False})
+    (result_dir(out, "valis120", second) / "realcheck.json").write_text("{trunc")
+    _, _, lines = _verdict(out, "valis120")
+    line = _line(lines, "valis120", "realcheck")
     assert line[2] == "unreadable"
     assert line[5] == "realcheck.json unreadable on P1_b"
     # a flag still wins the status, and the unreadable one is still said
-    write_json(result_dir(out, "valis120_hires", first) / "realcheck.json", {"flag": True})
-    _, _, lines = _verdict(out, "valis120_hires")
-    line = _line(lines, "valis120_hires", "realcheck")
+    write_json(result_dir(out, "valis120", first) / "realcheck.json", {"flag": True})
+    _, _, lines = _verdict(out, "valis120")
+    line = _line(lines, "valis120", "realcheck")
     assert line[2] == "flagged"
     assert line[5] == "flagged on P1_a; realcheck.json unreadable on P1_b"

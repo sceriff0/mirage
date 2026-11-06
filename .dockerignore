@@ -66,3 +66,4 @@ valis_lib
 # The root-level architecture/audit reviews (gitignored one by one, so a future
 # INTENDED root HTML is not swallowed silently). No directory rule covers them.
 /*.html
+new_results/

@@ -902,7 +902,7 @@ def test_no_job_asks_for_more_than_seven_days(site):
         h, m, s = (int(v) for v in clock.split(":"))
         assert int(days) * 86400 + h * 3600 + m * 60 + s <= 7 * 86400, job.name
     # three rounds at three days each would be nine: capped at the site's maximum
-    assert rungs(jobs, "valis120_hires", suffix="-first")[0].opt("--time") == "7-00:00:00"
+    assert rungs(jobs, "valis120", suffix="-first")[0].opt("--time") == "7-00:00:00"
     assert rungs(jobs, "palom")[0].opt("--time") == "3-00:00:00"
     # the last job of a staged round: one round's time plus the writer's 40 h
     assert rungs(jobs, "stare")[0].opt("--time") == "4-16:00:00"
@@ -2851,7 +2851,7 @@ def test_the_stage_task_and_the_last_job_are_told_what_they_are():
 def test_a_realcheck_runs_on_the_first_unit_without_holding_the_rest(dry):
     jobs, _, _ = dry
     real = {n: variants.realcheck_row(n) for n in RUNS if variants.realcheck_row(n)}
-    assert real == {"valis120_hires": "valis120_hires"}
+    assert real == {"valis120": "valis120"}
     settle = {n.strip("<>") for _, n in jobs["rb-settle"].deps}
     for run in real:
         first = rungs(jobs, run, suffix="-first")

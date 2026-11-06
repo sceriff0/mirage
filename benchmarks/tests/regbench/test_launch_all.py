@@ -358,7 +358,12 @@ def test_the_plain_launch_is_unchanged():
 
 
 # ── the GPU throttle ──────────────────────────────────────────────────────────────
-GPU_RUNS = {variants.run_name(r) for r in variants.runs_for(None) if r.gpu}
+# over the whole design: the launcher here launches it (the pre-archive sitecustomize)
+GPU_RUNS = {
+    variants.run_name(r)
+    for r in variants.RUNS
+    if r.gpu and variants._in_regime(None, r)
+}
 
 
 def _first_rungs(jobs):

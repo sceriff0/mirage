@@ -177,7 +177,8 @@ def test_status_of_another_dataset_reads_its_own_runs_and_cases(tmp_path, monkey
     rows, _ = status.tally(tmp_path / "out", empty, dataset="synthetic")
     want = {variants.run_name(r) for r in variants.runs_for("synthetic")}
     assert {r["run"] for r in rows} == want
-    assert "stare_medium_s128_none" in want and "stare_clahe" not in want
+    # (stare_medium_s128_none was the synthetic-only run until the 2026-11-06 archive)
+    assert want == set(variants.SYNTHETIC_RUNS) and "stare_clahe" not in want
     rows, _ = status.tally(tmp_path / "out", empty)  # the cohort: unchanged
     assert {r["run"] for r in rows} == {variants.run_name(r) for r in variants.runs_for(None)}
 

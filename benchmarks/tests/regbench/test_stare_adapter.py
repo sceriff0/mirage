@@ -269,7 +269,7 @@ def test_the_fluorescence_command_is_the_one_before_the_brightfield_rule(
     assert rnd.candidate is None and rnd.inputs is None
 
 
-def test_the_cohort_stare_list_is_unchanged():
+def test_the_cohort_stare_list_is_unchanged(pre_archive_runs):
     from benchmarks.regbench import variants
 
     cohort = [

@@ -472,7 +472,7 @@ def test_two_pairs_on_one_reference_canvas_get_folders_of_their_own(
 
 
 # ── a row that was never checked says so in every table ──────────────────────────────
-def test_a_stage_without_an_image_is_marked_in_every_table(tmp_path):
+def test_a_stage_without_an_image_is_marked_in_every_table(tmp_path, pre_archive_runs):
     root, out = tmp_path / "cases", tmp_path / "out"
     case = toy_case(root, "P1_r1", "P1")
     for name in ("stare_rigid", "stare", "ashlar_clean"):
@@ -515,7 +515,9 @@ def _masked_variant(share, cap=0.50):
     }
 
 
-def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(tmp_path, capsys):
+def test_a_run_over_its_mask_cap_is_scored_and_flagged_in_every_table(
+    tmp_path, capsys, pre_archive_runs
+):
     from benchmarks.regbench import cli
 
     root, out = tmp_path / "cases", tmp_path / "out"

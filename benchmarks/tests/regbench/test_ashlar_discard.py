@@ -27,7 +27,7 @@ def test_rigid_offset_of_a_rotation_is_read_at_the_centre():
     assert abs(got - (15**2 + 5**2) ** 0.5) < 1e-9
 
 
-def test_rows_read_the_cells_record_and_stares_anchor(tmp_path, toy_cases):
+def test_rows_read_the_cells_record_and_stares_anchor(tmp_path, toy_cases, pre_archive_runs):
     case = next(iter(toy_cases.values()))
     _run(
         tmp_path / "ashlar_anone_n0_s60" / case.dataset / case.case_id,
