@@ -111,6 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Two supplementary figure scripts, wired into `benchmarks/figures/make_figures.sh`: `fig_by_case_round.py` (Supplementary Fig. S6, target `by_case_round`: Dice and centroid distance per method by case and by moving round, with `by_case_round_medians.csv`) and `fig_seg_backends.py` (Supplementary Fig. S7, target `seg_backends`: one region segmented by each backend from its published GeoJSON, and the pairwise Dice of their whole-cell masks).
 - **`reg_valis_mode`: VALIS gets exactly two options, `default` and `hires`, both VALIS's
   own.** `default` (the default) is unchanged: `register()` at valis-wsi 1.2.0's defaults,
   the same rendered command. `hires` is valis-wsi 1.2.0's high-resolution example

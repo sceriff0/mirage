@@ -4,7 +4,8 @@
 #
 #   cd <regbench root> && bash <checkout>/benchmarks/figures/make_figures.sh [figure ...]
 #
-# figures: cost cohort crops crops_all overlay segmentation (default: all). Each figure writes
+# figures: cost cohort crops crops_all overlay segmentation by_case_round seg_backends
+# (default: all). Each figure writes
 # its own _source_data.csv, which records what was chosen (case, patient, crop, zones) and
 # the display settings. benchmarks/figures/README.md says what each one reproduces.
 set -euo pipefail
@@ -52,6 +53,18 @@ SEG_GEOJSON="${SEG_GEOJSON-}"               # <run>/geojson/<patient>_cells.geoj
 SEG_ZOOM_UM="${SEG_ZOOM_UM-150}"
 SEG_ZOOM_AT="${SEG_ZOOM_AT-}"               # X,Y in image px
 
+# Supplementary Fig. S6: Dice and centroid distance by case and by moving round, the
+# methods of its legend in box order
+CASE_ROUND_METHODS="${CASE_ROUND_METHODS-Unregistered=initial,STARE=$STARE,VALIS=$VALIS,PALOM=palom,DeeperHistReg=deeperhistreg_hr_fluo_cpu,ASHLAR=ashlar}"
+
+# Supplementary Fig. S7: one registered slide segmented by each backend (top row first);
+# the image is the slide the three runs segmented (SEG_IMAGE by default)
+SEG_BACKENDS=()                             # e.g. (CellSAM=<run>/geojson/<p>_cells.geojson
+                                            #       InstanSeg=... StarDist=...)
+SEG_BACKENDS_IMAGE="${SEG_BACKENDS_IMAGE-$SEG_IMAGE}"
+SEG_BACKENDS_REGION_UM="${SEG_BACKENDS_REGION_UM-150}"
+SEG_BACKENDS_AT="${SEG_BACKENDS_AT-}"       # X,Y in image px (the region's centre)
+
 # the zooms' display, the same in every figure (state it in the legends)
 # shellcheck disable=SC2054  # 1,99.8 is one argument: the low,high percentiles
 DISPLAY=(--clip 1,99.8 --clahe 0.01 --sharpen 0.6 --upsample 3)
@@ -76,7 +89,8 @@ fig() {
         "$FIG_PYTHON" -m "benchmarks.figures.$1" "${@:2}")
 }
 
-if [ $# -gt 0 ]; then want=("$@"); else want=(cost cohort crops crops_all overlay segmentation); fi
+if [ $# -gt 0 ]; then want=("$@"); else
+    want=(cost cohort crops crops_all overlay segmentation by_case_round seg_backends); fi
 for f in "${want[@]}"; do
     echo "== $f"
     case "$f" in
@@ -116,7 +130,21 @@ for f in "${want[@]}"; do
               "${DISPLAY[@]}" --outdir "$OUTDIR/segmentation")
         [ -n "$SEG_ZOOM_AT" ] && args+=(--zoom "$SEG_ZOOM_AT")
         fig fig_segmentation "${args[@]}" ;;
-    *) echo "unknown figure $f (cost cohort crops crops_all overlay segmentation)"; exit 2 ;;
+    by_case_round)
+        fig fig_by_case_round "$TABLES" --cases "$REGBENCH_CASES" \
+            --methods "$CASE_ROUND_METHODS" --set "$SCORE_SET" --seed "$SEED" \
+            --outdir "$OUTDIR/by_case_round" ;;
+    seg_backends)
+        if [ -z "$SEG_BACKENDS_IMAGE" ] || [ ${#SEG_BACKENDS[@]} -lt 2 ]; then
+            echo "seg_backends: set SEG_BACKENDS (and SEG_IMAGE) in this file"; continue
+        fi
+        args=(--image "$SEG_BACKENDS_IMAGE" --region-um "$SEG_BACKENDS_REGION_UM"
+              --bar-um 50 "${DISPLAY[@]}" --outdir "$OUTDIR/seg_backends")
+        for b in "${SEG_BACKENDS[@]}"; do args+=(--backend "$b"); done
+        [ -n "$SEG_BACKENDS_AT" ] && args+=(--region "$SEG_BACKENDS_AT")
+        fig fig_seg_backends "${args[@]}" ;;
+    *) echo "unknown figure $f (cost cohort crops crops_all overlay segmentation" \
+            "by_case_round seg_backends)"; exit 2 ;;
     esac
 done
 echo "-> $OUTDIR"

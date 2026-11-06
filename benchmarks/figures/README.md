@@ -21,7 +21,7 @@ pip install -r requirements/ci.txt        # matplotlib, pandas, scikit-image, ST
 cd <regbench root>                         # where regbench.env sets REGBENCH_CASES / _OUT
 bash <checkout>/benchmarks/figures/make_figures.sh             # all of them
 bash <checkout>/benchmarks/figures/make_figures.sh cohort crops # some of them
-# figures: cost cohort crops crops_all overlay segmentation
+# figures: cost cohort crops crops_all overlay segmentation by_case_round seg_backends
 ```
 
 Every choice (variants, cases, zoom sizes, display, seed) sits in one block at the top of
@@ -43,6 +43,8 @@ harness's own code.
 | `fig_crop_grid.py` | Fig. 3a: one patient's rounds, the same crop unregistered and after each method, Dice per crop | cases, results' written images, `warped.npz` |
 | `fig_crop_grid.py` (`make_figures.sh crops_all`) | Supplementary Fig. S5: the same, rows before / VALIS / STARE, one column per moving round | as Fig. 3a |
 | `fig_overlay.py` | Fig. 1c (its "before" file: the overview, the three fields boxed) and Fig. 4b (before and after STARE): a case's DAPI, three zooms: translation, rotation, deformation | cases, one result's `warped.npz` and images |
+| `fig_by_case_round.py` (`by_case_round`) | Supplementary Fig. S6: Dice (a, b) and residual centroid distance (c, d, log) per method, grouped by case and by moving round (its markers); `by_case_round_medians.csv` holds each group's medians and best method, to check the legend's "8 of 8 cases" | `tables/cells.csv`, the cases' `case.json` |
+| `fig_seg_backends.py` (`seg_backends`) | Supplementary Fig. S7: one region segmented by each backend (rows), whole-cell outlines yellow and nuclear outlines cyan over DAPI, 50 µm bars; b, the pairwise Dice of the whole-cell masks (the polygons filled) | the slide, one `geojson/<patient>_cells.geojson` per backend run |
 | `fig_segmentation.py` | Fig. 4c: a slide's DAPI with the pipeline's StarDist outlines in a zoomed inset | `pyramid/<patient>.ome.tif`, `geojson/<patient>_cells.geojson` |
 
 ## How each choice is made (all deterministic, all pinnable)
