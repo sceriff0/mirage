@@ -643,20 +643,21 @@ def test_n_candidates_is_every_terminal_row_of_the_family_on_the_cohort(pre_arch
         "n_candidates"] == want[variants.family(pp[0]["row"])] - 1
 
 
-def test_deeperhistregs_primary_is_its_best_as_drawn_row(pre_archive):
-    """Ruling 193 (user 2026-10-18 'the best one'): DeeperHistReg's primary is
-    the dataset's method_best row, said and flagged in-sample; variants.PRIMARY's
-    placeholder is not what the tables use."""
+def test_deeperhistregs_primary_is_the_reported_row_not_its_best(pre_archive):
+    """The 261105 manuscripts report DeeperHistReg's high-resolution preset with the
+    fluorescence setting on CPU as a fixed configuration: the tables use that row even
+    when another DeeperHistReg row scores higher (ruling 193's best-is-primary retired
+    2026-11-06)."""
+    assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_hr_fluo_cpu"
+    assert tables.BEST_IS_PRIMARY == {}
     rows = [t for t in tables.terminal_rows("multiplex").values()
             if variants.family(t) == "deeperhistreg"]
     pp = [_hand(t, "c1", "p1", 0.9 if t == "deeperhistreg_fluo_cpu" else 0.5) for t in rows]
     best = [tables.best_of(pp, "deeperhistreg", "multiplex", {})]
-    assert best[0]["best_row"] == "deeperhistreg_fluo_cpu"
-    assert tables.primary_row("deeperhistreg", "multiplex", best) == "deeperhistreg_fluo_cpu"
+    assert best[0]["best_row"] == "deeperhistreg_fluo_cpu"  # the ceiling is still reported
+    assert tables.primary_row("deeperhistreg", "multiplex", best) == "deeperhistreg_hr_fluo_cpu"
+    assert tables.primary_row("deeperhistreg", "multiplex", []) == "deeperhistreg_hr_fluo_cpu"
     assert tables.primary_row("stare", "multiplex", best) == "stare"
-    assert "user 2026-10-18" in tables.BEST_IS_PRIMARY["deeperhistreg"]
-    # without a best row it falls back to variants' placeholder, never to nothing
-    assert tables.primary_row("deeperhistreg", "multiplex", []) == variants.PRIMARY_DEEPERHISTREG
 
 
 def test_versions_hold_the_image_tag_digest_python_and_stardist(scored):

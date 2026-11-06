@@ -58,8 +58,9 @@ on that set); every other table and figure reads the outlines' row (``headline_b
 Paired differences against STARE are per patient (``paired_unit``), a tie counted as
 STARE at least as good (b >= a). ``n_candidates`` and ``in_sample_selection`` are on every
 best row: the best is an in-sample CEILING over ``n_candidates`` rows, not an estimate of
-a new cohort. DeeperHistReg's primary is its best row (``BEST_IS_PRIMARY``: user ruling
-2026-10-18), so its primary is in-sample too; ASHLAR's primary is unchanged.
+a new cohort. Every family's primary is fixed before scoring (``variants.PRIMARY``):
+DeeperHistReg's is the high-resolution preset with the fluorescence setting on CPU, the
+row the 261105 manuscripts report (``BEST_IS_PRIMARY`` is empty since 2026-11-06).
 
 """
 
@@ -598,10 +599,12 @@ def primary_of(family, dataset=COHORT):
 # method_best row (every DeeperHistReg row is the image its writer draws).
 # variants.PRIMARY keeps a placeholder (PRIMARY_DEEPERHISTREG) for the scorer's common
 # block and the realcheck; the paper resolves the primary here, at table time.
-BEST_IS_PRIMARY = {
-    "deeperhistreg": "primary = best (user 2026-10-18): the dataset's method_best row, "
-    "every DeeperHistReg row as-drawn; chosen on this dataset with this metric (in-sample)",
-}
+# Emptied 2026-11-06 (user: the code follows the 261105 manuscripts). The text reports
+# DeeperHistReg's high-resolution preset with the fluorescence setting on CPU as a
+# configuration fixed in advance, not as the best of its runs; with the fluorescence CPU
+# and GPU rows tied at a median Dice of 0.77, "best" could name the GPU row instead. The
+# mechanism stays for a family a later ruling makes best-is-primary again.
+BEST_IS_PRIMARY = {}
 
 
 def primary_row(family, dataset, best_rows):

@@ -3,7 +3,8 @@ series, with the cohort's slides at native size overlaid and the node's memory d
 
     python -m benchmarks.figures.fig_rss_vs_size \
         --synthetic <SYNTH_OUT>/tables --cohort <REGBENCH_OUT>/tables \
-        --valis valis120 --stare stare --node-gb 512 --outdir figures/cost
+        --valis valis120 --valis-hires valis120_hires --stare stare --node-gb 200 \
+        --outdir figures/cost   # Fig. 2c: the dashed line at 200 GB
 
 READS ``resources.csv`` (one row per round), nothing re-derived; where a folder's tables
 hold no row of the dataset (not scored yet), every result's own ``run.json`` instead,
@@ -52,6 +53,14 @@ from . import common as C
 from . import plotstyle as ps
 
 MEMORY = re.compile(r"oom|mem", re.I)
+
+
+# The two VALIS series of Fig. 2c: VALIS 1.2.0 at its defaults (the reported row) and at
+# the high-resolution example of its documentation. Same colour; the example is dotted
+# (dashed is the node-memory line).
+HIRES = "VALIS hires"
+VALIS_LABELS = ("VALIS", HIRES)
+LINESTYLE = {"VALIS": "-", HIRES: ":", "STARE": "-"}
 
 
 def _from_runs(out, dataset, cases):
@@ -231,21 +240,30 @@ def caption_numbers(syn, node_gb):
         )
     st = syn[(syn["label"] == "STARE") & syn["ok"]]["peak_rss_gb"].dropna()
     if len(st):
-        lines.append(f"STARE peak RSS (largest single job): {st.min():.2f}-{st.max():.2f} GB")
-    va = syn[syn["label"] == "VALIS"]
+        lines.append(
+            f"STARE peak RSS (largest single job): {st.min():.2f}-{st.max():.2f} GB"
+        )
+    for vlabel in VALIS_LABELS:
+        lines.extend(_valis_caption(syn, vlabel, node_gb))
+    return lines
+
+
+def _valis_caption(syn, vlabel, node_gb):
+    lines = []
+    va = syn[syn["label"] == vlabel]
     if len(va):
         bad = va[~va["ok"]]
         over = va[va["ok"] & (va["peak_rss_gb"] > node_gb)] if node_gb else va.iloc[0:0]
         first_fail = bad["side_px"].min() if len(bad) else math.nan
         first_over = over["side_px"].min() if len(over) else math.nan
         lines.append(
-            f"VALIS: first size with a failed run {first_fail:.0f} px "
+            f"{vlabel}: first size with a failed run {first_fail:.0f} px "
             f"({', '.join(sorted(set(bad['cause']) - {''})) or 'no cause recorded'}); "
             f"first size measured above the node memory {first_over:.0f} px"
         )
         ok = va[va["ok"]].groupby("side_px")["peak_rss_gb"].median()
         lines.append(
-            "VALIS median peak per size: "
+            f"{vlabel} median peak per size: "
             + ", ".join(f"{int(s)} px: {g:.1f} GB" for s, g in ok.items())
         )
     return lines
@@ -254,9 +272,9 @@ def caption_numbers(syn, node_gb):
 def draw(syn, coh, colors, node_gb, out, logy, unit_of="patient"):
     fig, axes = ps.figure(width="single", aspect=0.85)
     ax = axes[0]
-    col = {"STARE": colors["STARE"], "VALIS": ps.GREY}
+    col = {"STARE": colors["STARE"], "VALIS": ps.GREY, HIRES: ps.GREY}
     drawn = []
-    for label in ("VALIS", "STARE"):
+    for label in (*VALIS_LABELS, "STARE"):
         d = syn[syn["label"] == label]
         if d.empty:
             continue
@@ -272,7 +290,14 @@ def draw(syn, coh, colors, node_gb, out, logy, unit_of="patient"):
             zorder=3,
         )
         med = ok.groupby("side_px")["y"].median()
-        ax.plot(med.index, med.values, color=col[label], lw=0.8, zorder=2)
+        ax.plot(
+            med.index,
+            med.values,
+            color=col[label],
+            lw=0.8,
+            ls=LINESTYLE[label],
+            zorder=2,
+        )
         if len(bad):
             ax.scatter(
                 bad["side_px"],
@@ -284,7 +309,7 @@ def draw(syn, coh, colors, node_gb, out, logy, unit_of="patient"):
                 zorder=4,
             )
         drawn.append(d.assign(layer="synthetic"))
-    for label in ("VALIS", "STARE"):
+    for label in (*VALIS_LABELS, "STARE"):
         d = coh[coh["label"] == label] if len(coh) else coh
         if d is None or d.empty:
             continue
@@ -345,13 +370,26 @@ def draw(syn, coh, colors, node_gb, out, logy, unit_of="patient"):
     handles = [
         L([], [], ls="-", marker="o", ms=3, lw=0.8, color=col["STARE"]),
         L([], [], ls="-", marker="o", ms=3, lw=0.8, color=col["VALIS"]),
+        L([], [], ls=":", marker="o", ms=3, lw=0.8, color=col[HIRES]),
         L([], [], ls="", marker="D", ms=3, mfc="none", mec=ps.GREY, mew=0.7),
         L([], [], ls="", marker="x", ms=4, color=ps.GREY, mew=0.8),
     ]
     names = (
-        ["STARE", "VALIS", "cohort patients", "failed run"]
+        [
+            "STARE",
+            "VALIS (defaults)",
+            "VALIS (high-res. example)",
+            "cohort patients",
+            "failed run",
+        ]
         if unit_of == "patient"
-        else ["STARE (per task)", "VALIS (per slide)", "cohort slides", "failed run"]
+        else [
+            "STARE (per task)",
+            "VALIS defaults (per slide)",
+            "VALIS high-res. example (per slide)",
+            "cohort slides",
+            "failed run",
+        ]
     )
     ax.legend(
         handles,
@@ -397,7 +435,13 @@ def main(argv=None):
         default="valis120,valis",
         help="VALIS variant; comma-separated alternatives, first found wins",
     )
-    ap.add_argument("--stare", default="stare", help="STARE variant (high tier)")
+    ap.add_argument(
+        "--valis-hires",
+        default="valis120_hires",
+        help="VALIS high-resolution-example variant, the second VALIS line of Fig. 2c; "
+        "'' draws none",
+    )
+    ap.add_argument("--stare", default="stare", help="STARE variant")
     ap.add_argument("--node-gb", type=float, help="node memory: the dashed line")
     ap.add_argument("--min-px", type=float, default=4096)
     ap.add_argument("--max-px", type=float, default=65536)
@@ -415,6 +459,8 @@ def main(argv=None):
     ps.apply_style()
     colors = C.palette(a.outdir)
     names = {"VALIS": a.valis, "STARE": a.stare}
+    if a.valis_hires:
+        names[HIRES] = a.valis_hires
     syn = pick(a.synthetic, a.synthetic_dataset, names, a.synthetic_cases)
     if not syn:
         raise SystemExit("no synthetic rows for either method")

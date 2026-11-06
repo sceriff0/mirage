@@ -3644,10 +3644,8 @@ PAIRING_RULE = (
 PRIMARY_ANCHOR_RULE = (
     "**The primary rows here are fixed before scoring** (`variants.PRIMARY`): "
     "`paired_vs_primary`, `common_block` and every `*_shared` column pair against them. "
-    f"For DeeperHistReg that is `{_variants.PRIMARY_DEEPERHISTREG}`. The paper's "
-    "DeeperHistReg primary is instead its best row as drawn (user ruling 2026-10-18; "
-    "in-sample, chosen from these tables, `paper/tables.py` `BEST_IS_PRIMARY`), so this "
-    "summary's common case set and the paper's `common` pooling can differ.\n"
+    f"For DeeperHistReg that is `{_variants.PRIMARY_DEEPERHISTREG}`, the row the paper "
+    "reports too (`paper/tables.py` `BEST_IS_PRIMARY` is empty since 2026-11-06).\n"
 )
 
 SETS_RULE = (
