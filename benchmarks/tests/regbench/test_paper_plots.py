@@ -171,7 +171,7 @@ def test_colours_are_locked_across_figures(paper):
     figs = paper / "figures"
     plots.PLOTS["fig3b_dice_best"](paper, figs)
     first = json.loads((figs / ".palette.json").read_text())["default"]
-    plots.PLOTS["fig3e_peak_rss_best"](paper, figs)
+    plots.PLOTS["fig3d_peak_rss_best"](paper, figs)
     assert json.loads((figs / ".palette.json").read_text())["default"] == first
 
 

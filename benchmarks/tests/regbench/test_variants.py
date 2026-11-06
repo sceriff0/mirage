@@ -274,15 +274,15 @@ def test_primary_rows_are_expected_variants():
 
 
 def test_the_primary_list_is_the_plans():
-    """THE one place the two switchable primaries are written out in the tests (ruling
-    R3.12: the high-resolution row is primary for VALIS 1.2.0 and for DeeperHistReg).
+    """THE one place the two switchable primaries are written out in the tests (the
+    261105 manuscripts: VALIS 1.2.0 at its defaults, DeeperHistReg HR + fluo on the CPU).
     Switching one is its `variants.PRIMARY_...` line and the matching line here."""
-    assert variants.PRIMARY_VALIS120 == "valis120_hires"
-    assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_hr_gpu"
+    assert variants.PRIMARY_VALIS120 == "valis120"
+    assert variants.PRIMARY_DEEPERHISTREG == "deeperhistreg_hr_fluo_cpu"
     assert variants.PRIMARY == (
         "stare",
-        "valis120_hires",
-        "deeperhistreg_hr_gpu",
+        "valis120",
+        "deeperhistreg_hr_fluo_cpu",
         "ashlar",
         "palom",
     )
@@ -290,31 +290,32 @@ def test_the_primary_list_is_the_plans():
     assert variants.PRIMARY[2] is variants.PRIMARY_DEEPERHISTREG
 
 
-def test_the_high_resolution_rows_are_primary_and_the_defaults_stay_in_their_family(pre_archive):
+def test_the_reported_rows_are_primary_and_the_others_stay_in_their_family(pre_archive):
     """A family's name need not be its primary's: `valis120` and `valis120_hires` share
-    the family `valis120`, whose primary is now `valis120_hires`."""
+    the family `valis120`, whose primary is `valis120` (its defaults)."""
     assert variants.family("valis120") == "valis120"
     assert variants.family("valis120_hires") == "valis120"
-    assert variants.primary_of("valis120") == "valis120_hires"
+    assert variants.primary_of("valis120") == "valis120"
     assert variants.members("valis120") == ["valis120", "valis120_hires"]
-    assert variants.primary_of("deeperhistreg") == "deeperhistreg_hr_gpu"
+    assert variants.primary_of("deeperhistreg") == "deeperhistreg_hr_fluo_cpu"
     assert len(variants.members("deeperhistreg")) == 8
-    # the upstream-default rows are still run and expected, just not primary
+    # the other rows are still run and expected, just not primary
     expected = variants.expected_variants()
-    for name in ("valis120", "valis120_micro", "deeperhistreg_gpu"):
+    for name in ("valis120_hires", "valis120_micro", "deeperhistreg_gpu",
+                 "deeperhistreg_hr_gpu"):  # fmt: skip
         assert name in expected and name not in variants.PRIMARY
-    # the run that writes each primary row is the high-resolution one
+    # the runs that write the primary rows: VALIS at its defaults, DeeperHistReg's HR set
     runs = by_name()
-    assert runs["valis120_hires"].opts == {"hires": "1"}
-    assert runs["deeperhistreg_hr_gpu"].opts["config"] == variants.HR_CONFIG
+    assert runs["valis120"].opts == {}
+    assert runs["deeperhistreg_hr_fluo_cpu"].opts["config"] == variants.HR_CONFIG
 
 
-def test_the_deeperhistreg_primary_scores_the_written_image_on_the_gpu():
+def test_the_deeperhistreg_primary_scores_the_written_image_on_the_cpu():
     name = variants.PRIMARY_DEEPERHISTREG
     run = by_name()[name]  # its one row, under its own label: the image written to disk
     assert variants.variants_of(run) == [name]
-    assert run.method == "deeperhistreg" and run.gpu
-    assert "fluo" not in run.opts  # a shipped parameter set, not the benchmark's edit
+    assert run.method == "deeperhistreg" and not run.gpu  # Fig. 3d: on CPU
+    assert run.opts.get("fluo") == "1"  # the fluorescence setting the manuscript names
 
 
 def test_every_variant_has_a_family_and_the_longest_prefix_wins():
@@ -544,10 +545,11 @@ def test_runs_lines_carry_what_the_launcher_passes_back(pre_archive, capsys):
     assert got["palom"]["opts"] == "-"
     assert got["palom"]["selfcheck_mask"] == "seams"
     assert got["palom"]["checked_by"] == "palom"
-    assert got["valis120"]["primary"] == "-"
-    assert got["valis120_hires"]["primary"] == "valis120_hires"
+    assert got["valis120"]["primary"] == "valis120"
+    assert got["valis120_hires"]["primary"] == "-"
     assert got["valis120_hires"]["opts"] == "hires=1"
-    assert got["deeperhistreg_hr_gpu"]["primary"] == "deeperhistreg_hr_gpu"
+    assert got["deeperhistreg_hr_gpu"]["primary"] == "-"
+    assert got["deeperhistreg_hr_fluo_cpu"]["primary"] == "deeperhistreg_hr_fluo_cpu"
     assert got["deeperhistreg_gpu"]["primary"] == "-"
     assert (
         got["valis120"]["method"] == "valis" and got["valis120"]["image"] == "VALIS120"
@@ -652,6 +654,10 @@ def test_the_active_runs_are_the_reported_and_the_rest_are_archived():
 
 
 def test_a_paused_run_is_not_expected_not_counted_and_not_printed(pre_archive, monkeypatch, capsys):
+    # written when valis120_hires was VALIS's primary row: put it back, so that pausing
+    # valis120 pauses a non-primary run (pausing a primary is refused, the test below)
+    monkeypatch.setattr(variants, "PRIMARY", tuple(
+        "valis120_hires" if v == "valis120" else v for v in variants.PRIMARY))  # fmt: skip
     pause(monkeypatch, "valis120", "deeperhistreg_fluo_gpu")
     variants.check()
     assert variants.paused_names() == ["valis120", "deeperhistreg_fluo_gpu"]
@@ -718,13 +724,13 @@ def test_score_does_not_expect_a_paused_run(pre_archive, monkeypatch):
 
 
 def test_reactivating_is_one_field(pre_archive, monkeypatch):
-    pause(monkeypatch, "valis120")
+    pause(monkeypatch, "valis120_hires")
     assert len(variants.expected_variants()) == len(EXPECTED) - 3
     monkeypatch.setattr(
         variants,
         "RUNS",
         tuple(
-            r._replace(active=True) if variants.run_name(r) == "valis120" else r
+            r._replace(active=True) if variants.run_name(r) == "valis120_hires" else r
             for r in variants.RUNS
         ),
     )
@@ -735,8 +741,8 @@ def test_reactivating_is_one_field(pre_archive, monkeypatch):
 @pytest.mark.parametrize(
     "name, why",
     [
-        ("valis120_hires", "primary"),  # writes the primary row valis120_hires
-        ("deeperhistreg_hr_gpu", "primary"),  # writes its own primary row
+        ("valis120", "primary"),  # writes the primary row valis120
+        ("deeperhistreg_hr_fluo_cpu", "primary"),  # writes its own primary row
         ("ashlar", "primary"),  # (and checks ashlar_clean)
         ("affine_ashlar", "selfcheck checks"),  # checks the active affine_ashlar_clean
         ("stare", "primary"),  # (and the anchored ASHLAR rows wait for it)
@@ -901,9 +907,9 @@ def test_the_realcheck_reports_on_the_primary_row_of_the_valis_adapter(capsys):
         for r in variants.runs_for(None)
     }
     assert {k: v for k, v in real.items() if v} == {
-        "valis120_hires": "valis120_hires",
+        "valis120": "valis120",
     }
-    assert real["valis120"] is None  # the same adapter, no primary row
+    assert real["valis120_hires"] is None  # the same adapter, no primary row
     got = {r[0]: r[14] for r in rows(capsys)}
     assert got == {k: v or "-" for k, v in real.items()}
     assert set(variants.REALCHECK_METHODS) <= set(METHODS)
@@ -1214,13 +1220,14 @@ COHORT_RUNS = [
 ]  # fmt: skip
 # T31 R2 adds ONE line, stare_local4's: the sha is of the lines without it, so every
 # other run's line is byte-identical to before. Re-pinned 2026-11-05 when the nine
-# `valis_mirage` lines were removed (no other line changed)
-COHORT_RUNS_SHA256 = "e6e3e01252eec431b50f19ac424f4f6acc59b276d49be79ac52861ba64ae5755"
+# `valis_mirage` lines were removed (no other line changed), and 2026-11-06 when the primary
+# rows became the manuscripts' (valis120, deeperhistreg_hr_fluo_cpu: the primary column only)
+COHORT_RUNS_SHA256 = "a5b07bc7d4ab9e95ecd2570f4c4b08862196fa59696bbfa85c38e6b74cce75ab"
 # before the full cross (2026-10-20): the table without its 16 new lines still hashes to
 # this, so no existing run's line moved (test_the_full_cross_only_adds_lines)
 # (re-pinned 2026-11-05 without the nine valis_mirage lines: the 47-line table of 031ecbc1)
 COHORT_RUNS_SHA256_BEFORE_CROSS = (
-    "f5fece4fbd45997bc088cabb90c94f6799f63564a78c35c148a419e4ff57641c"
+    "99886eb5c4d3a6b88f6f2265a031a5bf376f52b0cd3f18dbcd0dc19355f4c6cc"
 )
 
 

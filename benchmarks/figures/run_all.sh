@@ -11,7 +11,7 @@
 #           benchmark in one command"). Needs REGBENCH_INPUT (the cohort's samplesheet).
 #           Resubmitting after a stop reuses every unit that is ok.
 # 2 paper   the harness's own paper tables and figures (`regbench paper`, `regbench plots`)
-#           into $REGBENCH_OUT/paper/, then make_figures.sh (Fig. 3a-e, 4b, 4c, cost vs
+#           into $REGBENCH_OUT/paper/, then make_figures.sh (Fig. 1c, 3a-e, 4b, 4c, S5, cost vs
 #           size) into $OUTDIR. Refused while any regbench job is queued or running, or
 #           before the scorer has written its tables.
 #

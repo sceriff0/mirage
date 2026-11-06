@@ -89,10 +89,12 @@ micro-registration depth 0, 1, 2) was retired on 2026-11-05 with that configurat
 adapter is at the git tag ``archive/regbench-valis-mirage`` (the configuration at
 ``archive/valis-mirage-tuned``).
 
-**Primary rows** (ruling R3.12). VALIS 1.2.0 and DeeperHistReg each run at upstream's
-default setting AND at upstream's high-resolution one; the high-resolution row is the
-primary of both, by the user's ruling. ``PRIMARY_VALIS120`` and ``PRIMARY_DEEPERHISTREG``
-are the one line to change for each.
+**Primary rows** (the 261105 manuscripts, 2026-11-06; ruling R3.12 made the
+high-resolution rows primary until then). VALIS 1.2.0 runs at upstream's default setting
+AND at its high-resolution one; the default (``valis120``) is primary. DeeperHistReg's
+primary is its high-resolution preset with the fluorescence setting on the CPU
+(``deeperhistreg_hr_fluo_cpu``). ``PRIMARY_VALIS120`` and ``PRIMARY_DEEPERHISTREG`` are
+the one line to change for each.
 
 **The images.** ``image`` is the suffix of the variable that holds the image's path on the
 cluster: ``REGBENCH_SIF_<image>``. For an image this repository builds, the suffix is its
@@ -442,13 +444,14 @@ ARCHIVED_RUNS = tuple((r.label or r.method) for r in RUNS if not r.active)
 # Runs of a private method plug-in (regbench.plugins): none unless one is enabled.
 RUNS += tuple(Run(**r) for r in plugins.get("RUNS", ()) or ())
 
-# Ruling R3.12 (2026-10-11): the high-resolution row is primary for both methods that
-# have one. Each is one line to switch back to upstream's default setting:
-# "valis120" (register at 512 / 2048 px) and "deeperhistreg_gpu" (the 4096 px set). Both
-# settings run either way. DeeperHistReg's one row per run is the image its writer puts
-# on disk.
-PRIMARY_VALIS120 = "valis120_hires"
-PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_gpu"
+# The rows the 261105 manuscripts report (2026-11-06; replaces ruling R3.12's
+# high-resolution primaries): VALIS 1.2.0 at its defaults, "valis120" (register at
+# 512 / 2048 px; valis120_hires still runs, as Fig. 2c's high-resolution line), and
+# DeeperHistReg's high-resolution preset with the fluorescence setting on the CPU (Fig. 3d
+# reports DeeperHistReg on CPU). Each is one line to switch. DeeperHistReg's one row per
+# run is the image its writer puts on disk.
+PRIMARY_VALIS120 = "valis120"
+PRIMARY_DEEPERHISTREG = "deeperhistreg_hr_fluo_cpu"
 PRIMARY = (
     "stare",
     PRIMARY_VALIS120,

@@ -1,8 +1,8 @@
 """DAPI overlay of one round pair (reference cyan, moving magenta) with three zooms
-chosen automatically: before registration, and optionally after (Fig. 4b).
+chosen automatically: before registration (Fig. 1c), and optionally after (Fig. 4b).
 
     python -m benchmarks.figures.fig_overlay --cases <REGBENCH_CASES> --out <REGBENCH_OUT> \
-        --tables <REGBENCH_OUT>/tables --zones-from valis120_hires --after stare \
+        --tables <REGBENCH_OUT>/tables --zones-from valis120 --after stare \
         --outdir figures/overlay
 
 BEFORE: both slides on the SAME pixel grid with no registration (the moving slide padded

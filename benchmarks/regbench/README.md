@@ -2207,7 +2207,7 @@ It is scored like every row, and its accuracy must equal `stare`'s: the paper ta
 compare the two case by case and a mismatch is a loss row (`stare_local4_differs`,
 blame `integrity`, effect `flagged`). It is never a best-row candidate. The launcher
 submits it by default (its own reuse key: no other row's moves); it needs
-`REGBENCH_CPUS=4` and is dropped from a launch at another count. Fig. 3f's wall panel is
+`REGBENCH_CPUS=4` and is dropped from a launch at another count. Fig. 3e's wall panel is
 every method at 4 CPUs with STARE as `stare_local4`; STARE's staged critical path and
 its time with the queue are two extra markers, each labelled, never on that axis
 without their label.
@@ -2219,17 +2219,17 @@ both over the SAME patients: common, complete for both, a comparable peak,
 `n_patients_fold`; NaN with a `fold_note` for STARE's stage-job row) and, for STARE's stage jobs, `peak_largest_job_gb` (the largest
 single attempt: what a node must give one job) and `peak_concurrent_gb` (the most the
 jobs of one round held at once: at every moment the sum of the peaks of the attempts
-running then, as `peak_cpus_at_once` is computed). Fig. 3e shows the first, with the
+running then, as `peak_cpus_at_once` is computed). Fig. 3d shows the first, with the
 second as a labelled marker.
 
 **Used against reserved.** `gb_h_used` is peak x duration per attempt (the attempt's own
 peak: a one-process row's `peak_rss_gb`, a stage attempt's `peak_rss_mb`), beside
 `gb_h_reserved`, which measures the REQUEST policy: STARE's stage jobs at the pipeline's
-per-process requests (COARSE 2 GB, tile 4 GB, SOLVE 1 GB, x attempt), every other method
+per-process requests (COARSE 2 GB, tile 4 GB, SOLVE 2 GB, x attempt), every other method
 on the ladder's 16 GB floor. `cpu_h_reserved_scheduler` and `gb_h_reserved_scheduler`
 are "what the cluster held": sacct's `AllocCPUS x ElapsedRaw` and `ReqMem x ElapsedRaw`
 over every job of the row's good attempts (STARE: its good stage jobs AND the round's
-driver job; the others: the launch), blank and counted without sacct. Fig. 3f draws
+driver job; the others: the launch), blank and counted without sacct. Fig. 3e draws
 CPU-hours reserved as the bar with used inside it and the total (good + wasted) as a
 marker, and GB-hours as used with the wasted request stacked on it.
 
@@ -3774,7 +3774,7 @@ each of the four is a scheduler job of its own (`regbench.stages`,
 |---|---|---|---|---|---|---|
 | COARSE | `TILED_COARSE` | `process_low` | 2 | 2 GB | 2 h | `conf/modules.config:137-141` (label), `:571-590` (memory: `ceil(max(2, (0.5 + 0.1 Mpx) x 2))`, 1024 px thumbnail) |
 | REG-TILE, per tile | `TILED_REG_TILE` | `process_low` | 2 | 4 GB | 2 h | `:137-141`, `:515-544` (memory: `ceil(max(4, (0.5 + 0.13 Mpx) x 2))`, window 2048 + 2 x max(256, 3 x 64) = 2560 px) |
-| SOLVE | `TILED_SOLVE` | `process_single` | 1 | 1 GB | 8 h | `:131-135`, `:600-604` |
+| SOLVE | `TILED_SOLVE` | `process_single` | 1 | 2 GB | 8 h | `:131-135`, `:600-604` |
 | STITCH | `TILED_STITCH` | `process_medium` | 4 | 4 GB | 4 h | `:143-147` (CPUs, time), `:635-657` (memory: `ceil(max(4, (0.6 + 0.17 Mpx) x 2))`, 1024 px output tile) |
 
 Memory and time are multiplied by the attempt, as there. `stages.ALLOCATION` holds the

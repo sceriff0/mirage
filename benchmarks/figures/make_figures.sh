@@ -4,7 +4,7 @@
 #
 #   cd <regbench root> && bash <checkout>/benchmarks/figures/make_figures.sh [figure ...]
 #
-# figures: cost cohort crops overlay segmentation (default: all). Each figure writes
+# figures: cost cohort crops crops_all overlay segmentation (default: all). Each figure writes
 # its own _source_data.csv, which records what was chosen (case, patient, crop, zones) and
 # the display settings. benchmarks/figures/README.md says what each one reproduces.
 set -euo pipefail
@@ -16,9 +16,9 @@ OUTDIR="${OUTDIR:-$PWD/figures}"
 SEED="${SEED-0}"                            # the jitter of every box plot
 
 # one variant per family; the box order is this order
-VALIS="${VALIS-valis120_hires}"             # VALIS as shown everywhere
+VALIS="${VALIS-valis120}"                   # VALIS as shown everywhere: its defaults
 STARE="${STARE-stare}"                      # STARE at the shipped stride
-COHORT_METHODS="${COHORT_METHODS-Unregistered=initial,ASHLAR=ashlar,DeeperHistReg=deeperhistreg_hr_gpu_asdrawn,PALOM=palom,VALIS=$VALIS,STARE=$STARE}"
+COHORT_METHODS="${COHORT_METHODS-Unregistered=initial,ASHLAR=ashlar,DeeperHistReg=deeperhistreg_hr_fluo_cpu,PALOM=palom,VALIS=$VALIS,STARE=$STARE}"
 SCORE_SET="${SCORE_SET-outlines}"           # outlines (the headline) or nuclei
 COST_DATASET="${COST_DATASET-multiplex}"         # peak RSS / CPU vs input size: the cohort
 
@@ -30,8 +30,15 @@ CROP_COLUMNS="${CROP_COLUMNS-4}"
 CROP_UM="${CROP_UM-150}"
 CROP_AT="${CROP_AT-}"                       # X,Y in reference px
 
-# Fig. 4b: the case (empty = the closest to the median Dice of OVERLAY_MEDIAN_OF), whose
-# result locates the zones, and which result the "after" panel shows
+# Supplementary Fig. S5: the same, rows before / VALIS / STARE, one column per moving
+# round (64 round pairs over 8 cases: 8 per case), the same crop choice
+CROPS_ALL_METHODS="${CROPS_ALL_METHODS-VALIS=$VALIS,STARE=$STARE}"
+CROPS_ALL_PATIENT="${CROPS_ALL_PATIENT-$CROP_PATIENT}"
+CROPS_ALL_COLUMNS="${CROPS_ALL_COLUMNS-8}"
+
+# Fig. 1c (the "before" file: the overview with the three boxed fields) and Fig. 4b
+# (before and after STARE): the case (empty = the closest to the median Dice of
+# OVERLAY_MEDIAN_OF), whose result locates the zones, and which result "after" shows
 OVERLAY_CASE="${OVERLAY_CASE-}"
 OVERLAY_MEDIAN_OF="${OVERLAY_MEDIAN_OF-$VALIS,$STARE}"
 OVERLAY_ZONES_FROM="${OVERLAY_ZONES_FROM-$VALIS}"
@@ -69,7 +76,7 @@ fig() {
         "$FIG_PYTHON" -m "benchmarks.figures.$1" "${@:2}")
 }
 
-if [ $# -gt 0 ]; then want=("$@"); else want=(cost cohort crops overlay segmentation); fi
+if [ $# -gt 0 ]; then want=("$@"); else want=(cost cohort crops crops_all overlay segmentation); fi
 for f in "${want[@]}"; do
     echo "== $f"
     case "$f" in
@@ -84,6 +91,13 @@ for f in "${want[@]}"; do
               --methods "$CROP_METHODS" --columns "$CROP_COLUMNS" --crop-um "$CROP_UM"
               "${DISPLAY[@]}" --outdir "$OUTDIR/crops")
         [ -n "$CROP_PATIENT" ] && args+=(--patient "$CROP_PATIENT")
+        [ -n "$CROP_AT" ] && args+=(--crop "$CROP_AT")
+        fig fig_crop_grid "${args[@]}" ;;
+    crops_all)
+        args=(--cases "$REGBENCH_CASES" --out "$REGBENCH_OUT" --tables "$TABLES"
+              --methods "$CROPS_ALL_METHODS" --columns "$CROPS_ALL_COLUMNS"
+              --crop-um "$CROP_UM" "${DISPLAY[@]}" --outdir "$OUTDIR/crops_all")
+        [ -n "$CROPS_ALL_PATIENT" ] && args+=(--patient "$CROPS_ALL_PATIENT")
         [ -n "$CROP_AT" ] && args+=(--crop "$CROP_AT")
         fig fig_crop_grid "${args[@]}" ;;
     overlay)
@@ -102,7 +116,7 @@ for f in "${want[@]}"; do
               "${DISPLAY[@]}" --outdir "$OUTDIR/segmentation")
         [ -n "$SEG_ZOOM_AT" ] && args+=(--zoom "$SEG_ZOOM_AT")
         fig fig_segmentation "${args[@]}" ;;
-    *) echo "unknown figure $f (cost cohort crops overlay segmentation)"; exit 2 ;;
+    *) echo "unknown figure $f (cost cohort crops crops_all overlay segmentation)"; exit 2 ;;
     esac
 done
 echo "-> $OUTDIR"

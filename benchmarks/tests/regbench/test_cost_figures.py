@@ -100,9 +100,9 @@ def _ticks(monkeypatch):
     return seen
 
 
-def test_fig3f_one_unit_no_gpu_row_on_a_cpu_axis_stare_at_4_cpus(paper, monkeypatch):
+def test_fig3e_one_unit_no_gpu_row_on_a_cpu_axis_stare_at_4_cpus(paper, monkeypatch):
     ticks = _ticks(monkeypatch)
-    res = cost_plots.fig3f_cpu_wall_best(paper, paper / "figures")
+    res = cost_plots.fig3e_cpu_wall_best(paper, paper / "figures")
     rows = _source(res)
     assert {r["unit"] for r in rows} == {"patient"}  # one unit per axis
     cpu = {r["row"] for r in rows if r["panel"] == "cpu_h"}
@@ -124,7 +124,7 @@ def test_fig3f_one_unit_no_gpu_row_on_a_cpu_axis_stare_at_4_cpus(paper, monkeypa
 
 
 def test_fig3e_leaves_a_rusage_peak_out_and_marks_stares_concurrent_memory(paper):
-    res = cost_plots.fig3e_peak_rss_best(paper, paper / "figures")
+    res = cost_plots.fig3d_peak_rss_best(paper, paper / "figures")
     rows = _source(res)
     assert ("valis_a", "P2") not in {(r["row"], r["unit_id"]) for r in rows
                                      if r["quantity"] == "peak_rss_gb"}
@@ -135,7 +135,7 @@ def test_fig3e_leaves_a_rusage_peak_out_and_marks_stares_concurrent_memory(paper
 
 def test_every_point_not_drawn_and_every_lower_bound_is_a_loss_row(paper):
     figs = paper / "figures"
-    got = {"fig3f_cpu_wall_best": cost_plots.fig3f_cpu_wall_best(paper, figs),
+    got = {"fig3e_cpu_wall_best": cost_plots.fig3e_cpu_wall_best(paper, figs),
            "figS_end_to_end": cost_plots.figS_end_to_end(paper, figs)}  # a placeholder
     from benchmarks.regbench import losses
 
@@ -203,19 +203,19 @@ def test_the_scored_cohort_draws_every_cost_figure_on_patients(tmp_path, monkeyp
     assert mine[variants.STARE_LOCAL4]["clock"] == costs.LOCAL4
     ticks = _ticks(monkeypatch)
     assert cli.main(["plots", "--out", str(out), "--only",
-                     "fig3e_peak_rss_best,fig3f_cpu_wall_best,fig2c_cost_vs_input"]) == 0
+                     "fig3d_peak_rss_best,fig3e_cpu_wall_best,fig2c_cost_vs_input"]) == 0
     printed = capsys.readouterr().out
     figs = out / "paper" / "figures"
-    for name in ("fig3e_peak_rss_best", "fig3f_cpu_wall_best"):
+    for name in ("fig3d_peak_rss_best", "fig3e_cpu_wall_best"):
         assert f"{name}\tdrawn" in printed, printed
         src = list(csv.DictReader(open(figs / f"{name}_source_data.csv")))
         assert src and {r["unit"] for r in src} == {"patient"}, name
         drawn = {r["unit_id"] for r in src}
         assert drawn <= {p["unit_id"] for p in pts if p["unit_kind"] == "patient"}
-    f3f = list(csv.DictReader(open(figs / "fig3f_cpu_wall_best_source_data.csv")))
-    on_cpu = {r["row"] for r in f3f if r["panel"] in ("cpu_h", "gb_h")}
+    f3e = list(csv.DictReader(open(figs / "fig3e_cpu_wall_best_source_data.csv")))
+    on_cpu = {r["row"] for r in f3e if r["panel"] in ("cpu_h", "gb_h")}
     assert "gpu" not in on_cpu and "gpu_cpu" in on_cpu, on_cpu
-    assert "gpu" in {r["row"] for r in f3f if r["panel"] == "gpu_h"}
+    assert "gpu" in {r["row"] for r in f3e if r["panel"] == "gpu_h"}
     # every tick's count is method_summary's, exactly
     summary = schema.read(out / "paper" / "method_summary.csv")
     want = {f"n={int(float(r['n_patients_common']))}/{int(float(r['n_patients_all']))}"
@@ -332,9 +332,9 @@ def _labels(monkeypatch):
 
 
 def test_the_gb_hours_and_the_concurrent_memory_markers_carry_their_interval(paper):
-    gb = [r for r in _source(cost_plots.fig3f_cpu_wall_best(paper, paper / "figures"))
+    gb = [r for r in _source(cost_plots.fig3e_cpu_wall_best(paper, paper / "figures"))
           if r["quantity"] == "gb_h_used"]
-    conc = [r for r in _source(cost_plots.fig3e_peak_rss_best(paper, paper / "figures"))
+    conc = [r for r in _source(cost_plots.fig3d_peak_rss_best(paper, paper / "figures"))
             if r["quantity"] == "peak_concurrent_gb"]
     for rows in (gb, conc):
         assert rows and all(r["ci_low"] not in ("", "NA") and r["ci_high"] not in ("", "NA")

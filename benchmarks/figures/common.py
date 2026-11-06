@@ -177,7 +177,7 @@ def plain_ticks(ax, log, data_max=None):
             for m in (1, 2, 5)
         ]
         vals = [v for v in vals if lo <= v <= hi]
-        if len(vals) > 8:  # a wide range: 1-3-10 like Fig. 3e
+        if len(vals) > 8:  # a wide range: 1-3-10 like Fig. 3d
             vals = [v for v in vals if str(v).lstrip("0.").startswith(("1", "3", "5"))]
         ax.yaxis.set_major_locator(FixedLocator(vals))
         ax.yaxis.set_minor_locator(NullLocator())

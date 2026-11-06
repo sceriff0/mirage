@@ -21,7 +21,7 @@ pip install -r requirements/ci.txt        # matplotlib, pandas, scikit-image, ST
 cd <regbench root>                         # where regbench.env sets REGBENCH_CASES / _OUT
 bash <checkout>/benchmarks/figures/make_figures.sh             # all of them
 bash <checkout>/benchmarks/figures/make_figures.sh cohort crops # some of them
-# figures: cost cohort crops overlay segmentation
+# figures: cost cohort crops crops_all overlay segmentation
 ```
 
 Every choice (variants, cases, zoom sizes, display, seed) sits in one block at the top of
@@ -35,10 +35,14 @@ harness's own code.
 
 | Script | Reproduces | Reads |
 |---|---|---|
-| `fig_synthetic_cost.py` | Peak RSS and CPU time vs input size per patient, VALIS vs STARE (the cohort: the benchmark has no synthetic set any more) | `tables/summary_resources.csv`, `tables/resources.csv` |
+| `fig_synthetic_cost.py` | Not a paper figure: peak RSS and CPU time vs input size per patient on the COHORT, VALIS vs STARE (`make_figures.sh cost`; despite its name it reads `COST_DATASET`, the cohort by default) | `tables/summary_resources.csv`, `tables/resources.csv` |
+| `fig_rss_vs_size.py` | Fig. 2c: peak RSS vs slide size on the synthetic matrix, STARE per task, ONE VALIS row (`--valis`, default `valis120`), the cohort's slides overlaid (the manuscript's second VALIS line, the high-resolution example, is not drawn by it). Not in `make_figures.sh` (it reads the synthetic run's tables too). `regbench plots fig2c_cost_vs_input` draws the same panel from `paper/` | `<synthetic>/tables/resources.csv`, `tables/resources.csv` |
+| `fig_stare_seam.py` | Fig. 2b: one round pair after STARE, an inset across a tile boundary and single-cell insets. Not in `make_figures.sh` (the case and tile corner are chosen by hand) | cases, the STARE result's written image |
+| `regbench plots figS_synth_cost_scaling` (`benchmarks/regbench/paper/cost_plots.py`, not a script here) | Supplementary Fig. S4: wall-clock time vs slide size on the synthetic matrix, log-log, the fitted exponent per method (its wall panel) | `paper/` of the synthetic set |
 | `fig_cohort_scores.py` | Fig. 3b–e: Dice, centroid distance, peak RSS, CPU time per method; paired Wilcoxon vs STARE, Holm-corrected | `tables/cells.csv`, `tables/summary_resources.csv` |
 | `fig_crop_grid.py` | Fig. 3a: one patient's rounds, the same crop unregistered and after each method, Dice per crop | cases, results' written images, `warped.npz` |
-| `fig_overlay.py` | Fig. 4b: a case's DAPI before (and after) registration, three zooms: translation, rotation, deformation | cases, one result's `warped.npz` and images |
+| `fig_crop_grid.py` (`make_figures.sh crops_all`) | Supplementary Fig. S5: the same, rows before / VALIS / STARE, one column per moving round | as Fig. 3a |
+| `fig_overlay.py` | Fig. 1c (its "before" file: the overview, the three fields boxed) and Fig. 4b (before and after STARE): a case's DAPI, three zooms: translation, rotation, deformation | cases, one result's `warped.npz` and images |
 | `fig_segmentation.py` | Fig. 4c: a slide's DAPI with the pipeline's StarDist outlines in a zoomed inset | `pyramid/<patient>.ome.tif`, `geojson/<patient>_cells.geojson` |
 
 ## How each choice is made (all deterministic, all pinnable)

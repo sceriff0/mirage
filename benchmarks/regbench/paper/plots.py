@@ -456,7 +456,7 @@ def fig3c_displacement_best(paper_dir, fig_dir):
 
 
 
-# ── Fig. 3e, 3f, 2c, the CPU cross and end to end: paper/cost_plots.py (T31) ──────
+# ── Fig. 3d, 3e, 2c, the CPU cross and end to end: paper/cost_plots.py (T31) ──────
 
 
 # ── supplementary ────────────────────────────────────────────────────────────
@@ -665,8 +665,8 @@ PLOTS = {
     "fig3b_dice_best_nuclei": fig3b_dice_best_nuclei,
     "fig3b_dice_all": fig3b_dice_all,
     "fig3c_displacement_best": fig3c_displacement_best,
-    "fig3e_peak_rss_best": None,  # cost_plots.FIGURES, filled in below
-    "fig3f_cpu_wall_best": None,
+    "fig3d_peak_rss_best": None,  # cost_plots.FIGURES, filled in below
+    "fig3e_cpu_wall_best": None,
     "fig2c_cost_vs_input": None,
     "figS_end_to_end": None,
     "figS_pipeline_cost_fits": figS_pipeline_cost_fits,
@@ -686,8 +686,8 @@ NEEDS = {
     "fig3b_dice_all": {"per_pair.csv": ("dice_matched",), "method_best.csv": ("best_row",)},
     "fig3c_displacement_best": {"per_pair.csv": ("displacement_um_p50",),
                                 "method_best.csv": ("best_row",)},
-    "fig3e_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
-    "fig3f_cpu_wall_best": {"method_best.csv": ("best_row",),
+    "fig3d_peak_rss_best": {"method_best.csv": ("best_row",), "cost_points.csv": ("peak_rss_gb",)},
+    "fig3e_cpu_wall_best": {"method_best.csv": ("best_row",),
                             "cost_points.csv": ("cpu_h_used", "wall_s")},
     "fig2c_cost_vs_input": {"method_best.csv": ("best_row",), "cost_points.csv": ("input_gpx",),
                             "cost_fits.csv": ("slope",)},

@@ -1,7 +1,7 @@
 """The paper's cost figures (Task 31): fig. 3e, 3f, 2c and the supplementary CPU cross
 and end-to-end panels, every one by the rules of ``paper.costs``.
 
-* **One unit per axis.** Fig. 3e and 3f: one point per PATIENT for every method. Fig. 2c:
+* **One unit per axis.** Fig. 3d and 3e: one point per PATIENT for every method. Fig. 2c:
   a per-round facet (every method that has a per-round figure) and a per-patient facet
   (every method, with the fits). The source data names the unit of every value.
 * **The common patients** (``cost_points.in_common``) are what is drawn; every tick
@@ -241,9 +241,9 @@ def _rotate(axes):
             t.set_ha("center")
 
 
-# ── Fig. 3e: the memory one job needs ────────────────────────────────────────
-def fig3e_peak_rss_best(paper_dir, fig_dir):
-    name = "fig3e_peak_rss_best"
+# ── Fig. 3d: the memory one job needs ────────────────────────────────────────
+def fig3d_peak_rss_best(paper_dir, fig_dir):
+    name = "fig3d_peak_rss_best"
     got, ph = _setup(paper_dir, fig_dir, name)
     if ph:
         return ph
@@ -286,7 +286,7 @@ def fig3e_peak_rss_best(paper_dir, fig_dir):
     return _done(fig, fig_dir, name, data, n, losses)
 
 
-# ── Fig. 3f: what the cluster paid ───────────────────────────────────────────
+# ── Fig. 3e: what the cluster paid ───────────────────────────────────────────
 def _cpu_entries(cost, best, local=False):
     """The CPU rows of the families: a GPU row is replaced by its CPU twin (or left
     out, counted, when it has none); with ``local``, STARE's staged row by
@@ -331,8 +331,8 @@ def _patient_rows(drawn, key_values):
     return out
 
 
-def fig3f_cpu_wall_best(paper_dir, fig_dir):
-    name = "fig3f_cpu_wall_best"
+def fig3e_cpu_wall_best(paper_dir, fig_dir):
+    name = "fig3e_cpu_wall_best"
     got, ph = _setup(paper_dir, fig_dir, name)
     if ph:
         return ph
@@ -670,8 +670,8 @@ def figS_end_to_end(paper_dir, fig_dir):
 
 
 FIGURES = {
-    "fig3e_peak_rss_best": fig3e_peak_rss_best,
-    "fig3f_cpu_wall_best": fig3f_cpu_wall_best,
+    "fig3d_peak_rss_best": fig3d_peak_rss_best,
+    "fig3e_cpu_wall_best": fig3e_cpu_wall_best,
     "fig2c_cost_vs_input": fig2c_cost_vs_input,
     "figS_end_to_end": figS_end_to_end,
 }
