@@ -53,6 +53,7 @@ process TILED_REG_TILE {
         --rx0 ${row.rx0} --ry0 ${row.ry0} --rx1 ${row.rx1} --ry1 ${row.ry1} \\
         --x0 ${row.x0} --y0 ${row.y0} --x1 ${row.x1} --y1 ${row.y1} \\
         --stride ${stride} \\
+        --pixel-size ${params.pixel_size} \\
         --out ${prefix}_ctrl.json
 
     ${ProcessEnvelope.versions(task.process, [], task.container)}
