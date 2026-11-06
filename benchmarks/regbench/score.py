@@ -3639,8 +3639,8 @@ PAIRING_RULE = (
 
 
 # T29 fix 1 (ruling 2026-10-19): the scorer pairs against variants.PRIMARY, fixed before
-# scoring. The paper's DeeperHistReg primary is its best row, which is chosen FROM these
-# tables, so the scorer cannot use it without a cycle.
+# scoring. Since 2026-11-06 the paper reports that same row (BEST_IS_PRIMARY is empty), so
+# the scorer and the paper pair against one DeeperHistReg row.
 PRIMARY_ANCHOR_RULE = (
     "**The primary rows here are fixed before scoring** (`variants.PRIMARY`): "
     "`paired_vs_primary`, `common_block` and every `*_shared` column pair against them. "

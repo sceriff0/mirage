@@ -819,16 +819,16 @@ def test_a_ref_to_mov_row_and_a_mov_to_ref_row_share_one_summary(tmp_path):
     assert MOV_TO_REF != REF_TO_MOV
 
 
-def test_summary_says_score_pairs_against_the_fixed_primary_not_the_papers():
-    """T29 fix 1: score keeps variants.PRIMARY (DeeperHistReg: hr_gpu) as the pairing
-    anchor fixed before scoring; the paper's DeeperHistReg primary is its best row. The
-    summary's header says so, and that the two common sets can differ."""
+def test_summary_says_score_pairs_against_the_fixed_primary_the_paper_reports():
+    """T29 fix 1: score keeps variants.PRIMARY as the pairing anchor fixed before
+    scoring. Since 2026-11-06 the paper reports that same DeeperHistReg row
+    (paper/tables.py BEST_IS_PRIMARY is empty), and the summary's header says so."""
     from benchmarks.regbench import variants
 
     rule = score.PRIMARY_ANCHOR_RULE
     assert variants.PRIMARY_DEEPERHISTREG in rule
-    for words in ("paired_vs_primary", "common_block", "_shared", "best",
-                  "2026-10-18", "can differ"):
+    for words in ("paired_vs_primary", "common_block", "_shared", "BEST_IS_PRIMARY",
+                  "2026-11-06", "reports too"):
         assert words in rule, words
     text = score.summary_markdown([], [], [])
     assert rule in text
