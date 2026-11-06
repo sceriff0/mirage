@@ -49,6 +49,7 @@ process TILED_COARSE {
         --tile ${tile} \\
         --halo ${halo} \\
         --max-dim ${max_dim} \\
+        --pixel-size ${params.pixel_size} \\
         --out-m0 ${prefix}_m0.json \\
         --out-tiles ${prefix}_tiles.csv
 
