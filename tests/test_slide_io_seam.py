@@ -123,7 +123,11 @@ PIXEL_WRITERS = {
         1,
         "generic helper; the caller supplies the decisions",
     ),
-    "bin/utils/qc.py": (2, "QC raster output, not a pipeline artifact"),
+    "bin/utils/qc.py": (
+        3,
+        "QC raster output, not a pipeline artifact; the third (4e277f42) writes a "
+        "full-resolution composite too large for a classic TIFF as OME BigTIFF",
+    ),
 }
 
 # Writers that emit a (C, H, W) stack and pass photometric THEMSELVES. Every one of these
