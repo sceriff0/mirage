@@ -74,15 +74,17 @@ def test_prints_both_sets_with_the_protocol_extras_removed(tmp_path, capsys):
         assert f"  {m:28s} " in proto_part
 
 
-def test_dice_against_five_methods_centroid_against_four(tmp_path, capsys):
+def test_both_metrics_against_the_same_five_methods(tmp_path, capsys):
     acc.main([str(_tables(tmp_path))])
     proto = capsys.readouterr().out.split("################ PROTOCOL 64")[1]
     dice = [ln for ln in proto.splitlines() if ln.startswith("  dice_mat ")]
     cent = [ln for ln in proto.splitlines() if ln.startswith("  displace ")]
     assert len(dice) == 5 and any("Unregistered" in ln for ln in dice)
-    assert len(cent) == 4 and not any("Unregistered" in ln for ln in cent)
+    # the manuscripts' rule (2026-11-05): centroid distance is tested on every pair against
+    # the same five, the unregistered condition included
+    assert len(cent) == 5 and any("Unregistered" in ln for ln in cent)
     # STARE is better in every pair and case of the fixture: the smallest exact case-level
-    # P with eight cases is 2/256 = 0.0078, x5 (Dice) and x4 (centroid) after Holm
+    # P with eight cases is 2/256 = 0.0078, x5 for both metrics after Holm
     assert all("cases 8/8" in ln for ln in dice + cent)
     assert all("case Holm 0.039" in ln for ln in dice)
-    assert all("case Holm 0.031" in ln for ln in cent)
+    assert all("case Holm 0.039" in ln for ln in cent)

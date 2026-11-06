@@ -2,7 +2,7 @@
 # E712: `== True` is kept on purpose: displacement_readable can be read as an object
 # column (strings / NaN), where a bare truth test would select different rows than the
 # published run did. E731: the lambdas are the original script's, kept verbatim.
-"""Every accuracy number of the 261105 manuscripts, from the harness's tables.
+"""Every accuracy number of the manuscripts (261105 and 261106), from the harness's tables.
 
     python -m benchmarks.regbench.paper.accuracy_stats <REGBENCH_OUT>/tables
 
@@ -11,21 +11,24 @@ Reads ``cells.csv`` (outlines: StarDist nuclei expanded by 10 px), ``cells_nucle
 the 64 pairs of the nine-round protocol (the reference-round re-stain and the FSP1 / L1CAM
 stains removed by ``EXTRA``):
 
-* the Supplementary Table S2 accuracy columns of every reported row (n, matched fraction,
-  matched-pair nuclear Dice and residual centroid distance with IQRs, p90);
+* the Supplementary Table 2 accuracy columns of every reported row (n, matched fraction,
+  matched-pair nuclear Dice and residual centroid distance with IQRs over ALL pairs, p90;
+  the centroid median over the pairs whose displacement is readable is printed beside it);
 * the STARE gain over its rigid anchor M0, and the matched-fraction excess;
-* bare-nuclei, mutual-nearest-neighbour and exact-component Dice (Supplementary Section S8);
+* bare-nuclei, mutual-nearest-neighbour and exact-component Dice (Supplementary Note 6);
 * per-case winners and margins, and the pairs where STARE is highest of the five methods;
-* the paired tests of Fig. 3b,c and Supplementary Section S8: two-sided Wilcoxon signed-rank
+* the paired tests of Fig. 3b,c and Supplementary Note 6: two-sided Wilcoxon signed-rank
   per round pair (normal approximation) and on the per-case medians (exact), Holm-corrected.
-  Dice is compared against FIVE methods (VALIS, PALOM, ASHLAR, DeeperHistReg,
-  Unregistered); centroid distance against FOUR (the unregistered condition is not tested),
-  on the pairs whose displacement is readable for both rows;
+  Both metrics are compared against the same FIVE (VALIS, PALOM, ASHLAR, DeeperHistReg,
+  Unregistered), on every pair (ruling 2026-11-05: no readable-displacement filter; this is
+  what ``benchmarks/figures/fig3bcde_benchmark.py`` tests too);
 * the fraction of moving ASHLAR fields replaced by its stage model, and the ASHLAR rounds
   that stayed near the unregistered Dice.
 
-This is the script that produced the published numbers (it was kept outside the repository
-until 2026-11-06); its computations are unchanged here, only wrapped in ``main``.
+It was kept outside the repository until 2026-11-06 and wrapped in ``main`` then. Its
+centroid analysis followed an earlier rule (readable pairs only, four comparisons); on
+2026-11-06 it was brought to the manuscripts' rule above, which reproduces their numbers
+(pair-level Holm P 1.8e-11 and case-level 0.039 for both metrics).
 """
 
 import argparse
@@ -83,7 +86,7 @@ def run(sub, title):
     g = lambda m, d=c_: d[d.method == m].set_index("case_id")
     print(f"\n################ {title}")
     print(
-        "TABLE S2: row | n | matched frac | Dice med (IQR) | centroid med (IQR) [readable] | p90 all | p90 readable"
+        "TABLE 2: row | n | matched frac | Dice med (IQR) | centroid med (IQR) all | readable: med (IQR) [n] | p90 all | p90 readable"
     )
     for m in ROWS:
         x = g(m)
@@ -92,7 +95,7 @@ def run(sub, title):
             f"{f2(s.median())} ({f2(s.quantile(0.25))}–{f2(s.quantile(0.75))})"
         )
         print(
-            f"  {m:28s} {len(x):3d} {f2(x.pair_fraction.median())} {q(x.dice_matched)} {q(r.displacement_um_p50) if len(r) else '-'} [{len(r)}] "
+            f"  {m:28s} {len(x):3d} {f2(x.pair_fraction.median())} {q(x.dice_matched)} {q(x.displacement_um_p50)} | {q(r.displacement_um_p50) if len(r) else '-'} [{len(r)}] "
             f"p90 {f2(x.displacement_um_p90.median())} / {f2(r.displacement_um_p90.median()) if len(r) else '-'}"
         )
     s = g("stare")
@@ -137,12 +140,7 @@ def run(sub, title):
         {m: g(m).groupby("patient_id").dice_matched.median() for m in meth}
     )
     D = pd.DataFrame(
-        {
-            m: g(m)[g(m).displacement_readable == True]
-            .groupby("patient_id")
-            .displacement_um_p50.median()
-            for m in meth
-        }
+        {m: g(m).groupby("patient_id").displacement_um_p50.median() for m in meth}
     )
     marg = W.stare - W.drop(columns="stare").max(axis=1)
     print(
@@ -160,17 +158,12 @@ def run(sub, title):
         "/",
         len(P),
     )
-    for metric, oth in [("dice_matched", others), ("displacement_um_p50", others[:-1])]:
+    for metric, oth in [("dice_matched", others), ("displacement_um_p50", others)]:
         pp, pc, txt = [], [], []
         for o in oth:
-            j = s[[metric, "displacement_readable", "patient_id"]].join(
-                g(o)[[metric, "displacement_readable"]], rsuffix="_o", how="inner"
+            j = s[[metric, "patient_id"]].join(
+                g(o)[[metric]], rsuffix="_o", how="inner"
             )
-            if metric != "dice_matched":
-                j = j[
-                    (j.displacement_readable == True)
-                    & (j.displacement_readable_o == True)
-                ]
             d = j[metric] - j[metric + "_o"]
             b = (d > 0).sum() if metric == "dice_matched" else (d < 0).sum()
             pp.append(wilcoxon(d, method="approx").pvalue)

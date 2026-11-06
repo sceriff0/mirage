@@ -462,7 +462,7 @@ PRIMARY = (
 
 # Result-name prefix -> the method a row is shown under. A family's name is a label for
 # the method, NOT the name of its primary row: `valis120` and `valis120_hires` share the
-# family `valis120`, whose primary is `valis120_hires` (`primary_of`).
+# family `valis120`, whose primary is `valis120` (`PRIMARY_VALIS120`, `primary_of`).
 # `ashlar_clean` stays in ASHLAR's family; the two anchored rows share a family of their
 # own, which has no primary row and is never offered as ASHLAR's best.
 FAMILY = {
