@@ -218,9 +218,10 @@ def test_the_pinned_params_are_real_and_at_their_shipped_default():
             f"{key}: compute-all restates {value!r}, nextflow.config ships {_default(key)}"
         )
     assert _default("registration_method") in compute_all.BACKENDS
-    # the rulings (2026-10-15): StarDist, the benchmark's own nuclei, and the input
-    # step's pixel size. NOT the shipped defaults: rulings, not restatements
-    assert compute_all.RULED == {"seg_method": "stardist", "pixel_size": 0.325}
+    # StarDist (the ruling of 2026-10-15) is the shipped default since 2026-11-05, so it
+    # is PINNED; the input step's pixel size is the one ruling that is NOT a default
+    assert compute_all.PINNED["seg_method"] == "stardist"
+    assert compute_all.RULED == {"pixel_size": 0.325}
     assert not set(compute_all.RULED) & set(compute_all.PINNED)
     for key, value in compute_all.RULED.items():
         assert _as_config(value) != _default(key), f"{key} is a restatement: PINNED"

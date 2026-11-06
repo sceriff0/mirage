@@ -108,6 +108,23 @@ def pipeline_memory_gb(stage, tier=None):
     return math.ceil(max(floor, (a + b * side * side / 1e6) * k))
 
 
+# The ONE stage whose pipeline request moved after the benchmark ran: TILED_SOLVE asks
+# 2 GB on attempt 1 since edb30439 (2026-11-05), because the measured cohort peak (1.20 GB,
+# case 5456) OOMed the 1 GB request. The benchmark ran at 1 GB (stages.ALLOCATION, frozen in
+# method_code_freeze.json: changing it re-runs every STARE result), and Supplementary
+# Table S1 of the 261105 manuscript reports that 1 GB.
+RAISED_SINCE_THE_BENCHMARK = {stages.SOLVE: 2}
+
+
+def _pipeline_gb(stage, tier=None):
+    """The pipeline's first-attempt GB, with the one documented raise checked and undone."""
+    got = pipeline_memory_gb(stage, tier)
+    if stage in RAISED_SINCE_THE_BENCHMARK:
+        assert got == RAISED_SINCE_THE_BENCHMARK[stage], (stage, got)
+        return stages.ALLOCATION[stage]["mem_gb"]
+    return got
+
+
 @pytest.mark.parametrize("stage", PIPELINE)
 def test_each_job_has_the_pipelines_allocation(stage):
     row = stages.ALLOCATION[stage]
@@ -124,7 +141,7 @@ def test_each_job_has_the_pipelines_allocation(stage):
     assert int(re.search(r"cpus\s*=\s*\{\s*(\d+)\s*\}", label)[1]) == row["cpus"]
     hours = re.search(r"time\s*=\s*\{\s*(\d+)\.h\s*\*\s*task\.attempt\s*\}", label)[1]
     assert int(hours) == row["hours"]
-    assert pipeline_memory_gb(stage) == row["mem_gb"]
+    assert _pipeline_gb(stage) == row["mem_gb"]
     for attempt in (1, 2, 3, 4):  # memory and time x attempt, as there
         got = stages.allocation(stage, attempt)
         assert got["cpus"] == row["cpus"]
@@ -2018,4 +2035,4 @@ def test_every_tier_gets_the_allocation_the_table_holds():
         tier = {("coarse_max_dim" if k == "max_dim" else k): v for k, v in row.items()}
         for stage in PIPELINE:
             want = stages.ALLOCATION[stage]["mem_gb"]
-            assert pipeline_memory_gb(stage, tier) == want, (name, stage)
+            assert _pipeline_gb(stage, tier) == want, (name, stage)

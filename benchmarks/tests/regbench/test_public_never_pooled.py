@@ -287,10 +287,12 @@ def test_the_arms_and_sweep_layers_are_gone():
         check=True,
     ).stdout.split()
     allowed = ("benchmarks/__init__.py", "benchmarks/README.md")
-    allowed_dirs = ("benchmarks/ashlar/", "benchmarks/regbench/", "benchmarks/tests/")
+    # benchmarks/figures/: the publication figures (merged from benchmarking, 0090a1c8)
+    allowed_dirs = ("benchmarks/ashlar/", "benchmarks/figures/", "benchmarks/regbench/",
+                    "benchmarks/tests/")
     stray = [f for f in tracked if f not in allowed and not f.startswith(allowed_dirs)]
     assert not stray, (
-        f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,regbench,tests}}: {stray}"
+        f"tracked files outside benchmarks/{{__init__.py,README.md,ashlar,figures,regbench,tests}}: {stray}"
     )
 
 

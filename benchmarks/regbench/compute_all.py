@@ -12,13 +12,13 @@ caused itself is not a cost (the arms' precedent, run_arms.sh's "timed ALONE").
 
 * ``registration_method``: the backend, the one thing compared;
 * ``PINNED``: values restated AT their shipped default so that a site profile cannot
-  move them (``enable_trace``: tracing off would remove the measurement). The guard
+  move them (``enable_trace``: tracing off would remove the measurement; ``seg_method``,
+  StarDist, the benchmark's own nuclei: the user's ruling of 2026-10-15, and the shipped
+  default since the Hugging Face StarDist model became the pipeline's, 2026-11-05). The guard
   ``test_compute_all.py::test_the_pinned_params_are_real_and_at_their_shipped_default``
   fails when one is not a schema param, not of its type, or not the default any more;
 * ``RULED``: rulings, NOT the shipped defaults, each checked against the schema (type,
-  enum, pattern, bounds): ``seg_method=stardist`` (the user's ruling of 2026-10-15: the
-  benchmark's own nuclei are StarDist's, and so was the arms' compute run; shipped
-  ``instantseg``) and ``pixel_size=0.325`` (the user's input-step ruling of 2026-10-15,
+  enum, pattern, bounds): ``pixel_size=0.325`` (the user's input-step ruling of 2026-10-15,
   extended to compute-all by the controller: the scale of the scored inputs, and no
   launch failure on slides without metadata; shipped ``auto``).
 
@@ -65,12 +65,10 @@ from . import trace
 
 BACKENDS = ("valis", "tiled")
 # restated AT the shipped default (nextflow.config), so a site profile cannot remove it
-PINNED = {"enable_trace": True}
-# rulings, not restatements: StarDist (the user's ruling, 2026-10-15: the benchmark's
-# nuclei and the arms' compute run were StarDist's; shipped instantseg), and the input
-# step's pixel size (the user's ruling for the inputs, extended to compute-all: the
+PINNED = {"enable_trace": True, "seg_method": "stardist"}
+# rulings, not restatements: the input step's pixel size (the user's ruling for the inputs, extended to compute-all: the
 # scale of the scored inputs, so no slide without metadata stops a run; shipped auto)
-RULED = {"seg_method": "stardist", "pixel_size": 0.325}
+RULED = {"pixel_size": 0.325}
 REGISTRATION_PROCESSES = {
     "valis": ("REGISTER",),
     "tiled": ("TILED_COARSE", "TILED_REG_TILE", "TILED_SOLVE", "TILED_STITCH"),

@@ -1104,9 +1104,11 @@ def test_where_the_site_config_is_looked_for(tmp_path, monkeypatch):
         "seg_pmax": nuclei.STARDIST["pmax"],
         "seg_prob_thresh": None,
     }
-    # the shipped template has the two keys in the form that is read
+    # the shipped template sets the model FOLDER in the form that is read; since the
+    # model is a pinned Hugging Face snapshot (nextflow.config's segmentation_model, HF
+    # StarDist, 2026-11-05) the model NAME is the shipped default and stays commented
     template = site_config.read(REPO / "conf" / "site.config.template")
-    assert set(template) >= set(site_config.MODEL_KEYS)
+    assert "segmentation_model_dir" in template and "segmentation_model" in site_config.MODEL_KEYS
 
 
 def test_a_site_config_that_cannot_be_read_plainly_is_refused(tmp_path):
