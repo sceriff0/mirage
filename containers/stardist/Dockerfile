@@ -3,7 +3,7 @@
 # produce a different image than the one that generated the published results. Resolved
 # 2026-09-02; Dependabot updates the digest in place. Guarded by
 # tests/test_base_images_are_digest_pinned.py.
-FROM tensorflow/tensorflow:2.15.0-gpu-jupyter@sha256:2de4ac3c6e8360a1e57b7dc4fca8d061daf7c58b61de31da1f0aca11c18bab32
+FROM tensorflow/tensorflow:2.21.0-gpu-jupyter@sha256:742a91e780b2d1d51a3352d1daf71415a73cc50594a3d7c0110d5f9949b7435b
 
 WORKDIR /workspace
 

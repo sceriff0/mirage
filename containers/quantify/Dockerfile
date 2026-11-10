@@ -5,7 +5,7 @@
 # produce a different image than the one that generated the published results. Resolved
 # 2026-09-02; Dependabot updates the digest in place. Guarded by
 # tests/test_base_images_are_digest_pinned.py.
-FROM nvidia/cuda:12.2.2-devel-ubuntu22.04@sha256:ae8a022c02aec945c4f8c52f65deaf535de7abb58e840350d19391ec683f4980
+FROM nvidia/cuda:13.5.0-devel-ubuntu22.04@sha256:b44fc069ef34cf454cdeabadf6a4e8b1d093b973b7d08ac2768bbc99fba2f013
 
 # Install Python and essential tools
 # procps is not optional. Nextflow's task-metrics wrapper hard-exits BEFORE the script
