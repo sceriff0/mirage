@@ -121,7 +121,7 @@ workflow SEG_QC {
         // never a silently smaller QC.
         def src = params.seg_qc_nuclei_dir.toString()
         ch_geojson = ch_native_images.map { meta, img ->
-            def slide = slide_of(img)
+            def slide = slide_of.call(img)
             def gj = file("${src}/${meta.patient_id}/qc/registration/geojson/${slide}.geojson")
             if (!gj.exists())
                 error "--seg_qc_nuclei_dir: no QC nuclei for slide '${slide}' of patient " +
@@ -131,7 +131,7 @@ workflow SEG_QC {
         }
     } else {
         ch_to_segment = ch_native_images.map { meta, img ->
-            tuple(meta + [qc_slide: slide_of(img)], img, seg_params)
+            tuple(meta + [qc_slide: slide_of.call(img)], img, seg_params)
         }
         SEG_QC_SEGMENT(ch_to_segment)
 
