@@ -28,8 +28,8 @@ inert and misleading; those have been removed. What remains is three cases:
 **These three counts cover `modules/local/*.nf` only**, because that is what
 `tests/test_resource_label_coverage.py` scans and the counts are checked against
 that scan — raising one to include a process outside `modules/local/` makes the
-build fail (verified: bumping case 3 to `7` fails with `claims [14, 6, 7] … give
-[14, 6, 6]`). One process is therefore outside all three numbers: **`BASICPY`**,
+build fail (verified: bumping case 3 to `7` fails with `claims [15, 6, 7] … give
+[15, 6, 6]`). One process is therefore outside all three numbers: **`BASICPY`**,
 in `modules/nf-core/basicpy/`, which is a **case-3 partial override** — upstream's
 `label 'process_single'` with `memory` raised to `32 GB × attempt` by its
 `withName:` block. Nothing guards that sentence, so check it by hand if you edit
@@ -133,7 +133,7 @@ concurrency block, after the profiles) and its own error strategy — see
 
 ### Registration — tiled / STARE
 
-Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
+The default backend (`registration_method = 'tiled'`). Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
 at most even for large slides. `TILED_COARSE`'s anchor is an FFT NCC rotation sweep (ORB
 fallback) on a thumbnail bounded by `reg_tiled_coarse_max_dim`: 0.25–0.43 GB peak RSS measured
 for the whole stage at 512–2048 px, so the row below asks 2 GB at the 1024 px default. (From
@@ -154,7 +154,7 @@ the only shape it has.
 `MERGE_AND_PYRAMID` are the
 processes whose memory
 request is **derived from a parameter** instead of being a constant: the first
-scales with `reg_tiled_tile + 2 × reg_tiled_halo`, the second with
+scales with `reg_tiled_tile + 2 × max(reg_tiled_halo, 3 × reg_tiled_stride)`, the second with
 `reg_tiled_out_tile`, each the measured linear fit doubled and floored at 4 GB.
 Raising a tile size therefore raises the reservation rather than producing a
 SIGKILL. The arithmetic is written out inside each process' own
@@ -197,11 +197,17 @@ formulas, not independent constants — the **parameter names**, not the numbers
 are what `tests/test_resource_label_coverage.py` checks for all five of these
 param-derived rows.
 
-The STARE method's memory is bounded. Measured peak RSS on a 16384² 2-channel
-tiled OME-TIFF: `TILED_REG_TILE` 1.31 GB, `TILED_SOLVE` < 1.31 GB,
-`TILED_STITCH` 1.35 GB — each set by a parameter (`reg_tiled_tile` +
-`reg_tiled_halo`, `reg_tiled_out_tile`) rather than by slide dimensions.
-`TILED_COARSE` is bounded the same way, by `reg_tiled_coarse_max_dim`, and is
+The memory of the STARE tile and resampling tasks is bounded by a window, not by
+the slide. Measured peak RSS on uint16 slides (macOS arm64, 2026-09-27):
+`TILED_REG_TILE` 1.27 GB at the default stride of 64 px (a 2432² px read window;
+1.65 GB at stride 128, 2.17 GB at 256) and `TILED_STITCH` 1.42 GB at the 1024 px
+default output tile — each set by a parameter (`reg_tiled_tile` +
+`reg_tiled_stride` / `reg_tiled_halo`, `reg_tiled_out_tile`) rather than by slide
+dimensions. `TILED_SOLVE` is the exception: it holds one displacement vector per
+lattice node plus lattice-sized working arrays, so its memory grows with slide
+area — 0.19–1.20 GB per round pair on the paper's eight-case cohort, which is why
+it asks a fixed 2 GB (raised from 1 GB after cohort-sized solves passed only on
+the retry). `TILED_COARSE` is bounded by a parameter too, by `reg_tiled_coarse_max_dim`, and is
 small again: its FFT NCC rotation-sweep anchor measured 0.25 GB at 512 px,
 0.43 GB at 1024 and 0.40 GB at 2048 on a 16384² tiled OME-TIFF pair
 (2026-09-27). The DISK U-Net it replaced needed `GB ≈ 1.1 + 7.3 × Mpx`
@@ -345,14 +351,21 @@ launch. Supply them from a `site.config` (`-c site.config`, copied from
     looks like; make your own from `conf/site.config.template` — see
     [Installation → Make a site config](installation.md#size-your-run).
 
-!!! warning "`-profile slurm` freezes the ceiling; `-c site.config` does not reach it"
+!!! note "`-profile slurm` no longer freezes the ceiling"
     The top-level `process.resourceLimits` in `nextflow.config` is a **closure**,
     so it is evaluated at task-submission time — after the whole profile stack has
     merged, and after a `-c` file has been layered. That is what makes
     `-c site.config` work: the closure reads `params.max_*` back lazily.
 
-    The `slurm` profile is the one exception. It assigns `resourceLimits` as a
-    **plain map** (`nextflow.config:724`), evaluated eagerly while
+    The `slurm` profile sets **no** `resourceLimits` of its own (see the comment in
+    its block in `nextflow.config`), so `-profile slurm,singularity -c site.config`
+    is clamped by the site's ceiling like every other route, and
+    `tests/test_frozen_config_params.py` forbids a plain-map `resourceLimits` in any
+    config file. What follows is the record of the defect that rule closes (measured
+    2026-09-09), kept so the plain map is not reintroduced.
+
+    The `slurm` profile used to assign `resourceLimits` as a
+    **plain map**, evaluated eagerly while
     `nextflow.config` is parsed — before any `-c` file exists. Measured with a
     `site.config` that actually sets a ceiling (`max_cpus = 64`,
     `max_memory = '300.GB'`), so the comparison is not against two `null`s:
@@ -368,16 +381,11 @@ launch. Supply them from a `site.config` (`-c site.config`, copied from
     Without `-profile slurm`, `resourceLimits` prints as the **closure literal**
     (`nextflow config` shows source, not the value it resolves to at
     submission time) — it reads `site.config`'s `64`/`300.GB` lazily, later, when
-    a task actually submits. *With* `-profile slurm`, the ceiling is frozen at
-    whatever `params.max_*` were at line 719 — `null`/`null`, because that line
-    runs before `-c site.config` is layered — and the `64`/`300.GB` from
-    `site.config` never reaches it, silently. Since `max_cpus`/`max_memory` have
-    **no default**, that frozen map is the reason to prefer
-    `-profile slurm,singularity -c site.config` together with a site config that
-    is layered for the *params* while the executor comes from the profile — and
-    the reason not to rely on `-profile slurm,<site>` picking up the site's
-    ceiling. Fix, if ever needed: make line 719 a closure, matching the
-    top-level default.
+    a task actually submits. *With* the old plain map, the ceiling was frozen at
+    whatever `params.max_*` were when the profile was parsed — `null`/`null`,
+    because that runs before `-c site.config` is layered — and the `64`/`300.GB`
+    from `site.config` never reached it, silently. The fix was to delete the
+    profile's map and leave the top-level closure as the only `resourceLimits`.
 
 ---
 
@@ -566,11 +574,11 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 | `bolt3x/mirage-convert:1.0.0` | `CONVERT_IMAGE` |
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
 | `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
-| `cdgatenbee/valis-wsi:1.2.0` (digest-pinned) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
-| `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH` |
+| `bolt3x/mirage-valis:1.0.0` (built on the digest-pinned upstream `cdgatenbee/valis-wsi:1.2.0`) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
+| `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH`, and `WARP_SEG_QC`'s STARE path |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
-| `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
-| `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` *(default)* |
+| `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` *(default)* |
+| `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` |
 | `bolt3x/mirage-cellsam:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method cellsam` |
 | *(per backend, `lib/WarpBackends.groovy`)* | `WARP_SEG_QC` |
 | `bolt3x/mirage-quantify:1.0.0` | `SEG_QC_GEOJSON`, `QUANTIFY`, `MERGE_QUANT_CSVS`, `EXTRACT_CELL_PROPERTIES`, `EXTRACT_NUCLEI_PROPERTIES`, `EXPORT_GEOJSON`, `GENERATE_POSTPROCESSING_QC` |

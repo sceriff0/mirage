@@ -1,8 +1,8 @@
-site_name: MIRAGE Pipeline
+site_name: MIRAGE
 site_description: >-
-  Nextflow DSL2 pipeline for multiplex whole-slide microscopy — illumination
-  correction, registration, segmentation, single-cell quantification, and
-  QuPath-compatible export.
+  Nextflow pipeline for whole-slide multiplexed immunofluorescence: bounded-memory
+  non-rigid registration of staining rounds with STARE, segmentation, single-cell
+  quantification, and QuPath and SpatialData export.
 site_author: Valerio Fassi, Yinxiu Zhan
 site_url: https://mirage-pipeline.readthedocs.io/
 repo_url: https://github.com/sceriff0/mirage
@@ -57,7 +57,7 @@ theme:
   favicon: assets/favicon.png
   icon:
     repo: fontawesome/brands/github
-  # Monochrome, matching the supplementary-figure design language in
+  # Monochrome, matching the method-schematic design language in
   # docs/stylesheets/extra.css (white paper / black ink). `primary: black` and
   # `accent: grey` are the closest Material presets; extra.css overrides the
   # remaining hue-carrying variables in both schemes.
@@ -124,18 +124,25 @@ plugins:
 # ---------------------------------------------------------------------------
 nav:
   - Home: index.md
-  - Installation: installation.md
-  - Usage: usage.md
-  - Format validation: validation/format_validation.md
-  - Pipeline: pipeline.md
-  - Parameters: parameters.md
-  - Inputs & outputs: outputs.md
-  - Resources: resources.md
-  - Illumination correction: basic_illumination.md
-  - Registration QC: registration_qc.md
-  - SpatialData & FlowPath: spatialdata.md
+  - Get started:
+      - Run your own slides: quickstart.md
+      - Installation: installation.md
+  - Guide:
+      - Running MIRAGE: usage.md
+      - Inputs & outputs: outputs.md
+      - Checking registration: registration_qc.md
+      - SpatialData & FlowPath: spatialdata.md
+  - How it works:
+      - The pipeline: pipeline.md
+      - Illumination correction: basic_illumination.md
+      - Resources: resources.md
+  - Reference:
+      - Parameters: parameters.md
+      - Format validation: validation/format_validation.md
+  - The paper:
+      - What the paper reports: paper.md
+      - Citation: citation.md
   - Development: developing.md
-  - Citation: citation.md
 
 # ---------------------------------------------------------------------------
 # Appearance extras
