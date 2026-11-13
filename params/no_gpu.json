@@ -1,0 +1,4 @@
+{
+    "_comment": "For a machine with no NVIDIA GPU (most laptops, any Mac): segmentation runs on the CPU. Combine with -profile local,docker. Slower, same result.",
+    "seg_gpu": false
+}
