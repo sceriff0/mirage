@@ -164,7 +164,7 @@ moved by its own code in its own direction. Every departure from that is listed 
 in `run.json: info.implementation.benchmark_side`.** Where a method's writer departs
 from its own transform, that is stated in prose in the method's section, not recorded
 per run. DeeperHistReg, whose shipped writer draws its image off its own registration,
-is scored on the image as drawn only (user instruction of 2026-10-17).
+is scored on the image as drawn.
 
 The departures are listed, none is hidden; "Caveats that travel with the results" and
 each method's section give them in full. In short:
@@ -385,9 +385,8 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   chosen from the scorer's tables, so the scorer cannot use it without a cycle. The
   scorer's common case set and the paper's `common` pooling can therefore differ;
   `summary.md` says so in its header (`score.PRIMARY_ANCHOR_RULE`).
-- **DeeperHistReg keeps one row per run, the image its writer draws** (user instruction
-  of 2026-10-17, which replaced option A of 2026-10-15). The row is named after the run
-  (`deeperhistreg_hr_gpu`); no row of the estimated field is written.
+- **DeeperHistReg keeps one row per run, the image its writer draws.** The row is named
+  after the run (`deeperhistreg_hr_gpu`).
 - **STARE runs are generated: stride x preprocessing level**
   (`regimes.py`; `variants._stare_runs`). `STARE_STRIDES = (64, 128, 256)`. The cohort's
   regime has the levels `baseline` (STARE unchanged: the fluorescence channel as it is),
@@ -396,7 +395,7 @@ exactly the cohort's result names and opens its summary on the six primary rows:
   `stare` (stride 64, no preprocessing), `stare_<level>` (stride 64) or
   `stare_s<stride>_<level>`. Beside them are two tier runs, `stare_medium` and
   `stare_low` (`variants.STARE_TIERS`; stride 64, no preprocessing, `--opt tier=<tier>`),
-  the medium and low rows of `lib/RegPresets.groovy`; `stare` itself is the high tier.
+  the medium and low rows of `ParamUtils.RETIRED_STARE_TIERS`; `stare` itself is the high tier.
   A STARE run is checked by `stare`'s selfcheck (one adapter, one pointing path).
 - **STARE's run options `proxy` and `sprep`** (STARE 1.3.0). `sprep=<none|clahe|percentile>`
   is STARE's OWN `--prep`, passed to `stare coarse` and `stare reg-tile` (default `none`;
@@ -3958,7 +3957,7 @@ each of the four is a scheduler job of its own (`regbench.stages`,
 
 Memory and time are multiplied by the attempt, as there. `stages.ALLOCATION` holds the
 table and `test_stages.py` works each number out again from the text of
-`conf/modules.config` and `lib/RegPresets.groovy`: it fails when they differ.
+`conf/modules.config` and `nextflow.config`'s STARE defaults: it fails when they differ.
 
 - **Retries.** None of the four processes sets an `errorStrategy`: they inherit the
   process-level one of `conf/base.config:11-22`, which retries an exit status of 104,
@@ -4022,7 +4021,7 @@ table and `test_stages.py` works each number out again from the text of
   which is read and not run.
 
 - **Parameters.** `TIER_HIGH_STRIDE64` = the `high` row of the STARE table in
-  `lib/RegPresets.groovy` (`tile` 2048, `halo` 256, `out_tile` 1024, `max_dim` 1024) plus
+  `ParamUtils.RETIRED_STARE_TIERS` (`tile` 2048, `halo` 256, `out_tile` 1024, `max_dim` 1024) plus
   `stride` 64, all five passed explicitly; a test reads the row from that file. The two
   STITCH flags the pipeline always passes are passed too: `--pixel-size` (the case's) and
   `--channel-names` (the case's, else the names in the moving slide's header). SOLVE is
@@ -4031,7 +4030,7 @@ table and `test_stages.py` works each number out again from the text of
   pipeline's module passes one by one. `info["cpu_count"]` records what COARSE's FFTs
   can use on the node.
 - **Tier.** `--opt tier=<high|medium|low>`; unset is `high`; any other value fails the
-  case. `TIERS` holds the three rows of the STARE table in `lib/RegPresets.groovy`, each
+  case. `TIERS` holds the three rows of the STARE table in `ParamUtils.RETIRED_STARE_TIERS`, each
   read back from that file by a test: `high` 2048 / 256 / 1024 / 1024, `medium`
   1024 / 192 / 768 / 1024, `low` 512 / 128 / 512 / 512 (`tile` / `halo` / `out_tile` /
   `max_dim`). A tier moves those four values and nothing else, so SOLVE's `--max-disp`
@@ -4583,7 +4582,7 @@ uncompressed (`single_page_tiff`); the clock is paused meanwhile and `convert_s`
 min-max rule (counted on every fourth row and column): a few bright pixels can leave
 16-bit DAPI in a handful of levels.
 
-**One row per run, reference -> moving, not inverted** (user instruction of 2026-10-17).
+**One row per run, reference -> moving, not inverted.**
 `<label>` scores the image **as written**: for every pixel of the file on disk, the
 moving-slide position the package's writer sampled (`asdrawn_map`). Its points are the
 transform of the image, and its selfcheck declares no offset.

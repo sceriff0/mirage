@@ -584,7 +584,7 @@ _TABLE_LIST = [
     _t("hosts", ("row",), "where the runs ran",
        ("row", "", ""), ("cpu_model", "", ""), ("cpus_requested", "", "distinct, '|'-joined"),
        ("mem_requested_gb", "", "distinct rungs"), ("n_results", "count", "")),
-    _t("stare_tier_table", ("tier",), "STARE's tiers (Table S3), from lib/RegPresets.groovy",
+    _t("stare_tier_table", ("tier",), "STARE's tiers (Table S3), from ParamUtils.RETIRED_STARE_TIERS",
        ("tier", "", ""), ("tile", "px", ""), ("halo", "px", "the displacement bound"),
        ("out_tile", "px", ""), ("coarse_max_dim", "px", ""), ("read_box_px_s64", "px", ""),
        ("reg_tile_mem_gb", "GB", "attempt 1"), ("stitch_mem_gb", "GB", "attempt 1")),

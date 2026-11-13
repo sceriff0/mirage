@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **STARE has no cost tiers any more: `reg_tiled_mode` is gone.** STARE runs one default
+  configuration, the former `high` row, now the plain defaults of its four knobs in
+  `nextflow.config`: `reg_tiled_tile` 2048, `reg_tiled_halo` 256, `reg_tiled_out_tile` 1024,
+  `reg_tiled_coarse_max_dim` 1024. A default run is unchanged: the same rendered commands and
+  the same memory requests (TILED_COARSE 2 GB, TILED_REG_TILE 4 GB, TILED_SOLVE 1 GB with
+  `--max-disp 256`, TILED_STITCH 4 GB, at attempt 1). Each knob can now be set directly,
+  without `custom`. `RegPresets.STARE`, `STARE_KEYS`, `STARE_PARAM_OF` and
+  `RegPresets.stare()` are removed, and `conf/modules.config` no longer inlines the tier
+  table. A run that still passes `reg_tiled_mode` (command line, `-params-file`, profile) is
+  **refused at launch** when the value is `medium`, `low` or `custom`, with the four knob
+  values of the retired row in the message (medium 1024/192/768/1024, low 512/128/512/512),
+  so an old `--reg_tiled_mode low` cannot silently run the high values. `high` only logs a
+  warning, since it is what runs anyway. VALIS's `memory_mode` tiers are unchanged.
+
 ### Changed
 
 - **REGISTER gives VALIS's JVM VALIS's own 10 GiB heap at every attempt** (was

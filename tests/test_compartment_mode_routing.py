@@ -363,7 +363,10 @@ ALLOWED_LINES = {
         # 1223 -> 1229 (2026-10-16): 305216c4's STARE comment fixes (TILED_SOLVE's range
         # gate, REG_TILE's window note) added a net +6 lines above this one.
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1229
-        1229: (
+        # 1229 -> 1199 (2026-11-04): STARE's cost tiers were removed, and the four TILED_*
+        # closures above this line lost their inlined tier table (-30 lines).
+        #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1199
+        1199: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

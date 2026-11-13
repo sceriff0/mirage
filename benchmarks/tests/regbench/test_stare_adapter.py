@@ -63,12 +63,21 @@ def no_stage(monkeypatch):
 
 
 # ── the command ───────────────────────────────────────────────────────────────
+def _retired_row(tier):
+    """One row of ``ParamUtils.RETIRED_STARE_TIERS`` (STARE's tiers were removed from the
+    pipeline; ``high`` is its default configuration, pinned to nextflow.config by
+    tests/test_reg_presets_inlined_in_config.py), keys without the ``reg_tiled_`` prefix."""
+    text = (REPO / "lib" / "ParamUtils.groovy").read_text()
+    table = re.search(r"\bRETIRED_STARE_TIERS\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
+    row = re.search(rf"\b{tier}\s*:\s*\[([^\]]*)\]", table).group(1)
+    return {
+        k.removeprefix("reg_tiled_"): int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)
+    }
+
+
 def high_row():
-    """The ``high`` row of the STARE table in ``lib/RegPresets.groovy``, read from the file."""
-    text = (REPO / "lib" / "RegPresets.groovy").read_text()
-    table = re.search(r"\bSTARE\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
-    row = re.search(r"\bhigh\s*:\s*\[([^\]]*)\]", table).group(1)
-    return {k: int(v) for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)}
+    """The ``high`` row: STARE's defaults in the pipeline."""
+    return _retired_row("high")
 
 
 def test_every_tier_owned_value_is_passed(toy_cases, recorded, tmp_path):
@@ -877,14 +886,10 @@ def load_case_by_id(cases, cid):
 
 # ── the tiers: high, medium and low, each the pipeline's row ─────────────────
 def tier_row(tier):
-    """One row of the STARE table in ``lib/RegPresets.groovy``, in the adapter's names
+    """One row of ``ParamUtils.RETIRED_STARE_TIERS``, in the adapter's names
     (``coarse_max_dim`` is ``--max-dim``), read from the file."""
-    text = (REPO / "lib" / "RegPresets.groovy").read_text()
-    table = re.search(r"\bSTARE\s*=\s*\[(.*?)\n\s*\]", text, re.S).group(1)
-    row = re.search(rf"\b{tier}\s*:\s*\[([^\]]*)\]", table).group(1)
     return {
-        ("max_dim" if k == "coarse_max_dim" else k): int(v)
-        for k, v in re.findall(r"(\w+)\s*:\s*(\d+)", row)
+        ("max_dim" if k == "coarse_max_dim" else k): v for k, v in _retired_row(tier).items()
     }
 
 
@@ -902,7 +907,7 @@ def test_every_tier_is_the_pipelines_row():
 
 def test_the_high_tier_command_is_unchanged(toy_cases, tmp_path):
     """Unset is high, and the high command is the one every earlier result was made
-    with: the tier's four values from RegPresets' high row, then the stride, in that
+    with: the tier's four values from the high row (the pipeline's defaults), then the stride, in that
     order, between the nuclear index and ``--prep``."""
     case = toy_cases["rigid"]
     row = high_row()

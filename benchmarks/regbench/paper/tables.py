@@ -624,8 +624,8 @@ def primary_of(family, dataset=COHORT):
     return None
 
 
-# Ruling 193 (user 2026-10-18 "the best one as_drawn"): a family whose primary is its
-# dataset's method_best row (every DeeperHistReg row is as-drawn since 2026-10-17).
+# Ruling 193 (user 2026-10-18 "the best one"): a family whose primary is its dataset's
+# method_best row (every DeeperHistReg row is the image its writer draws).
 # variants.PRIMARY keeps a placeholder (PRIMARY_DEEPERHISTREG) for the scorer's common
 # block and the realcheck; the paper resolves the primary here, at table time.
 BEST_IS_PRIMARY = {
@@ -1516,7 +1516,7 @@ def hosts(res_rows, dataset, excluded=frozenset()):
 
 
 def stare_tier_table():
-    """Table S3: one row per tier of ``methods.stare.TIERS`` (``lib/RegPresets.groovy``).
+    """Table S3: one row per tier of ``methods.stare.TIERS`` (``ParamUtils.RETIRED_STARE_TIERS``).
     ``read_box_px_s64`` is STARE's read box for an interior tile at stride 64 (tile +
     2 x 3 x 64); the memories are ``stages.ALLOCATION`` attempt 1 (the high tier's; at
     stride 64 ``conf/modules.config``'s formula floors at the same 4 GB for every tier)."""

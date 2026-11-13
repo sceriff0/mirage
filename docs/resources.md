@@ -149,8 +149,9 @@ concurrency block, after the profiles) and its own error strategy — see
 Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
 at most even for large slides. `TILED_COARSE`'s anchor is an FFT NCC rotation sweep (ORB
 fallback) on a thumbnail bounded by `reg_tiled_coarse_max_dim`: 0.25–0.43 GB peak RSS measured
-for the whole stage at 512–2048 px, so the row below asks 2 GB at every shipped tier. (From
-v1.0.0 until 2026-09-27 it was a DISK U-Net that asked 48 GB at the `high` tier.)
+for the whole stage at 512–2048 px, so the row below asks 2 GB at the 1024 px default. (From
+v1.0.0 until 2026-09-27 it was a DISK U-Net that asked 48 GB at the then-default `high` tier;
+STARE has had no tiers since 2026-11-04.)
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner | `maxForks` |
 |---|---|---|---|---|---|

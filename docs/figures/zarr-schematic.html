@@ -665,8 +665,8 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
       like — and it required designing the <i>algorithm</i> around windows, not swapping a read call.<br><br>
       <b><code>TILED_COARSE</code> is no longer in that band, and the header this figure cites still says it is.</b>
       Its coarse anchor became a U-Net (DISK) rather than a cheap feature detector, so its peak is linear in
-      thumbnail <i>area</i>: <code>GB &asymp; 1.1 + 7.3 &times; Mpx</code>. At the shipped
-      <code>reg_tiled_mode high</code> (<code>reg_tiled_coarse_max_dim</code> 2048, 4.19 Mpx) that is
+      thumbnail <i>area</i>: <code>GB &asymp; 1.1 + 7.3 &times; Mpx</code>. At the then-shipped
+      <code>high</code> tier (<code>reg_tiled_coarse_max_dim</code> 2048, 4.19 Mpx) that is
       <b>&asymp;31.7 GB peak against a 48 GB request</b> — the 1.5&times; headroom the closure applies. The
       window-bounded property still holds in the sense that matters (the number comes from a parameter, not the
       slide), but the <i>magnitude</i> is an order of magnitude out from the rest of the path.

@@ -24,12 +24,9 @@ process TILED_STITCH {
     script:
     def prefix    = "${meta.patient_id}_${meta.channels.join('_')}"
     def slidename = meta.channels.join('_')
-    // Tier-owned knobs: null means take the value from reg_tiled_mode's row in
-    // lib/RegPresets.groovy. Resolved via RegPresets so the tier table has one home;
-    // the mode and the override are passed as SCALARS, never the params map, because a
-    // script: block that hands `params` to a helper makes Nextflow hash the whole map
-    // and re-run the task on any unrelated parameter change (see CLAUDE.md).
-    def out_tile  = RegPresets.stare(params.reg_tiled_mode, 'out_tile', params.reg_tiled_out_tile)
+    // A plain param with a nextflow.config default (STARE has no cost tiers since 2026-11-04);
+    // an itemised `params.x` read, so only this value enters the task hash.
+    def out_tile  = params.reg_tiled_out_tile as int
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${moving}"], "${prefix}.TILED_STITCH.size.csv")}
 

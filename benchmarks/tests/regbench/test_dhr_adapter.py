@@ -93,7 +93,7 @@ def test_contract():
 
 @pytest.mark.parametrize("label", sorted(LABELS))
 def test_a_run_yields_one_variant_named_after_its_label(label):
-    """User instruction 2026-10-17: one result per run, under the run's own label."""
+    """One result per run, under the run's own label."""
     assert dhr.VARIANTS == ("deeperhistreg",)
     assert methods.variant_names("deeperhistreg", label) == [label]
 
