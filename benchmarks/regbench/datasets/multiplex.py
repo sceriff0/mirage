@@ -278,15 +278,17 @@ def _names(row, key, image):
     return given or channel_names(image)
 
 
-def prepare_one(cases_root, row, a):
-    d = case_dir(cases_root, "multiplex", row["case_id"])
+def prepare_one(cases_root, row, a, dataset="multiplex"):
+    """One row as a case of ``dataset`` (default ``multiplex``; ``ibex`` writes its own
+    cases through here). The cache is ``<cases>/_cache/<dataset>``."""
+    d = case_dir(cases_root, dataset, row["case_id"])
     if (d / "case.json").exists() and not a.force:
         return d
     if a.max_cells and cells.is_geojson(row.get("mov_cells") or ""):
         raise ValueError(
             f"{row['mov_cells']}: --max-cells does not apply to nuclei given as GeoJSON"
         )
-    cache = Path(cases_root) / "_cache" / "multiplex"
+    cache = Path(cases_root) / "_cache" / dataset
     cache.mkdir(parents=True, exist_ok=True)
     if row.get("pixel_size_um"):
         px = float(row["pixel_size_um"])
@@ -321,7 +323,7 @@ def prepare_one(cases_root, row, a):
     names_ref = _names(row, "channels_ref", row["reference"])
     names_mov = _names(row, "channels_mov", row["moving"])
     case = Case(
-        dataset="multiplex",
+        dataset=dataset,
         case_id=row["case_id"],
         group=row.get("group") or row["case_id"],
         ref_nuclear=str(ref_n),

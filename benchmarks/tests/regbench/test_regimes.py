@@ -10,7 +10,7 @@ def test_every_regime_has_its_four_levels():
 
 def test_baseline_is_stare_unchanged():
     for name, r in rg.REGIMES.items():
-        assert r["baseline"].sprep == "none", name   # R4: STARE's plain row always runs
+        assert r["baseline"].sprep == "none", name  # R4: STARE's plain row always runs
 
 
 def test_cyclic_if_default_is_the_baseline_so_two_levels():
@@ -30,11 +30,17 @@ def test_percentile_level_keys():
 
 def test_brightfield_regimes_have_three_levels():
     for r in ("bf_same", "bf_consecutive", "dapi_he", "cytassist"):
-        assert [k for k, _ in rg.stare_levels(r)] == ["baseline", "default", "alt", "pct"]
+        assert [k for k, _ in rg.stare_levels(r)] == [
+            "baseline",
+            "default",
+            "alt",
+            "pct",
+        ]
 
 
 def test_each_dataset_maps_to_a_regime():
     from benchmarks.regbench import ALL_DATASETS
+
     for d in ALL_DATASETS:
         assert rg.regime_of(d) in rg.REGIMES
 

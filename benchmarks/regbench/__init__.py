@@ -24,7 +24,14 @@ RAW = "raw"
 # image library; test_rawtiles.py holds the two equal
 RAW_FRONT_ENDS = ("stage", "ashlar_edge", "stare_mosaic", RAW)
 RAW_TILE_CASE_SETS = tuple(f"{d}@{fe}" for d in RAW_TILE_DATASETS for fe in RAW_FRONT_ENDS)
-EXTERNAL_DATASETS = HYRECO_DATASETS + ANHIR_DATASETS + RAW_TILE_CASE_SETS
+# IBEX (`regbench.datasets.ibex`): STITCHED fluorescence cycles (Imaris `.ims`, NRRD), one
+# case per later panel against panel 1. Not a raw-tile set: every run takes it as it takes
+# any stitched slide. External, own tables (`tables/ibex/`), never pooled with the cohort.
+IBEX = "ibex"
+STITCHED_IF_DATASETS = (IBEX,)
+EXTERNAL_DATASETS = (
+    HYRECO_DATASETS + ANHIR_DATASETS + RAW_TILE_CASE_SETS + STITCHED_IF_DATASETS
+)
 # `score --dataset <name>` takes the raw-tile base name and scores every case set of it
 ALL_DATASETS = DATASETS + EXTERNAL_DATASETS + RAW_TILE_DATASETS
 

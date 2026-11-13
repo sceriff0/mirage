@@ -81,6 +81,8 @@ DATASET_REGIME = {
     "hyreco_b": "bf_same",
     "anhir_tune": "bf_consecutive",
     "anhir": "bf_consecutive",
+    # stitched fluorescence cycles (`datasets/ibex.py`)
+    "ibex": "cyclic_if",
     # raw-tile cyclic IF (`datasets/rawtiles.py`): every case set `<name>@<front end>`
     # has its base name's regime (`regime_of`)
     "mcmicro": "cyclic_if",

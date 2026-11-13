@@ -67,6 +67,7 @@ from . import (
     EXTERNAL_DATASETS,
     RAW_FRONT_ENDS,
     RAW_TILE_DATASETS,
+    STITCHED_IF_DATASETS,
     plugins,
 )
 from . import METHODS as PUBLIC_METHODS
@@ -142,6 +143,27 @@ def build_parser():
         "10 px rim taken off (labelled shrunk_outlines, exact: false; too small "
         "where cells touch). Never used unless given",
     )
+
+    ib = prep.add_parser(
+        "ibex",
+        help="IBEX stitched fluorescence cycles (benchmarks/regbench/datasets/ibex.py): "
+        "Human_*_Panel*.ims and spleen_panel*.nrrd, panel 1 against each later panel",
+    )
+    common(ib)
+    ib.add_argument(
+        "--source", required=True, help="folder holding the .ims / .nrrd files"
+    )
+    ib.add_argument(
+        "--groups",
+        nargs="*",
+        default=None,
+        help="only these groups (Human_Spleen, Human_Liver, Human_Kidney, Mouse_Spleen)",
+    )
+    ib.add_argument("--diameter", type=float, default=20.0)
+    ib.add_argument("--tile", type=int, default=2048)
+    ib.add_argument("--max-cells", type=int, default=0)
+    ib.add_argument("--nuclei-dir", default=None)
+    ib.add_argument("--nuclei-fallback", default="", choices=("", "shrink"))
 
     nu = sub.add_parser(
         "nuclei",
@@ -1807,6 +1829,23 @@ def _main(a):
             gates=a.gates,
             run_variants=variants.run_variants(),
             fresh=a.fresh,
+        )
+        return 0
+    if external in STITCHED_IF_DATASETS:
+        # a stitched-slide set: the cohort's scorer, into tables of its own
+        score.score(
+            a.cases,
+            a.out,
+            [external],
+            a.workers,
+            expected=None if a.only_run else variants.expected_variants(external),
+            primary=None if a.only_run else variants.primary_for(external),
+            with_tissue=False,
+            dropped=_dropped(a.drop),
+            gates=a.gates,
+            run_variants=variants.run_variants(),
+            fresh=a.fresh,
+            tables_dir=os.path.join(a.out, "tables", external),
         )
         return 0
     if external:

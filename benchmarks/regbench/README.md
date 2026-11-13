@@ -3608,6 +3608,42 @@ among all submitted methods), which needs the other methods' results on the same
   on a whole slide are unmeasured (it runs with the clock paused, `info.prep.prep_s`).
 - The mammary glands' pixel size.
 
+## IBEX: stitched fluorescence cycles (its own tables)
+
+`python -m benchmarks.regbench prepare ibex --cases CASES --source DIR [--groups ...]`
+(`datasets/ibex.py`). `DIR` holds the Zenodo files: `Human_{Spleen,Liver,Kidney}_Panel{1..4}.ims`
+(4632320) and the mouse `spleen_panel{1,2,3}.nrrd` (4304786) [MEMORY: layouts verified
+against real files by the controller on 2026-10-14; the Zenodo records were not re-read
+here]. One file is one cycle; **panel 1 is the reference**, every later panel is a case
+`<group>_P<n>`; `Human_Spleen`, `Human_Liver`, `Human_Kidney` and `Mouse_Spleen` are separate
+groups (separate patients).
+
+* **Not a raw-tile set.** The cycles are already stitched, so `ibex` is an ordinary external
+  stitched-slide set: regime `cyclic_if`, the cohort's whole run list (ASHLAR's full
+  factorial included, `variants.runs_for("ibex")`), primaries as the cohort's
+  (`primary_for("ibex")`), own tables `tables/ibex/`, never pooled with the cohort
+  (`score --dataset ibex`, alone).
+* **Reading, memory-bounded.** `.ims`: h5py sliced reads, one output tile at a time, padding
+  cropped to `DataSetInfo/Image` `X`/`Y`, channels counted from the groups present
+  (`NumberOfChannels` may exceed them), names decoded from byte-char arrays and stripped.
+  `.nrrd`: header parsed, the gzip stream read sequentially, one Z plane of one channel at a
+  time into a running maximum (one Y x X plane), each channel's projection written before
+  the next. The OME-TIFF goes through `imageio.write_channel_tiles` (one encoder thread).
+  `tests/regbench/test_ibex.py` traces peak memory on a small and a 9x larger stand-in
+  (Python/numpy allocations only; h5py's C buffers are not traced).
+* **Nuclear channel**: the channel whose name contains `hoechst` or `jojo`, any case (the
+  first when several); none is a refusal that lists the channels. Channels keep the file's
+  order; the index goes into `ref_channel` / `mov_channel`.
+* **Pixel size** from the file: `.ims` `(ExtMax - ExtMin) / X`, `.nrrd` `space directions`.
+  The mouse header is checked against the record, 0.284 um (refused beyond 2 %). **Human
+  panels have no independent record**: only a non-finite or non-positive voxel, or X and Y
+  voxels more than 2 % apart, is refused, and `case.json: extra.pixel_size_source` says the
+  header is the only source. A panel whose voxel differs from its reference's by more than
+  2 % is refused.
+* **Not verified**: the layout of the `imaris_channels_information` XML (names are taken
+  from the `Name` attribute or child of every element whose tag contains "channel", and a
+  count different from the file's channels is refused); no real file was read.
+
 ## Dormant datasets: known defects before any use
 
 `semisynth`, `hyreco_a` and `hyreco_b` are DORMANT (ruling R3.14, 2026-10-11): the code
