@@ -18,6 +18,12 @@ via `--seg_method`).
 
 GitHub: <https://github.com/ome/bioformats>
 
+#### BioIO — Image reading
+
+`CONVERT_IMAGE` reads every input through BioIO (bioio 3.5.0), which uses Bio-Formats for
+formats without a native BioIO reader. The MIRAGE paper cites no separate reference for
+BioIO; cite Bio-Formats (above) and name the bioio version you ran.
+
 ---
 
 ### Illumination correction
@@ -35,11 +41,29 @@ GitHub: <https://github.com/peng-lab/BaSiCPy>
 
 ### Registration
 
+#### STARE — Tile-based non-rigid registration (`registration_method = tiled`, the default)
+
+> Fassi, V., Borriero, C., Dondi, A., Chiodin, A., Compagnoni, M., Frigè, G., Chiocca, S., Bossi, P., Mazzarella, L., Barberis, M., Rodighiero, S., & Zhan, Y.
+> STARE enables whole-slide multiplexed immunofluorescence on conventional microscopes by bounded-memory non-rigid registration.
+> Manuscript (no DOI yet).
+
+GitHub: <https://github.com/sceriff0/stare> (the `stare-registration` package; MIRAGE pins v1.3.0)
+
+STARE's slide-wide solve smooths the displacement vectors by robust penalized least squares
+with the discrete cosine transform (DCT-PLS):
+
+> Garcia, D. (2010).
+> Robust smoothing of gridded data in one and higher dimensions with missing values.
+> *Comput. Stat. Data Anal.*, 54, 1167–1178.
+> [https://doi.org/10.1016/j.csda.2009.09.020](https://doi.org/10.1016/j.csda.2009.09.020)
+
+---
+
 #### VALIS — Whole-slide image registration
 
-> Gatenbee, C. A., Baker, A.-M., Cunningham, J. J., Cresswell, G., Gatenbee, C., Robertson-Tessi, M., & Anderson, A. R. A. (2023).
-> VALIS: Virtual Alignment of pathoLogy Image Series.
-> *Nature Communications*, 14, 4426.
+> Gatenbee, C. D. et al. (2023).
+> Virtual alignment of pathology image series for multi-gigapixel whole slide images.
+> *Nature Communications*, 14, 4502.
 > [https://doi.org/10.1038/s41467-023-40218-9](https://doi.org/10.1038/s41467-023-40218-9)
 
 GitHub: <https://github.com/MathOnco/valis>
@@ -72,15 +96,22 @@ GitHub: <https://github.com/stardist/stardist>
 For the channel-invariant fluorescence model used on multiplexed images, also cite:
 
 > Goldsborough, T., O'Callaghan, A., Inglis, F., Visvanathan, A., Bilen, H., & Bankhead, P. (2024).
-> A novel channel invariant architecture for the segmentation of cells and nuclei in multiplexed images.
+> A novel channel invariant architecture for the segmentation of cells and nuclei in multiplexed images using InstanSeg.
 > *bioRxiv*.
-> GitHub: <https://github.com/instanseg/instanseg>
+> [https://doi.org/10.1101/2024.09.04.611150](https://doi.org/10.1101/2024.09.04.611150)
 
 GitHub: <https://github.com/instanseg/instanseg>
 
 ---
 
 #### CellSAM — Foundation-model cell segmentation
+
+> Marks, M. et al. (2025).
+> CellSAM: a foundation model for cell segmentation.
+> *Nature Methods*, 22, 2585–2593.
+> [https://doi.org/10.1038/s41592-025-02879-w](https://doi.org/10.1038/s41592-025-02879-w)
+
+Preprint:
 
 > Israel, U., Marks, M., Dilip, R., Li, Q., Yu, C., Laubscher, E., Iqbal, A., Pradhan, E., Ates, A., Abt, M., Brown, C., Pao, E., Restrepo, S., Van Valen, D., et al. (2023).
 > A Foundation Model for Cell Segmentation.
@@ -121,6 +152,20 @@ GitHub: <https://github.com/scikit-image/scikit-image>
 > [https://doi.org/10.1038/s41598-017-17204-5](https://doi.org/10.1038/s41598-017-17204-5)
 
 Website: <https://qupath.github.io/>
+
+#### SpatialData — the `.zarr` store written by `EXPORT_SPATIALDATA`
+
+> Marconato, L. et al. (2025).
+> SpatialData: an open and universal data framework for spatial omics.
+> *Nature Methods*, 22, 58–62.
+> [https://doi.org/10.1038/s41592-024-02212-x](https://doi.org/10.1038/s41592-024-02212-x)
+
+#### scverse — the ecosystem that reads the store without conversion
+
+> Virshup, I. et al. (2023).
+> The scverse project provides a computational ecosystem for single-cell omics data analysis.
+> *Nature Biotechnology*, 41, 604–606.
+> [https://doi.org/10.1038/s41587-023-01733-8](https://doi.org/10.1038/s41587-023-01733-8)
 
 ---
 

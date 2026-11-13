@@ -1,16 +1,19 @@
 # Installation
 
-This page gets MIRAGE running on your machine — laptop, workstation, or HPC login node. The whole setup is: install **Nextflow**, pick **one container backend**, clone the repo, and verify. Budget about 10–15 minutes, most of it spent pulling container images on the first run.
+<p class="standfirst">The requirements in detail, for a laptop, a workstation or a cluster login
+node: Nextflow, one container backend, a clone of the repository, and a ceiling on how large one
+job may be.</p>
 
-!!! tip "In a hurry?"
-    Already have Nextflow and Docker? Skip to [Clone the repository](#clone-the-repository), then head straight to the [Walkthrough](usage.md).
+!!! tip "First time?"
+    [Run your own slides](quickstart.md) walks through the same setup step by step, starting
+    from an empty computer.
 
 ## Requirements
 
 | Requirement | Version / detail | Notes |
 |---|---|---|
 | **Nextflow** | `>=25.04.0` | Uses the `nf-schema@2.5.1` plugin; older versions will not run. |
-| **Java** | 11 or newer | Required by Nextflow. Check with `java -version`. |
+| **Java** | 17 or newer | Required by Nextflow. Check with `java -version`. |
 | **Container backend** | one of Singularity/Apptainer, Docker, or Conda | Singularity recommended on HPC; Docker for local/dev. |
 | **Free disk** | ~10 GB | For container images plus intermediate outputs. |
 | **Network access on first run** | outbound access to the Nextflow plugin registry | Nextflow fetches `nf-schema` from the registry the first time the pipeline runs. On a network-isolated compute node, pre-provision the plugin first — see [Offline / air-gapped execution](usage.md#offline-air-gapped-execution). |
@@ -35,7 +38,7 @@ nextflow self-update
 ```
 
 !!! info "Java first"
-    Nextflow needs Java 11+. On most clusters this is a module (`module load java`); on a Mac, `brew install openjdk@17` works well.
+    Nextflow needs Java 17 or newer. On most clusters this is a module (`module load java`); on a Mac, `brew install openjdk@17` works well.
 
 ## Make a site config { #size-your-run }
 
@@ -155,12 +158,12 @@ The first real run downloads each tool's image, which can take several minutes. 
 | `bolt3x/mirage-convert:1.0.0` | `CONVERT_IMAGE` (format conversion) |
 | `bolt3x/mirage-preprocess:1.0.0` | `SPLIT_CHANNELS`, `PREFLIGHT_SCALE`, `TILE_FOR_BASIC` / `APPLY_PROFILES` (illumination correction around `BASICPY`), `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `AGGREGATE_SIZE_LOGS` |
 | `bolt3x/mirage-quantify:1.0.0` | quantification, property extraction, GeoJSON export, postprocessing QC |
-| `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` |
-| `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` (default) |
+| `bolt3x/mirage-stardist:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method stardist` (default) |
+| `bolt3x/mirage-instanseg:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method instantseg` |
 | `bolt3x/mirage-cellsam:1.0.0` | `SEGMENT` / `SEG_QC_SEGMENT` when `--seg_method cellsam` |
 | `bolt3x/mirage-merge:1.0.0` | `MERGE_AND_PYRAMID`, `EXTRACT_MASK_SERIES` |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
-| `bolt3x/mirage-stare:1.0.0` | the `tiled` (STARE) registration backend, and `WARP_SEG_QC`'s tiled path (slim: no torch; replaces `bolt3x/mirage-tiled`) |
+| `bolt3x/mirage-stare:1.0.0` | the `tiled` (STARE) registration backend (default), and `WARP_SEG_QC`'s tiled path (slim: no torch; replaces `bolt3x/mirage-tiled`) |
 | `bolt3x/mirage-spatialdata:1.0.0` | `EXPORT_SPATIALDATA` |
 | `bolt3x/mirage-segeval:1.0.0` | `SEG_QUALITY_EVAL`, `MERGE_SEG_EVAL` (opt-in) |
 | `bolt3x/mirage-valis:1.0.0` (upstream `cdgatenbee/valis-wsi:1.2.0`, digest-pinned, with only the non-root fixes) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
@@ -212,8 +215,8 @@ The first real run downloads each tool's image, which can take several minutes. 
 
 Segmentation can run on a GPU for a substantial speedup, or fall back to CPU.
 
-- **Enable GPU**: `seg_gpu = true`. Your container runtime must expose the GPU — Singularity needs `--nv`, and on SLURM you must request a GPU (e.g. `--gres=gpu:1`). See the [SLURM guide](usage.md#running-on-hpc) for cluster specifics.
-- **CPU fallback**: `seg_gpu = false`. Slower but works everywhere — this is what the `test` profile uses so the demo runs on any laptop.
+- **Enable GPU**: `seg_gpu = true` (the default). Your container runtime must expose the GPU — Singularity needs `--nv`, and on SLURM you must request a GPU (e.g. `--gres=gpu:1`). See the [SLURM guide](usage.md#running-on-hpc) for cluster specifics.
+- **CPU fallback**: `seg_gpu = false`. Slower but works everywhere. It is a true/false setting, so it goes in a `-params-file`: `params/no_gpu.json` carries exactly this, and the `test` profile sets it so the demo runs on any laptop.
 
 !!! warning
     If you request `seg_gpu = true` without exposing a GPU to the container, segmentation will fail or silently fall back depending on the backend. When in doubt on a new machine, start with `seg_gpu = false`.
@@ -260,6 +263,6 @@ Profiles are defined in `nextflow.config` and combined with commas. Pick one **e
 
 ## Next steps
 
-Head to **[Usage](usage.md)** — the four-stage model, the samplesheet, the
-end-to-end run on synthetic data, resuming from checkpoints, and what lands in
-`--outdir`. To tune the run, see **[Parameters](parameters.md)**.
+Head to **[Running MIRAGE](usage.md)** — the four-stage model, the samplesheet,
+resuming from checkpoints, and what lands in `--outdir`. To tune the run, see
+**[Parameters](parameters.md)**.

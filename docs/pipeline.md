@@ -5,24 +5,25 @@ slides, segments every cell, quantifies each marker per compartment, and exports
 GeoJSON, a pyramidal OME-TIFF, and a scverse-native SpatialData store. The nuclear/fiducial channel is
 resolved by marker name from image metadata and drives both segmentation and registration.</p>
 
-This page is the site rendering of **Supplementary Figure S1** —
+This page is the site rendering of **Schematic 1** —
 [open the figure itself](figures/pipeline-schematic.html){ target=_blank }, a
 single self-contained page that also opens straight from the filesystem. Every
 process, default and path below is read from the pipeline source —
 `nextflow.config`, `conf/modules.config`, `lib/ParamUtils.groovy` and
 `lib/Layout.groovy`.
 
-!!! abstract "The supplementary figure set"
-    - **S1 · pipeline** — [figure](figures/pipeline-schematic.html){ target=_blank } · this page
-    - **S2 · registration** — [figure](figures/registration-schematic.html){ target=_blank } ·
+!!! abstract "The method schematics"
+    - **Schematic 1 · pipeline** — [figure](figures/pipeline-schematic.html){ target=_blank } · this page
+    - **Schematic 2 · registration** — [figure](figures/registration-schematic.html){ target=_blank } ·
       the two backends, step by step
-    - **S3 · quality control** — [figure](figures/qc-schematic.html){ target=_blank } ·
+    - **Schematic 3 · quality control** — [figure](figures/qc-schematic.html){ target=_blank } ·
       the tagged artifact stream, the kind vocabulary, and the retry-then-fail contract
-    - **S4 · lazy reads** — [figure](figures/zarr-schematic.html){ target=_blank } ·
+    - **Schematic 4 · lazy reads** — [figure](figures/zarr-schematic.html){ target=_blank } ·
       where lazy zarr reads cut peak memory, and every place they cannot help
-    - **S5 · coarse alignment** — [figure](figures/coarse-schematic.html){ target=_blank } ·
-      why the STARE global pose is a learned matcher, and what that costs in memory
-    - **S6 · accuracy measures** — [figure](figures/accuracy-schematic.html){ target=_blank } ·
+    - **Schematic 5 · coarse alignment** — [figure](figures/coarse-schematic.html){ target=_blank } ·
+      how the STARE rigid anchor is estimated (an NCC rotation sweep with an ORB + RANSAC
+      fallback), and what it costs in memory
+    - **Schematic 6 · accuracy measures** — [figure](figures/accuracy-schematic.html){ target=_blank } ·
       the four registration-accuracy numbers, which two are scored on the registrar's own features, and why none is ground truth
 
 ---
@@ -133,17 +134,19 @@ Chips give real defaults. Every process runs in a pinned container and emits
         <div class="pp"><span>is_reference <b>exactly one</b></span></div></div>
       <div class="grp">
         <div class="bh">◇ registration_method</div>
-        <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-def">default</span></div>
+        <div class="opt"><div class="oh"><span>valis → REGISTER</span><span class="tag-alt">method=valis</span></div>
           <div class="ox">Feature-based rigid + non-rigid warp (JVM / Bio-Formats), resolving all
             slides into a shared space: valis-wsi 1.2.0 at its defaults, with the nuclear
             channel (index 0) passed as the registration channel. No micro-registration
-            (<code>reg_valis_mode hires</code>: VALIS's own high-resolution example, with both micro passes).</div>
+            (<code>reg_valis_mode hires</code>: VALIS's own high-resolution example, with both micro passes).
+            Kept as the alternative because STARE needs a nuclear counterstain shared by every round.</div>
           <div class="pp"><span>valis-wsi <b>1.2.0</b></span><span>rigid / non-rigid <b>512 / 2048 px</b></span><span>JVM heap <b>10 GB</b></span></div></div>
-        <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-alt">method=tiled</span></div>
+        <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-def">default</span></div>
           <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial is
             channel 0. Every step is bounded by a parameter; COARSE (NCC rotation sweep, ORB
-            fallback) needs &lt;0.5 GB at every tier. The per-tile fan-out is the only shape.</div>
-          <div class="pp"><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>stride <b>128</b></span></div></div>
+            fallback) needs &lt;0.5 GB. The per-tile fan-out is the only shape, and there is one
+            default configuration (no cost tiers).</div>
+          <div class="pp"><span>tile <b>2048</b></span><span>halo <b>256</b></span><span>stride <b>64</b></span></div></div>
       </div>
       <div class="mod"><div class="n">GENERATE_REGISTRATION_QC <span class="tag tag-on">reg_qc≥1</span></div>
         <div class="x">Nuclear-channel overlay, registered vs reference.</div></div>
@@ -166,10 +169,11 @@ Chips give real defaults. Every process runs in a pinned container and emits
         <div class="pp"><span>gpu <b>true</b></span></div></div>
       <div class="grp">
         <div class="bh">fork — seg_method</div>
-        <div class="opt"><div class="oh"><span>instantseg</span><span class="tag-def">default</span></div>
+        <div class="opt"><div class="oh"><span>instantseg</span><span class="tag-alt">seg_method=instantseg</span></div>
           <div class="ox">Channel-invariant; native cell + nuclei output.</div></div>
-        <div class="opt"><div class="oh"><span>stardist</span><span class="tag-alt">needs model</span></div>
-          <div class="ox">Nuclear channel 0 only; cells expanded from nuclei.</div></div>
+        <div class="opt"><div class="oh"><span>stardist</span><span class="tag-def">default</span></div>
+          <div class="ox">Nuclear channel 0 only; cells expanded from nuclei. The trained model is
+            downloaded at a pinned commit on first use.</div></div>
         <div class="opt"><div class="oh"><span>cellsam</span><span class="tag-alt">gated weights</span></div>
           <div class="ox">Nuclear channel by name; cells expanded from nuclei.</div></div>
       </div>
@@ -220,8 +224,9 @@ Chips give real defaults. Every process runs in a pinned container and emits
 
 !!! warning "The three segmentation backends are not drop-in equivalents"
     They read different inputs, build the whole-cell mask differently, and have
-    different prerequisites — only InstanSeg runs on an unconfigured clone, and
-    `seg_expand_distance` is ignored when it is selected. Side-by-side
+    different prerequisites — StarDist (the default) and InstanSeg run on an unconfigured
+    clone, CellSAM needs gated weights, and `seg_expand_distance` is ignored when InstanSeg
+    is selected. Side-by-side
     comparison and the 17 backend-specific parameters:
     [Parameters → Choosing a backend](parameters.md#choosing-a-backend).
 
@@ -310,7 +315,7 @@ dropped): [Resources](resources.md).
 - :material-file-tree: **Every input and output path** — [Inputs & outputs](outputs.md)
 - :material-server: **Every resource request** — [Resources](resources.md)
 - :material-console: **Command recipes** — [Usage](usage.md)
-- :material-image-outline: **Supplementary Figure S2 · registration** —
+- :material-image-outline: **Schematic 2 · registration** —
   [figure](figures/registration-schematic.html){ target=_blank }
-- :material-image-outline: **Supplementary Figure S3 · quality control** —
+- :material-image-outline: **Schematic 3 · quality control** —
   [figure](figures/qc-schematic.html){ target=_blank }

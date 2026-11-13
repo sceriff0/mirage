@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MIRAGE Supplementary Figure S3 — Quality control</title>
+<title>MIRAGE Schematic 3 — Quality control</title>
 <style>
   /* ======================================================================
-     MIRAGE supplementary figures — shared design base (S1 · S2 · S3 · S4 · S5 · S6)
+     MIRAGE method schematics — shared design base (1–6)
      ----------------------------------------------------------------------
      DUPLICATED ON PURPOSE, not extracted to a shared file. Each figure in
      this set has to survive being detached from the repository — attached to
@@ -89,7 +89,7 @@
   .tag-def{font-family:var(--mono);font-size:.53rem;background:var(--ink);color:#fff;padding:1px 4px;font-weight:700;white-space:nowrap;}
   .tag-alt{font-family:var(--mono);font-size:.53rem;background:var(--sub);color:var(--ink-2);border:1px solid var(--rule);padding:1px 4px;white-space:nowrap;}
 
-  /* parameter tables (td.v in S1/S3, td.val in S2 — same scale) */
+  /* parameter tables (td.v in 1/3, td.val in 2 — same scale) */
   table.pr{border-collapse:collapse;width:100%;font-size:.78rem;}
   table.pr td{padding:3.5px 4px;border-bottom:1px solid var(--rule-2);vertical-align:top;}
   table.pr tr:last-child td{border-bottom:none;}
@@ -222,16 +222,16 @@
 <div class="sheet">
 
   <div class="masthead">
-    <div class="kick">Supplementary Figure S3 · quality control</div>
+    <div class="kick">Schematic 3 · quality control</div>
     <h1>Quality control as one seam: a tagged artifact stream, a step-owned kind vocabulary, three guards, and a failure contract that stops the run</h1>
   </div>
-  <nav class="figset" aria-label="Supplementary figure set">
-    <a href="pipeline-schematic.html">S1 · pipeline</a>
-    <a href="registration-schematic.html">S2 · registration</a>
-    <span class="self">S3 · quality control</span>
-    <a href="zarr-schematic.html">S4 · lazy reads</a>
-    <a href="coarse-schematic.html">S5 · coarse alignment</a>
-    <a href="accuracy-schematic.html">S6 · accuracy measures</a>
+  <nav class="figset" aria-label="Schematic set">
+    <a href="pipeline-schematic.html">1 · pipeline</a>
+    <a href="registration-schematic.html">2 · registration</a>
+    <span class="self">3 · quality control</span>
+    <a href="zarr-schematic.html">4 · lazy reads</a>
+    <a href="coarse-schematic.html">5 · coarse alignment</a>
+    <a href="accuracy-schematic.html">6 · accuracy measures</a>
   </nav>
   <p class="standfirst">Every step of the pipeline emits quality-control artifacts, and every one of them reaches
     the end-of-run report through the <i>same</i> one-channel interface: a stream of <code>[kind, file]</code>
@@ -261,7 +261,7 @@
         <h3><span>PREPROCESSING</span><span>1</span></h3>
         <div class="body">
           <div class="mod"><div class="n">GENERATE_PREPROCESS_QC <span class="tag tag-on">!skip_preprocess_qc</span></div>
-            <div class="x">Per-channel downsampled PNGs of the corrected image, one task per slide.</div>
+            <div class="x">Per-channel downsampled PNGs of the preprocessed image — the converted image at the default <code>skip_preprocessing</code>, the illumination-corrected one when the correction is turned on — one task per slide.</div>
             <div class="pp"><span>preprocess_qc_scale_factor <b>0.25</b></span></div></div>
           <div class="kind">emits <b>preprocess_qc</b></div>
         </div>
@@ -403,7 +403,7 @@
       <thead><tr><th>step</th><th>qcKinds</th><th>what it is</th></tr></thead>
       <tbody>
         <tr><td class="st">preprocessing</td><td class="kd">preprocess_qc</td>
-          <td>Per-channel PNG thumbnails of the illumination-corrected image.</td></tr>
+          <td>Per-channel PNG thumbnails of the preprocessed image (converted only by default; illumination-corrected when the correction is on).</td></tr>
         <tr><td class="st">registration</td>
           <td class="kd">registration_qc<br>registration_tre<br>seg_qc<br>seg_residuals</td>
           <td>The overlay PNG/TIFF; the backend's own target-registration-error file (deliberately <i>not</i> named
@@ -540,9 +540,9 @@
 
     <div class="tbl-scroll"><table class="bk">
       <caption style="font-family:var(--mono);font-size:.63rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);text-align:left;padding:0 0 7px;">one warp process, two backends — lib/WarpBackends.groovy, keyed on the <code>method</code> input</caption>
-      <thead><tr><th>&nbsp;</th><th>valis <span class="tag-def">default</span></th><th>tiled <span class="tag-alt">method=tiled</span></th></tr></thead>
+      <thead><tr><th>&nbsp;</th><th>valis <span class="tag-alt">method=valis</span></th><th>tiled <span class="tag-def">default</span></th></tr></thead>
       <tbody>
-        <tr><td class="rk">container</td><td>bolt3x/mirage-valis:1.0.0</td><td>bolt3x/mirage-tiled:1.0.0</td></tr>
+        <tr><td class="rk">container</td><td>bolt3x/mirage-valis:1.0.0</td><td>bolt3x/mirage-stare:1.0.0</td></tr>
         <tr><td class="rk">stages</td><td>native · rigid · non_rigid <i>(no micro at <code>reg_valis_mode default</code>)</i>; + micro at <code>hires</code></td><td>native · rigid · refined</td></tr>
         <tr><td class="rk">versionTools</td><td>valis · skimage · scipy</td><td>skimage · scipy</td></tr>
         <tr><td class="rk">extra flags</td><td>moving/reference name · <code>--micro-reg 0</code> (<code>2</code> at hires) · optional
@@ -557,7 +557,7 @@
       pinned to its digest (<code>@sha256:4fd20b68…</code>, read 2026-10-11) in the Dockerfile — a supply-chain
       hardening (R6) — with only the fixes a user who is not root needs under Apptainer; no Python package is
       added or moved. <code>lib/WarpBackends.groovy</code> and <code>modules/local/register.nf</code> name the
-      same image, so the registrar pickle loads in the VALIS that wrote it. <code>bolt3x/mirage-tiled:1.0.0</code>,
+      same image, so the registrar pickle loads in the VALIS that wrote it. <code>bolt3x/mirage-stare:1.0.0</code> (the STARE image, <code>stare-registration</code> 1.3.0),
       and every <code>bolt3x/mirage-*</code> image named elsewhere in this figure, are the pipeline's own
       published, content-descriptive tags.</p>
     <p class="outnote"><b>The per-cell residual CSV is never published.</b> <code>WARP_SEG_QC</code>'s
@@ -608,7 +608,7 @@
             Where the report used to print a per-slide TRE table, a row-by-row reconciliation table and a
             head-of-CSV row dump, it now renders per-stage error-distribution plots, a feature-TRE vs
             cell-displacement scatter (log-log, with the divergence ratio drawn as a diagonal band — see
-            <a href="accuracy-schematic.html">S6</a>) and a
+            <a href="accuracy-schematic.html">Schematic 6</a>) and a
             per-cell residual histogram. The plots are hand-rolled inline SVG, <b>stdlib-only</b>, following
             this same file's pre-existing <code>_tiled_tre_heatmap_svg()</code> precedent — a report that
             needed matplotlib could not run inside the <code>preprocess</code> image it is published from.
@@ -756,7 +756,7 @@
   </section>
 
   <p class="caption">
-    <b>Supplementary Figure S3. The quality-control architecture.</b>
+    <b>Schematic 3. The quality-control architecture.</b>
     <b>(a)</b> Each of the four ordered steps contributes QC behind its own parameter gate, all of them open at the
     shipped defaults; segmentation contributes no step-specific kind, and every process in the pipeline contributes
     the two universal ones. <b>(b)</b> All of it reaches the end-of-run aggregation through a single channel of
@@ -781,7 +781,7 @@
     imply a complete QC tree. Only the two opt-in evaluators (<code>SEG_QUALITY_EVAL</code>,
     <code>MERGE_SEG_EVAL</code>) still fall back to <code>ignore</code>, and a drop is announced through
     <code>workflow.stats.ignoredCount</code> rather than left to be inferred. <b>(h)</b> QC defaults.
-    Supplementary Figure <b>S1</b> places these processes in the whole workflow; Supplementary Figure <b>S2</b>
+    Schematic <b>1</b> places these processes in the whole workflow; Schematic <b>2</b>
     takes the <code>reg_qc</code> ladder apart per registration backend.
     <span class="footnote">Process names, containers, resource requests, published paths, parameter defaults and
     the artifact vocabulary are read verbatim from the pipeline source

@@ -1,9 +1,10 @@
-# Usage
+# Running MIRAGE
 
-Everything you need to run MIRAGE: the four-stage model, the samplesheet, the
-command shapes, resuming from checkpoints, where outputs land, and the most common
-fixes. For the full flag surface see [Parameters](parameters.md); to install see
-[Installation](installation.md).
+<p class="standfirst">The four-stage model, the samplesheet, the command shapes, resuming from
+checkpoints, clusters, where outputs land, and the most common fixes.</p>
+
+New here? [Run your own slides](quickstart.md) is the short path. For every setting see
+[Parameters](parameters.md); to install see [Installation](installation.md).
 
 ## The four-stage model
 
@@ -16,22 +17,20 @@ for exactly one stage.
 ```mermaid
 flowchart LR
     A[Raw multi-channel<br/>images + CSV] --> B[Preprocessing<br/>convert + illumination correct]
-    B --> C[Registration<br/>align panels: VALIS or tiled/STARE]
+    B --> C[Registration<br/>align rounds: STARE or VALIS]
     C --> D[Segmentation<br/>segment + extract properties]
     D --> E[Postprocessing<br/>quantify + export]
     E --> F[GeoJSON cells<br/>+ pyramidal OME-TIFF]
-    style B fill:#e3f2fd,stroke:#1976d2
-    style C fill:#e8f5e9,stroke:#388e3c
-    style D fill:#fce4ec,stroke:#c2185b
-    style E fill:#fff3e0,stroke:#f57c00
 ```
 
 - **Preprocessing** — Bio-Formats conversion (nuclear marker → channel 0), plus optional BaSiC
   illumination correction. The correction is **off by default** (`skip_preprocessing` is `true`;
   set it `false` in a params file or profile to run it); the conversion always runs.
 - **Registration** — whole-slide alignment of every panel onto the reference panel, via
-  `--registration_method`: **tiled/STARE** (default; JVM-free, fully parallel) or **VALIS**
-  (graph-based — see [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
+  `--registration_method`: **`tiled`**, which runs STARE (default; tile-parallel, no GPU, memory
+  per task set by a fixed window) or **`valis`** (VALIS 1.2.0 at its defaults, for slides without a
+  nuclear stain shared by every round — see
+  [Parameters → Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled)).
 - **Segmentation** — cell/nucleus segmentation on the reference panel + morphology/contour extraction.
 - **Postprocessing** — per-cell quantification + QuPath GeoJSON export + pyramidal OME-TIFF.
 
@@ -54,6 +53,9 @@ git clone https://github.com/sceriff0/mirage.git && cd mirage
 python tests/testdata/generate_complete_testdata.py
 nextflow run . -profile test,docker --outdir results
 ```
+
+The `test` profile is a small fixture, not the shipped defaults: it pins VALIS and a built-in
+StarDist model so that it runs in a few minutes on synthetic images.
 
 ## The minimal command
 
@@ -337,12 +339,14 @@ Profiles are defined in `nextflow.config` and combine with commas — pick one
 ```bash
 # Laptop demo
 nextflow run . -profile test,docker --outdir results
+# Laptop or workstation, your own slides, no GPU
+nextflow run . -profile local,docker -params-file params/no_gpu.json --input samplesheet.csv --outdir results
 # HPC production
 nextflow run . -profile slurm,singularity --input samplesheet.csv --outdir results -c site.config
 ```
 
 JSON presets in `params/` (`full_pipeline.json`, `preprocessing_only.json`,
-`registration_only.json`, `postprocessing_only.json`, `test.json`) set sensible
+`registration_only.json`, `postprocessing_only.json`, `no_gpu.json`, `test.json`) set sensible
 defaults; load one with `-params-file` and override values inline.
 
 ## Running on HPC
@@ -614,7 +618,8 @@ key grammar is a cross-repository contract — see
     [Boolean parameters](#boolean-parameters).
 
 ??? question "Do I need a GPU?"
-    No — run CPU-only with `seg_gpu = false`. A GPU mainly accelerates `SEGMENT`.
+    No. Registration with STARE never uses one. Segmentation uses a GPU by default
+    (`seg_gpu = true`); to run it on the CPU add `-params-file params/no_gpu.json`.
 
 ??? tip "Resetting a stuck task"
     If `-resume` keeps re-running the same failing task after you've fixed params,

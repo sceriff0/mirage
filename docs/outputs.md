@@ -121,7 +121,8 @@ aggregates at the `<outdir>` root.
 ### What a default run publishes
 
 `--cleanup_level` decides how much of the tree below is written. The default,
-`final`, publishes only what the run was asked to produce:
+`none` (since 2026-09-10), publishes the complete tree shown in the next
+section. The opt-in `final` publishes only what the run was asked to produce:
 
 ```text
 results/                              # = --outdir, at --cleanup_level=final
@@ -144,8 +145,8 @@ Everything else in the full tree below — `converted/`, `preprocessed/`,
 `publishDir` is `mode: 'copy'`, so publish-then-delete would pay a full copy out
 of `work/` for a file nobody reads.
 
-`--cleanup_level none` publishes the complete tree below, byte-for-byte as the
-pipeline always did. Use it whenever the output will be re-entered: `--start
+`--cleanup_level none`, the default, publishes the complete tree below, byte-for-byte
+as the pipeline always did. Keep it whenever the output will be re-entered: `--start
 <step>`, or as the `--prior_outdir` of a `--mode add_cycle` run (which is refused
 at launch at any other level). Details: [Output cleanup](parameters.md#output-cleanup).
 
@@ -271,7 +272,7 @@ Written to `--trace_dir` (default `.trace`, **independent of `--outdir`**) when
     <div class="p">pyramid/pyramid.ome.tiff</div>
     <div class="role">primary · image</div>
     <ul>
-      <li>8 levels, scale 2, zstd</li>
+      <li>512 px tiles, up to 8 levels, scale 2, zstd</li>
       <li>Channel names preserved</li>
       <li>Optional uint32 mask series (<code>embed_masks</code>)</li>
     </ul>
@@ -297,6 +298,14 @@ Written to `--trace_dir` (default `.trace`, **independent of `--outdir`**) when
   </div>
 </div>
 
+`geojson/export/` holds three files (`bin/export_geojson.py`):
+
+| File | Content |
+|---|---|
+| `cells.geojson` | QuPath-native detections: each whole-cell polygon (simplified at `simplify_tolerance`, default 1.0 px; coordinates to `geojson_coord_precision`, default 2 decimals) with its measurements, and the nuclear polygon as `nucleusGeometry` |
+| `cells_wholecell.geojson` | The same cells without `nucleusGeometry`, for faster loading |
+| `cells_data.csv` | One row per cell: the raw values plus a `<column>_zscore` for each marker column, computed column-wise across all cells of the patient |
+
 ---
 
 ## Provenance: what a run records about itself
@@ -311,7 +320,7 @@ end of the run.
     python: 3.10.14
     container: bolt3x/mirage-convert:1.0.0
     tifffile: 2024.12.12
-    bioio: 1.1.0
+    bioio: 3.5.0
     h5py: 3.11.0
 ```
 
@@ -407,9 +416,10 @@ written in every mode — FlowPath's bare-key fast path is hard-wired to
     [CHANGELOG's Migration section](https://github.com/sceriff0/mirage/blob/main/CHANGELOG.md#migration--read-before-comparing-any-output-across-this-release).
 
 Cytoplasm is computed as `Cell − Nucleus` by subtraction, per cell. A cell with
-no nuclear overlap yields an empty Nucleus/Cytoplasm compartment, which is
-emitted as `0.0` rather than dropped — so the row count is identical across
-every compartment.
+no nuclear overlap has a **missing** (`NaN`) Nucleus value and a Cytoplasm value
+equal to its whole-cell value; a compartment with no pixels is `NaN`, never `0.0`
+(`bin/quantify.py`, guarded by `tests/test_absent_compartment_is_nan.py`). The
+row is kept either way, so the row count is identical across every compartment.
 
 ### Non-marker columns
 

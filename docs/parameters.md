@@ -54,7 +54,8 @@ actually resolved.</p>
 
 ## Preprocessing
 
-Bio-Formats conversion + BaSiC illumination correction.
+Bio-Formats conversion + BaSiC illumination correction (the correction is off by default:
+`skip_preprocessing = true`).
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -75,6 +76,10 @@ owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
 Two backends, selected by `--registration_method`: **STARE tiled** (default; JVM-free, fully
 parallel) and **VALIS** (graph-based whole-slide alignment). Every STARE task asks 2–4 GB at the
 defaults — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
+On the paper's eight-case cohort (64 round pairs) STARE reached a higher matched-pair nuclear
+Dice than VALIS (median 0.84 against 0.80) at about 40-fold lower peak memory and about 2.8-fold
+more CPU time; VALIS is kept as the second mode because STARE needs a nuclear counterstain
+shared by every round.
 
 ### Common
 
@@ -137,9 +142,9 @@ and how to read it.
 
 ### Tiled / STARE (`registration_method=tiled`)
 
-STARE is an alternative registration backend that is **JVM-free** (no Bio-Formats/Java
+STARE is the default registration backend. It is **JVM-free** (no Bio-Formats/Java
 heap), tiles the slide internally, and runs fully in parallel. These params apply only when
-`--registration_method tiled`.
+`registration_method` is `tiled` (the default).
 
 **Sizing.** Every STARE step is region-streamed and bounded by a parameter, not by the slide.
 `TILED_COARSE` estimates its rigid anchor with an FFT NCC rotation sweep (0.25–0.43 GB peak RSS
@@ -154,7 +159,7 @@ asked ~48 GB at the then-default `high` tier, so sites sized for that can lower 
 | `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. (STARE v2 has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
 | `reg_tiled_stride` | `64` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. See `research/stare-optimal-design-2026-09-27.md` §2. |
 | `reg_tiled_out_tile` | `1024` | Streaming stitch write-tile size (px) — gigapixel-safe. |
-| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateStareKnobs` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. |
+| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); the ORB fit is accepted with at least 30 inliers. If neither passes, the candidate transforms are compared on up to eight 1,024 px nuclear patches read at full resolution: a candidate confirmed by at least three patches is used, and otherwise the best candidate is kept and **flagged as unverified** (the task does not fail). Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateStareKnobs` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. |
 
 ### No tiers
 
@@ -230,7 +235,7 @@ Consumes the **DAPI channel** (must be channel 0 — guaranteed upstream).
 | `seg_pmax` | `99.8` | Upper percentile for normalization. |
 | `seg_n_tiles_x` | `16` | Inference tiles along X. |
 | `seg_n_tiles_y` | `16` | Inference tiles along Y. |
-| `seg_prob_thresh` | `null` | Detection probability threshold. `null` uses the model's built-in default. |
+| `seg_prob_thresh` | `null` | Detection probability threshold. `null` uses the model's own thresholds (for the default model: probability 0.61, non-maximum suppression 0.3). |
 
 ### InstanSeg (`seg_method=instantseg`)
 
@@ -542,11 +547,12 @@ Ready-made `-params-file` JSON presets in `params/`:
 
 | Preset | Purpose |
 |---|---|
-| `params/full_pipeline.json` | All stages from preprocessing, on the InstanSeg backend (see the file's `_comment_seg_method` for the StarDist switch) |
+| `params/full_pipeline.json` | All stages from preprocessing, with STARE registration and the StarDist backend (the file's `_comment_seg_method` describes the alternatives); it turns BaSiC illumination correction on (`skip_preprocessing: false`) |
 | `params/preprocessing_only.json` | Preprocessing only |
 | `params/registration_only.json` | Registration from a checkpoint |
 | `params/postprocessing_only.json` | Postprocessing from a checkpoint |
 | `params/test.json` | Minimal self-contained test run (carries its own small ceilings) |
+| `params/no_gpu.json` | `seg_gpu` off alone — segmentation on the CPU, for a machine with no NVIDIA GPU; combine with `-profile local,docker` |
 | `params/dry_run.json` | `dry_run` alone — combine with any other flags |
 | `params/seg_quality_eval.json` | Turns the opt-in CSE segmentation-quality scorer on |
 

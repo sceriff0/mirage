@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MIRAGE Supplementary Figure S4 — Lazy reads</title>
+<title>MIRAGE Schematic 4 — Lazy reads</title>
 <style>
   /* ======================================================================
-     MIRAGE supplementary figures — shared design base (S1 · S2 · S3 · S4 · S5 · S6)
+     MIRAGE method schematics — shared design base (1–6)
      ----------------------------------------------------------------------
      DUPLICATED ON PURPOSE, not extracted to a shared file. Each figure in
      this set has to survive being detached from the repository — attached to
@@ -89,7 +89,7 @@
   .tag-def{font-family:var(--mono);font-size:.53rem;background:var(--ink);color:#fff;padding:1px 4px;font-weight:700;white-space:nowrap;}
   .tag-alt{font-family:var(--mono);font-size:.53rem;background:var(--sub);color:var(--ink-2);border:1px solid var(--rule);padding:1px 4px;white-space:nowrap;}
 
-  /* parameter tables (td.v in S1/S3, td.val in S2 — same scale) */
+  /* parameter tables (td.v in 1/3, td.val in 2 — same scale) */
   table.pr{border-collapse:collapse;width:100%;font-size:.78rem;}
   table.pr td{padding:3.5px 4px;border-bottom:1px solid var(--rule-2);vertical-align:top;}
   table.pr tr:last-child td{border-bottom:none;}
@@ -203,16 +203,16 @@
 <div class="sheet">
 
   <div class="masthead">
-    <div class="kick">Supplementary Figure S4 · lazy reads</div>
+    <div class="kick">Schematic 4 · lazy reads</div>
     <h1>A peak-memory transition, not an I/O one: where a lazy zarr view turns O(channels) into O(1), where the pipeline genuinely needs every pixel, and three audit claims that reading the read sites got wrong</h1>
   </div>
-  <nav class="figset" aria-label="Supplementary figure set">
-    <a href="pipeline-schematic.html">S1 · pipeline</a>
-    <a href="registration-schematic.html">S2 · registration</a>
-    <a href="qc-schematic.html">S3 · quality control</a>
-    <span class="self">S4 · lazy reads</span>
-    <a href="coarse-schematic.html">S5 · coarse alignment</a>
-    <a href="accuracy-schematic.html">S6 · accuracy measures</a>
+  <nav class="figset" aria-label="Schematic set">
+    <a href="pipeline-schematic.html">1 · pipeline</a>
+    <a href="registration-schematic.html">2 · registration</a>
+    <a href="qc-schematic.html">3 · quality control</a>
+    <span class="self">4 · lazy reads</span>
+    <a href="coarse-schematic.html">5 · coarse alignment</a>
+    <a href="accuracy-schematic.html">6 · accuracy measures</a>
   </nav>
   <p class="standfirst">Lazy, region-readable zarr views of an OME-TIFF were never missing from this pipeline:
     <code>bin/utils/tiled_io.py</code> has carried <code>open_lazy</code>, <code>read_decimated</code> and
@@ -282,7 +282,7 @@
       all on the STARE tiled registration path. Everything else in <code>bin/</code> read eagerly. No dependency
       was added either: every affected container already pinned <code>zarr==2.18.3</code>
       (<code>containers/preprocess</code>, <code>regqc</code>, <code>stardist</code>, <code>cellsam</code>,
-      <code>tiled</code>).</div>
+      <code>stare</code>).</div>
   </section>
 
   <!-- b — THE PRIMITIVE -->
@@ -667,18 +667,19 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
       Where the design was built around bounded windows, the property holds and has been measured: the
       <i>per-tile</i> STARE tasks peak at <b>1.3&ndash;2.0 GB on an 8192&sup2; slide, and the same on a larger
       one</b>, because each reads a bounded window through lazy zarr regions. Peak scales with the
-      <b>parameter</b> (<code>reg_tiled_tile</code> + 2&times;<code>reg_tiled_halo</code>,
-      <code>reg_tiled_out_tile</code>), never with the slide. That is what a genuinely memory-bounded step looks
+      <b>parameter</b> (<code>reg_tiled_tile</code> + 6&times;<code>reg_tiled_stride</code> for the tile read
+      window — 2432&sup2; at the defaults —
+      <code>reg_tiled_out_tile</code> for the write tile), never with the slide. That is what a genuinely memory-bounded step looks
       like — and it required designing the <i>algorithm</i> around windows, not swapping a read call.<br><br>
-      <b><code>TILED_COARSE</code> is no longer in that band, and the header this figure cites still says it is.</b>
-      Its coarse anchor became a U-Net (DISK) rather than a cheap feature detector, so its peak is linear in
-      thumbnail <i>area</i>: <code>GB &asymp; 1.1 + 7.3 &times; Mpx</code>. At the then-shipped
-      <code>high</code> tier (<code>reg_tiled_coarse_max_dim</code> 2048, 4.19 Mpx) that is
-      <b>&asymp;31.7 GB peak against a 48 GB request</b> — the 1.5&times; headroom the closure applies. The
-      window-bounded property still holds in the sense that matters (the number comes from a parameter, not the
-      slide), but the <i>magnitude</i> is an order of magnitude out from the rest of the path.
+      <b><code>TILED_COARSE</code> is in that band again.</b>
+      While its coarse anchor was a U-Net (DISK) its peak was linear in
+      thumbnail <i>area</i> — about 32 GB at <code>reg_tiled_coarse_max_dim</code> 2048, against a 48 GB
+      request. Since 2026-09-27 the anchor is a correlation sweep over a few thumbnail-sized canvases:
+      <b>0.25&ndash;0.43 GB for the whole stage at 512&ndash;2048 px, against a 2 GB request</b>. The exception
+      is now <code>TILED_SOLVE</code>: it opens no image, but it holds one displacement vector per lattice node, so
+      its memory grows with slide area (0.19&ndash;1.20 GB per round pair on the manuscript cohort, 2 GB requested).
       <span class="src" style="display:block">conf/modules.config, "STARE (tiled) per-task memory" header ·
-      <code>withName: 'TILED_COARSE'</code></span></div>
+      <code>withName: 'TILED_COARSE'</code> · <code>'TILED_SOLVE'</code></span></div>
   </section>
 
   <!-- g — STRUCTURAL BLOCKERS -->
@@ -983,7 +984,7 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
   </section>
 
   <p class="caption">
-    <b>Supplementary Figure S4. Lazy reads: a peak-memory transition and its boundaries.</b>
+    <b>Schematic 4. Lazy reads: a peak-memory transition and its boundaries.</b>
     <b>(a)</b> Lazy zarr-backed region reads were not added by this work — they had existed in
     <code>bin/utils/tiled_io.py</code> and were consumed by three STARE tiled scripts; what changed is reach. Two
     axes of overread exist, and only the channel axis was ever removable here. <b>(b)</b> The primitive: a
@@ -1003,7 +1004,7 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
     input is already one plane or is a table, and reads owned by another library (VALIS, and now the vendored
     nf-core BASICPY container) — while the STARE per-tile path shows the
     ceiling a window-bounded <i>design</i> reaches, as opposed to a swapped read call; <code>TILED_COARSE</code>
-    is the exception, at ~31.7 GB against a 48 GB request since its anchor became a U-Net. <b>(g)</b> Four mechanisms
+    is back inside it, at under 0.5 GB against a 2 GB request since its U-Net anchor was retired. <b>(g)</b> Four mechanisms
     block a spatial saving even where the read is now lazy, and the opportunity this figure once listed as the only
     one left (<code>convert_image.py</code>'s BioIO <code>img.data</code>) has been taken, through that library's
     own API: lazy read plus streamed chunk-slab write, with the naive per-plane iterator measured to be a
@@ -1017,8 +1018,8 @@ DEFAULT_BAND_BYTES = 64 * 1024 * 1024    <span class="cm"># a BYTE budget, not a
     that scoped this work were wrong, all for one reason — a read site cannot tell you what the pixels are for,
     what filter consumes them, which library owns the read, or how coarsely that library chunks it. <b>(j)</b> The
     limits.
-    Supplementary Figure <b>S1</b> places these processes in the whole workflow; <b>S2</b> covers the registration
-    backends whose tiled path already read lazily; <b>S3</b> covers the QC artifacts two of these sites produce.
+    Schematic <b>1</b> places these processes in the whole workflow; <b>2</b> covers the registration
+    backends whose tiled path already read lazily; <b>3</b> covers the QC artifacts two of these sites produce.
     <span class="footnote">Function names, call sites, container pins, resource closures, published paths and
     parameter defaults are read verbatim from the pipeline source
     (<code>bin/utils/tiled_io.py</code>, <code>bin/utils/qc.py</code>, <code>bin/utils/segment_io.py</code>,

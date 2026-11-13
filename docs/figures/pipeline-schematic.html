@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MIRAGE Supplementary Figure S1 — Pipeline</title>
+<title>MIRAGE Schematic 1 — Pipeline</title>
 <style>
   /* ======================================================================
-     MIRAGE supplementary figures — shared design base (S1 · S2 · S3 · S4 · S5 · S6)
+     MIRAGE method schematics — shared design base (1–6)
      ----------------------------------------------------------------------
      DUPLICATED ON PURPOSE, not extracted to a shared file. Each figure in
      this set has to survive being detached from the repository — attached to
@@ -89,7 +89,7 @@
   .tag-def{font-family:var(--mono);font-size:.53rem;background:var(--ink);color:#fff;padding:1px 4px;font-weight:700;white-space:nowrap;}
   .tag-alt{font-family:var(--mono);font-size:.53rem;background:var(--sub);color:var(--ink-2);border:1px solid var(--rule);padding:1px 4px;white-space:nowrap;}
 
-  /* parameter tables (td.v in S1/S3, td.val in S2 — same scale) */
+  /* parameter tables (td.v in 1/3, td.val in 2 — same scale) */
   table.pr{border-collapse:collapse;width:100%;font-size:.78rem;}
   table.pr td{padding:3.5px 4px;border-bottom:1px solid var(--rule-2);vertical-align:top;}
   table.pr tr:last-child td{border-bottom:none;}
@@ -253,16 +253,16 @@
 <div class="sheet">
 
   <div class="masthead">
-    <div class="kick">Supplementary Figure S1</div>
+    <div class="kick">Schematic 1</div>
     <h1>A whole-slide multiplex image processing pipeline: modules, segmentation backends, defaults, outputs, resource model, and benchmarking</h1>
   </div>
-  <nav class="figset" aria-label="Supplementary figure set">
-    <span class="self">S1 · pipeline</span>
-    <a href="registration-schematic.html">S2 · registration</a>
-    <a href="qc-schematic.html">S3 · quality control</a>
-    <a href="zarr-schematic.html">S4 · lazy reads</a>
-    <a href="coarse-schematic.html">S5 · coarse alignment</a>
-    <a href="accuracy-schematic.html">S6 · accuracy measures</a>
+  <nav class="figset" aria-label="Schematic set">
+    <span class="self">1 · pipeline</span>
+    <a href="registration-schematic.html">2 · registration</a>
+    <a href="qc-schematic.html">3 · quality control</a>
+    <a href="zarr-schematic.html">4 · lazy reads</a>
+    <a href="coarse-schematic.html">5 · coarse alignment</a>
+    <a href="accuracy-schematic.html">6 · accuracy measures</a>
   </nav>
   <p class="standfirst">A step-gated Nextflow DSL2 workflow that aligns multiplexed immunofluorescence slides,
     segments every cell, quantifies each marker per compartment, and exports QuPath-compatible GeoJSON, a
@@ -307,7 +307,7 @@
         The step vocabulary has one owner (<code>ParamUtils.STEPS</code>), which also fixes each step's required
         samplesheet columns and the QC artifacts it contributes.</p></div>
     <div class="gate">
-      <div class="g"><div class="k">step 1 · default start</div><div class="v">preprocessing</div><div class="d">Standardize to OME-TIFF; BaSiC illumination correction (optional).</div></div>
+      <div class="g"><div class="k">step 1 · default start</div><div class="v">preprocessing</div><div class="d">Standardize to OME-TIFF; BaSiC illumination correction (optional, off by default).</div></div>
       <div class="g"><div class="k">step 2</div><div class="v">registration</div><div class="d">Align each moving slide to the patient's reference.</div></div>
       <div class="g"><div class="k">step 3</div><div class="v">segmentation</div><div class="d">Detect every cell; extract contours and morphology.</div></div>
       <div class="g"><div class="k">step 4 · default stop</div><div class="v">postprocessing</div><div class="d">Quantify and export.</div></div>
@@ -375,11 +375,14 @@
                 registration channel, passed by index (the nuclear channel, index 0) instead of VALIS's name match
                 on "dapi". No MIRAGE settings and no tiers; <code>reg_valis_mode hires</code> swaps in VALIS's own
                 high-resolution example as shipped (<code>MicroRigidRegistrar</code>, then <code>register_micro</code>
-                at 0.25 × the smallest slide's longest side).</div>
+                at 0.25 × the smallest slide's longest side). Kept as the second mode because STARE needs a
+                nuclear counterstain shared by every round.</div>
               <div class="pp" style="margin-top:6px"><span>valis-wsi <b>1.2.0</b></span><span>rigid <b>512</b></span><span>nonrigid <b>2048</b></span><span>JVM heap <b>10 GB</b></span></div></div>
             <div class="opt"><div class="oh"><span>tiled → STARE</span><span class="tag-def">default</span></div>
-              <div class="ox">JVM-free tiled rigid + mesh warp into the reference's shape; fiducial = channel 0.
-                COARSE asked 48 GB while its matcher was a U-Net; its FFT anchor now asks 2 GB.
+              <div class="ox">JVM-free and GPU-free (<code>stare-registration</code> 1.3.0): a rigid anchor from an NCC
+                rotation sweep on a thumbnail, displacement vectors measured tile by tile on a 64&nbsp;px lattice,
+                one slide-wide robust solve into a continuous field, then every channel resampled into the
+                reference frame; fiducial = channel 0. Every task asks 2–4 GB at the defaults, whatever the slide size.
                 Step 2 fans out to one task per tile — the only shape it has. Its geometry knobs
                 carry plain defaults and are set directly; STARE has one default configuration (the
                 <code>reg_tiled_mode</code> cost tiers were removed).</div>
@@ -392,7 +395,7 @@
               (<code>SEG_QC_SEGMENT</code> is <code>SEGMENT</code> aliased, so it follows
               <code>--seg_method</code>), trace the mask to polygons, then warp those through the transform and
               score IoU and centroid displacement per registration stage. Also emits a <b>per-cell residual</b>
-              table consumed by the SpatialData export. Default on — see figure <b>S3</b>.</div></div>
+              table consumed by the SpatialData export. Default on — see Schematic <b>3</b>.</div></div>
           <div class="ckpt">→ csv/registered.csv</div>
         </div>
       </div>
@@ -649,7 +652,7 @@
           a broken QC task fails the run, so a green run implies a complete QC tree. Only the two <i>opt-in</i>
           evaluators above (<code>SEG_QUALITY_EVAL</code>, <code>MERGE_SEG_EVAL</code>) still fall back to
           <b>ignore</b>, and <code>main.nf</code>'s <code>onComplete</code> announces a drop via
-          <code>workflow.stats.ignoredCount</code>. Figure <b>S3</b> takes that contract apart.</p>
+          <code>workflow.stats.ignoredCount</code>. Schematic <b>3</b> takes that contract apart.</p>
       </div>
 
       <div>
@@ -661,10 +664,10 @@
             <tr><td>TILE_FOR_BASIC</td><td class="n">2</td><td>6 GB §</td><td>2 h</td><td><span class="own own-w">name</span></td></tr>
             <tr><td>BASICPY ¶</td><td class="n">1</td><td>32 GB × a</td><td>8 h</td><td><span class="own">both</span></td></tr>
             <tr><td>APPLY_PROFILES</td><td class="n">2</td><td>8 GB §</td><td>3 h</td><td><span class="own own-w">name</span></td></tr>
-            <tr><td>REGISTER</td><td class="n">8</td><td>300 GB</td><td>24 h</td><td><span class="own own-w">name</span></td></tr>
-            <tr><td>TILED_COARSE</td><td class="n">2</td><td>48 GB §</td><td>2 h</td><td><span class="own">both</span></td></tr>
+            <tr><td>REGISTER</td><td class="n">8</td><td>64 GB ‡</td><td>24 h</td><td><span class="own own-w">name</span></td></tr>
+            <tr><td>TILED_COARSE</td><td class="n">2</td><td>2 GB §</td><td>2 h</td><td><span class="own">both</span></td></tr>
             <tr><td>TILED_REG_TILE</td><td class="n">2</td><td>4 GB §</td><td>2 h</td><td><span class="own">both</span></td></tr>
-            <tr><td>TILED_SOLVE</td><td class="n">1</td><td>1 GB</td><td>8 h</td><td><span class="own">both</span></td></tr>
+            <tr><td>TILED_SOLVE</td><td class="n">1</td><td>2 GB</td><td>8 h</td><td><span class="own">both</span></td></tr>
             <tr><td>TILED_STITCH</td><td class="n">4</td><td>4 GB §</td><td>4 h</td><td><span class="own">both</span></td></tr>
             <tr><td>GENERATE_REGISTRATION_QC</td><td class="n">1</td><td>100–300 GB †</td><td>12 h</td><td><span class="own">both</span></td></tr>
             <tr><td>SEG_QC_SEGMENT</td><td class="n">8</td><td>32–128 GB †</td><td>4 h</td><td><span class="own own-w">name</span></td></tr>
@@ -684,12 +687,12 @@
           <code>modules/local/*.nf</code>) cannot see. Its cpus and time come from its own upstream
           <code>label 'process_single'</code>; only <code>memory</code> is overridden here, because it runs Bio-Formats
           under a JVM and does not fit the single tier's 12 GB on a real slide.
-          ‡ doubling ramp (32/64/128/256) rather than linear. § derived from a parameter, not a constant:
-          <code>reg_tiled_tile</code>&nbsp;+&nbsp;2·<code>reg_tiled_halo</code> for TILED_REG_TILE and
+          ‡ doubling ramp rather than linear: 32/64/128/256 GB for WARP_SEG_QC, 64/128/256/512 GB for REGISTER
+          (from 128 GB at <code>reg_valis_mode hires</code>). § derived from a parameter, not a constant:
+          <code>reg_tiled_tile</code>&nbsp;+&nbsp;2·max(<code>reg_tiled_halo</code>, 3·<code>reg_tiled_stride</code>) for TILED_REG_TILE and
           <code>reg_tiled_out_tile</code> for STITCH, each the measured linear fit doubled and floored at 4 GB;
-          <code>reg_tiled_coarse_max_dim</code> for COARSE, whose matcher is a U-Net and therefore
-          linear in thumbnail AREA (<code>GB ≈ 1.1 + 7.3·Mpx</code>, ×1.5, floored at 4 GB) — 48 GB at the
-          then-shipped <b>high</b> tier (STARE has had no tiers since 2026-11-04);
+          <code>reg_tiled_coarse_max_dim</code> for COARSE, the same construction floored at 2 GB
+          (its learned U-Net matcher, retired 2026-09-27, asked 48 GB; STARE has had no tiers since 2026-11-04);
           <code>preproc_tile_size</code> for TILE_FOR_BASIC (floor 6 GB) and APPLY_PROFILES (floor 8 GB, plus
           a small term linear in channel count — the fitted flatfield/darkfield planes, held for the whole
           run); one decoded plane (4× the largest single channel file) plus a <code>pyramid_scale</code> /
@@ -698,10 +701,11 @@
           GPU is requested by <code>SEGMENT</code> — and therefore by its alias
           <code>SEG_QC_SEGMENT</code> — when <code>seg_gpu=true</code>, via <code>--gres=gpu:$gpu_type</code>
           plus <code>--gpus all</code> (Docker) or <code>--nv</code> (Singularity);
-          <code>SEG_QC_GEOJSON</code> is pure-CPU contour tracing and asks for none. Three of STARE's four
-          processes fit in 4 / 1 / 4 GB — JVM-free and tile-streamed. <code>TILED_COARSE</code> does not:
-          its DISK matcher is a U-Net, so it asked 48 GB; its FFT anchor now asks 2 GB, and STARE has one
-          default configuration (the cost tiers were removed).</p>
+          <code>SEG_QC_GEOJSON</code> is pure-CPU contour tracing and asks for none. All four of STARE's
+          processes fit in 2 / 4 / 2 / 4 GB — JVM-free, GPU-free and tile-streamed — and STARE has one
+          default configuration (the cost tiers were removed); in the manuscript's cohort no STARE task needed more
+          than 2.4 GB. That bound is registration's, not the pipeline's: segmentation and quantification
+          still ask 32–128 GB.</p>
       </div>
 
     </div>
@@ -727,32 +731,34 @@
   <section class="panel">
     <span class="plabel">h</span>
     <div class="panel-head"><h2>Benchmarking</h2>
-      <p>A separate <code>benchmarking</code> branch changes no pipeline code; it sweeps parameters over the
-        unmodified pipeline and harvests QC the pipeline already writes.</p></div>
-    <div class="bnote"><b>0</b> changes to workflows / subworkflows / modules / nextflow.config — the sweep
-      harness lives entirely under <code>benchmarks/</code> and drives the pipeline as a black box.</div>
+      <p>A separate <code>benchmarking</code> branch holds the benchmark harness behind manuscript Fig.&nbsp;3 and
+        Supplementary Table&nbsp;2: it runs each registration method through its own entry point at a shipped
+        parameter set, on the same converted rounds, and scores them all on the same nuclei.</p></div>
+    <div class="bnote"><b>64</b> round pairs from eight cases — every method starts from one shared preprocessing
+      run, so differences between methods arise from registration alone. The harness lives entirely under
+      <code>benchmarks/</code> on that branch.</div>
     <div class="harness">
-      <span class="h">sweep.yaml</span><span class="a">→</span><span class="h">generate_matrix.py</span><span class="a">→</span>
-      <span class="h">build_run_plan.py</span><span class="a">→</span><span class="h">run_sweep.sh</span><span class="a">→</span>
-      <span class="h pipe">unmodified pipeline</span><span class="a">→</span><span class="h">make_tables.py</span><span class="a">→</span><span class="h">paper_data/*.csv</span>
+      <span class="h">converted rounds</span><span class="a">→</span><span class="h pipe">STARE · VALIS · three external methods</span><span class="a">→</span>
+      <span class="h">nuclei on each round's own image</span><span class="a">→</span><span class="h">one-to-one pairing</span><span class="a">→</span>
+      <span class="h">Dice · centroid distance · cost</span>
     </div>
     <div class="sigs">
-      <div class="sig"><h4>Resource scaling</h4><div class="src">← trace.txt + size_logs</div>
-        <ul><li>Linear fit per stage: <code>peak_rss ~ input_gb</code>, <code>realtime ~ input_gb</code></li><li>Slope = marginal cost per input GiB</li><li>Intercept = fixed overhead</li></ul></div>
-      <div class="sig"><h4>Registration accuracy</h4><div class="src">← reg_qc=2 seg_qc.json · VALIS summary · STARE intrinsic TRE</div>
-        <ul><li>Seg-based Dice + centroid displacement per stage</li><li>Δ-vs-rigid isolates registration from segmentation noise</li><li>VALIS feature rTRE and STARE intrinsic TRE as method-native second signals</li><li><b>No ground truth of any kind.</b> Every number here is a reference-free agreement measure on tissue: it ranks configurations against each other, and cannot say any of them is correct. See <a href="accuracy-schematic.html">S6</a>.</li></ul></div>
-      <div class="sig"><h4>Segmentation stability</h4><div class="src">← cross-method agreement</div>
-        <ul><li>Instance-F1 between backends on a shared cell population</li><li>Foreground IoU</li><li>instantseg / stardist / cellsam</li></ul></div>
+      <div class="sig"><h4>Registration accuracy</h4><div class="src">← nuclei segmented on each round's unregistered image</div>
+        <ul><li>Matched-pair nuclear Dice, on StarDist nuclei expanded by 10 px</li><li>Residual centroid distance of the same pairs (per-pair median, µm)</li><li>STARE against each other method: two-sided Wilcoxon signed-rank test on the 64 paired round pairs, Holm-corrected</li><li><b>No ground truth of any kind.</b> Every number here is a reference-free agreement measure on tissue: it ranks methods against each other, and cannot say any of them is correct. See <a href="accuracy-schematic.html">Schematic 6</a>.</li></ul></div>
+      <div class="sig"><h4>Registration cost</h4><div class="src">← wall-clock, CPU time and peak RSS of every job</div>
+        <ul><li>Peak RSS per case = the largest registration job, image writer excluded</li><li>CPU time per case = the sum over jobs</li><li>STARE 0.70 GB and 3.3 CPU-h per case against 31.6 GB and 1.4 CPU-h for VALIS (medians)</li></ul></div>
+      <div class="sig"><h4>Memory against image size</h4><div class="src">← synthetic square images, 4,096–65,536 px per side</div>
+        <ul><li>The largest STARE task stayed below 3 GB</li><li>VALIS at its defaults stayed at 21–25 GB; its high-resolution example grew from 7 to 209 GB</li><li>Cost only — no accuracy comparison is drawn from synthetic images</li></ul></div>
     </div>
     <div class="tbl-scroll"><table class="dl">
-      <thead><tr><th>paper_data table</th><th>one row per</th><th>carries</th></tr></thead>
+      <thead><tr><th>manuscript item</th><th>one point or row per</th><th>carries</th></tr></thead>
       <tbody>
-        <tr><td class="k">runs_master.csv</td><td>run</td><td>input dims, per-stage peak RAM / wall-time, cost</td></tr>
-        <tr><td class="k">scaling_fits.csv</td><td>stage</td><td>slope, intercept, r² for RAM and runtime vs input GiB</td></tr>
-        <tr><td class="k">registration_accuracy.csv</td><td>run × slide × stage</td><td>matched Dice, centroid displacement (µm), Δ vs rigid</td></tr>
-        <tr><td class="k">registration_valis_rtre.csv</td><td>run × slide</td><td>VALIS's own feature-based rTRE</td></tr>
-        <tr><td class="k">segmentation_agreement.csv</td><td>method pair</td><td>instance-F1, foreground IoU</td></tr>
-        <tr><td class="k">param_matrix.csv</td><td>run</td><td>every knob's cost <i>and</i> quality, joined wide</td></tr>
+        <tr><td class="k">Fig. 3b</td><td>round pair × method</td><td>matched-pair nuclear Dice</td></tr>
+        <tr><td class="k">Fig. 3c</td><td>round pair × method</td><td>residual centroid distance (µm)</td></tr>
+        <tr><td class="k">Fig. 3d,e</td><td>case × method</td><td>peak RSS, CPU time</td></tr>
+        <tr><td class="k">Fig. 2c</td><td>image size × method</td><td>peak RSS on synthetic images</td></tr>
+        <tr><td class="k">Extended Data Fig. 4</td><td>image size × method</td><td>wall-clock time on synthetic images</td></tr>
+        <tr><td class="k">Supplementary Table 2</td><td>configuration</td><td>accuracy <i>and</i> cost of every configuration run, including those not in Fig. 3</td></tr>
       </tbody></table></div>
   </section>
 
@@ -762,7 +768,7 @@
     <div class="panel-head"><h2>Default parameters</h2>
       <p>Values taken verbatim from the <code>params{}</code> block of <code>nextflow.config</code>, which is the
         only place a default may be declared — a test forbids a second declaration anywhere else. Selected from
-        the <b>92</b> parameters that block declares; the full surface is in the documentation.</p></div>
+        the <b>83</b> parameters that block declares; the full surface is in the documentation.</p></div>
     <div class="pgrid">
       <div class="pcol">
         <h4>Workflow &amp; channels</h4>
@@ -783,7 +789,7 @@
         <table class="pr">
           <tr><td class="k">registration_method</td><td class="v">tiled</td><td class="d">tiled (STARE) | valis</td></tr>
           <tr><td class="k">reg_qc</td><td class="v">2</td><td class="d">0 none · 1 overlay · 2 +seg</td></tr>
-          <tr><td class="k">reg_jvm_heap_gb</td><td class="v nul">null</td><td class="d">null → derive from task.memory</td></tr>
+          <tr><td class="k">reg_jvm_heap_gb</td><td class="v nul">null</td><td class="d">null → fixed 10 GB (VALIS's own value)</td></tr>
         </table>
         <h4>Registration — tiled / STARE</h4>
         <table class="pr">
@@ -831,16 +837,17 @@
   </section>
 
   <p class="caption">
-    <b>Supplementary Figure S1. Whole-slide multiplex image processing pipeline.</b>
+    <b>Schematic 1. Whole-slide multiplex image processing pipeline.</b>
     <b>(a)</b> The workflow is driven by a samplesheet in which each row is one image and exactly one image per
     patient is the registration reference. Channel identity is taken from image metadata; the nuclear (fiducial)
     channel is resolved by marker name using an ordered preference list (<code>nuclear_markers</code>, default
     DAPI then CELLTOX) and moved to channel 0 — DAPI is used where present, otherwise CELLTOX.
     <b>(b)</b> Execution is gated by <code>--start</code>/<code>--stop</code> across four ordered steps, each
-    writing a resumable checkpoint. <b>(c)</b> Preprocessing standardizes and illumination-corrects images;
+    writing a resumable checkpoint. <b>(c)</b> The stage graph of manuscript Fig.&nbsp;4a. Preprocessing standardizes images and can
+    illumination-correct them (BaSiC; off by default);
     registration aligns each moving slide to the reference through one of two interchangeable backends behind a
-    single adapter seam — VALIS or the JVM-free tiled/STARE backend —
-    with staged registration QC on by default (VALIS runs valis-wsi 1.2.0 at its defaults); segmentation
+    single adapter seam — the JVM-free tiled/STARE backend, the default, or VALIS (valis-wsi 1.2.0 at its defaults) —
+    with staged registration QC on by default; segmentation
     detects every cell on the reference and extracts morphology and contours once per mask; postprocessing
     quantifies each marker per compartment and exports. <b>(d)</b> The three
     segmentation backends compared on what they read, how the whole-cell mask is produced, what each requires
@@ -850,12 +857,10 @@
     polygons, measurements and QC — including a per-cell registration residual — for the scverse ecosystem.
     <b>(f)</b> Each process's CPU, memory and wall-time request has a single owner and scales with the retry
     attempt under global ceilings; the seven quality-control processes are gating — they retry, then fail the
-    run — and only the two opt-in segmentation evaluators are dropped rather than fatal. <b>(g)</b> An
-    incremental mode folds a new imaging cycle into a completed run, reusing the prior reference, masks, and
-    quantification. <b>(h)</b> A separate branch benchmarks the unmodified pipeline by parameter sweep,
-    harvesting resource, registration-accuracy, and segmentation-stability signals from QC the pipeline
-    already emits. No external ground-truth dataset is used. <b>(i)</b> Default parameters.
-    Supplementary Figure <b>S2</b> takes registration apart backend by backend; Supplementary Figure <b>S3</b>
+    run — and only the two opt-in segmentation evaluators are dropped rather than fatal. <b>(g)</b> A separate branch holds the registration benchmark of manuscript Fig.&nbsp;3 and Supplementary
+    Table&nbsp;2: every method on the same converted rounds, scored by matched-pair nuclear Dice, residual centroid
+    distance and registration cost. No external ground-truth dataset is used. <b>(i)</b> Default parameters.
+    Schematic <b>2</b> takes registration apart backend by backend; Schematic <b>3</b>
     does the same for the quality-control architecture summarised in <b>(c)</b> and <b>(f)</b>.
     <span class="footnote">Parameter defaults, published paths, and resource requests are taken verbatim from the
     pipeline source (<code>nextflow.config</code>, <code>conf/modules.config</code>, <code>lib/Layout.groovy</code>)
