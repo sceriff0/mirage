@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MIRAGE Supplementary Figure S6 — Accuracy measures</title>
+<title>MIRAGE Schematic 6 — Accuracy measures</title>
 <style>
   /* ======================================================================
-     MIRAGE supplementary figures — shared design base (S1 · S2 · S3 · S4 · S5 · S6)
+     MIRAGE method schematics — shared design base (1–6)
      ----------------------------------------------------------------------
      DUPLICATED ON PURPOSE, not extracted to a shared file. Each figure in
      this set has to survive being detached from the repository — attached to
@@ -89,7 +89,7 @@
   .tag-def{font-family:var(--mono);font-size:.53rem;background:var(--ink);color:#fff;padding:1px 4px;font-weight:700;white-space:nowrap;}
   .tag-alt{font-family:var(--mono);font-size:.53rem;background:var(--sub);color:var(--ink-2);border:1px solid var(--rule);padding:1px 4px;white-space:nowrap;}
 
-  /* parameter tables (td.v in S1/S3, td.val in S2 — same scale) */
+  /* parameter tables (td.v in 1/3, td.val in 2 — same scale) */
   table.pr{border-collapse:collapse;width:100%;font-size:.78rem;}
   table.pr td{padding:3.5px 4px;border-bottom:1px solid var(--rule-2);vertical-align:top;}
   table.pr tr:last-child td{border-bottom:none;}
@@ -264,16 +264,16 @@
 <div class="sheet">
 
   <div class="masthead">
-    <div class="kick">Supplementary Figure S6 · accuracy measures</div>
-    <h1>Four registration-accuracy numbers this pipeline reports — two scored by the transform's own features, two independent, and none of them a ground truth</h1>
+    <div class="kick">Schematic 6 · accuracy measures</div>
+    <h1>Four registration-accuracy numbers this pipeline reports — two scored by the transform's own measurements, two independent, and none of them a ground truth</h1>
   </div>
-  <nav class="figset" aria-label="Supplementary figure set">
-    <a href="pipeline-schematic.html">S1 · pipeline</a>
-    <a href="registration-schematic.html">S2 · registration</a>
-    <a href="qc-schematic.html">S3 · quality control</a>
-    <a href="zarr-schematic.html">S4 · lazy reads</a>
-    <a href="coarse-schematic.html">S5 · coarse alignment</a>
-    <span class="self">S6 · accuracy measures</span>
+  <nav class="figset" aria-label="Schematic set">
+    <a href="pipeline-schematic.html">1 · pipeline</a>
+    <a href="registration-schematic.html">2 · registration</a>
+    <a href="qc-schematic.html">3 · quality control</a>
+    <a href="zarr-schematic.html">4 · lazy reads</a>
+    <a href="coarse-schematic.html">5 · coarse alignment</a>
+    <span class="self">6 · accuracy measures</span>
   </nav>
   <p class="standfirst">Every registration run in this pipeline can emit up to four distinct
     accuracy-shaped numbers, produced by different processes, in different units, at different
@@ -292,7 +292,7 @@
         disagree with each other by design — not by bug.</p></div>
     <div class="tbl-scroll"><table class="rc">
       <caption>one slide-stage, four numbers — three read verbatim from the worked example in
-        <code>docs/registration_qc.md</code> (lines 174-177); the fourth has no documented worked
+        <code>docs/registration_qc.md</code> (its <code>*_seg_qc.json</code> example); the fourth has no documented worked
         example and is left blank</caption>
       <thead><tr><th>measure</th><th class="v">value</th></tr></thead>
       <tbody>
@@ -324,19 +324,21 @@
       <tbody>
         <tr><td class="k">intrinsic TRE</td>
           <td class="v">VALIS: its own keypoint-match residual after the fit
-            (<code>*_summary.csv</code>, the "rTRE" table). STARE: the DISK+LightGlue anchor's
-            RANSAC residual plus the per-tile phase-correlation shift
+            (<code>*_summary.csv</code>, the "rTRE" table). STARE: the rigid anchor's residual estimate (<code>coarse_tre_px</code>)
+            plus, per tile, the median of the displacement vectors measured after the anchor
             (<code>*_tre.json</code>).</td>
           <td class="v">px</td>
           <td class="v"><code>REGISTER</code> / <code>TILED_SOLVE</code></td>
           <td class="v"><span class="em">always</span> — part of registration itself</td></tr>
-        <tr><td class="k">STARE confidence gate</td>
-          <td class="v">Normalised phase-correlation error, <code>[0,1]</code>, per tile — the
-            same measurement that decides whether a control point enters the mesh. Only the
-            resulting accept/reject flag and <code>tre_rigid</code> land in <code>*_tre.json</code>;
-            the raw confidence number itself is not published.</td>
-          <td class="v">unitless [0,1]</td>
-          <td class="v"><code>TILED_REG_TILE</code> (measures) / <code>TILED_SOLVE</code> (gates)</td>
+        <tr><td class="k">STARE vector acceptance</td>
+          <td class="v">Correlation peak ratio, per displacement vector — a vector is kept when its
+            peak is at least 1.2× the next local maximum, and the solve then drops any vector at or
+            beyond the range gate. The normalised correlation error and the foreground fraction of
+            each crop are recorded for diagnosis only and are not used for acceptance. The per-tile
+            accept flag and <code>tre_rigid</code> land in <code>*_tre.json</code>; the vectors and
+            their peak ratios in the published <code>*_ctrl.json</code>.</td>
+          <td class="v">unitless ratio</td>
+          <td class="v"><code>TILED_REG_TILE</code> (measures, keeps) / <code>TILED_SOLVE</code> (range gate)</td>
           <td class="v"><span class="em">always</span> — STARE method only, not QC-gated</td></tr>
         <tr><td class="k">cell displacement</td>
           <td class="v">Median/p90/max centroid distance between the same nuclei, warped through
@@ -360,33 +362,33 @@
   <section class="panel">
     <span class="plabel">c</span>
     <div class="panel-head"><h2>Circularity — the load-bearing panel</h2>
-      <p>Two of the four measures are computed from the same features the registrar optimised
-        against; the other two are computed from an independently segmented signal the registrar
+      <p>Two of the four measures are computed from the same measurements the registrar built its
+        transform from; the other two are computed from an independently segmented signal the registrar
         never saw.</p></div>
     <div class="grid2">
       <div class="branch" style="margin-top:0">
-        <div class="bh">circular — same features the registrar fit</div>
+        <div class="bh">circular — same measurements the registrar fit</div>
         <div class="opt"><div class="oh"><span>intrinsic TRE</span><span class="tag">↺ self-scored</span></div>
           <div class="ox">The registrar reports its own residual on the very correspondences it
             used to solve for the transform. A transform that overfits a handful of bright,
             easy-to-match points can report an excellent intrinsic TRE while the rest of the
             tissue — everything the matcher did not key on — is untouched.</div></div>
-        <div class="opt"><div class="oh"><span>STARE confidence gate</span><span class="tag">↺ self-scored</span></div>
-          <div class="ox">The same normalised phase-correlation error is used <i>both</i> to
-            decide which control points enter the mesh <i>and</i> as the only quality signal
-            about how well that tile matched. Measured, not hypothetical: a tile that is roughly
-            <b>40–90% off-tissue is ACCEPTED with a WRONG recovered shift</b>, in every one of
-            <b>12</b> swept geometry/seed configurations, injecting a bogus
-            displacement of up to <b>131&nbsp;px</b> — and the range gate cannot catch it, because
-            131&nbsp;px is well inside the default <code>max_disp</code> of <b>256&nbsp;px</b>
-            (<code>reg_tiled_halo</code>).</div></div>
+        <div class="opt"><div class="oh"><span>STARE vector acceptance</span><span class="tag">↺ self-scored</span></div>
+          <div class="ox">The same correlation that measures a displacement vector also decides
+            whether it is kept (peak ratio ≥ 1.2), so a vector the correlator is confident about
+            and wrong about is accepted. Three things bound the damage, none of them an outside
+            check: correlation windows with less than <b>25%</b> tissue are skipped; the solve's
+            bisquare weights down-weight a confident but locally wrong vector; and the range gate
+            — default <b>256&nbsp;px</b> (<code>reg_tiled_halo</code>) — lies <i>above</i> the
+            roughly ±128&nbsp;px the two correlator passes can measure, so it does not bind on a
+            correctly measured vector and is a secondary net only.</div></div>
       </div>
       <div class="branch" style="margin-top:0">
         <div class="bh">independent — a signal the registrar never saw</div>
         <div class="opt"><div class="oh"><span>cell displacement</span><span class="tag-def">independent input</span></div>
           <div class="ox">Nuclei are segmented on each slide's <i>native</i>, pre-registration
             image by the run's own segmenter — a different algorithm, working from cell
-            morphology, that never sees the registrar's keypoints or its optimisation
+            morphology, that never sees the registrar's correlations or keypoints or its optimisation
             target.</div></div>
         <div class="opt"><div class="oh"><span>seg-QC IoU / dice_matched</span><span class="tag-def">independent input</span></div>
           <div class="ox">Computed on the exact same warped, fixed-paired native-segmentation
@@ -395,7 +397,7 @@
       </div>
     </div>
     <div class="callout" style="margin-top:12px"><b>What this means for reading a report.</b> An
-      excellent intrinsic TRE and an excellent confidence-gate pass rate say the registrar is
+      excellent intrinsic TRE and a high vector-acceptance rate say the registrar is
       happy with itself. They say nothing about whether the cells the registrar was never shown
       actually landed on top of each other. Cell displacement and <code>dice_matched</code> are
       the only two numbers in this pipeline that can contradict a registrar that is quietly
@@ -458,7 +460,7 @@
           itself does, only how much of it gets measured.</td></tr>
       <tr><td class="k">reg_tiled_max_disp</td><td class="val nul">null</td>
         <td class="d">STARE's range gate — drop a window vector whose |displacement| (px) is at or
-          beyond this; null = the read halo. (STARE v2 retired the confidence and TRE gates.)</td></tr>
+          beyond this; null = <code>reg_tiled_halo</code> (256 px). (STARE v2 retired the confidence and TRE gates.)</td></tr>
       <tr><td class="k">reg_tiled_stride</td><td class="val">64</td>
         <td class="d">STARE's mesh resolution — one window vector per stride px (window 2×stride),
           solved into the mesh by robust DCT-PLS; no vector is zeroed for being small.</td></tr>
@@ -485,10 +487,14 @@
       or its sibling branches closes that gap today</span> No landmark TRE against ANHIR or
       ACROBAT correspondences was ever measured for this release. The harness that would produce
       one (<code>benchmarks/registration_eval/</code>) exists on no branch, including
-      <code>benchmarking</code>; the removal record — benchmarks/README.md section B,
-      documenting it and a synthetic-ground-truth successor also removed after it — lives only on
+      <code>benchmarking</code>; the removal record — benchmarks/README.md, "Removed harnesses" —
+      lives only on
       the <code>benchmarking</code> branch, since <code>main</code> and <code>dev</code> carry no
-      <code>benchmarks/</code> directory at all.</div>
+      <code>benchmarks/</code> directory at all. The manuscript's registration benchmark
+      (Fig.&nbsp;3, Supplementary Note&nbsp;6) is the same kind of measure as the independent pair
+      here, not a different one: matched-pair nuclear Dice and residual centroid distance on nuclei
+      segmented on each round's own unregistered image, over 64 round pairs from eight cases. It
+      ranks methods against each other on tissue; it is not scored on annotated correspondences.</div>
     <div class="warnbox" style="margin-top:10px"><span class="wl">3 — the question a reviewer is
       most likely to ask has no answer here</span> "What is the absolute registration error, in
       physical units, against independently and externally verified correspondences?" This
@@ -498,27 +504,26 @@
   </section>
 
   <p class="caption">
-    <b>Supplementary Figure S6. What each accuracy measure actually measures.</b>
+    <b>Schematic 6. What each accuracy measure actually measures.</b>
     <b>(a)</b> A registration run can emit four differently-scoped accuracy numbers per slide-stage;
     none is privileged as "the" registration error, and they are not required to agree.
-    <b>(b)</b> Intrinsic TRE and the STARE confidence gate are emitted unconditionally, as part of
+    <b>(b)</b> Intrinsic TRE and STARE's vector acceptance are emitted unconditionally, as part of
     registration itself; cell displacement and seg-QC IoU/<code>dice_matched</code> exist only at
     <code>reg_qc&nbsp;=&nbsp;2</code>, computed by <code>WARP_SEG_QC</code> from nuclei segmented on
-    each slide's native image. <b>(c)</b> Intrinsic TRE and the confidence gate are both scored on
-    the same features the registrar optimised against or used to decide its own mesh; cell
+    each slide's native image. <b>(c)</b> Intrinsic TRE and vector acceptance are both scored on
+    the same measurements the registrar built its transform from; cell
     displacement and <code>dice_matched</code> are the only two numbers computed from a signal the
     registrar never saw. <b>(d)</b> Plotting intrinsic TRE against cell displacement exposes exactly
     the failure mode neither catches alone — a registrar that scores itself well on features that
     do not represent the tissue, or an independent measure thrown off by a segmentation artefact —
     with a fixed 3× ratio marking disagreement; the reconciliation's own output fields carry a
     µm-suffixed name regardless of the unit actually inside them. <b>(e)</b> <code>reg_qc</code>
-    defaults to its richest level; STARE's two gating parameters are correctness knobs, not
-    cost/accuracy tier knobs. <b>(f)</b> None of the four measures is checked against an
+    defaults to its richest level; STARE's range gate and lattice stride are correctness and resolution knobs, not
+    cost tiers (STARE has none). <b>(f)</b> None of the four measures is checked against an
     externally-verified correspondence, nothing in this codebase currently closes that gap, and a
     reviewer asking for an absolute error in physical units against known correspondences has no
-    answer here. This figure is the accuracy counterpart to Supplementary Figure <b>S3</b>'s QC
-    architecture and Supplementary Figure <b>S2</b>'s registration detail, and to Supplementary
-    Figure <b>S5</b>'s account of how the STARE front-end that produces one of these four numbers
+    answer here. This figure is the accuracy counterpart to Schematic <b>3</b>'s QC
+    architecture and Schematic <b>2</b>'s registration detail, and to Schematic <b>5</b>'s account of how the STARE front-end that produces one of these four numbers
     actually works.
     <span class="footnote">All algorithm details and parameter defaults are read verbatim from the
     pipeline source

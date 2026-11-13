@@ -30,7 +30,7 @@ transcripts to store.
 |---|---|
 | `X` | raw intensities; columns are the `"CD3: Nucleus: Median"` keys FlowPath also uses |
 | `var` | parsed `marker` / `compartment` / `statistic` |
-| `layers["zscore"]` | per-slide z-scores |
+| `layers["zscore"]` | z-scores, computed column-wise across all cells of the patient |
 | `obs` | `label`, `patient_id`, `fov`, morphology (`qc_area`, `qc_solidity`, …) |
 | `obsm["spatial"]` | centroids, **in pixels**, corner-of-pixel (QuPath/ImageJ) — the same convention as the `shapes` polygons, so a cell's point lies inside its own polygon |
 | `obsm["qc_reg_residual_px"]` | per-cell registration residual, one column per cycle |

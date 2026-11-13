@@ -1,6 +1,8 @@
 # Illumination correction: the three-process nf-core BASICPY path
 
-Illumination correction runs as **three** processes, not one:
+Illumination correction is **off by default** (`skip_preprocessing = true` in
+`nextflow.config`; conversion still runs). When it is turned on, it runs as **three**
+processes, not one:
 
 ```
 CONVERT_IMAGE ──► TILE_FOR_BASIC ──► BASICPY ──► APPLY_PROFILES ──► <pid>/preprocessed/
