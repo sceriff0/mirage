@@ -9,23 +9,29 @@ fill in one small table.
 
 !!! info "What ten minutes covers"
     Ten minutes gets the run **started**. The first run then downloads the tools (several
-    gigabytes, once), and the analysis itself takes from minutes for a small image to hours for
+    gigabytes, once: about 18 GB at the defaults), and the analysis itself takes from minutes for a small image to hours for
     a full cohort of whole slides.
 
 ## What you need
 
 | | |
 |---|---|
-| **A computer** | Linux, macOS, or Windows with [WSL 2](https://learn.microsoft.com/windows/wsl/install) (open the "Ubuntu" terminal and follow the Linux instructions). A cluster works too — see step 4. |
+| **A computer** | With an Intel or AMD processor: Linux, Windows with [WSL 2](https://learn.microsoft.com/windows/wsl/install) (open the "Ubuntu" terminal and follow the Linux instructions), or an Intel Mac. A cluster works too — see step 4. **Not an Apple-silicon Mac** (M1 and later) — see the note below. |
 | **Your slides** | One image file per staining round, each containing the same nuclear stain (DAPI). See [which formats are read](validation/format_validation.md). |
 | **The channel names** | For each file, the names of its channels in the order they were acquired. |
-| **Disk space** | About 10 GB for the tools, plus room for results: several times the size of your slides. |
+| **Disk space** | About 40 GB for the tools with Docker (about 20 GB with Apptainer or Singularity), plus room for results: several times the size of your slides. |
 
 !!! warning "How much memory"
     Registration with STARE needs under 4 GB per task whatever the slide size. Segmentation and
     quantification do not have that bound: they need memory in proportion to the slide. A laptop
     with 16 GB handles small sections and test crops; whole-slide cohorts belong on a workstation
     with 64 GB or more, or on a cluster. [Resources](resources.md) has the numbers.
+
+!!! warning "Apple-silicon Macs (M1 and later)"
+    The tools are built for Intel and AMD processors. On an Apple-silicon Mac, Docker runs them
+    through emulation: conversion and STARE registration work that way, but segmentation with
+    StarDist crashes (exit code 139; measured on an M2 Mac with Docker's default emulation), so
+    a run does not finish. Use an Intel or AMD workstation, or a cluster.
 
 ## 1. Install three things
 
@@ -139,9 +145,9 @@ Four rules:
 
     Start it inside `tmux` or `screen`, or as a job of its own, so it survives your logging out.
 
-A list of steps appears and fills in as they finish. When the last line reads `[SUCCESS]`, the
-run is complete. If it stops, run the same command again with `-resume` added: finished steps are
-not repeated.
+A list of steps appears and each is ticked (✔) as it finishes. The run is complete when the
+terminal prompt returns with every step ticked and no error message. If it stops with an error,
+run the same command again with `-resume` added: finished steps are not repeated.
 
 ## 5. Look at the results
 
@@ -207,4 +213,4 @@ python tests/testdata/generate_complete_testdata.py
 nextflow run . -profile test,docker --outdir results
 ```
 
-This needs Python with `numpy`, `tifffile` and `h5py`, and takes about 15 minutes.
+The first line needs Python with three packages (`pip install numpy tifffile h5py`).

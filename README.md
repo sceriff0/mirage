@@ -75,7 +75,8 @@ contain the nuclear stain (`DAPI`).
 
 **3. Run**
 
-On a laptop or workstation (4 CPUs, 16 GB, segmentation on the CPU):
+On a laptop or workstation with an Intel or AMD processor (4 CPUs, 16 GB, segmentation on the
+CPU). The images are built for x86-64 only; on an Apple-silicon Mac segmentation does not run:
 
 ```bash
 nextflow run . -profile local,docker \
