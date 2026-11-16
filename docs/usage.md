@@ -41,7 +41,7 @@ flowchart LR
 
 ## Quick start (synthetic data)
 
-No real images, no GPU, no HPC — runs on any laptop in ~15 minutes:
+No real images, no GPU, no HPC — runs on a laptop with an Intel or AMD processor:
 
 ```bash
 git clone https://github.com/sceriff0/mirage.git && cd mirage
