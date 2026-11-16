@@ -15,7 +15,8 @@ job may be.</p>
 | **Nextflow** | `>=25.04.0` | Uses the `nf-schema@2.5.1` plugin; older versions will not run. |
 | **Java** | 17 or newer | Required by Nextflow. Check with `java -version`. |
 | **Container backend** | one of Singularity/Apptainer, Docker, or Conda | Singularity recommended on HPC; Docker for local/dev. |
-| **Free disk** | ~10 GB | For container images plus intermediate outputs. |
+| **Processor** | x86-64 (Intel or AMD) | Every image is built for `linux/amd64` only. On an Apple-silicon Mac the `docker` profile requests emulation; conversion and STARE registration run that way, StarDist segmentation crashes (exit 139, measured on an M2 with Docker's QEMU emulation). |
+| **Free disk** | ~40 GB with Docker, ~20 GB with Singularity/Apptainer | The images of a default run are about 18 GB compressed; Docker unpacks them to about twice that. Results and the work directory come on top. |
 | **Network access on first run** | outbound access to the Nextflow plugin registry | Nextflow fetches `nf-schema` from the registry the first time the pipeline runs. On a network-isolated compute node, pre-provision the plugin first — see [Offline / air-gapped execution](usage.md#offline-air-gapped-execution). |
 
 !!! warning "Nextflow version matters"
