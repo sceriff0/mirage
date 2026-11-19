@@ -22,19 +22,14 @@ exclude_docs: |
 # ---------------------------------------------------------------------------
 # Link and navigation validation
 # ---------------------------------------------------------------------------
-# mkdocs 1.6 has no `error` level -- `mkdocs/config/defaults.py`'s _LogLevel accepts
-# exactly warn / info / ignore. Raising these categories from their default `info`
-# to `warn` is what makes `mkdocs build --strict` abort on them, which is how the
-# BLOCKING `docs` job in .github/workflows/_test-suite.yml turns a dangling
-# anchor into a failed build instead of a line nobody reads. (It sat in
-# nightly.yml as an advisory job from 2026-09-02, while the build carried four
-# pre-existing warnings; plan 12 cleared them and moved it back on 2026-09-03.)
+# mkdocs 1.6 has no `error` level (it accepts warn / info / ignore). Raising these
+# categories to `warn` is what makes `mkdocs build --strict` abort on them, so the
+# blocking `docs` job in .github/workflows/_test-suite.yml fails on a dangling link
+# or anchor.
 #
 # `nav.omitted_files: warn` is the orphan-page rule: a Markdown file in docs/ that
-# no nav entry points at is unreachable from the site. The two former orphans
-# (nextflow-26-bump.md, migration-2026-08-24.md) now live under docs/_archive/,
-# which `exclude_docs` covers; docs/perf/ is excluded in place because bin/ and
-# tests/ cite those notes by path.
+# no nav entry points at is unreachable from the site. docs/_archive/ and docs/perf/
+# are excluded above (bin/ and tests/ cite the perf notes by path).
 validation:
   omitted_files: warn
   absolute_links: warn
@@ -125,24 +120,30 @@ plugins:
 nav:
   - Home: index.md
   - Get started:
-      - Run your own slides: quickstart.md
-      - Installation: installation.md
-  - Guide:
-      - Running MIRAGE: usage.md
-      - Inputs & outputs: outputs.md
-      - Checking registration: registration_qc.md
-      - SpatialData & FlowPath: spatialdata.md
-  - How it works:
-      - The pipeline: pipeline.md
+      - Install: installation.md
+      - Your first run: quickstart.md
+  - Run on your data:
+      - Samplesheet: samplesheet.md
+      - Choosing methods: choosing_methods.md
+      - GPU or no GPU: gpu.md
+      - Running on a cluster: hpc.md
+      - Checkpoints & resuming: resuming.md
+      - Troubleshooting: troubleshooting.md
+  - Understand the pipeline:
+      - The steps: pipeline.md
       - Illumination correction: basic_illumination.md
-      - Resources: resources.md
+      - Registration QC: registration_qc.md
+      - Outputs: outputs.md
+      - SpatialData & FlowPath: spatialdata.md
   - Reference:
       - Parameters: parameters.md
+      - Command line: usage.md
+      - Resources: resources.md
       - Format validation: validation/format_validation.md
+  - Develop: developing.md
   - The paper:
       - What the paper reports: paper.md
       - Citation: citation.md
-  - Development: developing.md
 
 # ---------------------------------------------------------------------------
 # Appearance extras

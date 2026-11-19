@@ -15,13 +15,15 @@ aligns the rounds at the scale of a nucleus, finds every cell, measures every ma
 files that open in QuPath and scverse.
 
 <div class="mirage-badges" markdown>
-[Run your own slides :octicons-arrow-right-24:](quickstart.md){ .md-button .md-button--primary }
+[Your first run :octicons-arrow-right-24:](quickstart.md){ .md-button .md-button--primary }
 [What a run produces](outputs.md){ .md-button }
 [The paper](paper.md){ .md-button }
 [:fontawesome-brands-github: Source](https://github.com/sceriff0/mirage){ .md-button }
 </div>
 
 </div>
+
+![The four steps of MIRAGE: preprocessing, registration, segmentation and postprocessing](assets/mirage_schematic.png)
 
 ## Where to start
 
@@ -32,15 +34,15 @@ files that open in QuPath and scverse.
 
 Start from an empty computer: install three things, fill in one table, paste one command.
 
-[Run your own slides](quickstart.md)
+[Your first run](quickstart.md)
 </div>
 
 <div class="path" markdown>
 <div class="who">I run pipelines on a cluster</div>
 
-Requirements, containers, sizing, checkpoints, SLURM and offline nodes.
+Apptainer, SLURM, job sizing, offline nodes, checkpoints.
 
-[Installation](installation.md) · [Running MIRAGE](usage.md) · [Parameters](parameters.md)
+[Running on a cluster](hpc.md) · [Checkpoints & resuming](resuming.md) · [Parameters](parameters.md)
 </div>
 
 <div class="path" markdown>
@@ -104,41 +106,20 @@ nextflow run . -profile local,docker \
 ```
 
 That is a complete run at the defaults on a laptop or workstation.
-[Run your own slides](quickstart.md) explains each part and gives the cluster form.
+[Your first run](quickstart.md) explains each part and gives the cluster form.
 
 ## Why STARE is the default
 
-Registration of whole slides usually means holding a whole slide in memory. STARE does not: each
-task reads a fixed window, so its memory does not grow with the slide.
-
-<div class="stats" markdown>
-
-<div class="stat" markdown>
-<div class="v">0.84</div>
-matched-pair nuclear Dice with STARE, against 0.80 for VALIS, over 64 round pairs
-</div>
-
-<div class="stat" markdown>
-<div class="v">0.7 GB</div>
-peak memory of the largest STARE registration job per case, against 31.6 GB for VALIS
-</div>
-
-<div class="stat" markdown>
-<div class="v">no GPU</div>
-and no STARE task above 2.4 GB, at about 2.8 times the CPU time of VALIS
-</div>
-
-</div>
-
-These are the measurements of the paper on eight cases; [The paper](paper.md) gives the full table
-and what each number means. STARE needs a nuclear stain shared by every round, which is why VALIS
-stays available.
+Each STARE task reads a fixed window, so its memory does not grow with the slide, and it
+needs no GPU. On the paper's eight cases it reached a higher matched-pair nuclear Dice than VALIS at a fraction of the
+memory; [Choosing methods](choosing_methods.md#registration-stare-or-valis) gives the
+numbers and when to pick VALIS instead.
 
 ## Find your way
 
 <div class="grid cards" markdown>
 
--   :material-play-circle-outline:{ .lg .middle } **Run your own slides**
+-   :material-play-circle-outline:{ .lg .middle } **Your first run**
 
     ---
 
@@ -146,19 +127,27 @@ stays available.
 
     [:octicons-arrow-right-24: Get started](quickstart.md)
 
--   :material-console:{ .lg .middle } **Running MIRAGE**
+-   :material-table:{ .lg .middle } **The samplesheet**
 
     ---
 
-    The samplesheet, the four stages, checkpoints, clusters, troubleshooting.
+    One row per image file: the columns, the rules, the formats that are read.
 
-    [:octicons-arrow-right-24: Guide](usage.md)
+    [:octicons-arrow-right-24: Samplesheet](samplesheet.md)
 
--   :material-file-tree:{ .lg .middle } **Inputs & outputs**
+-   :material-call-split:{ .lg .middle } **Choosing methods**
 
     ---
 
-    Every file a run reads and writes, and how the measurement columns are named.
+    STARE or VALIS, StarDist, InstanSeg or CellSAM, illumination correction on or off.
+
+    [:octicons-arrow-right-24: Choosing methods](choosing_methods.md)
+
+-   :material-file-tree:{ .lg .middle } **Outputs**
+
+    ---
+
+    Every file a run writes, and how the measurement columns are named.
 
     [:octicons-arrow-right-24: Outputs](outputs.md)
 
@@ -193,6 +182,3 @@ stays available.
     [`nextflow.config`](https://github.com/sceriff0/mirage/blob/main/nextflow.config) holds every
     default. Please [open an issue](https://github.com/sceriff0/mirage/issues) if you find a
     mismatch.
-
-<!-- Provenance of the three figures above: manuscript main text, Results and Supplementary
-     Table 2, read in full on 2026-11-13 [FULL]. -->

@@ -10,8 +10,8 @@ CONVERT_IMAGE ──► TILE_FOR_BASIC ──► BASICPY ──► APPLY_PROFILE
                        └──── slide + positions ───────┘
 ```
 
-It is three because nf-core's `basicpy` module does two things mirage's in-process
-BaSiC call did not:
+It is three because nf-core's `basicpy` module does two things that need a
+process on either side:
 
 * **It computes profiles only.** Upstream (mcmicro) applies them downstream inside
   ASHLAR. mirage has no ASHLAR, so `APPLY_PROFILES` is the missing half.
@@ -24,9 +24,8 @@ BaSiC call did not:
 
 ## TILE_FOR_BASIC
 
-Takes the converted slide and writes mirage's existing non-overlapping FOV grid — the
-same `params.preproc_tile_size` grid the in-process path fitted on, via the same
-`bin/utils/fov_tiling.py` helpers — as an OME-TIFF whose **tiles occupy the `Z` axis**.
+Takes the converted slide and writes mirage's non-overlapping FOV grid — the
+`params.preproc_tile_size` grid, via the `bin/utils/fov_tiling.py` helpers — as an OME-TIFF whose **tiles occupy the `Z` axis**.
 
 * Axes are **`CZYX`**, not `ZCYX`. The module iterates channels
   (`for c, channel_stack in enumerate(istack, 1)`) and fits one profile per channel;
@@ -35,9 +34,7 @@ same `params.preproc_tile_size` grid the in-process path fitted on, via the same
   come from `Z`.
 * Edge tiles are zero-padded to the grid's maximum tile size. This is **required**, not
   incidental: BaSiCPy's `fit()` takes one `(N, Y, X)` ndarray and has no ragged-input
-  path, so fields differing by a pixel cannot be passed at all. It is also unchanged —
-  the in-process path handed BaSiC the same padded stack — so the fit input is the same
-  bytes. The cost is worth knowing: BaSiCPy normalises the fitted flatfield by its own
+  path, so fields differing by a pixel cannot be passed at all. The cost is worth knowing: BaSiCPy normalises the fitted flatfield by its own
   mean (`S = S / torch.mean(S)`), so padded zeros pull that mean down slightly. With the
   remainder distributed across tiles the padding is at most a one-pixel border, so on a
   ~1950 px tile the effect is ~0.1% at the profile's very edge. Do not "fix" the padding
@@ -78,32 +75,22 @@ pyramid-level stash makes (measured at 0.69 MB/channel there, against a 3.4× wa
 cost to remove it entirely) — a different formula, but the same reasoning: a small
 per-channel term is cheaper than the I/O needed to eliminate it.
 
-`APPLY_PROFILES` used to assemble the whole corrected slide — every channel accumulated
-into a list, `np.stack`ed, then clipped and cast with the list still referenced. That is
-roughly `8 × C × H × W` bytes, about **115 GB** on an 8-channel 40000×30000 uint16 slide,
-against a request that was computed from the *compressed* file size and so under-shot it.
-The streamed rewrite is bit-identical: same grid, same padding, same arithmetic, same
-rounding, same log lines — only the order the pixels are visited in changed.
-
-> **Why neither memory formula carries a file-size term any more.** `CONVERT_IMAGE` and
-> `SPLIT_CHANNELS` now write their outputs **tiled** — guarded by
+> **Why neither memory formula carries a file-size term.** `CONVERT_IMAGE` and
+> `SPLIT_CHANNELS` write their outputs **tiled** — guarded by
 > `tests/test_convert_streaming_write.py::test_the_write_is_tiled` and
 > `tests/test_split_multichannel_lazy_read.py::test_the_write_is_tiled` — so a region read
-> decodes a TILE. Before that, a striped producer's `write_ome_tiff` ("no compression, no
-> tile") made tifffile's zarr view report `chunks=(1, H, W)` — one chunk per whole plane —
-> so a region read decoded the ENTIRE PLANE and sliced it: measured, a 2048² region of a
-> 6000² striped plane peaked at 76.7 MiB against 16.0 MiB for the same read on a tiled one.
-> That is why an untiled producer ahead of any lazy reader in the repository (this path,
-> `bin/tiled_stitch.py` included) is a bug and not a style choice, and it is what those two
-> tests now hold the line on — not a historical footnote.
+> decodes a TILE. A striped (untiled) OME-TIFF makes tifffile's zarr view report
+> `chunks=(1, H, W)` — one chunk per whole plane — so a region read decodes the ENTIRE
+> PLANE and slices it: a 2048² region of a 6000² striped plane peaked at 76.7 MiB against
+> 16.0 MiB for the same read on a tiled one. That is why an untiled producer ahead of any
+> lazy reader in the repository (this path, `bin/tiled_stitch.py` included) is a bug and
+> not a style choice.
 >
 > **One known degradation this does not size for.** A run re-entered with `--start` from
-> a tree published before the producers were tiled can still hand these processes an
-> untiled slide, and the plane-decode
-> cost above returns for that input. That is covered by the exit-137 retry ramp
-> (`conf/base.config`), not by a term in either formula — sizing the steady state for an
-> input the pipeline will stop producing would keep every normal run's request permanently
-> inflated.
+> a tree written with untiled slides hands these processes an untiled slide, and the
+> plane-decode cost above returns for that input. That is covered by the exit-137 retry
+> ramp (`conf/base.config`), not by a term in either formula — sizing every normal run for
+> such an input would keep its request permanently inflated.
 
 ### The tile-position sidecar
 
@@ -133,12 +120,11 @@ slide comes out unchanged. In every other case the two lists are identical.
 
 ### The nuclear/fiducial skip lives here, once
 
-The deleted `bin/preprocess.py` skipped correction for the nuclear/fiducial channel, and its comment
-records that an earlier version tested `"DAPI" in name.upper()` directly and so silently
-corrected a configured CELLTOX fiducial — the channel that drives both registration and
+Testing a name like `"DAPI" in name.upper()` directly would silently correct a
+configured CELLTOX fiducial — the channel that drives both registration and
 segmentation, corrected on one panel and not another.
 
-The decision is now made **once**, in `TILE_FOR_BASIC`, through `utils.metadata.is_nuclear`
+The decision is made **once**, in `TILE_FOR_BASIC`, through `utils.metadata.is_nuclear`
 (the shared rule, fed by `MarkerUtils.markerList(params.nuclear_markers)` exactly as
 `SPLIT_CHANNELS` and `CONVERT_IMAGE` are), and **recorded in the sidecar**.
 `APPLY_PROFILES` reads the answer instead of re-deriving it, so the two halves cannot
@@ -149,14 +135,12 @@ drift. `params.preproc_skip_nuclear` still switches it off.
 `modules/nf-core/basicpy/`, vendored unmodified. Read
 `modules/nf-core/basicpy/MIRAGE-NOTES.md` before changing anything about it. In short:
 
-* It runs at **upstream defaults**. `ext.args` is empty *on purpose* — mirage's previous
-  in-process parameters (`BaSiC(get_darkfield=True, smoothness_flatfield=1)`) are
-  deliberately not reproduced. `tests/test_basicpy_defaults_are_deliberate.py` and
+* It runs at **upstream defaults**. `ext.args` is empty *on purpose*: no
+  darkfield and no custom smoothness. `tests/test_basicpy_defaults_are_deliberate.py` and
   `tests/modules/basicpy.nf.test` both fail if a flag appears.
 * **`get_darkfield` is False at those defaults, so no darkfield is estimated or removed.**
   That is a change in the correction model, not a tuning difference: only the
-  multiplicative flatfield is divided out, and the additive offset mirage used to remove
-  stays in the data. basicpy still resizes its zero-initialised darkfield to the tile
+  multiplicative flatfield is divided out, and the additive offset stays in the data. basicpy still resizes its zero-initialised darkfield to the tile
   shape, so `*-dfp.ome.tif` is present, correctly shaped and **all zeros** —
   `APPLY_PROFILES` detects that and logs the correction as flatfield-only.
 * `--no_autotune` is **inverted** (`action="store_false"`, `default=True`, gated by
@@ -173,7 +157,7 @@ drift. `params.preproc_skip_nuclear` still switches it off.
 
 `corrected = (image - darkfield) / flatfield`, per channel, per pseudo-FOV, streamed
 straight to disk one write-tile at a time using the sidecar's positions (see "Neither half
-ever holds the slide" above). Three contracts carried over from the in-process path:
+ever holds the slide" above). Three contracts:
 
 * **The fiducial skip**, read from `corrected_channels` (see above).
 * **The negative clip.** `bin/utils/validation.py`'s `StreamingNegativeClip` — the chunked
@@ -183,10 +167,9 @@ ever holds the slide" above). Three contracts carried over from the in-process p
   `bin/split_multichannel.py` uses the same class for the same reason. Only real pixels are
   folded in — a partial write-tile at the slide edge is passed as its valid sub-array, or
   the padding would enter the reported percentage.
-  Note the *rationale* has changed: the deleted `bin/preprocess.py` explained the clip by BaSiC's
-  darkfield exceeding a pixel value, and with `get_darkfield=False` that mechanism is
-  largely gone. It is kept because the contract is what downstream reads, and because the
-  script still subtracts whatever darkfield it is handed.
+  With `get_darkfield=False` the darkfield is all zeros, so the subtraction itself
+  cannot push a pixel negative; the clip is kept because the contract is what downstream reads, and because the script still subtracts
+  whatever darkfield it is handed.
 * **Profile validity, checked before any arithmetic.** The clip cannot catch a degenerate
   profile — `detect_negative_values` tests `data < 0`, which is False for both `nan` and
   `inf`, and `np.round(np.clip(nan)).astype(uint16)` is undefined behaviour that produces
@@ -203,9 +186,8 @@ ever holds the slide" above). Three contracts carried over from the in-process p
 * **The storage dtype rule**: clip to range, **round** (half-to-even), then cast.
   `.astype()` truncates toward zero, a one-sided −0.5 LSB bias that never averages out.
 
-The output is `<name>_corrected.ome.tif` published to `<outdir>/<pid>/preprocessed/` —
-byte-for-byte the same artifact *kind* the removed in-process `PREPROCESS` published, in the same place, so the
-`preprocessed` checkpoint row and every downstream consumer are unchanged by the swap.
+The output is `<name>_corrected.ome.tif` published to `<outdir>/<pid>/preprocessed/`,
+which the `preprocessed` checkpoint row names.
 
 ## What is intentionally not published
 

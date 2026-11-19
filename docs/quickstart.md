@@ -1,4 +1,4 @@
-# Run your own slides
+# Your first run
 
 <p class="standfirst">From a computer with almost nothing installed to MIRAGE running on your own
 slides at its defaults. Five steps, about ten minutes of your time; after that the computer works on
@@ -16,7 +16,7 @@ fill in one small table.
 
 | | |
 |---|---|
-| **A computer** | With an Intel or AMD processor: Linux, Windows with [WSL 2](https://learn.microsoft.com/windows/wsl/install) (open the "Ubuntu" terminal and follow the Linux instructions), or an Intel Mac. A cluster works too — see step 4. **Not an Apple-silicon Mac** (M1 and later) — see the note below. |
+| **A computer** | With an Intel or AMD processor: Linux, Windows with [WSL 2](https://learn.microsoft.com/windows/wsl/install) (open the "Ubuntu" terminal and follow the Linux instructions), or an Intel Mac. A cluster works too — see step 4. On an Apple-silicon Mac (M1 and later) a run does not finish — see the note below. [Install](installation.md) has the per-platform details. |
 | **Your slides** | One image file per staining round, each containing the same nuclear stain (DAPI). See [which formats are read](validation/format_validation.md). |
 | **The channel names** | For each file, the names of its channels in the order they were acquired. |
 | **Disk space** | About 40 GB for the tools with Docker (about 20 GB with Apptainer or Singularity), plus room for results: several times the size of your slides. |
@@ -29,9 +29,11 @@ fill in one small table.
 
 !!! warning "Apple-silicon Macs (M1 and later)"
     The tools are built for Intel and AMD processors. On an Apple-silicon Mac, Docker runs them
-    through emulation: conversion and STARE registration work that way, but segmentation with
-    StarDist crashes (exit code 139; measured on an M2 Mac with Docker's default emulation), so
-    a run does not finish. Use an Intel or AMD workstation, or a cluster.
+    through emulation: on an M2 Mac with Docker Desktop's default (QEMU) emulation, conversion
+    and STARE registration ran but segmentation with StarDist crashed (exit code 139), so a run
+    does not finish. Docker Desktop's *Use Rosetta for x86_64/amd64 emulation* setting has not
+    been tested with MIRAGE. The reliable route is an Intel or AMD machine, or a cluster — see
+    [Install → macOS](installation.md#macos).
 
 ## 1. Install three things
 
@@ -102,7 +104,7 @@ P001,/data/P001_round2.nd2,false,DAPI|CD45|CD163
 P001,/data/P001_round3.nd2,false,DAPI|CD8|CD4
 ```
 
-Four rules:
+Four rules (the full contract is in [The samplesheet](samplesheet.md)):
 
 1. **`patient_id`** — the same label on every round of one section. Each patient is processed on
    its own.
@@ -124,8 +126,9 @@ Four rules:
     ```
 
     `local` caps the run at 4 CPUs and 16 GB. `params/no_gpu.json` runs segmentation on the
-    processor; leave that line out on a Linux machine with an NVIDIA GPU. For a bigger
-    workstation, [size the run to your machine](installation.md#size-your-run).
+    processor; leave that line out on a Linux machine with an NVIDIA GPU
+    ([GPU or no GPU](gpu.md)). For a bigger
+    workstation, [size the run to your machine](hpc.md#size-your-run).
 
 === "Cluster (SLURM)"
 
@@ -144,6 +147,7 @@ Four rules:
     ```
 
     Start it inside `tmux` or `screen`, or as a job of its own, so it survives your logging out.
+    More in [Running on a cluster](hpc.md).
 
 A list of steps appears and each is ticked (✔) as it finishes. The run is complete when the
 terminal prompt returns with every step ticked and no error message. If it stops with an error,
@@ -183,26 +187,11 @@ You changed nothing, so the run used the defaults — the configuration of the p
 
 ## If it stops
 
-??? failure "`Missing required parameter(s): max_cpus, max_memory`"
-    The command has neither `-profile local` nor `-c site.config`. Add one of them, as in step 4.
-
-??? failure "The run stops at the start with a message about pixel size"
-    Your files do not record their pixel size. Add it to the command, in micrometres per pixel,
-    for example `--pixel_size 0.325`.
-
-??? failure "A step ends with exit code 137 or 140"
-    It ran out of memory or time. On a laptop, close other programs and raise Docker Desktop's
-    memory; beyond that the slide needs a larger machine. On a cluster, raise `max_memory` in
-    `site.config`.
-
-??? failure "The run refuses the samplesheet"
-    The message names the row. The usual causes are no `is_reference=true` row for a patient,
-    two of them, a row without the nuclear stain, or the same marker name on two rounds.
-
-??? failure "Docker: `permission denied` or `Cannot connect to the Docker daemon`"
-    Docker Desktop is not running, or on Linux your user is not in the `docker` group.
-
-More in [Running MIRAGE → Troubleshooting](usage.md#troubleshooting-faq).
+Run the same command again with `-resume` added: finished steps are not repeated
+([Checkpoints & resuming](resuming.md)). The common first-run errors — missing
+`max_cpus`/`max_memory`, a missing pixel size, a refused samplesheet, Docker not running,
+a step out of memory — and their fixes are in
+[Troubleshooting → First run](troubleshooting.md#first-run).
 
 ## No slides at hand?
 
@@ -214,3 +203,7 @@ nextflow run . -profile test,docker --outdir results
 ```
 
 The first line needs Python with three packages (`pip install numpy tifffile h5py`).
+
+The `test` profile is a small fixture, not the shipped defaults: it pins VALIS and a built-in
+StarDist model and runs segmentation on the CPU, so that it finishes in a few minutes on
+synthetic images.

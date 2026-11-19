@@ -60,7 +60,7 @@ runs:
       if: inputs.plugins == 'true'
       uses: actions/cache@v4
       with:
-        # Matches the caller's NXF_PLUGINS_DIR (the same mechanism docs/usage.md
+        # Matches the caller's NXF_PLUGINS_DIR (the same mechanism docs/hpc.md
         # describes for air-gapped clusters).
         path: ${{ github.workspace }}/.nextflow-plugins
         # nextflow.config declares the plugin, so the key rotates with the pin.

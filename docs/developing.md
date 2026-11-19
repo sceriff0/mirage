@@ -47,15 +47,14 @@ and a new `withName:` block picks one and writes it out. It cannot be shared fro
 helper (see the next rule), so naming *is* the abstraction here.
 `tests/test_error_strategy_policy.py` rejects anything else, including the one
 combination that is deliberately absent: select on a specific exit cause and then
-*drop* the task. That combination is what silently discarded an ordinary `exit 1`
-from a QC selector that was on by default.
+*drop* the task, which would silently discard an ordinary `exit 1`.
 
 **`conf/*.config` cannot see `lib/*.groovy`, and fails silently when it tries.**
 Nextflow parses config in a separate pass, so a class name inside a config closure
 does not fail to compile — it resolves against `ConfigObject` and surfaces as a
 misleading `MissingMethodException` only when the closure runs. The same applies to
 `log`: an `errorStrategy` closure calling `log.warn` aborts the run on Nextflow 25
-(the version the manifest still accepts) while working on 26. Anything that needs a
+(which the manifest accepts) while working on 26. Anything that needs a
 `lib/` class, or needs to say something to the operator, belongs in a module's
 `script:` block or in `main.nf`'s `onComplete`.
 
@@ -85,7 +84,7 @@ exactly that surface and nothing else.
 
 ## Verification reality — read this before trusting a green run
 
-Every item below has actually happened here.
+Each of these makes a green run prove less than it seems to.
 
 **1. `-stub` never evaluates a `script:` block.** A stub run exercises channel
 wiring and the `stub:` block only, so any change to a *rendered command* is
@@ -99,10 +98,10 @@ under assertion. `tests/modules/generate_qc_report.nf.test` and
 tag never runs there. Tag new files or they are decorative.
 
 **3. An `errorStrategy` that ignores a failure drops the task without failing the
-run.** Mostly closed: the default-on QC selector now fails the run. Two processes
-keep a deliberate drop, both opt-in, and when either drops, the completion handler
-announces the count rather than leaving it to be inferred from a missing column.
-Still: check published artefacts, not just the exit code.
+run.** The default-on QC selector fails the run. Two processes keep a deliberate
+drop, both opt-in, and when either drops, the completion handler announces the count
+rather than leaving it to be inferred from a missing column. Still: check published
+artefacts, not just the exit code.
 
 **4. `-resume` can silently reuse nothing, or re-run everything, and stay green.**
 Two hashing rules bite. A process `script:` block that references `params` hashes
@@ -116,15 +115,13 @@ rather than a task and rewrites to a fresh temporary directory every run, so a
 process consuming its output can never cache — the two report processes that do are
 declared uncacheable for exactly that reason, and seeing only those two re-run on
 an otherwise fully-cached resume is correct. `tests/test_resume_determinism.py`
-guards the mechanism statically, because the regression was intermittent (about one
-run in four) and a run-twice check can pass by luck;`tests/resume_check.sh` is the
-behavioural counterpart.
+guards the mechanism statically, because a cache miss of this kind is intermittent
+and a run-twice check can pass by luck; `tests/resume_check.sh` is the behavioural
+counterpart.
 
-**5. A guard that parses Nextflow source must use `tests/nfmodel`.** Seven guards
-each carried a private regex and each had a different blind spot. The measured
-case: a comment-stripping regex was fooled by `stageAs: 'ref/*'`, which opens a
-fake block comment and swallowed sixty-odd lines — including the whole `script:`
-block of the one process that guard's own docstring cited. Pick the right view,
+**5. A guard that parses Nextflow source must use `tests/nfmodel`**, never a
+private regex: a naive comment-stripping regex is fooled by `stageAs: 'ref/*'`,
+which opens a fake block comment and hides the code after it. Pick the right view,
 too: the comments-and-strings-blanked view locates code and is right for
 identifier scans; the strings-preserved view is the one to use whenever the thing
 under assertion lives inside a quoted literal, which includes every published path,
@@ -135,21 +132,17 @@ gitignored, so a fixture is available in CI only if
 `tests/testdata/generate_complete_testdata.py` writes it. New fixtures go in that
 generator *and* in `.gitignore`'s per-file list, and
 `tests/test_fixtures_have_a_producer.py` checks both that they exist and that they
-open as what their suffix claims — a fixture committed at zero bytes passed the
-existence-only version of that guard for months and aborted the real suite with
-`not a TIFF file b''`.
+open as what their suffix claims (a zero-byte fixture exists but is not a TIFF).
 
 Related: `tests/lib_probe.nf` is the only unit-test surface `lib/*.groovy` has,
 because nf-test's assertion context cannot see `lib/` classes. It must parse under
-Nextflow 26 as well as 25 — it did not, and every assertion in it was silently
-skipped in one CI leg.
+Nextflow 26 as well as 25, or every assertion in it is silently skipped in one CI
+leg.
 
 **7. A text-matching guard is satisfied by a comment unless you make it
-comment-blind.** Found six times in one day, in six unrelated guards, twice in
-guards written that same day to fix an earlier instance of it. A comment naming a
-command satisfied the check while the real command had been replaced with an echo;
-commenting out a gate's result check, leaving the literal string in the comment,
-kept the aggregator guard green while the check no longer executed. The rule: a
+comment-blind.** A comment naming a command satisfies a naive check even when the
+real command has been replaced, and a commented-out gate still contains the string
+the guard looks for. The rule: a
 guard asking *"does this actually run?"* reads the comment-stripped view
 (`tests/ci_actions.py` has the one quote-aware definition — never a private
 `split("#")`, which truncates shell parameter expansions). The raw view is right
@@ -164,6 +157,16 @@ container-less stub:
 ```bash
 nextflow -q run . -profile test -stub -w /tmp/_nfw --outdir /tmp/_stub
 ```
+
+**Every documented command is checked.** `tests/test_documented_commands_are_runnable.py`
+checks that every `nextflow run` command in the README and the docs carries
+`--outdir` and the sizing pair (`-c site.config`, a pinning profile, or a preset that
+carries both) — a static token check, run in the Python suite.
+`tests/documented_commands_launch.sh` goes further: it substitutes each command's
+placeholders for this repo's own fixtures and runs
+`nextflow -stub -params-file params/dry_run.json` against every one, so an
+unrecognised flag or a schema rejection fails CI too. A command that is illustrative
+only carries a `# not-runnable: <reason>` comment on the line above it.
 
 ## Adding a process
 
@@ -200,3 +203,16 @@ nextflow -q run . -profile test -stub -w /tmp/_nfw --outdir /tmp/_stub
 - Pass `--basetemp=<unique dir>` to every pytest run when more than one process
   shares the virtualenv; two runs fighting over pytest's shared basetemp produce
   non-reproducible collection counts.
+
+## Building the docs locally
+
+The docs are a MkDocs Material site. Build and live-preview them:
+
+```bash
+pip install -r docs/requirements.txt
+mkdocs serve
+```
+
+Then open <http://127.0.0.1:8000> — the site rebuilds on every save. CI builds it with
+`mkdocs build --strict`, so a broken link or anchor, or a page missing from the `nav`
+of `mkdocs.yml`, fails the build.
