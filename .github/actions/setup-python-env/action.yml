@@ -32,7 +32,7 @@ inputs:
   upgrade-pip:
     description: >-
       Upgrade pip, setuptools and wheel before anything else. Only the full CI
-      stack needs it; a single-tool install (ruff, nf-core) does not.
+      stack needs it; a single-tool install (e.g. ruff) does not.
     required: false
     default: 'false'
 

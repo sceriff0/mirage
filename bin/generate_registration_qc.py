@@ -194,7 +194,7 @@ Output:
         help=(
             "Pixel size in micrometers, stamped as the XResolution/ResolutionUnit "
             "tags on both the full-resolution and downsampled QC TIFFs. Omit to "
-            "leave the output unstamped, unchanged from before this flag existed."
+            "leave the output unstamped."
         ),
     )
 

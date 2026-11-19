@@ -34,10 +34,9 @@ inputs:
     default: '25.04.0'
   plugins:
     description: >-
-      Cache and provision Nextflow plugins (nf-schema). 'false' only for a job
-      that never runs the pipeline — the nf-core structural lint job is the one
-      such job, and giving it a plugin download would add a network dependency
-      it does not use.
+      Cache and provision Nextflow plugins (nf-schema). Set 'false' only for a
+      job that never runs the pipeline, so it skips a network download it does
+      not use.
     required: false
     default: 'true'
 

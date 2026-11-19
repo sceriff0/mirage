@@ -58,10 +58,8 @@ def parse_args():
         "--versions",
         default=None,
         help=(
-            "Path to the collated versions.yml. NOT rendered in the report: it is "
-            "copied verbatim into --data-dir as collated_versions.yml, which is "
-            "where a machine-readable version record belongs. A per-process "
-            "software table is 200 rows nobody reads and a parser nobody trusts."
+            "Path to the collated versions.yml. Not rendered in the report: it is "
+            "copied verbatim into --data-dir as collated_versions.yml."
         ),
     )
     p.add_argument("--run-summary", default=None, help="Path to run_summary.json")

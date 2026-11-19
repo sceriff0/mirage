@@ -647,7 +647,7 @@ def parse_args(argv=None):
         choices=cp.PAIRING_METHODS,
         default=cp.DEFAULT_PAIRING,
         help="cell correspondence at the anchor stage: 'lsa' = optimal one-to-one "
-        "assignment within the match radius (default); 'mutual_nn' = the older greedy "
+        "assignment within the match radius (default); 'mutual_nn' = a greedy "
         "mutual-nearest-neighbour rule",
     )
     ap.add_argument(
