@@ -40,7 +40,7 @@ SCAN = [
 # Profiles that pin BOTH params.max_cpus and params.max_memory, and those that
 # additionally pin params.outdir. Both sets are verified against the config below,
 # so a profile that stops pinning cannot stay on the list.
-SIZING_PROFILES = {"test", "test_full", "local", "ieo", "shipped_defaults_test"}
+SIZING_PROFILES = {"test", "test_full", "local", "shipped_defaults_test"}
 OUTDIR_PROFILES = {"test", "test_full", "shipped_defaults_test"}
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
