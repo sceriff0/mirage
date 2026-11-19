@@ -22,6 +22,11 @@ fix, run the same command again with <code>-resume</code>: finished steps are no
 ??? failure "Docker: `permission denied` or `Cannot connect to the Docker daemon`"
     Docker Desktop is not running, or on Linux your user is not in the `docker` group.
 
+??? failure "Docker: `could not select device driver \"\" with capabilities: [[gpu]]`"
+    Segmentation asks for a GPU by default and this machine has none Docker can use (any
+    Mac, most laptops, WSL without the NVIDIA toolkit). Add
+    `-params-file params/no_gpu.json` to run segmentation on the CPU. See [GPU](gpu.md).
+
 ??? failure "Segmentation crashes with exit code 139 on an Apple-silicon Mac"
     The images are built for Intel/AMD processors and run under emulation on Apple
     silicon; StarDist segmentation crashes there. See
