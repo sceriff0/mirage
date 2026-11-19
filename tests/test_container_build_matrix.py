@@ -1,9 +1,7 @@
 """containers/images.json is the ONE list of images to build. Keep it honest.
 
-This guards the failure that shipped `:tiled` unpublished: a new build context
-appears under containers/, nothing adds it to the build matrix, CI stays green
-because nothing references it, and the first run that pulls the tag fails on the
-cluster with "manifest unknown" -- long after the change looked done.
+A build context under containers/ that is missing from the matrix is never
+published, and the first run that pulls its tag fails with "manifest unknown".
 
 The list is also read by the workflow's `only` filter, so a name here that has no
 directory produces a dispatch option that always fails.
@@ -23,9 +21,7 @@ CONTAINERS = REPO_ROOT / "containers"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "containers.yml"
 LIB_DIR = REPO_ROOT / "lib"
 
-# VALIS is deliberately not built here: the pipeline pulls the maintained upstream
-# image cdgatenbee/valis-wsi:1.0.0 rather than re-hosting its from-source libvips
-# build. Recorded as an exclusion so "missing" reads as "decided", not "forgotten".
+# VALIS is not built here: the pipeline pulls the upstream cdgatenbee/valis-wsi image.
 NOT_BUILT_HERE: dict[str, str] = {}
 
 
@@ -74,8 +70,7 @@ def test_tags_are_unique_and_descriptive():
 
 
 def test_workflow_reads_the_json_rather_than_repeating_it():
-    """The matrix must come from images.json. A hand-written `include:` list back
-    in the workflow is the drift this file exists to prevent."""
+    """The matrix must come from images.json, not a hand-written `include:` list."""
     wf = WORKFLOW.read_text()
     assert "fromJson(needs.resolve.outputs.matrix)" in wf, (
         "containers.yml no longer builds its matrix from containers/images.json"
@@ -98,42 +93,18 @@ def test_workflow_reads_the_json_rather_than_repeating_it():
 # whitespace, ':', or a quote, and 'O' is none of those.
 _CONTAINER_DIRECTIVE_RE = re.compile(r"container\s*:?\s*[\"']([^\"']+)[\"']")
 
-# First-party images are one Docker Hub repository per component --
-# bolt3x/mirage-<component>:<version> -- since the containers/ rename
-# (see tests/test_container_image_naming.py's header). Only the component name
-# is captured; the version segment is deliberately ignored here, because it
-# is a literal x.y.z in every reference (a `${params.segeval_tag}` interpolation used to
-# be the one exception; the param was deleted 2026-09-02 and segeval joined
-# manifest.version with the other ten images), and the component is the only part that
-# must agree with containers/images.json anyway.
+# First-party images are bolt3x/mirage-<component>:<version>. Only the component is
+# captured: it is the part that must agree with containers/images.json.
 _MIRAGE_COMPONENT_RE = re.compile(r"^bolt3x/mirage-([a-z0-9]+(?:-[a-z0-9]+)*):")
 
 
 def _referenced_tags() -> set:
     """First-party mirage component names every process actually pulls.
 
-    Registry-agnostic on purpose: the previous version of this scan hardcoded
-    the string `attend_image_analysis:`, and when the images were renamed to
-    bolt3x/mirage-* it silently matched nothing (referenced == set(), every
-    assertion over it vacuously true). This one recognizes bolt3x/mirage-*
-    by the naming convention the rename actually produced, not by grepping a
-    string that happened to be true on one day.
-
-    Two sources are scanned, not one. `modules/local/*.nf`'s literal
-    `container "..."` directives cover most processes, but SEGMENT and
-    WARP_SEG_QC resolve their container through a closure --
-    `container { SegBackends.container(params.seg_method) }` and
-    `container { WarpBackends.container(method) }` -- so the image name never
-    appears as a literal string in modules/local/ at all; it lives in
-    lib/SegBackends.groovy's and lib/WarpBackends.groovy's per-backend maps.
-    Scanning modules/local/ alone would silently miss stardist/instanseg/cellsam
-    entirely, and would find `tiled` only by accident (five other, unrelated
-    modules happen to reference it directly too).
-
-    Both sources run through `strip_comments` (nfmodel's view that blanks
-    comments but keeps string literals intact) rather than
-    `strip_comments_and_strings`: a container reference lives INSIDE a string
-    literal, and the "and_strings" view blanks exactly that.
+    Scans modules/local/*.nf and lib/**/*.groovy: SEGMENT and WARP_SEG_QC resolve
+    their container through SegBackends/WarpBackends, so those image names appear
+    only in lib/. Read through `strip_comments` (strings kept), because a container
+    reference lives inside a string literal.
     """
     referenced: set = set()
 
@@ -145,20 +116,14 @@ def _referenced_tags() -> set:
 
     for proc in processes().values():
         _scan(proc.raw_body)
-    # rglob, not glob: lib/ is flat today, but a non-recursive glob is the same
-    # nested-directory trap tests.nfmodel.nf_files()'s own docstring warns
-    # about -- a backend table added later under e.g. lib/backends/ would be
-    # silently unscanned rather than failing loudly.
+    # rglob, so a backend table added under a lib/ subdirectory is still scanned.
     for groovy in sorted(LIB_DIR.rglob("*.groovy")):
         _scan(groovy.read_text())
     return referenced
 
 
 def test_the_reference_scan_is_not_vacuous():
-    """This guard once grepped for `attend_image_analysis:`, a string the
-    container rename removed. `referenced` became the empty set and every
-    assertion over it passed while checking nothing. A guard that cannot fail
-    is not a guard."""
+    """An empty `referenced` set would make every assertion over it pass vacuously."""
     referenced = _referenced_tags()
     assert referenced, (
         "no container tags were extracted from modules/local/ or lib/ -- the "
@@ -169,13 +134,9 @@ def test_the_reference_scan_is_not_vacuous():
 def test_modules_pull_only_tags_the_matrix_publishes():
     """Every bolt3x/mirage-<component> a module pulls must be a component this
     workflow actually builds -- otherwise the pipeline references an image
-    nothing publishes, which is exactly how :tiled shipped broken."""
-    # `dir` is the field that actually appears in the image name
-    # (bolt3x/mirage-<dir>); images.json's `tag` field happens to equal it for
-    # every current entry but is a separate, vestigial field checked for its
-    # own uniqueness by test_tags_are_unique_and_descriptive -- see that test's
-    # docstring. Comparing against `dir` is correct even if the two ever
-    # diverge.
+    nothing publishes."""
+    # `dir` is the field in the image name (bolt3x/mirage-<dir>); `tag` currently
+    # equals it but is a separate field.
     published = {e["dir"] for e in _entries()}
     referenced = _referenced_tags()
     unknown = sorted(referenced - published)

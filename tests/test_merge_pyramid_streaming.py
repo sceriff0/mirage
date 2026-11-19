@@ -1,53 +1,25 @@
 """MERGE_AND_PYRAMID must build the published pyramid without ever holding the slide.
 
-``bin/merge_channels_pyramid.py`` used to run three passes: scan metadata, allocate the
-whole ``(C, H, W)`` output stack and fill it channel by channel, then hand that array to
-``tifffile`` and derive each pyramid level from the previous one -- holding both, plus
-``downsample_image``'s per-channel float32 temporary, plus the slide-sized uint32 mask
-stack. ``conf/modules.config`` asked for 200-300 GB and the process still hit a node-memory
-cliff in production.
+``bin/merge_channels_pyramid.py`` streams: the base resolution is written from a generator
+of tiles fed by ``open_lazy`` row-band reads, each pyramid level is derived one channel at a
+time and tiled only on the way out, and the mask series streams the same way.
 
-It now streams: the base resolution is written from a generator of tiles fed by
-``open_lazy`` row-band reads, each pyramid level is derived one channel at a time and tiled
-only on the way out, and the mask series streams the same way.
+What this file pins:
 
-WHAT THIS FILE PINS, AND WHY EACH ASSERTION IS THE ONE THAT CATCHES THE MISTAKE:
-
-1. **Every level is pixel-identical to the whole-array derivation.** The reference below is
-   the pre-streaming writer reproduced verbatim, INCLUDING its own inline
-   ``cv2.resize(plane.astype(float32), INTER_AREA)`` rather than a call into the module
-   under test -- so a bug inside the factored-out ``_downsample_plane_f32`` cannot be
-   reproduced identically on both sides and cancel out. The comparison is
-   ``np.array_equal`` per level, and the files are additionally compared BYTE FOR BYTE with
-   only tifffile's random per-file UUID masked out, which catches metadata and IFD-layout
-   drift that a pixel comparison would not.
-
-2. **An ODD-DIMENSIONED fixture.** This is the case that separates a correct implementation
-   from a plausible one, and an even-only fixture set proves nothing about it --
-   see ``test_band_wise_downsampling_is_not_whole_plane_downsampling`` for the measured
-   trap, and ``_downsample_plane_f32``'s docstring for why it forecloses the obvious
-   "derive the levels as the base streams" design.
-
-3. **Bands are forced small** (``READ_BAND_BYTES`` monkeypatched) in the equality tests,
-   and at more than one size. At the shipped 64 MiB budget every test-sized image is a
-   single band, so an implementation that silently leaked a band boundary into the output
-   would pass a test that did not force more than one band. One tile row is the extreme;
-   production sits in between (about two tile rows on a 30000px-wide slide), so the level
-   comparison is additionally parametrised over a THREE-tile-row band, where a partial
-   final band and a band boundary that is not a plane boundary coexist.
-
-4. **The peak grows only at the documented stash slope**, measured with ``tracemalloc``.
-   It is NOT independent of the channel count -- ``_PyramidLevels`` stashes levels 2..K
-   of every channel's chain until the writer has consumed them, ``H*W/6`` bytes
-   (one twelfth of a base plane) per channel, a deliberate trade against re-reading every
-   source plane once per pyramid level (see ``write_pyramidal_ome_tiff_from_source`` and
-   ``_PyramidLevels``'s docstrings). ``conf/modules.config``'s memory closure states this
-   term explicitly; the property checked here is that the slope stays near that model,
-   not that it is zero.
-
-5. **The per-channel validation log is unchanged**: same lines, same numbers, and in
-   particular the wrapped-value percentage computed against the WHOLE channel rather than
-   against whichever band it was folded from.
+1. Every level is pixel-identical to the whole-array derivation. The reference below is a
+   whole-array writer with its own inline ``cv2.resize(..., INTER_AREA)``, so a bug in
+   ``_downsample_plane_f32`` cannot cancel out on both sides. Files are also compared byte
+   for byte with only tifffile's per-file UUID masked, which catches metadata and IFD drift.
+2. An odd-dimensioned fixture, where band-wise level derivation diverges (see
+   ``test_band_wise_downsampling_is_not_whole_plane_downsampling``).
+3. Bands are forced small (``READ_BAND_BYTES`` monkeypatched) at more than one size: at the
+   shipped 64 MiB budget every test image is one band. A three-tile-row band adds a partial
+   final band whose boundary is not a plane boundary.
+4. The peak grows only at the documented stash slope (``tracemalloc``): ``_PyramidLevels``
+   keeps levels 2..K of every channel, ``H*W/6`` bytes per channel, rather than re-reading
+   each source plane per level. ``conf/modules.config``'s memory closure states this term.
+5. The per-channel validation log is unchanged, with the wrapped-value percentage computed
+   against the whole channel, not a band.
 """
 
 from __future__ import annotations
@@ -74,15 +46,15 @@ _SPEC.loader.exec_module(mcp)
 
 
 # ---------------------------------------------------------------------------
-# the reference: the pre-streaming writer, reproduced
+# the reference: a whole-array writer, written out independently
 # ---------------------------------------------------------------------------
 
 
 def _reference_downsample(stack, factor):
-    """``downsample_image``'s 3-D integer branch as it stood before the rewrite.
+    """``downsample_image``'s 3-D integer branch, whole-array.
 
     Written out here rather than imported so the two sides of the equality test do not
-    share an implementation. If this and the module drift, that is the test doing its job.
+    share an implementation.
     """
     c, h, w = stack.shape
     new_h, new_w = h // factor, w // factor
@@ -98,7 +70,7 @@ def _reference_downsample(stack, factor):
 
 
 def _reference_stack(channel_files, dtype):
-    """``_load_channel_stack``'s arithmetic: read whole, clip negatives, cast float->uint16."""
+    """Whole-plane channel read: read whole, clip negatives, cast float->uint16."""
     planes = []
     for path in channel_files:
         plane = np.asarray(tifffile.imread(str(path)))
@@ -127,7 +99,7 @@ def _reference_write(
     physical_size_x=0.325,
     physical_size_y=0.325,
 ):
-    """The pre-streaming ``write_pyramidal_ome_tiff``: one whole-array write per level."""
+    """A whole-array ``write_pyramidal_ome_tiff``: one whole-array write per level."""
     levels = mcp.calculate_pyramid_levels(
         stack.shape[1],
         stack.shape[2],
@@ -199,8 +171,8 @@ def _reference_write(
 #
 # `odd_both_axes` is the fixture that matters: 1023 and 777 are both indivisible by 2, so
 # INTER_AREA's effective ratio is 2.00196 rather than 2, and any band- or tile-wise level
-# derivation de-aligns progressively down the plane (measured max difference 29642 counts
-# on uint16). `odd_height_only` covers the one-axis case, which is just as ordinary.
+# derivation de-aligns progressively down the plane (up to ~29642 counts on uint16).
+# `odd_height_only` covers the one-axis case.
 SHAPES = [
     ("even", ["DAPI", "CD8"], 512, 512, np.uint16, False),
     ("odd_both_axes", ["DAPI", "CD8", "PANCK"], 1023, 777, np.uint16, True),
@@ -220,7 +192,7 @@ def _make_inputs(tmp_path, names, h, w, dtype, with_masks, seed=20260819):
             plane = rng.uniform(-50.0, 4000.0, size=(h, w)).astype(np.float32)
         else:
             plane = rng.integers(0, 65000, size=(h, w), dtype=np.uint16)
-        # Tiled, as SPLIT_CHANNELS now writes them, so the region reads are real.
+        # Tiled, as SPLIT_CHANNELS writes them, so the region reads are real.
         tifffile.imwrite(
             str(channels_dir / f"{name}.tif"),
             plane,
@@ -496,23 +468,12 @@ def _run_merge(tmp_path, n_channels, h=1024, w=1024):
 
 
 def test_peak_memory_grows_only_at_the_documented_stash_slope(tmp_path):
-    """The real O(C) claim the memory closure in conf/modules.config is derived from --
-    NOT the O(1) claim this test used to assert.
+    """The O(C) slope the memory closure in conf/modules.config is derived from.
 
-    The old implementation allocated ``(C, H, W)`` up front, so its peak was linear in C by
-    construction: at these sizes 2 channels cost 2 MiB of stack and 12 cost 12 MiB, and the
-    ratio would be about 6. The streaming path is not flat either, though: ``_PyramidLevels``
-    stashes levels 2..K of every channel's chain, ``H*W/6`` bytes per channel -- one twelfth
-    of a base plane, twelve times shallower than the old slope, but not zero.
-
-    This USED TO assert a flat ``peak_12 <= peak_2 + plane_bytes`` -- one whole plane of
-    slack for a ten-channel delta. That happens to pass at ``C=12``, where the modelled
-    growth (``10 * plane/12`` ~= 0.83 plane) is still under the one-plane budget, but the
-    SAME unmodified implementation fails that flat cap by ``C=16`` (modelled growth
-    ``14 * plane/12`` ~= 1.17 planes; measured ~2.3 MB against a 2.1 MB budget on this
-    fixture) with nothing having regressed -- a guard whose name promised O(1) was really
-    only checking one point on an O(C) line. Asserting the SLOPE instead of a fixed
-    constant stays correct at any channel count tested.
+    ``_PyramidLevels`` stashes levels 2..K of every channel's chain, ``H*W/6`` bytes per
+    channel (one twelfth of a base plane), so the peak is not flat in C. A whole-stack
+    implementation would grow by about one plane per channel. A flat cap would fail at
+    larger C with nothing regressed, so the slope is asserted instead.
     """
     plane_bytes = 1024 * 1024 * 2
     peak_2 = _peak_bytes(_run_merge(tmp_path / "c2", 2))
@@ -520,10 +481,8 @@ def test_peak_memory_grows_only_at_the_documented_stash_slope(tmp_path):
 
     delta_c = 16 - 2
     growth = peak_16 - peak_2
-    # The model term is plane_bytes/12 per channel (H*W/6 bytes). 3x slack is generous
-    # against read-band/write-tile measurement noise, but a regression to the OLD
-    # ~1-plane-per-channel slope -- twelve times steeper -- still fails this by a wide
-    # margin, which a flat "one plane total" cap could not promise at every C.
+    # Model term: plane_bytes/12 per channel. 3x slack covers measurement noise; a
+    # ~1-plane-per-channel slope (twelve times steeper) still fails by a wide margin.
     budget = delta_c * (plane_bytes / 12) * 3
     assert growth <= budget, (
         f"peak grew {growth / 1e6:.2f} MB over {delta_c} extra channels "
@@ -539,8 +498,7 @@ def test_peak_memory_is_a_small_multiple_of_one_plane(tmp_path):
     The bound is stated in planes rather than in bytes because that is what the memory
     closure derives from: one float32 plane for the level derivation (4 bytes/px), its
     resize output and level chain (about 1.5 more), one read band and one write tile. Six
-    planes is generous for that and still far below the twelve-plane stack the old code
-    allocated before it wrote anything.
+    planes is generous for that and far below a twelve-plane whole stack.
     """
     plane_bytes = 1024 * 1024 * 2
     peak = _peak_bytes(_run_merge(tmp_path / "bound", 12))
@@ -605,9 +563,8 @@ def test_every_write_pins_one_compressor_thread(tmp_path, monkeypatch):
 
     tifffile defaults `maxworkers` to the machine's CPU count for a compressed tiled write
     and dispatches encoded tiles through a thread pool that runs ahead of the writer. The
-    queued tiles are then an unbounded term in the peak that scales with the CHANNEL COUNT
-    -- the one property this rewrite exists to remove. Measured end to end on a 1024^2
-    slide with four pyramid levels, peak in units of one plane:
+    queued tiles are then a term in the peak that scales with the channel count. Peak on
+    a 1024^2 slide with four pyramid levels, in units of one plane:
 
         C=                    2      8     12     16
         tifffile 2023.4.12  8.24   4.78   5.10   5.41
@@ -616,9 +573,8 @@ def test_every_write_pins_one_compressor_thread(tmp_path, monkeypatch):
     containers/merge/Dockerfile pins 2025.5.10, where the slope is about one plane per
     channel. With `maxworkers=1` both versions give 4.46 / 4.77 / 5.09 / 5.41.
 
-    This is asserted on the ARGUMENT rather than measured, deliberately: the peak tests
-    below run at 2023.4.12 on this host, where the default pool is shallow enough that they
-    would NOT catch its removal. A version-independent assertion is the only one that holds.
+    Asserted on the argument rather than measured: with an older tifffile the default pool
+    is shallow enough that the peak tests would not catch its removal.
     """
     channels_dir, _files, masks_dir = _make_inputs(
         tmp_path, ["DAPI", "CD8"], 512, 512, np.uint16, True
@@ -649,12 +605,10 @@ def test_every_write_pins_one_compressor_thread(tmp_path, monkeypatch):
 
 
 def test_no_channel_file_is_read_whole_through_imread(tmp_path, monkeypatch):
-    """``_read_channel_file`` is gone, not merely renamed.
+    """No channel or mask file is decoded whole with ``tifffile.imread``.
 
-    It opened a zarr store and then immediately called ``np.asarray`` on all of it, so the
-    open bought nothing; the docstring's "via zarr when available" described a laziness that
-    was not there. The only remaining whole-file reads must be the metadata scan's
-    ``TiffFile`` header reads, which decode no pixels.
+    The only whole-file reads are the metadata scan's ``TiffFile`` header reads, which
+    decode no pixels.
     """
     eager = []
     original_imread = tifffile.imread
@@ -691,16 +645,12 @@ def test_the_base_pass_reads_bands_not_planes(tmp_path, monkeypatch, dtype):
     bound asserted here is per read and sized from ``READ_BAND_BYTES``, not "smaller than a
     plane" unconditionally.
 
-    THE float32 CASE IS THE ONE WITH TEETH. The band is budgeted from the SOURCE itemsize,
-    not the output's, and for a float32 channel those differ: the pyramid is written as
-    uint16, so budgeting by the output would size the band from 2 bytes/px while the read
-    materialises 4. On a uint16 fixture the two are the same number and the distinction is
-    invisible -- which is how the first version of this test passed against the wrong one.
+    The float32 case is the one that matters: the band is budgeted from the source
+    itemsize, not the uint16 output's, so a float32 read materialises 4 bytes/px. On a
+    uint16 fixture the two are equal and the distinction is invisible.
     """
-    # Three tile rows of a 512px-wide UINT16 plane. Chosen so the budget, not
-    # `_band_rows`' one-tile-row floor, is what binds -- at a smaller budget every band
-    # collapses to the floor and the itemsize the budget was computed from stops mattering,
-    # which is exactly how a wrong itemsize hides.
+    # Three tile rows of a 512px-wide uint16 plane, so the budget binds rather than
+    # `_band_rows`' one-tile-row floor (at the floor a wrong itemsize hides).
     monkeypatch.setattr(mcp, "READ_BAND_BYTES", 3 * 128 * 512 * 2)
 
     reads = []
@@ -798,10 +748,9 @@ def test_the_negative_clip_still_logs_one_line_per_channel_with_the_whole_channe
 ):
     """Same two lines, same numbers -- and the min is the CHANNEL's, not a band's.
 
-    ``_load_channel_stack`` read the whole plane, took ``channel_data.min()`` and logged
-    once. Streaming sees the plane in pieces, so the decision to log and the number logged
-    both have to be deferred to the last band. A per-band implementation would print one
-    pair of lines per band, each with that band's min.
+    Streaming sees the plane in pieces, so the decision to log and the number logged are
+    deferred to the last band. A per-band implementation would print one pair of lines per
+    band, each with that band's min.
     """
     monkeypatch.setattr(mcp, "READ_BAND_BYTES", 1)  # one tile row per band
 
@@ -809,7 +758,7 @@ def test_the_negative_clip_still_logs_one_line_per_channel_with_the_whole_channe
     channels_dir = tmp_path / "channels"
     channels_dir.mkdir()
     plane = rng.uniform(5.0, 4000.0, size=(384, 256)).astype(np.float32)
-    # A single, deep negative deliberately parked in the LAST band.
+    # A single, deep negative in the last band.
     plane[380, 7] = -1234.5
     tifffile.imwrite(str(channels_dir / "DAPI.tif"), plane)
     tifffile.imwrite(
@@ -837,7 +786,7 @@ def test_the_negative_clip_still_logs_one_line_per_channel_with_the_whole_channe
 def test_the_wrapped_value_percentage_is_against_the_whole_channel(
     tmp_path, monkeypatch, captured_log
 ):
-    """The denominator, which is the number a chunked rewrite gets wrong for free.
+    """The denominator is the whole channel, not the band holding the pixels.
 
     The suspicious pixels are all parked in one band. Reported against the whole channel
     they are a small fraction; reported against the band that holds them they are ~24x that,
@@ -892,15 +841,12 @@ def test_the_wrapped_value_percentage_is_against_the_whole_channel(
 def test_the_array_entry_point_does_not_clip_signed_input(tmp_path):
     """`write_pyramidal_ome_tiff` must round-trip a signed-integer stack unchanged.
 
-    The negative clip belongs to the PIPELINE's read of the channel files -- it is what
-    `_load_channel_stack` did, and `_ChannelFileSource` still does it there. It never ran in
-    `write_pyramidal_ome_tiff`, which only cast float input. The first draft of `_ArraySource`
-    clipped anyway, on the grounds that "signed means clip", and silently turned an int16
-    stack's -100 pixels into 0 at a retained public entry point that nothing covered.
+    The negative clip belongs to the pipeline's read of the channel files
+    (`_ChannelFileSource`), not to `write_pyramidal_ome_tiff`, which only casts float
+    input. `_ArraySource` must not clip an int16 stack's negatives to 0.
 
-    int16 is what makes the difference observable: for uint16 the clip is a no-op, and for
-    float `to_uint16` clips regardless (and is asserted to, below), so a test on either of
-    those dtypes would pass against the broken version.
+    int16 makes the difference observable: for uint16 the clip is a no-op, and float is
+    clipped by `to_uint16` regardless (asserted below).
     """
     data = np.full((2, 64, 64), -100, dtype=np.int16)
     data[:, 32:, :] = 500

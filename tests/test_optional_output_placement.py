@@ -10,22 +10,15 @@ Written inside them, Nextflow parses `optional: true` as one more entry in
 `arity:` and `followLinks:` -- accepts it, and drops it. The declaration stays
 mandatory, so the task FAILS when the glob matches nothing.
 
-Until 2026-08-25 that failure was invisible: both offending processes are
-covered by conf/modules.config's QC selector, whose terminal branch was
-'ignore'. Making that selector fatal (retry-then-fail) is what turns this from
-a latent defect into a run-stopping one, which is why the two land together --
-the guard below is the thing that keeps them together.
-
-Six other declarations in modules/local/ already write the qualifier correctly
-(export_geojson, generate_registration_qc, register x3, warp_seg_qc), so this
-is a slip against the repo's own prevailing form, not a convention question.
+Under conf/modules.config's retry-then-fail QC selector, that failure stops
+the run.
 """
 
 import re
 
 from tests.nfmodel import REPO_ROOT, processes
 
-# `[^)]*` deliberately stops at the first `)`: `optional:` has to appear inside
+# `[^)]*` stops at the first `)`: `optional:` has to appear inside
 # path()'s OWN argument list to be the defect. A declaration that closes the
 # parens first and then writes `, optional: true` is the correct form and must
 # not be reported.

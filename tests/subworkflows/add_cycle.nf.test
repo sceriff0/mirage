@@ -5,23 +5,13 @@ nextflow_workflow {
     workflow "ADD_CYCLE"
 
     /*
-     * ADD_CYCLE takes the new-cycle sample channel: it rebuilds the prior
-     * run's reusable assets itself, from --prior_outdir's checkpoint CSVs (that
-     * reconstruction, including EXTRACT_MASK_SERIES, used to live in the router).
-     * tests/testdata/prior_run/ is a minimal stand-in for a completed run, written
-     * by tests/testdata/generate_complete_testdata.py.
+     * ADD_CYCLE takes the new-cycle sample channel and rebuilds the prior run's
+     * reusable assets from --prior_outdir's checkpoint CSVs. tests/testdata/prior_run/
+     * is a minimal stand-in for a completed run (generate_complete_testdata.py).
      *
-     * take: gained a second input, compartment_mode -- Task 4 (arch-B-split)'s seam
-     * for --quantify_compartments / --expanded_quantification / --embed_masks,
-     * resolved once by workflows/mirage.nf in production and threaded down the same
-     * way here. The two compartments-off tests below pass input[1] as a LITERAL map
-     * that DIVERGES from params (left at its true default), proving ADD_CYCLE
-     * honours the argument rather than re-reading params.quantify_compartments --
-     * the same "the literal wins" proof the registration_method='tiled' + literal
-     * 'valis' assertion in the third test already makes for that sibling seam. The
-     * middle ("compartment path runs") test keeps input[1] in agreement with params
-     * since it exercises the positive path, not the argument-vs-global distinction.
-     * UNVERIFIED LOCALLY (nf-test hangs under qemu on this host).
+     * input[1] is compartment_mode. The two compartments-off tests pass a literal map
+     * that conflicts with params (left at the true default), proving ADD_CYCLE honours
+     * the argument; the "compartment path runs" test keeps them in agreement.
      */
 
     test("folds a new cycle: emits combined geojson, merged csv, and pyramid") {
@@ -41,11 +31,9 @@ nextflow_workflow {
                 """
             }
             params {
-                // quantify_compartments deliberately NOT overridden (defaults true)
-                // -- input[1] above is a LITERAL with compartments: false, proving
-                // ADD_CYCLE honours the compartment_mode ARGUMENT (which gates
-                // whether EXTRACT_NUCLEI_PROPERTIES runs), not a re-read of the --
-                // here, conflicting -- global param.
+                // quantify_compartments left at its true default; input[1] is a
+                // literal with compartments: false, proving ADD_CYCLE honours the
+                // argument (which gates whether EXTRACT_NUCLEI_PROPERTIES runs).
                 outdir = "$outputDir"
                 mode = 'add_cycle'
                 prior_outdir = "$projectDir/tests/testdata/prior_run"
@@ -77,11 +65,7 @@ nextflow_workflow {
                 """
             }
             params {
-                // The positive path (compartments genuinely on): input[1] agrees
-                // with params here on purpose, since this test's whole point (per
-                // its name) is exercising the "compartment path runs" behaviour,
-                // not the argument-vs-global distinction the two compartments-off
-                // tests in this file prove.
+                // The positive path: input[1] agrees with params on purpose.
                 outdir = "$outputDir"
                 mode = 'add_cycle'
                 prior_outdir = "$projectDir/tests/testdata/prior_run"
@@ -115,22 +99,16 @@ nextflow_workflow {
                 """
             }
             params {
-                // quantify_compartments deliberately NOT overridden (defaults true)
-                // -- input[1] above is a LITERAL with compartments: false, same
-                // argument-vs-global proof as the first test in this file.
+                // quantify_compartments left at its true default; input[1] is a
+                // literal with compartments: false, as in the first test.
                 outdir = "$outputDir"
                 mode = 'add_cycle'
                 prior_outdir = "$projectDir/tests/testdata/prior_run"
                 reg_qc = 1
-                // ADD_CYCLE registers with VALIS unconditionally: it passes the
-                // LITERAL 'valis' to the shared REGISTER_PATIENT, never
-                // params.registration_method. workflows/mirage.nf rejects
-                // --registration_method tiled in add_cycle mode, but a caller that
-                // invokes ADD_CYCLE directly -- this test, for one -- bypasses that
-                // guard entirely, so the guarantee has to be pinned HERE too.
-                // tests/subworkflows/local/register_patient.nf.test proves
-                // REGISTER_PATIENT honours its argument; this proves add_cycle.nf
-                // passes the right one. Neither test alone is sufficient.
+                // ADD_CYCLE passes the literal 'valis' to REGISTER_PATIENT, never
+                // params.registration_method. Calling ADD_CYCLE directly bypasses
+                // workflows/mirage.nf's tiled rejection, so it is pinned here too;
+                // register_patient.nf.test proves the core honours its argument.
                 registration_method = 'tiled'
             }
         }
@@ -233,18 +211,12 @@ nextflow_workflow {
     }
 
     /*
-     * THE ASSERTION WITH TEETH for the native-image join (Task 8). ch_for_qc pairs the
-     * new cycle's NATIVE (pre-registration) image -- ch_new_pre, the same channel
-     * ch_grouped hands to REGISTER_PATIENT -- to its own registered file via
-     * `.join(ch_new_pre.map { ... }, by: 0)` keyed on meta.id. add_cycle registers
-     * exactly one new slide per patient, so a wrong key cannot cross-pair two slides
-     * the way registration.nf's twin test can prove; the only observable failure mode
-     * here is join() silently dropping the pair -- ch_for_qc, and therefore
-     * GENERATE_REGISTRATION_QC, would emit nothing while workflow.success stays true.
-     * GENERATE_REGISTRATION_QC stages its native input into its own `native/`
-     * subdirectory (stageAs: 'native/*'), so finding it at all is the proof the join
-     * matched, and the file it contains being the new cycle's preprocessed output (not
-     * empty, not the frozen reference) is the proof of WHICH slide matched.
+     * Pins the native-image join: ch_for_qc pairs the new cycle's native image
+     * (ch_new_pre) with its registered file via `.join(..., by: 0)` on meta.id. With one
+     * new slide per patient a wrong key cannot cross-pair; the failure mode is join()
+     * silently dropping the pair, so GENERATE_REGISTRATION_QC emits nothing while the
+     * run succeeds. Finding the staged native/ file proves the join matched; its being
+     * the new cycle's preprocessed output proves which slide matched.
      */
     test("Should pair the new cycle's own native image with its registered file - stub") {
         tag "stub"
@@ -286,11 +258,8 @@ nextflow_workflow {
                     def nativeFiles = new File(taskDirs[0], 'native').listFiles()
                     assert nativeFiles.size() == 1 :
                         "expected exactly one staged native file, found ${nativeFiles*.name}"
-                    // The teeth: the staged native file is the NEW CYCLE's own
-                    // preprocessed output, not empty and not the frozen prior
-                    // reference (whose meta.id is 'P001_reference', never
-                    // 'P001_cycle2') -- so a join keyed on the wrong side's meta.id
-                    // could not have produced this pairing by accident.
+                    // The staged native file is the new cycle's own preprocessed
+                    // output, not the frozen prior reference (meta.id 'P001_reference').
                     assert nativeFiles[0].name.contains('P001_cycle2') :
                         "staged native file was '${nativeFiles[0].name}', expected the new " +
                         "cycle's own preprocessed output (named from meta.id 'P001_cycle2')"

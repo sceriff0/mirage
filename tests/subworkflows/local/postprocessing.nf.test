@@ -7,27 +7,10 @@ nextflow_workflow {
     tag "subworkflow"
     tag "postprocessing"
 
-    // POSTPROCESSING no longer runs SEGMENT / EXTRACT_CELL_PROPERTIES /
-    // EXTRACT_NUCLEI_PROPERTIES itself (Task 1, arch-B-split: they moved to
-    // subworkflows/local/segmentation.nf, its own resumable step). Its take:
-    // grew from 3 inputs (ch_registered, ch_reg_qc, ch_reg_residuals) to 9:
-    // ch_registered, ch_cell_mask, ch_nuclei_mask, ch_contours,
-    // ch_nucleus_contours, ch_morphology, ch_reg_qc, ch_reg_residuals,
-    // compartment_mode. Every test below now feeds pre-made mask/contours/
-    // morphology fixtures for input[1..5] instead of relying on this workflow
-    // to derive them, and input[8] = ParamUtils.compartmentMode(params) --
-    // Task 4's seam for --quantify_compartments / --expanded_quantification /
-    // --embed_masks, resolved once by workflows/mirage.nf in production and
-    // threaded down the same way here.
-    //
-    // input[8] stays a live ParamUtils.compartmentMode(params) call rather than a
-    // literal map on purpose: none of the 7 tests below overrides
-    // --quantify_compartments / --expanded_quantification / --embed_masks, so there
-    // is no "off" case here that a literal map would exercise any differently.
-    //
-    // UNVERIFIED LOCALLY: nf-test resolves -profile test,docker and hangs
-    // under qemu on this host (see CLAUDE.md's "Verification reality"). Updated
-    // to match the new interface but not run.
+    // POSTPROCESSING takes pre-made mask/contours/morphology fixtures for input[1..5]
+    // (segmentation is its own step) and input[8] = ParamUtils.compartmentMode(params),
+    // which is resolved once by workflows/mirage.nf in production. No test here
+    // overrides the compartment params, so a live call is as good as a literal.
 
     test("Should run full postprocessing - stub") {
 
@@ -217,11 +200,8 @@ nextflow_workflow {
     }
 
     test("Should quantify multiple registered slides against pre-made masks - stub") {
-        // Renamed from "Should segment reference images only": POSTPROCESSING no
-        // longer runs SEGMENT (moved to segmentation.nf), so this no longer segments
-        // anything. What it actually exercises: multiple registered slides
-        // (reference + 2 moving) quantified against masks supplied directly, with no
-        // registration QC -- the --start postprocessing shortcut shape.
+        // Multiple registered slides (reference + 2 moving) quantified against masks
+        // supplied directly, with no registration QC: the --start postprocessing shape.
 
         tag "stub"
         options "-stub"
@@ -401,12 +381,11 @@ nextflow_workflow {
     }
 
     /*
-     * Round ids (Meta.identityFor) are unique only WITHIN a patient. Two patients whose
-     * moving slides share meta.id 'mov1' must each get THEIR OWN retention and residual
-     * CSV at CELL_QC -- the round joins key on [patient_id, id]. The stub .command.sh
-     * of every task names its patient (ProcessEnvelope.sizeLogStub's `<process>,<pid>,stub,0` row), so the
-     * staged retention symlink is traced back to the NUCLEAR_RETENTION task that wrote
-     * it. The residual CSVs are two differently-named files so each is identifiable.
+     * Round ids (Meta.identityFor) are unique only within a patient. Two patients whose
+     * moving slides share meta.id 'mov1' must each get their own retention and residual
+     * CSV at CELL_QC (the joins key on [patient_id, id]). Each stub .command.sh names its
+     * patient (ProcessEnvelope.sizeLogStub's row), so the staged retention symlink is
+     * traced back to the NUCLEAR_RETENTION task that wrote it.
      */
     test("Should pair each patient's round CSVs with that patient when slide ids collide - stub") {
 
@@ -627,24 +606,12 @@ nextflow_workflow {
                 compression = 'zstd'
                 debug_channels = false
             }
-            // `pixel_size` goes in the METAS below, not only in params. EXPORT_GEOJSON
-            // and EXPORT_SPATIALDATA both render the flag from `meta.pixel_size`: each
-            // is handed a CSV or a pyramid rather than the source image, so neither can
-            // resolve `params.pixel_size == 'auto'` itself, and both read the value the
-            // samplesheet reader already resolved. In production
-            // `Meta.fromCheckpointRow` REQUIRES the column (lib/Meta.groovy:190-197), so
-            // it is always there; a hand-built meta has to supply it. Absent, the flag
-            // renders as the literal string `null` and bin/utils/pixel_size.py exits 1
-            // with `PixelSizeError: --pixel_size 'null' is neither a number nor 'auto'`
-            // -- family 6 of nightly 33633986188 (test 8e60d8b3), the one case in the
-            // fourteen that reached a process and failed inside it.
-            //
-            // Setting it on input[0] is enough for the export chain: QUANTIFY_MARKERS
-            // rebuilds the grouped meta as `metas[0] + [id: ...]`, so the key survives
-            // SPLIT_CHANNELS -> QUANTIFY -> MERGE_QUANT_CSVS -> ASSEMBLE_EXPORT.
-            // (The comment lives out here rather than inside the workflow block below:
-            // that block is a GString, and a `${...}` in it would be interpolated
-            // against the test's own binding.)
+            // `pixel_size` goes in the metas, not only in params: EXPORT_GEOJSON and
+            // EXPORT_SPATIALDATA render it from meta.pixel_size (Meta.fromCheckpointRow
+            // requires the column in production). Absent, it renders as `null` and
+            // bin/utils/pixel_size.py exits 1. Setting it on input[0] is enough:
+            // QUANTIFY_MARKERS keeps metas[0]'s keys through to ASSEMBLE_EXPORT.
+            // This comment sits outside the workflow block, which is a GString.
             workflow {
                 """
                 input[0] = Channel.fromList([

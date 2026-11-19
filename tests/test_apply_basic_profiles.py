@@ -1,4 +1,4 @@
-"""APPLY_PROFILES: the step nf-core's module deliberately does not provide.
+"""APPLY_PROFILES: applying the BaSiC profiles, which nf-core's module does not do.
 
 ``modules/nf-core/basicpy`` computes PROFILES ONLY -- mcmicro applies them downstream,
 inside ASHLAR. mirage has no ASHLAR, so ``bin/apply_basic_profiles.py`` is where
@@ -8,21 +8,13 @@ inside ASHLAR. mirage has no ASHLAR, so ``bin/apply_basic_profiles.py`` is where
 happens, per channel, per pseudo-FOV, followed by reassembly from the sidecar the tiling
 step wrote.
 
-Three contracts from the in-process BaSiC path have to survive the swap, and each has a
-test here that fails if it does not:
+Contracts tested here:
 
-  * the nuclear/fiducial channel is left alone (the deleted ``bin/preprocess.py``'s skip, whose
-    comment records that an earlier version silently corrected a configured CELLTOX
-    fiducial);
-  * negative pixels are clipped to zero and reported in ONE aggregate line, not one line
-    per channel, via ``bin/utils/validation.py``'s ``clip_negative_values``. NOTE the
-    rationale has changed: ``bin/preprocess.py`` had explained this by darkfield subtraction
-    pushing a pixel below zero, and the pipeline now runs BASICPY at upstream defaults
-    where ``get_darkfield`` is FALSE, so that mechanism is largely gone. The contract is
-    kept because downstream expects it and because this script still subtracts whatever
-    darkfield it is handed -- a non-zero one when run standalone, or if the decision to
-    stay on upstream defaults is ever revisited;
-  * the storage cast ROUNDS before truncating, because ``.astype()`` floors and a
+  * the nuclear/fiducial channel (e.g. a CELLTOX fiducial) is left alone;
+  * negative pixels are clipped to zero and reported in one aggregate line via
+    ``bin/utils/validation.py``'s ``clip_negative_values`` (BASICPY runs with
+    ``get_darkfield`` false, but this script subtracts whatever darkfield it is handed);
+  * the storage cast rounds before truncating, because ``.astype()`` floors and a
     one-sided -0.5 LSB bias never averages out.
 """
 
@@ -36,8 +28,7 @@ import pytest
 np = pytest.importorskip("numpy")
 tifffile = pytest.importorskip("tifffile")
 
-# No basicpy stub any more -- see tests/test_tile_for_basic.py. Nothing on this path
-# imports basicpy since the in-process BaSiC module was deleted.
+# Nothing on this path imports basicpy, so no stub is needed.
 import apply_basic_profiles  # noqa: E402
 import tile_for_basic  # noqa: E402
 from fov_tiling import reconstruct_image_from_fovs, split_image_into_fovs  # noqa: E402
@@ -202,26 +193,13 @@ def test_a_spatially_varying_profile_is_applied_per_tile_pixel(tmp_path):
 def test_write_tiles_straddling_fov_boundaries_are_corrected_exactly(
     tmp_path, monkeypatch
 ):
-    """The regression this whole file's review wave exists for.
+    """Write tiles that straddle FOV boundaries map back to the right profile window.
 
-    ``apply_basic_profiles._correct_tile`` calls ``fov_overlaps(positions, y0, x0, ...)``
-    to map a WRITE-TILE-local window back onto FOV-local profile coordinates. Mutating
-    that call to ``fov_overlaps(positions, 0, 0, ...)`` is a no-op for every test that
-    came before this one: ``test_a_spatially_varying_profile_is_applied_per_tile_pixel``
-    (above) varies the profile spatially but runs at the shipped ``WRITE_TILE = 2048`` on
-    a 200px slide, so there is exactly one write tile and it starts at ``(0, 0)`` --
-    the mutation is invisible there. ``tests/test_basic_illumination_lazy_read.py``
-    patches ``WRITE_TILE`` down to genuinely straddle FOV boundaries, but every profile
-    it uses is a flat scalar (``flat_value=2.0``), so the origin used to look the profile
-    up is irrelevant to the result. Neither condition alone catches the bug; this test
-    is the one place both are true at once, on a slide whose dimensions are a multiple
-    of neither grid.
-
-    The independent oracle is ``fov_tiling.reconstruct_image_from_fovs`` applied to the
-    whole-array correction -- computed directly on the FOV grid via
-    ``split_image_into_fovs``, so it never needs to know the write-tile grid exists at
-    all. That is the same round-trip oracle ``tests/test_fov_tiling.py`` and
-    ``tests/test_tile_for_basic.py`` already check the streaming path against.
+    ``_correct_tile`` passes the write tile's origin to ``fov_overlaps``; passing
+    ``(0, 0)`` instead is caught only when there are several write tiles AND the profile
+    varies spatially, on a slide whose size is a multiple of neither grid. The oracle is
+    the whole-array correction on the FOV grid, reassembled by
+    ``fov_tiling.reconstruct_image_from_fovs``.
     """
     monkeypatch.setattr(apply_basic_profiles, "WRITE_TILE", 64)
 
@@ -301,7 +279,7 @@ def test_write_tiles_straddling_fov_boundaries_are_corrected_exactly(
 
 
 def test_a_celltox_fiducial_is_passed_through_untouched(tmp_path):
-    """The exact regression the deleted bin/preprocess.py's comment recorded.
+    """A non-DAPI fiducial (CELLTOX) is not corrected.
 
     The skip decision is made once, at tiling time, and recorded in the sidecar; this
     asserts the applying half honours it for a panel whose fiducial is not DAPI.
@@ -688,28 +666,12 @@ def test_swapping_the_two_profiles_is_caught_at_the_shipped_defaults(tmp_path):
 def test_the_write_pins_one_compressor_thread(tmp_path, monkeypatch):
     """`maxworkers=1` on the write, and it is a memory bound, not a tuning preference.
 
-    Same defect and same fix as `bin/merge_channels_pyramid.py`'s
-    `test_every_write_pins_one_compressor_thread` in
-    tests/test_merge_pyramid_streaming.py: this write is fed by `_tiles()`, a
-    channel-major generator, and tifffile defaults `maxworkers` to the machine's CPU
-    count for a compressed (`zlib`) tiled write, dispatching encoded tiles through a
-    thread pool that runs ahead of the writer. Measured on a 4096^2 slide with the same
-    tile size this write uses (2048), peak in units of one plane:
-
-        C=                    2      4      8     12     16
-        tifffile 2023.4.12  2.24   2.23   2.23   2.23   2.23
-        tifffile 2025.5.10  3.76   5.75   9.18  12.37  15.55
-
-    containers/preprocess/Dockerfile pins 2025.5.10, where the slope is about one plane
-    per channel -- the exact channel-count-scaled term the streaming rewrite in this
-    file exists not to reintroduce. With `maxworkers=1` both versions are flat: 1.11
-    planes at 2023.4.12, 0.86 at 2025.5.10, independent of C.
-
-    Asserted on the ARGUMENT rather than measured, deliberately: a peak-memory
-    assertion would pass on this host's 2023.4.12, where the default pool is shallow
-    enough not to catch its removal, and prove nothing about 2025.5.10. See
-    bin/apply_basic_profiles.py's write call and bin/merge_channels_pyramid.py:826-847
-    for the full mechanism.
+    For a compressed tiled write tifffile defaults `maxworkers` to the CPU count, and
+    its encoder pool runs ahead of the channel-major generator: with tifffile 2025.5.10
+    (the pinned version) peak memory grows by about one plane per channel. Asserted on
+    the argument, because a peak-memory check would pass on older tifffile versions.
+    Same fix as `test_every_write_pins_one_compressor_thread` in
+    tests/test_merge_pyramid_streaming.py.
     """
     original = np.full((2, 250, 250), 1000, dtype=np.uint16)
     slide, sidecar, manifest = _tile(tmp_path, original, ["DAPI", "PANCK"])

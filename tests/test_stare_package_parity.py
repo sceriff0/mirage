@@ -13,12 +13,8 @@ Both run the same (deterministic) dctpls solve on the same control JSONs, so any
 disagreement is the executor's, not the solver's. The manifests must be equal (JSON structure
 exact, floats to within 1e-9) and the stitched arrays identical.
 
-WHY THERE IS NO "PRE-MOVE SCRIPTS vs SHIMS" LEG. The ``bin/tiled_*.py`` shims ARE the
-package: each one imports its stage's ``main`` from ``stare.stages`` and replaces itself in
-``sys.modules`` with the stage module, so there is no second implementation for (a) to be
-compared against -- running (a) against "the old scripts" would be running the package
-against itself. The parity that can drift is between the two EXECUTORS, and that is what
-this file pins.
+The ``bin/tiled_*.py`` shims are the package (each replaces itself in ``sys.modules`` with
+its ``stare.stages`` module), so the parity that can drift is between the two executors.
 
 The COARSE anchor is numpy/scipy/scikit-image only (NCC rotation sweep, ORB fallback), so
 this runs wherever the rest of the suite does.

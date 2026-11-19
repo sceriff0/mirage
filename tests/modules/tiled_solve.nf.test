@@ -39,20 +39,12 @@ nextflow_process {
 
     test("Should render the range gate and no retired STARE v1 flag - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate collects it, but
-        // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:` block,
-        // so no stub run can observe a rendered command. Same shape as
-        // tests/modules/tiled_coarse.nf.test's "rendered command" cases.
-        //
-        // `--max-disp` is the range gate on the window vectors: a peak further than the read
-        // window is an artefact. If it stops being rendered, tiled_solve.py falls back to its own
-        // argparse default (None -- NO range bound at all) and the pipeline silently loses it.
-        // STARE v2 removed --gate-tre / --max-error / --solver; tiled_solve.py's argparse would
-        // REJECT them, so a stale rendering of any of them fails every real TILED_SOLVE task.
-        //
-        // The assertions read the rendered .command.sh rather than the process outcome, so the
-        // case holds whether tiled_solve.py itself succeeds; under `-profile test` no container
-        // engine is active and the staged inputs here are not real control-point JSONs.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`.
+        // `--max-disp` is the range gate on the window vectors (a peak beyond the read window
+        // is an artefact); unrendered, tiled_solve.py's default is no bound at all. The
+        // retired --gate-tre / --max-error / --solver would be rejected by argparse.
+        // Asserts .command.sh, not the outcome: no container engine, and the inputs are not
+        // real control-point JSONs.
         tag "stub"
 
         when {
@@ -74,9 +66,8 @@ nextflow_process {
                     rendered << f.text
                 }
             }
-            // Extract each flag's COMPLETE value as a token. A substring match on the flag
-            // and value together is also satisfied by a LONGER value (256 by 2560), so the
-            // value is compared as a whole token.
+            // Compare each flag's value as a whole token: a substring match of 256 is also
+            // satisfied by 2560.
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -85,12 +76,12 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_SOLVE .command.sh found under the task work dir" },
-                // reg_tiled_max_disp is declared null in nextflow.config so it DERIVES from the
-                // read halo: a match further than the halo was never inside the read window.
+                // reg_tiled_max_disp is null in nextflow.config so it derives from the read halo: a
+                // match further than the halo was never inside the read window.
                 { assert rendered.every { flagValue(it, '--max-disp') == '256' },
                     "--max-disp is not exactly 256 (derived from params.reg_tiled_halo); got: " +
                     rendered.collect { flagValue(it, '--max-disp') }.join(', ') },
-                // the retired STARE v1 flags: tiled_solve.py's argparse no longer knows them
+                // the retired STARE v1 flags, which tiled_solve.py's argparse rejects
                 { assert rendered.every { t -> ['--gate-tre', '--max-error', '--solver'].every { !t.contains(it) } },
                     "a retired STARE v1 flag is still rendered: " + rendered.join(' --- ') }
             )
@@ -99,8 +90,7 @@ nextflow_process {
 
     test("Should derive --max-disp from reg_tiled_halo when reg_tiled_max_disp is null - rendered command") {
 
-        // Proves the null-means-derive contract is live rather than coincidentally agreeing with
-        // the shipped halo: move the halo and --max-disp must move with it.
+        // Move the halo and --max-disp must move with it (null means derive).
         tag "stub"
 
         when {
@@ -125,8 +115,7 @@ nextflow_process {
                     rendered << f.text
                 }
             }
-            // Extract each flag's COMPLETE value as a token (a substring match of 512 is also
-            // satisfied by 5120), so the value is compared as a whole token.
+            // Compare each value as a whole token (512 also matches 5120).
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -168,8 +157,7 @@ nextflow_process {
                     rendered << f.text
                 }
             }
-            // Extract each flag's COMPLETE value as a token (a substring match of 512 is also
-            // satisfied by 5120), so the value is compared as a whole token.
+            // Compare each value as a whole token (512 also matches 5120).
             def flagValue = { txt, flag ->
                 def m = (txt =~ (java.util.regex.Pattern.quote(flag) + /\s+(\S+)/))
                 m.find() ? m.group(1) : null
@@ -178,8 +166,7 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_SOLVE .command.sh found under the task work dir" },
-                // 100 is not the halo (256), so this proves the override is honoured rather
-                // than coincidentally agreeing with the derived value.
+                // 100 is not the halo (256), so this proves the override is honoured.
                 { assert rendered.every { flagValue(it, '--max-disp') == '100' },
                     "explicit params.reg_tiled_max_disp was not honoured; got: " +
                     rendered.collect { flagValue(it, '--max-disp') }.join(', ') }
@@ -189,14 +176,10 @@ nextflow_process {
 
     test("Should honour an explicit reg_tiled_max_disp of 0 - rendered command") {
 
-        // The Elvis bug. `params.reg_tiled_max_disp ?: params.reg_tiled_halo` substituted the
-        // halo whenever the value was FALSY, and 0 is falsy in Groovy -- so asking for the
-        // tightest possible range gate silently produced the loosest one shipped (256), which
-        // rejects almost nothing on a realistic grid. The schema declares this parameter
-        // ["number","null"] with `minimum: 0`, so 0 is a legal request, not a typo.
-        //
-        // This case cannot be written as a stub run: `-stub` never evaluates a `script:` block,
-        // so it can never observe an `ext.args` closure. Tagged `stub` for CI collection only.
+        // 0 must not fall back to the halo: `?:` treats 0 as falsy, which would turn the
+        // tightest range gate into the loosest. The schema allows `minimum: 0`.
+        // Not writable as a stub run (ext.args is only evaluated in `script:`); tagged `stub`
+        // for CI collection only.
         tag "stub"
 
         when {

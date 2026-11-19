@@ -1,75 +1,39 @@
 #!/usr/bin/env python3
 """Resolve a GitHub Actions workflow through the LOCAL COMPOSITE ACTIONS it uses.
 
-WHY THIS MODULE EXISTS. Until 2026-09-01 every step CI ran lived inside
-`.github/workflows/*.yml`, so a guard test that globbed that directory saw
-everything. Phase 2 of the CI redesign moved ~70 duplicated step instances into
-four composite actions under `.github/actions/**`. A guard whose glob stops at
-`.github/workflows/` therefore goes BLIND the moment a step moves — it keeps
-passing, over a file that no longer contains the thing it was written to check.
-That is this repository's single most repeated failure mode (see CLAUDE.md,
-"Verification reality"), so the resolution lives in ONE place rather than being
-re-derived by each guard with a different blind spot.
+CI steps live both in `.github/workflows/*.yml` and in composite actions under
+`.github/actions/**`, so a guard that only globs the workflows directory misses
+any step that sits in an action. The resolution lives here, in one place.
 
-WHAT "RESOLVE" MEANS HERE. A workflow's effective step list is its own steps plus
-the steps of every `uses: ./.github/actions/<name>` it references, transitively.
-This module gives guards three views of that:
+A workflow's effective step list is its own steps plus the steps of every
+`uses: ./.github/actions/<name>` it references, transitively. Views:
 
-  * `resolved_text(path)`   — the workflow's text concatenated with the text of
-    every local action it reaches. For scans that only ask "does this string
-    appear anywhere in what this workflow runs".
-  * `job_resolved_run_text(job)` — the same, narrowed to ONE JOB: the job's own
-    `run:` bodies plus the full text of the local actions that job uses. This is
-    what keeps a per-job claim per-job.
-  * `requirement_files_installed(job)` — the ordered list of `requirements/*.txt`
-    files a job ends up installing, whether the `pip install -r` is written in
-    the job, passed as the `requirements:` input of `setup-python-env`, or named
-    literally inside an action the job calls. PER JOB, deliberately: a
-    whole-workflow union let a sibling job's install line satisfy a check on
-    behalf of the job that actually needed the package, which is how CI's
-    blocking gate could have run with no cv2 (29 tests module-scope
-    `importorskip` away in silence) and no PyYAML (which silently deletes both of
-    tests/test_ci_job_hygiene.py's own guards).
+  * `resolved_text(path)`: the workflow's text plus the text of every local
+    action it reaches.
+  * `job_resolved_run_text(job)`: the same, narrowed to one job.
+  * `requirement_files_installed(job)`: the ordered `requirements/*.txt` files a
+    job installs, whether written in the job, passed to `setup-python-env`, or
+    named inside an action. Per job, so a sibling job's install cannot satisfy a
+    check on another job.
 
-THE SECOND KIND OF INDIRECTION (2026-09-01, CI redesign Phase 5): a job whose
-whole body is `uses: ./.github/workflows/<x>.yml` — a REUSABLE WORKFLOW call.
-`.github/workflows/_test-suite.yml` holds the five blocking suites, and both
-`ci.yml` and `release.yml` reach them that way.
+A job whose body is `uses: ./.github/workflows/<x>.yml` (a reusable workflow
+call) is not folded into those views: a caller job is not the called jobs, and
+folding them in would let one leg of the suite satisfy a claim about another.
+The called workflow's jobs are still scanned directly, because guards glob
+`.github/workflows/`. Crossing that boundary has its own views:
 
-That indirection is deliberately NOT folded into the three views above, and the
-reason is the same one that makes `requirement_files_installed` per-job:
+  * `called_local_workflows(path)`: `{job_id: Path}` for each job in `path`
+    that calls a local reusable workflow.
+  * `workflow_run_scripts(path)`: `run_scripts(path)` plus that of every local
+    workflow its jobs call, transitively.
 
-  * `job_resolved_run_text(job)` must stay the ONE JOB's commands. A caller job
-    is not five jobs; folding the called workflow in would make `ci.yml`'s
-    one-line `test-suite` job look like an aggregator (it would contain
-    `_test-suite.yml`'s `needs.<job>.result` reads), and would let a sibling LEG
-    of the suite satisfy a per-job claim about another leg — the union problem,
-    one level up.
-  * `requirement_files_installed(job)` likewise. A caller job installs nothing.
+Raw vs command view: `resolved_text` / `job_resolved_run_text` return literal
+bytes, comments included, and are right only when the literal text is the
+subject (a `uses:` line, a cache key). Any "CI runs this command" claim must use
+the comment-stripped views (`run_scripts`, `workflow_run_scripts`,
+`job_run_scripts`), because a comment naming a command satisfies the raw view.
 
-The called workflow's jobs are not lost by that: every guard here discovers
-workflows BY GLOB over `.github/workflows/`, so `_test-suite.yml`'s jobs are
-scanned directly, on their own, as the jobs they are. What the glob cannot answer
-is "does the thing this GATE requires include check X", because that crosses a
-file boundary — so it gets its own, explicitly-named view:
-
-  * `called_local_workflows(path)` — `{job_id: Path}` for each job in `path`
-    whose body calls a local reusable workflow.
-  * `workflow_run_scripts(path)` — `run_scripts(path)` plus that of every local
-    workflow its jobs call, transitively. For scans that ask "does everything
-    this workflow sets in motion RUN X".
-
-RAW VIEW vs COMMAND VIEW — pick by the question, not by convenience.
-`resolved_text` / `job_resolved_run_text` return the files' literal bytes,
-comments included. They are correct only when the thing under assertion IS the
-literal text (a `uses:` line, a cache key, an action reference). Every claim of
-the form "CI runs this command" must go through the comment-stripped views —
-`run_scripts`, `workflow_run_scripts`, `job_run_scripts` — because a comment
-naming a command satisfies the raw view while the command does not execute. That
-error has been made four times on this repository, on four unrelated guards.
-
-NOT A GENERAL YAML MODEL. It answers exactly the questions this repo's CI guards
-ask. Anything more would be a second parser with its own blind spots.
+Not a general YAML model: it answers only the questions this repo's CI guards ask.
 
 Consumers: tests/test_ci_stack_pinned.py, tests/test_ci_job_hygiene.py,
 tests/test_release_workflow_graph.py.
@@ -86,19 +50,14 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 ACTIONS_DIR = ROOT / ".github" / "actions"
 
-# `uses: ./.github/actions/<name>` — the only local-action form this repo writes.
-# Matched against raw text rather than parsed structure so it works on an action
-# file and a workflow file alike, and so a `uses:` inside a comment block is
-# harmless (it would only ever widen a scan).
-# The leading character may not be a dot: prose in this repo writes
-# `uses: ./.github/actions/...` as an ellipsis, and a name of "..." matched the
-# looser form and was reported as a missing action.
+# `uses: ./.github/actions/<name>`, matched on raw text so it works on action and
+# workflow files alike (a `uses:` in a comment only widens a scan).
+# The name may not start with a dot, so prose writing `actions/...` is not matched.
 LOCAL_ACTION_USES_RE = re.compile(r"\./\.github/actions/([A-Za-z0-9_-][A-Za-z0-9._-]*)")
 
 # `uses: ./.github/workflows/<file>.yml` as a JOB body — a reusable-workflow
-# call. Same shape and the same leading-dot exclusion as above; the `.yml`/`.yaml`
-# suffix is required, which is what distinguishes it from prose naming the
-# directory.
+# call. Same leading-dot exclusion as above; the `.yml`/`.yaml` suffix is
+# required so prose naming the directory does not match.
 LOCAL_WORKFLOW_USES_RE = re.compile(
     r"\./\.github/workflows/([A-Za-z0-9_-][A-Za-z0-9._-]*\.ya?ml)"
 )
@@ -160,10 +119,8 @@ def local_actions_used(text: str) -> list[str]:
 def resolved_action_files(text: str) -> list[Path]:
     """Every local action file reachable from `text`, transitively.
 
-    A name with no action.yml is skipped rather than raising: that is a real
-    defect, but it is `test_ci_job_hygiene.test_every_local_action_referenced_exists`'s
-    to report, and raising here would turn one clear failure into many confusing
-    ones.
+    A name with no action.yml is skipped rather than raising;
+    `test_ci_job_hygiene.test_every_local_action_referenced_exists` reports it.
     """
     out: list[Path] = []
     pending = local_actions_used(text)
@@ -189,18 +146,9 @@ def resolved_paths(path: Path) -> list[Path]:
 def strip_comment_lines(text: str) -> str:
     """Drop whole-line `#` comments.
 
-    THIS IS LOAD-BEARING, NOT TIDINESS. Every view below is substring-matched by
-    guards looking for a COMMAND, and this repo's YAML explains its commands at
-    length -- `.github/actions/setup-nextflow/action.yml` names
-    `nextflow plugin install` in prose precisely because that command is one of
-    test_release_workflow_graph.BLOCKING_CHECKS' needles. Measured: replacing the
-    real command with `echo DELETED-PROVISIONING` while leaving the comment
-    standing left the release-parity guard GREEN (14 passed). A comment must
-    never be able to satisfy a claim about what CI runs.
-
-    Same rule, same reason, as `test_ci_stack_pinned.pip_invocations`, which has
-    stripped `#` lines since it was written: a comment explaining why a pin was
-    removed necessarily quotes the pin.
+    The views below are substring-matched by guards looking for a command, and
+    this repo's YAML names its commands in comments. A comment must never satisfy
+    a claim about what CI runs.
     """
     return "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("#"))
 
@@ -215,20 +163,19 @@ def _action_run_bodies(path: Path) -> list[str]:
 
 
 def resolved_text(path: Path) -> str:
-    """The text of `path` plus every local action it reaches, COMMENTS STRIPPED.
+    """The text of `path` plus every local action it reaches, comments stripped.
 
-    Still contains YAML prose (`description:` blocks), so it is the right view for
-    "does this file mention X" and the WRONG view for "does CI run the command X".
+    Still contains YAML prose (`description:` blocks), so it suits "does this file
+    mention X" but not "does CI run the command X".
     Use `resolved_run_text` for the latter.
     """
     return strip_comment_lines("\n".join(p.read_text() for p in resolved_paths(path)))
 
 
 def resolved_run_text(path: Path) -> str:
-    """Every `run:` body a WORKFLOW executes, its local actions included.
+    """Every `run:` body a workflow executes, its local actions included.
 
-    Comments stripped, and `description:`/`name:` prose never present at all --
-    this is a view of COMMANDS. It is what a guard asserting "CI runs X" must read.
+    Comments stripped and no `description:`/`name:` prose: a view of commands.
     """
     bodies: list[str] = []
     for _name, job in load_jobs(path).items():
@@ -250,9 +197,8 @@ def workflow_file(name: str) -> Path | None:
 def called_local_workflows(path: Path) -> dict[str, Path]:
     """`{job_id: called workflow}` for each job in `path` that calls one.
 
-    Only a job whose BODY is `uses: ./.github/workflows/<x>.yml` counts — that is
-    what a reusable-workflow call is. A `uses:` on a STEP is a composite action
-    and belongs to `local_actions_used`; GitHub does not allow a workflow there.
+    Only a job whose body is `uses: ./.github/workflows/<x>.yml` counts. A `uses:`
+    on a step is a composite action; GitHub does not allow a workflow there.
     """
     out: dict[str, Path] = {}
     for job_id, job in load_jobs(path).items():
@@ -286,12 +232,8 @@ def called_workflow_closure(path: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 # Comment-blind command view
 # ---------------------------------------------------------------------------
-# TWICE ON 2026-09-01 A GUARD ON THIS REPOSITORY PASSED BECAUSE A COMMENT
-# SATISFIED IT: a comment naming `nextflow plugin install` satisfied a
-# release-parity needle, and a commit's header prose naming an owner satisfied an
-# owner check. A scan that asks "is this command RUN" must therefore read `run:`
-# bodies only, and must drop the shell comments inside them too — a `#` line in a
-# script explaining why a step was removed necessarily quotes the thing removed.
+# A scan asking "is this command run" reads `run:` bodies only, with their shell
+# comments dropped: a comment explaining a removed step quotes the thing removed.
 
 
 def _run_bodies_of_file(path: Path) -> list[str]:
@@ -308,24 +250,11 @@ def _run_bodies_of_file(path: Path) -> list[str]:
 
 
 def _strip_shell_comments(script: str) -> str:
-    """Drop `#` comments from a shell script — whole-line AND trailing.
+    """Drop `#` comments from a shell script, whole-line and trailing.
 
-    QUOTE-AWARE, because a naive "cut at the first `#`" is wrong on this
-    repository's own scripts: `VERSION="${VERSION#v}"` (build-images.yml) and
-    `echo "version_no_v=${VERSION#v}"` (release.yml) both carry a `#` inside
-    double quotes that is parameter expansion, not a comment. Cutting there would
-    silently truncate two real commands.
-
-    The rule implemented is the shell's own: a `#` starts a comment when it is
-    outside quotes and is either at the start of the line or preceded by
-    whitespace. `${VERSION#v}` fails the second half (it follows `N`), and both
-    occurrences fail the first half as well (they are inside `"`).
-
-    The trailing case is closed rather than documented-around because "a comment
-    satisfied a guard" has fired three separate times on this repository. The one
-    real trailing comment in the tree is `nf-core lint --dir . || true  # nf-core
-    lint is advisory, not blocking`, which is exactly the shape someone would use
-    to leave a command's name behind after deleting it.
+    Quote-aware, using the shell's rule: a `#` starts a comment when it is outside
+    quotes and at the start of the line or after whitespace. A naive cut would
+    truncate `VERSION="${VERSION#v}"`, which is parameter expansion.
     """
     out = []
     for line in script.splitlines():
@@ -338,11 +267,9 @@ def _strip_shell_comments(script: str) -> str:
 def strip_line_comment(line: str) -> str:
     """One line with its `#` comment removed, quote-aware. `""` if it was all comment.
 
-    The single definition of "where does the comment start" in this module. Exposed
-    because guards that must report a LINE NUMBER cannot use
-    `_strip_shell_comments` (it drops lines, so the numbering shifts) and would
-    otherwise re-derive the rule with `line.split("#", 1)[0]` — the naive cut that
-    truncates `VERSION="${VERSION#v}"`.
+    The one definition of where a comment starts. Public for guards that report a
+    line number and so cannot use `_strip_shell_comments`, which drops lines.
+    Use it instead of `line.split("#", 1)[0]`, which truncates `${VERSION#v}`.
     """
     in_single = in_double = False
     for i, ch in enumerate(line):
@@ -359,17 +286,11 @@ def strip_line_comment(line: str) -> str:
 def strip_shell_comments(script: str) -> str:
     """`script` with whole-line AND trailing `#` comments removed, quote-aware.
 
-    `_strip_shell_comments` above drops whole-LINE comments, which is the right
-    scope for `run_scripts`'s "does CI run this command" question and NOT enough
-    for "has this command been commented out": `true  # bash tests/cleanup_work.sh`
-    leaves the needle on a line that is otherwise a real command, and a guard
-    matching the text reports that CI still runs something it has stopped running.
-    Measured on this repository on 2026-09-01, twice.
+    Keeps line numbering (no lines are dropped). A trailing comment such as
+    `true  # bash tests/cleanup_work.sh` must not read as the command still running.
 
-    Quote-aware, so a `#` inside a string literal (a colour, a URL fragment, a
-    `sed 's/#.*//'`) is kept. It is a heuristic and not a shell parser -- it knows
-    nothing about here-documents or backslash-escaped quotes -- so use it for
-    "is this command still invoked" questions and not to execute anything.
+    Quote-aware, so a `#` inside a string literal is kept. A heuristic, not a
+    shell parser: it knows nothing about here-documents or escaped quotes.
     """
     out = []
     for line in script.splitlines():
@@ -390,9 +311,8 @@ def strip_shell_comments(script: str) -> str:
 def run_scripts(path: Path) -> str:
     """Every `run:` body in `path` and in every local action it uses, comment-free.
 
-    Both whole-line and TRAILING `#` comments are dropped from each script (see
-    `_strip_shell_comments`). What is left is what the runner executes, which is
-    the only thing a "does CI run this command" guard may be allowed to match.
+    Whole-line and trailing `#` comments are dropped (see `_strip_shell_comments`),
+    so what is left is what the runner executes.
     """
     scripts: list[str] = []
     for p in resolved_paths(path):
@@ -437,24 +357,12 @@ def job_run_text(job: dict) -> str:
 
 
 def job_resolved_run_text(job: dict) -> str:
-    """The job's `run:` bodies PLUS the FULL TEXT of the local actions it uses.
+    """The job's `run:` bodies plus the full text of the local actions it uses.
 
-    RAW. Comments included, and the action files are included whole rather than
-    just their `run:` bodies -- an action's `uses:` steps (nf-core/setup-nextflow,
-    actions/setup-python) are part of what the job runs, and a guard asking "does
-    this job install Nextflow" has to be able to see a `uses:` line.
-
-    THAT IS THE ONLY QUESTION THIS VIEW ANSWERS CORRECTLY. It is the wrong view
-    for "does this job RUN command X", because a comment naming X satisfies it.
-    That mistake has now been made four times on this repository, on four
-    unrelated guards; the fourth was inside the guard written to close the third.
-    The measured case: `.github/actions/setup-nextflow/action.yml` documents
-    `nextflow plugin install` in prose BECAUSE that command is one of
-    test_release_workflow_graph.BLOCKING_CHECKS' needles, so replacing the command
-    with `echo DELETED-PROVISIONING` and leaving the comment standing left the
-    parity check green.
-    Use `job_run_scripts` for any command-runs claim, and `job_local_actions(job)`
-    to ask which ACTIONS a job uses.
+    Raw: action files are included whole, comments too, so a guard can see an
+    action's `uses:` steps (e.g. nf-core/setup-nextflow). Wrong for "does this job
+    run command X", since a comment naming X satisfies it: use `job_run_scripts`
+    for that, and `job_local_actions(job)` for which actions a job uses.
     """
     parts = [job_run_text(job)]
     parts += [p.read_text() for p in job_local_actions(job)]
@@ -462,16 +370,10 @@ def job_resolved_run_text(job: dict) -> str:
 
 
 def job_run_scripts(job: dict) -> str:
-    """The job's `run:` bodies plus those of the local actions it uses, COMMENT-FREE.
+    """The job's `run:` bodies plus those of the local actions it uses, comment-free.
 
-    The per-job counterpart of `run_scripts`, and the view every "does this job
-    run X" guard must use. Comments — whole-line and trailing — are stripped by
-    `_strip_shell_comments`, so a command that has been COMMENTED OUT reads as
-    absent, which is what it is at runtime.
-
-    Commenting out is the likelier failure than deleting: it is what someone does
-    to a flaky check under time pressure, and it leaves the literal string in the
-    file for a raw-text guard to find.
+    The per-job counterpart of `run_scripts`, for "does this job run X" guards. A
+    commented-out command reads as absent, as it is at runtime.
     """
     scripts = [str(s["run"]) for s in steps_of(job) if "run" in s]
     for path in job_local_actions(job):
@@ -492,10 +394,8 @@ def job_run_scripts(job: dict) -> str:
 class UnresolvableCondition(Exception):
     """An `if:` inside a composite action this module cannot evaluate.
 
-    Raised rather than guessed. Guessing "the step runs" would let a guard report
-    that a job installs a package it does not, which is the exact direction of
-    error this whole module exists to prevent; guessing "it does not" would hide
-    a real install. Widen `_eval_action_if` instead.
+    Raised rather than guessed: either guess would misreport what a job installs.
+    Widen `_eval_action_if` instead.
     """
 
 
@@ -545,18 +445,14 @@ def requirements_from_step(
 
       1. a `run:` body containing `pip install -r requirements/<f>.txt`;
       2. `uses: ./.github/actions/setup-python-env` with a literal, newline
-         separated `requirements:` input — the form every call site is REQUIRED to
-         use (the action declares the input with no default precisely so that a
-         file can never be installed without a job naming it);
+         separated `requirements:` input (the input has no default, so a job must
+         name every file);
       3. `uses: ./.github/actions/<other>` where the file is named literally
          inside that action (generate-testdata names requirements/testdata.txt).
 
-    Form 3 is why this recurses through the action's own steps — and why it
-    evaluates the `if:` on those steps against the inputs the caller passed.
-    ci.yml's `python-tests` calls generate-testdata with `setup-python: 'false'`,
-    so the requirements/testdata.txt install inside that action does NOT happen
-    there, and reporting it would be a lie about the one job whose installs
-    matter most.
+    Form 3 is why this recurses through the action's steps and evaluates their
+    `if:` against the caller's inputs: with `setup-python: 'false'`,
+    generate-testdata does not install requirements/testdata.txt.
 
     `inputs` is None for a step written in a workflow job (there is no input
     context) and a mapping for a step inside a composite action.

@@ -1,17 +1,13 @@
 """`ome_io.detect_reader` is the whole format claim, in one function.
 
-README.md says "any Bio-Formats-compatible format" and bin/convert_image.py's
-docstring lists six. Neither statement was checkable: the old
-`get_file_format` fell through to "bioio" for EVERY unknown suffix, so a .png,
-a .txt or a directory named *.zarr reached BioImage and failed there with a
-plugin-installation message that named neither the suffix nor what this
-pipeline actually supports.
+An unknown suffix must be refused here with a message naming the supported
+formats, not fall through to BioImage and fail with a plugin-installation error.
 
 This file needs no image reader at all -- detect_reader is a suffix table --
 which is why it lives in the main suite while every other format test lives in
 tests/integration/formats/ behind the convert image's reader stack.
 
-IMPORT CONVENTION. `ome_io` is a bin/utils module and imports its siblings
+Import convention: `ome_io` is a bin/utils module and imports its siblings
 (`jvm_cache`, `pixel_size`) with a flat `from jvm_cache import ...`, so both
 `bin` and `bin/utils` must be on `sys.path` -- matching tests/test_ome_io.py
 and tests/test_tiled_io.py, not a plain `from utils import ome_io`.
@@ -67,8 +63,7 @@ def test_every_claimed_suffix_routes_to_a_named_reader(name, expected):
 
 def test_every_reader_the_table_names_is_in_READERS():
     """A typo'd reader name would route a real format to a branch that does not
-    exist -- and the failure would surface as an AttributeError deep in read_info,
-    not as 'this format is unsupported'."""
+    exist, failing as an AttributeError deep in read_info."""
     routed = {
         ome_io.detect_reader(Path(f"slide{suffix}"))
         for suffix in (

@@ -1,17 +1,12 @@
 """The STARE image is slim: no torch, no kornia, no learned weights, no libGL.
 
-bolt3x/mirage-tiled:1.0.0 carried torch + kornia (CPU wheels, ~1 GB), libgl1/libglib2.0-0
-for them, and the DISK + LightGlue checkpoints baked under TORCH_HOME=/opt/torch -- all for
-a COARSE front-end retired on 2026-09-27 (an FFT NCC rotation sweep with a scikit-image ORB
-fallback replaced it; stare/coarse_align.py imports neither). Its replacement,
-containers/stare (bolt3x/mirage-stare:1.0.0), exists to drop that weight, so this file pins
-the drop from both ends: the Dockerfile installs none of it, and the image's own smoke.sh
-asserts torch is NOT importable (a transitive pull would otherwise re-grow the image
-silently, and only a build-time import check can see a transitive pull).
+STARE's COARSE stage (stare/coarse_align.py) needs neither torch nor kornia. This file pins
+that from both ends: containers/stare's Dockerfile installs none of it, and the image's
+smoke.sh asserts torch is not importable (only a build-time import check can see a
+transitive pull).
 
-This file was tests/test_disk_weights_are_baked.py, which asserted the opposite for the
-old image; its comment-blind Dockerfile reader is kept, because the Dockerfile's comments
-name torch/kornia/TORCH_HOME while explaining why they are gone.
+The Dockerfile reader is comment-blind because the Dockerfile's comments name
+torch/kornia/TORCH_HOME.
 """
 
 import json

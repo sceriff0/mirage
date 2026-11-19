@@ -5,8 +5,7 @@ Nextflow decides a task failed by reading the exit status, and `conf/base.config
 and throws the result away therefore reports success for a `main()` that returned 1,
 and the run goes green on a task that did not do its job.
 
-Two forms are accepted and both are already common here (11 and 10 files when this
-guard was written):
+Two forms are accepted:
 
     raise SystemExit(main())
     sys.exit(main())
@@ -58,9 +57,8 @@ ENTRYPOINTS = _entrypoints()
 def test_the_scan_found_the_scripts_it_is_meant_to_cover():
     """A scope glob that matches nothing passes vacuously; this is the tripwire.
 
-    The floor is deliberately well below the measured count (31 at the time of
-    writing) so that deleting one script does not fail this test, while a regex or
-    glob that stops matching does.
+    The floor is well below the real count, so deleting one script does not fail
+    this test while a regex or glob that stops matching does.
     """
     assert len(ENTRYPOINTS) >= 25, sorted(ENTRYPOINTS)
     assert {

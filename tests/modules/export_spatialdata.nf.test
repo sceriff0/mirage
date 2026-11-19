@@ -8,10 +8,9 @@ nextflow_process {
     tag "modules_local"
     tag "export_spatialdata"
 
-    // The meta MUST carry pixel_size. EXPORT_SPATIALDATA is handed a CSV and a
-    // pyramid, never the source image, so it cannot resolve params.pixel_size ==
-    // 'auto' itself; it renders meta.pixel_size, and a hand-built meta without it
-    // renders the literal `null` (documented in postprocessing.nf.test).
+    // The meta must carry pixel_size: EXPORT_SPATIALDATA never sees the source image, so
+    // it cannot resolve pixel_size 'auto'; it renders meta.pixel_size, which is the
+    // literal `null` when a hand-built meta omits it.
     def fullInputs = { String pd ->
         """
         input[0] = [

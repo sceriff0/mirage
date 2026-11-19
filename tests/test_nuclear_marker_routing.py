@@ -9,16 +9,10 @@
                        string, because an array cannot be given on a command line)
   ['DAPI,CELLTOX']     a params file with the list written as one comma-joined string
 
-This test exists because of a real defect, not a hypothetical one.
-`modules/local/convert_image.nf` read the parameter raw and called `.join(' ')` on it.
-For the List shape that is correct and every test passed. For the String shape it does
-NOT throw: Groovy dispatches `"CELLTOX".join(' ')` to Java's static
-`String.join(CharSequence, CharSequence...)` with zero varargs, which returns the EMPTY
-string -- so the rendered command carried a bare `--nuclear-markers` and
-`bin/convert_image.py`'s `nargs="+"` exited 2, mid-run, with an error naming the wrong
-problem. Every test for the string spelling was `-stub`, and `-stub` never evaluates a
-`script:` block, so nothing caught it. A static scan does not care which block the code
-lives in, which is exactly why this guard is static.
+The trap: on the String shape, `params.nuclear_markers.join(' ')` does not throw.
+Groovy dispatches `"CELLTOX".join(' ')` to Java's static `String.join` with zero
+varargs, which returns an empty string, so the rendered command carries a bare
+`--nuclear-markers`. `-stub` never evaluates a `script:` block, so the guard is static.
 
 Two rules, both mechanical:
 
@@ -48,10 +42,9 @@ SCANNED_GLOBS = [
     "conf/*.config",
 ]
 
-# The router itself. Its mentions of the parameter are documentation and the text of the
-# "no markers configured" exception -- it never consumes the value, it defines what
-# consuming it means. Excluded by name rather than by a fragile in-a-string-literal
-# heuristic; `test_scan_actually_finds_the_consumers` keeps the exclusion from widening.
+# The router itself: its mentions of the parameter are documentation and an exception
+# message. Excluded by name; `test_scan_actually_finds_the_consumers` keeps the
+# exclusion from widening.
 ROUTER_FILE = "MarkerUtils.groovy"
 
 READ_RE = re.compile(r"(?:\w+\.)?params\.nuclear_markers")
@@ -90,21 +83,8 @@ def test_scan_actually_finds_the_consumers():
     sites = _read_sites()
     files = {path.name for path, _no, _line, _prev in sites}
     assert len(sites) >= 6, f"only {len(sites)} read sites found -- globs may be stale"
-    # The consumers this task routed. If one disappears, that is a real change worth
-    # noticing rather than a scan silently going quiet.
-    # seg_qc_geojson.nf was on this list until the reg_qc=2 QC stopped segmenting for
-    # itself. It read params.nuclear_markers only to tell its own StarDist invocation
-    # which channel was nuclear; that invocation is now SEGMENT's (aliased
-    # SEG_QC_SEGMENT), so the read moved to the place that already owned it --
-    # SegBackends.groovy, still on this list, where the stardist guard and the cellsam
-    # index both route through MarkerUtils. Removed rather than replaced: nothing new
-    # reads the parameter, one duplicate reader stopped.
-    # split_channels.nf was on this list until the keep-set moved onto the meta map. It
-    # read params.nuclear_markers only to decide which channel to drop; that decision is
-    # now made once at samplesheet read by CsvUtils.resolveKeptChannelsPerSlide -- still
-    # on this list, via input_check.nf -- and travels as meta.keep_channels, so the
-    # process applies no marker rule of its own. Removed rather than replaced: nothing
-    # new reads the parameter, one duplicate reader stopped.
+    # The known consumers. If one disappears, that is a real change worth noticing
+    # rather than a scan silently going quiet.
     for expected in (
         "convert_image.nf",
         "SegBackends.groovy",

@@ -1,8 +1,7 @@
 """The registration QC's before/after wiring, guarded end to end.
 
-The before/after change (spec Phase 3) added a third image input to
-``GENERATE_REGISTRATION_QC``. Four things can silently come apart afterwards,
-and none of them is visible to a stub run:
+``GENERATE_REGISTRATION_QC`` takes a third (native) image input. Four things
+can silently come apart, and none of them is visible to a stub run:
 
 1. The process could lose the input while the Python still expects it.
 2. The process could keep the input and stop passing it to the script --
@@ -10,9 +9,7 @@ and none of them is visible to a stub run:
    (``tests/modules/generate_registration_qc.nf.test``'s rendered-command case
    catches this at runtime; this is the cheap static twin of it.)
 3. One of the two call sites -- ``registration.nf`` and ``add_cycle.nf`` -- could
-   be updated and the other not. They have drifted apart before: ``add_cycle``
-   reimplemented ``REGISTER_PATIENT``'s wiring by hand and had lost three things
-   the original had.
+   be updated and the other not.
 4. ``conf/modules.config``'s memory closure could keep sizing the task on two
    inputs while it stages three -- a silent under-request that surfaces as an
    OOM on real data and never on a fixture.
@@ -71,13 +68,10 @@ def test_the_script_passes_the_native_image_to_the_qc_script():
         "stages a third full-resolution image and ignores it, and no stub test "
         "can see the difference"
     )
-    # strip_comments only knows Groovy `//` and `/* */` -- a `#` inside the
-    # script: heredoc is not a Groovy comment at all, it is string content
-    # that happens to become a SHELL comment when the heredoc is rendered and
-    # run. A bare substring check is fooled by turning the flag into one: the
-    # text "--native ${native_image}" is still present, but the rendered
-    # command no longer passes it. CLAUDE.md's "Verification reality" #7 is
-    # exactly this pattern, so reject any occurrence on a shell-commented line.
+    # strip_comments only knows Groovy comments; a `#` inside the script:
+    # heredoc becomes a shell comment when rendered, so a commented-out
+    # "--native ${native_image}" would still match. Reject any occurrence on a
+    # shell-commented line.
     native_lines = [
         line for line in body.splitlines() if "--native ${native_image}" in line
     ]
@@ -104,15 +98,10 @@ def test_both_qc_call_sites_build_a_four_element_tuple():
         end = text.index(f"{PROCESS}(ch_for_qc)", start)
         assignment = text[start:end]
 
-        # The tuple actually PASSED to the process is whatever the TERMINAL
-        # `.map { ... -> [...] }` in the chain produces -- a plain substring
-        # scan of the whole assignment is not enough, because an earlier link
-        # (e.g. `.combine(other.map { ... })`'s own nested map, or an earlier
-        # `.map` in the chain) can still mention the native variable after a
-        # later map has already dropped it from the tuple. The terminal map is
-        # textually LAST: Groovy method chaining writes each argument before
-        # continuing the chain, so the last `.map {` in the assignment is the
-        # one that shapes what ch_for_qc actually emits.
+        # The tuple passed to the process is whatever the terminal `.map {}`
+        # produces; an earlier link can still mention the native variable after
+        # a later map dropped it. The terminal map is textually last in the
+        # assignment, so check that one.
         last_map = assignment.rfind(".map {")
         assert last_map != -1, f"{rel}'s ch_for_qc assignment has no .map {{...}}"
         terminal = assignment[last_map:]

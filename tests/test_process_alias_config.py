@@ -3,15 +3,12 @@
 
 Nextflow matches a config selector against an aliased include's OWN name *and* the
 process' original declared name. `include { SPLIT_CHANNELS as SPLIT_PRIOR_PYRAMID }`
-is therefore governed by `withName: 'SPLIT_CHANNELS'`, confirmed in this repo from a
-real run's debug log (`Config settings withName:SPLIT_CHANNELS matches process
-SPLIT_PRIOR_PYRAMID`) and written up beside that block in conf/modules.config.
+is therefore governed by `withName: 'SPLIT_CHANNELS'` (see the note beside that block
+in conf/modules.config).
 
-For resources that is exactly what you want -- the alias is the same process and should
-cost the same. For `publishDir` it is a silent data-loss bug, and it has fired here:
-both instances of SPLIT_CHANNELS published `*.tiff` by bare channel name into the same
-`<pid>/split_channels/`, and whichever task finished last overwrote the other's file for
-every marker the two shared. Nothing failed; a file was just wrong.
+For resources that is what you want. For `publishDir` it is silent data loss: two
+instances publishing `*.tiff` by bare channel name into the same directory overwrite
+each other's files for every shared marker.
 
 So: if a base process publishes, every alias of it must say where IT publishes (or that
 it does not), in its own `withName:` block, placed textually AFTER the base's -- Nextflow
@@ -38,10 +35,8 @@ ALIAS_INCLUDE_RE = re.compile(r"include\s*\{\s*(\w+)\s+as\s+(\w+)\s*\}", re.MULT
 WITH_NAME_OPEN_RE = re.compile(r"withName:\s*(?:'([^']+)'|\"([^\"]+)\")\s*\{")
 
 # A real `publishDir = ...` ASSIGNMENT, anchored to the start of a line so a `//`
-# comment merely discussing publishDir does not count. Every block touched by this
-# rule has a comment explaining its publishing decision, so a bare `"publishDir" in
-# body` substring test passes on a block that sets nothing -- verified by deleting
-# the assignment and watching that version of this guard stay green.
+# comment discussing publishDir does not count (every such block has one, so a
+# substring test would pass on a block that sets nothing).
 PUBLISH_DIR_ASSIGN_RE = re.compile(r"^\s*publishDir\s*=", re.MULTILINE)
 
 

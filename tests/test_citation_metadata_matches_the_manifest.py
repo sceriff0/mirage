@@ -2,8 +2,6 @@
 
 CFF is what GitHub renders in the "Cite this repository" panel and what reference
 managers import, so a stale field there is a wrong citation in somebody's paper.
-On 2026-09-02 it said `date-released: 2026-07-29` (the date of a snapshot, not of
-the release) and carried a literal `TODO(release)` marker in place of the DOI.
 
 `version` is checked against `nextflow.config`'s manifest rather than against a
 hardcoded string, so the two cannot drift; `release.yml`'s verify-config already

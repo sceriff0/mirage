@@ -1,25 +1,11 @@
 /*
- * THE permanent, CI-collected guard for the defect Task 4.3 closed: a
- * checkpoint-entered meta (READ_SEGMENTED_CHECKPOINT -> Meta.fromCheckpointRow /
- * CsvUtils.metaContextFromCheckpoint) must carry keep_channels/channels_count, not
- * just patient_id/id/is_reference/channels.
+ * A checkpoint-entered meta (READ_SEGMENTED_CHECKPOINT -> Meta.fromCheckpointRow /
+ * CsvUtils.metaContextFromCheckpoint) must carry keep_channels and channels_count, not
+ * just patient_id/id/is_reference/channels. Without keep_channels, SPLIT_CHANNELS falls
+ * back to the full declared list (an extra DAPI plane) and QUANTIFY runs twice.
  *
- * Before Task 4.3, READ_SEGMENTED_CHECKPOINT built meta by hand --
- * [patient_id, id: patient_id, is_reference, channels] -- with keep_channels and
- * channels_count both absent. Downstream, SPLIT_CHANNELS fell back to the FULL
- * declared channel list (an extra DAPI plane) because meta.keep_channels didn't
- * exist, and QUANTIFY ran twice. The manual work-dir diff that caught this (and
- * the manual full-run-vs---start-postprocessing diff that proved the fix) ran
- * ONCE and is recorded in a report -- it does not run again on the next change to
- * Meta.fromCheckpointRow or CsvUtils.metaContextFromCheckpoint. This file is what
- * runs again, every time, under CI's blocking `nf-test test --tag stub` gate.
- *
- * ONE nextflow_workflow block, deliberately: nf-test 0.9.5 in this environment
- * only executes the LAST such block when a single .nf.test file contains more
- * than one (confirmed empirically against tests/subworkflows/local/segmentation.nf.test,
- * which has two -- a scratch first block with a deliberately-false assertion never
- * ran and the file still reported SUCCESS). A second block here would silently
- * make one of the two assertions below never execute.
+ * One nextflow_workflow block only: nf-test 0.9.5 ran only the last block of a file
+ * with several, so a second block would silently skip one of the assertions.
  */
 
 nextflow_workflow {
@@ -54,8 +40,8 @@ nextflow_workflow {
             def metas = workflow.out.samples.collect { it[0] }
             assert metas.size() == 2 : "expected reference + one moving slide, got: ${metas}"
 
-            // The regression this guards: BOTH keys must be present on EVERY
-            // checkpoint-entered meta, not merely on the reference row.
+            // Both keys must be present on every checkpoint-entered meta, not
+            // merely on the reference row.
             metas.each { meta ->
                 assert meta.containsKey('keep_channels') : "keep_channels missing: ${meta}"
                 assert meta.containsKey('channels_count') : "channels_count missing: ${meta}"
@@ -65,25 +51,16 @@ nextflow_workflow {
             def movMeta = metas.find { !it.is_reference }
             assert refMeta != null && movMeta != null
 
-            // tests/testdata/segmented.csv declares the SAME two rows as
-            // test_input.csv (P001 ref DAPI|PANCK|SMA, P001 mov1 DAPI|CD3|CD8) --
-            // see the generator's comment. Claim-once-per-patient (reference
-            // first): the reference claims all three of its own channels; the
-            // moving slide's declared DAPI is already claimed, so it keeps only
+            // tests/testdata/segmented.csv declares the same two rows as
+            // test_input.csv. Claim-once (reference first): the reference keeps its
+            // three channels; the moving slide's DAPI is already claimed, so it keeps
             // CD3 and CD8.
             assert refMeta.keep_channels == ['DAPI', 'PANCK', 'SMA']
             assert movMeta.keep_channels == ['CD3', 'CD8']
 
-            // channels_count is the PER-PATIENT total (3 + 2 = 5), identical on
-            // every row of the patient -- and identical to what INPUT_CHECK's
-            // CsvUtils.countChannelsPerPatient computes for the SAME declared
-            // channels on the samplesheet path: tests/subworkflows/local/
-            // input_check.nf.test asserts `counts[0].channels.P001 == 5` against
-            // test_input.csv's identical two rows. Hard-coded here (not called
-            // via CsvUtils) because the nf-test assertion context has no lib/ on
-            // its classpath -- see tests/layout.nf.test's header comment -- so 5
-            // is this file's independently-verified cross-check, not a value
-            // invented in isolation.
+            // channels_count is the per-patient total (3 + 2 = 5) on every row, the
+            // same value input_check.nf.test asserts for the samplesheet path.
+            // Hard-coded because the nf-test assertion context cannot see lib/.
             assert refMeta.channels_count == 5
             assert movMeta.channels_count == 5
         }

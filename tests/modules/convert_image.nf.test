@@ -145,29 +145,18 @@ nextflow_process {
 
     test("Should render a valid --nuclear-markers for a scalar params value - real") {
 
-        // REAL, not stub, and deliberately so. This asserts the RENDERED COMMAND, which
-        // only a `script:` block produces -- `-stub` runs the stub block and never
-        // evaluates line 32 at all. That is exactly how the defect this pins reached
-        // main: every test for the scalar `--nuclear_markers CELLTOX` spelling was a
-        // stub run, so nothing ever rendered the flag.
-        //
-        // The defect: `params.nuclear_markers.join(' ')` on a bare String does not throw.
-        // Groovy dispatches it to Java's static String.join(CharSequence, CharSequence...)
-        // with zero varargs, which returns the EMPTY string -- the rendered command
-        // carried a bare `--nuclear-markers` and convert_image.py's nargs="+" exited 2
-        // mid-run, naming the wrong problem. Against that code this test fails.
-        //
-        // Asserted on the rendered .command.sh rather than on process outcome, so it
-        // holds whether the conversion itself succeeds or fails for unrelated
-        // environmental reasons (arm64 host, missing container).
+        // Real, not stub: this asserts the rendered command, which only `script:` produces.
+        // `params.nuclear_markers.join(' ')` on a bare String does not throw: Groovy dispatches
+        // to Java's String.join with zero varargs and returns '', rendering a bare
+        // `--nuclear-markers` that convert_image.py's nargs="+" rejects. Asserts .command.sh,
+        // not the outcome.
         tag "real"
         tag "slow"
 
         when {
             params {
-                // The shape Nextflow produces for `--nuclear_markers CELLTOX` on the
-                // command line. nextflow_schema.json permits it because an array cannot
-                // be given on a command line at all.
+                // The shape Nextflow produces for `--nuclear_markers CELLTOX` on the command line;
+                // the schema permits it because an array cannot be given on a command line.
                 nuclear_markers = 'CELLTOX'
                 pixel_size = 0.325
             }
@@ -196,9 +185,7 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered CONVERT_IMAGE .command.sh found under the task work dir" },
-                // The whole assertion. With the defect the rendered line is a bare
-                // `--nuclear-markers` followed by the shell line-continuation, so the
-                // value is simply absent and this fails.
+                // With the defect the flag is followed directly by the line continuation.
                 { assert rendered.every { it.contains('--nuclear-markers CELLTOX') },
                     "rendered command lost the marker value: " + rendered.join(' --- ') }
             )
@@ -239,14 +226,9 @@ nextflow_process {
                 { assert process.out.ome_tiff.get(0).get(0).channels == ['DAPI', 'PANCK', 'SMA'] },
                 // OME-TIFF output is non-trivial
                 { assert file(process.out.ome_tiff.get(0).get(1)).size() > 1000 },
-                // channels.txt content matches expected channel names. COMMA-separated:
-                // bin/convert_image.py:658 writes `",".join(output_channels)` and the
-                // stub block writes `meta.channels.join(',')`, so both paths agree. This
-                // asserted newline-separated and could not have been observed failing --
-                // `.text` on the unwrapped output threw MissingPropertyException first
-                // (family 4), which is what hid it. Not to be confused with
-                // tests/testdata/sample_channels.txt / expected/channels_3ch.txt, which
-                // are one-per-line and belong to a different artifact.
+                // channels.txt is comma-separated in both paths (`",".join(output_channels)` in
+                // bin/convert_image.py, `meta.channels.join(',')` in the stub). Not the one-per-line
+                // tests/testdata/sample_channels.txt, which is a different artifact.
                 {
                     def channelsContent = file(process.out.ome_tiff.get(0).get(2)).text.trim()
                     assert channelsContent == 'DAPI,PANCK,SMA'
@@ -257,10 +239,8 @@ nextflow_process {
 
     test("Should render channels, pixel_size, nuclear-markers and output_dir - rendered command") {
 
-        // No options "-stub": stub mode never evaluates script:, so this is the
-        // only tag-"stub" case that reaches the rendered command. Gates the same
-        // scalar-vs-list nuclear_markers defect the "real" case above pins, but
-        // under CI's blocking `--tag stub` gate.
+        // No options "-stub": stub mode never evaluates script:. The tag-"stub" counterpart
+        // of the "real" nuclear_markers case above, so CI's blocking gate runs it.
         tag "stub"
 
         when {

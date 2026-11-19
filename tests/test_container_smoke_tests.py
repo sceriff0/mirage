@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
 """Guard: every container image carries a real smoke test, and it is wired up twice.
 
-WHAT THIS IS FOR. Until 2026-09-01 an image could stop building, or build and then
-fail on its first import, and nothing in CI would say so: `build-images.yml` ran on a
-push to main touching `containers/**` and on a manual dispatch, and on nothing else.
-`containers/regqc` carried a `pip install git+.../cudipy.git` for months after that
-GitHub repository ceased to exist -- the image could not be built AT ALL -- and the
-suite stayed green throughout. CI redesign Phase 6 closed that with three mechanisms:
-a changed-only build on every PR, a full nightly matrix, and a per-image
-`containers/<dir>/smoke.sh` that is RUN BY THE DOCKERFILE and again by
+Each image's `containers/<dir>/smoke.sh` is run by its Dockerfile and again by
 `.github/workflows/containers.yml` against the built image.
 
 The smoke script is the part that rots silently, so it is the part guarded here:
@@ -21,12 +14,8 @@ The smoke script is the part that rots silently, so it is the part guarded here:
      third-party modules; and
   5. EVERY MODULE IT IMPORTS IS ACTUALLY INSTALLED BY THAT IMAGE.
 
-(5) is the one that earns this file. The smoke scripts assert imports, and a
-mistyped module name (`skimage` vs `scikit-image`, `instanseg` vs `instanseg-torch`,
-`cellSAM` vs `cellsam`) turns a smoke test into a build failure that only a real
-container build -- twenty minutes on a runner, and on the release path a half-published
-image set -- can discover. Comparing the imported names against what the Dockerfile and
-its requirements files actually install catches that here, in a second, with no Docker.
+(5) catches a mistyped module name (`skimage` vs `scikit-image`) in a second,
+instead of in a twenty-minute container build.
 
 It is a static check and it says so: it cannot prove an import SUCCEEDS, only that the
 package providing it was asked for. The build is what proves the rest.
@@ -46,9 +35,7 @@ from tests import test_container_harmonisation as harmonisation
 
 yaml = pytest.importorskip("yaml")
 
-# The shared workflow/composite-action resolver, imported rather than re-derived --
-# the rule this repo adopted after seven guards each carried a private parse of the
-# same files, each with a different blind spot.
+# The shared workflow/composite-action resolver; guards must not re-parse these files.
 if str(Path(__file__).parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent))
 ci_actions = importlib.import_module("ci_actions")
@@ -61,17 +48,9 @@ WORKFLOW = REPO / ".github" / "workflows" / "containers.yml"
 # Where the Dockerfile puts the script, and therefore what containers.yml runs.
 IN_IMAGE_PATH = "/usr/local/bin/mirage-smoke.sh"
 
-# Import name -> the distribution name pip is asked for. Only the ones that DIFFER
-# need an entry; anything absent is assumed to be its own distribution, which is true
-# for numpy, scipy, pandas, tifffile, zarr, numcodecs, imagecodecs, torch, kornia,
-# csbdeep, stardist, spatialdata, anndata, geopandas, shapely, xmltodict and matplotlib.
-# `bioio_bioformats` underscores where its distribution hyphenates, and `scyjava` arrives
-# transitively through bioio-bioformats -> bffile. bin/utils/jvm_cache.py (which
-# containers/convert/smoke.sh imports -- see LOCALLY_COPIED_MODULES below) imports
-# scyjava.config directly (it is the timing-immune lever for the jgo cache), so
-# containers/convert names scyjava in its own pip line rather than relying on the
-# transitive install -- an install nothing in the Dockerfile names is invisible to
-# test_container_harmonisation.py too.
+# Import name -> the distribution name pip is asked for, only where they differ.
+# `scyjava` arrives transitively through bioio-bioformats; containers/convert also names
+# it directly because bin/utils/jvm_cache.py imports scyjava.config.
 IMPORT_TO_DISTRIBUTION = {
     "stare": "stare-registration",  # github.com/sceriff0/stare, pinned in requirements/stare.txt
     "skimage": "scikit-image",
@@ -83,33 +62,20 @@ IMPORT_TO_DISTRIBUTION = {
     "scyjava": "scyjava",
 }
 
-# {container: {import name}} for a module a smoke script imports that is NOT a pip
-# distribution at all -- it is a first-party bin/utils/*.py file the Dockerfile COPYs
-# into the image directly, so `declared_distributions` (a pip-install scan) can never
-# find it. containers/convert is the one case today: smoke.sh calls the PRODUCTION
-# `bin/utils/jvm_cache.py::point_jvm_cache_off_readonly_home()` (Task 7 review round 1)
-# rather than hand-rolling its own scyjava.config calls, and the Dockerfile COPYs that
-# one file onto its own PYTHONPATH entry for exactly that reason -- see
-# containers/convert/Dockerfile's "COPY bin/utils/jvm_cache.py" comment.
-# `test_locally_copied_modules_are_actually_copied_by_name` below is what keeps this
-# honest: an entry here that the Dockerfile does not literally COPY is a hard failure,
-# not a silent permanent exemption.
+# {container: {import name}} for a first-party bin/utils/*.py file the Dockerfile COPYs
+# into the image directly, which a pip-install scan cannot see. containers/convert's
+# smoke.sh imports the production bin/utils/jvm_cache.py. An entry the Dockerfile does
+# not literally COPY fails test_locally_copied_modules_are_actually_copied_by_name.
 LOCALLY_COPIED_MODULES = {
     "convert": {"jvm_cache"},
 }
 
-# {container: {import name: repo-relative package dir}} for a FIRST-PARTY PACKAGE a smoke
-# script imports -- repository code the Dockerfile COPYs as a directory and pip-installs
-# from that path, so `declared_distributions` (which reads requirement tokens and skips
-# path installs) cannot see it either. containers/stare is the case: `stare` is the STARE
-# method itself (github.com/sceriff0/stare), which bin/tiled_*.py shim over.
-# `test_locally_installed_packages_are_actually_installed_by_name` keeps an entry honest
-# the same way LOCALLY_COPIED_MODULES' meta-test does: the Dockerfile must literally COPY
-# that directory AND pip-install the destination, and smoke.sh must actually import it.
+# {container: {import name: repo-relative package dir}} for a first-party package the
+# Dockerfile COPYs as a directory and pip-installs from that path. Kept honest by
+# test_locally_installed_packages_are_actually_installed_by_name.
 LOCALLY_INSTALLED_PACKAGES: dict[str, dict[str, str]] = {
-    # empty since 2026-10-01: `stare` is a pinned requirement (requirements/stare.txt,
-    # `stare-registration @ <release URL>`), seen by declared_distributions like any other
-    # pin rather than exempted as a COPY'd repository directory.
+    # empty: `stare` is a pinned requirement (requirements/stare.txt), seen by
+    # declared_distributions like any other pin.
 }
 
 
@@ -143,26 +109,15 @@ def _strip_hash_comments(text: str) -> str:
     )
 
 
-# Trailing-comment stripping lives in the shared resolver, not here -- see
-# ci_actions.strip_shell_comments, and this repo's rule about seven guards each
-# carrying a private parse of the same files.
+# Trailing-comment stripping lives in ci_actions.strip_shell_comments.
+
 _shell_commands_only = ci_actions.strip_shell_comments
 
 
-# AN IMPORT MUST START A STATEMENT. Both patterns are matched against a chunk that
-# has already been cut at every newline, `;` and quote character, and both are
-# anchored -- so `import numpy, scipy` counts and the words "can import pyplot",
-# which appear INSIDE a print() string in containers/segeval/smoke.sh, do not.
-#
-# That is not a hypothetical: an unanchored first draft of this scan reported that
-# containers/segeval installs no distribution called `pyplot`. Prose satisfying a
-# text-matching guard is this repository's most repeated defect, and a string
-# literal is prose the shell-comment stripper cannot see.
-#
-# Cutting at quotes is also what makes the scan work at all on the three scripts
-# whose Python is written on ONE line inside `"$PY" -c "..."` -- a `^\s*import`
-# form over raw lines matched nothing whatsoever in containers/tiled/smoke.sh, which
-# this file's own "imports at least two modules" case caught on its first run.
+# An import must start a statement. Both patterns are matched against chunks cut at
+# every newline, `;` and quote, and anchored -- so `import numpy, scipy` counts but the
+# words "can import pyplot" inside a print() string do not. Cutting at quotes also makes
+# the scan see Python written on one line inside `"$PY" -c "..."`.
 _CHUNK_SPLIT_RE = re.compile(r"""[\n;"']""")
 _FROM_RE = re.compile(r"^\s*from\s+([A-Za-z_][\w.]*)\s+import\b")
 _IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)")
@@ -229,9 +184,8 @@ def declared_distributions(name: str) -> set[str]:
     everything through `requirements/stare.txt`, containers/merge names every pin
     inline, and containers/regqc does both.
     """
-    # Join Dockerfile line continuations FIRST, so one `RUN pip install a \` + `b`
-    # is one logical line. Scanning the raw text instead is how a first draft came
-    # back claiming this image installs distributions called `run`, `copy` and `env`.
+    # Join Dockerfile line continuations first, so one `RUN pip install a \` + `b`
+    # is one logical line (otherwise `run`, `copy`, `env` read as distributions).
     text = _strip_hash_comments(dockerfile(name).read_text()).replace("\\\n", " ")
     declared: set[str] = set()
 
@@ -244,13 +198,9 @@ def declared_distributions(name: str) -> set[str]:
             if match:
                 declared |= _tokens_from_pip_line(match.group(1))
 
-    # Plus everything in every requirements file the Dockerfile COPYs -- EXCEPT
-    # constraints.txt, and that exclusion is what gives this check its teeth.
-    # A constraints file does not install anything; it caps what a resolve may pick.
-    # requirements/constraints.txt is the harmonised table and names nearly every
-    # package in the repository, so counting it as "declared" would mean almost any
-    # module name passed, including a wrong one. Nine of the eleven Dockerfiles COPY
-    # it, so this is the difference between a real check and a formality.
+    # Plus every requirements file the Dockerfile COPYs, except constraints.txt: it
+    # installs nothing and names nearly every package, so counting it would pass almost
+    # any module name.
     for req in sorted(set(re.findall(r"requirements/[A-Za-z0-9._-]+\.txt", text))):
         if Path(req).name == "constraints.txt":
             continue
@@ -340,12 +290,9 @@ def test_every_smoke_script_proves_ps_exists(name):
     task of EVERY run. An image without procps therefore fails every task with exit
     status 1 and empty stdout -- a failure that reads as "the tool crashed silently",
     not as "a system package is missing". Debian/Ubuntu bases do not ship procps:
-    `python:*-slim` and `ubuntu:22.04` both lack it, and `AGGREGATE_SIZE_LOGS` ran in
-    bare `ubuntu:22.04` until 2026-09-02.
+    `python:*-slim` and `ubuntu:22.04` both lack it.
 
-    COMMENT-BLIND. Every one of these scripts explains procps in prose above the check;
-    reading the raw text would let the explanation satisfy the guard while the command
-    was deleted. That is this repository's most-repeated defect.
+    Comment-blind: the prose explaining procps above the check must not satisfy it.
     """
     body = _strip_hash_comments(smoke_path(name).read_text())
     assert _PS_CHECK_RE.search(body), (
@@ -359,16 +306,9 @@ def test_every_smoke_script_proves_ps_exists(name):
 
 @pytest.mark.parametrize("name", _dirs())
 def test_every_module_the_smoke_script_imports_is_installed_by_the_image(name):
-    """The check that earns this file.
+    """Every module smoke.sh imports is a package the Dockerfile asks pip for.
 
-    A mistyped module name turns a smoke test into a BUILD failure, discovered twenty
-    minutes into a runner job -- or, on the release path, after the tag exists and half
-    the image set is published. The Dockerfile and its requirements files say what pip
-    was asked for; compare against that here instead.
-
-    STATIC, and it says so: this proves the package was requested, not that the import
-    succeeds. The build proves the rest. It is still the difference between finding a
-    typo in a second and finding it in a release.
+    Static: proves the package was requested, not that the import succeeds.
     """
     declared = declared_distributions(name) | UPSTREAM_STACK.get(name, set())
     assert declared, (
@@ -466,13 +406,9 @@ def test_the_workflow_runs_the_smoke_script_against_the_built_image():
     `docker run`, which is what the cluster does -- so an ENTRYPOINT, a CMD or a
     read-only $HOME that breaks starting the image shows up there and nowhere else.
 
-    COMMENT-BLIND, AND THAT COST A DRAFT. The first version of this case matched the
-    whole file text, so replacing the invocation with
-    `true  # bash /usr/local/bin/mirage-smoke.sh` -- the plausible way somebody
-    disables it "temporarily" -- left it PASSING. It is read off `run:` bodies via
-    ci_actions.run_scripts (no YAML comment can satisfy it) and then through a
-    quote-aware trailing-`#` strip, because ci_actions drops WHOLE-LINE shell comments
-    only. Both halves were needed; each alone still passed the break.
+    Comment-blind: read off `run:` bodies via ci_actions.run_scripts, then through a
+    quote-aware trailing-`#` strip, so `true  # bash /usr/local/bin/mirage-smoke.sh`
+    does not pass.
     """
     commands = _shell_commands_only(ci_actions.run_scripts(WORKFLOW))
     # The invocation is written over three continued lines, so the window spans them.

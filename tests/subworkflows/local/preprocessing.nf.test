@@ -226,16 +226,8 @@ nextflow_workflow {
                     assert file(get(1).get(1)).size() > 1000
                 }},
                 // Metadata preserved
-                // Explicit receiver on the collect, NOT `with(...) { collect { ... } }`.
-                // Unqualified, `collect` inside a `with` block does not reach the
-                // delegate List: the closure is handed the WHOLE list as `it`, so
-                // `it[0]` is the first [meta, path] tuple and `.patient_id` spreads over
-                // it, giving `MissingPropertyException ... for java.util.ArrayList,
-                // Reason: No such property: patient_id for class: java.lang.String`.
-                // Measured on nightly runs 33633986188 and 33740335196. `get(n)` in a
-                // `with` block is fine (it is a real List method); it is the Groovy
-                // extension methods that miss. The stub cases in this file already use
-                // the explicit form and are green.
+                // Explicit receiver on collect: inside `with { }`, an unqualified
+                // `collect` gets the whole list as `it`, not the delegate's elements.
                 {
                     def patient_ids = workflow.out.preprocessed.collect { it[0].patient_id }
                     assert patient_ids.size() == 2
@@ -263,22 +255,13 @@ nextflow_workflow {
 
     test("Should skip BaSiC but still emit a row per slide when skip_preprocessing - stub") {
 
-        // The gate has to preserve two properties that are easy to break together:
-        //
-        //  1. Every input slide still reaches the checkpoint. APPLY_PROFILES is what
-        //     normally produces the rows, so switching the correction off must not drop
-        //     them --
-        //     a `--start registration` run reads this CSV and would silently see
-        //     fewer slides.
-        //  2. The recorded path names the directory the file was ACTUALLY published
-        //     into. Nothing publishes into <pid>/preprocessed/ on a skipped run, so a
-        //     row pointing there names a directory that does not exist -- the defect
-        //     Layout.passthroughPath documents for unregistered slides, and the one
-        //     tests/checkpoint_manifest.nf.test fails on.
-        //
-        // Conversion is deliberately NOT skipped: CONVERT_IMAGE is what standardises
-        // the OME-TIFF and moves the fiducial to channel 0, which every downstream
-        // step assumes.
+        // The gate must preserve two properties:
+        //  1. Every input slide still reaches the checkpoint, or a later
+        //     `--start registration` run silently sees fewer slides.
+        //  2. The recorded path names the directory the file was published into
+        //     (converted/), not <pid>/preprocessed/, which nothing writes here.
+        // Conversion is not skipped: CONVERT_IMAGE standardises the OME-TIFF and moves
+        // the fiducial to channel 0, which every downstream step assumes.
         tag "stub"
         options "-stub"
 
@@ -310,8 +293,7 @@ nextflow_workflow {
                 { assert rows.size() == 3,
                     "expected a header + 2 slides, got: " + rows.join(' | ') },
                 { assert workflow.out.preprocessed.size() == 2 },
-                // Property 2: the rows point at converted/, which CONVERT_IMAGE really
-                // published into -- never at preprocessed/, which nothing wrote here.
+                // Property 2: the rows point at converted/, never at preprocessed/.
                 { assert paths.every { it.contains('/converted/') },
                     "checkpoint rows do not point at converted/: " + paths.join(' | ') },
                 { assert paths.every { !it.contains('/preprocessed/') },

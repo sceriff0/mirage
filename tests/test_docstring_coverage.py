@@ -5,18 +5,10 @@ Public means ``not name.startswith("_")``. Scope is ``bin/**/*.py`` minus
 ``ruff.toml`` excludes for the same reason: it is held to its upstream style,
 not ours.
 
-NESTED FUNCTIONS ARE EXEMPT, and the exemption is structural rather than a
-name allowlist: the walk descends into module bodies and class bodies only, so
-a closure defined inside a function is never visited. Closures here are things
-like ``read_channel`` inside a lazy-read branch and ``pct``/``val``/``kept``
-inside an HTML formatter -- one-line helpers whose whole context is the three
-lines above them, and requiring a docstring on each would produce noise, not
-documentation.
+Nested functions are exempt structurally: the walk descends into module and class
+bodies only, so a small closure inside a function is never visited.
 
-Style is numpy (Parameters / Returns), matching ``bin/utils/qc.py`` and
-``bin/generate_registration_qc.py``. This test does not check style -- only
-presence -- because a style check that cannot be satisfied mechanically becomes
-a rubber stamp.
+Style is numpy (Parameters / Returns); only presence is checked, not style.
 """
 
 from __future__ import annotations

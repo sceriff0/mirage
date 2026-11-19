@@ -1,35 +1,15 @@
 """Every fixture a test opens must actually be there.
 
-tests/testdata/ is gitignored (.gitignore:140,142) with a small tracked
-exception, so a fixture is available at all only if
-tests/testdata/generate_complete_testdata.py writes it or git carries it. A
-fixture that is neither exists on exactly one developer's machine, and the test
-that opens it fails everywhere else -- or passes locally and hides a regression
-CI cannot see.
+tests/testdata/ is gitignored with a small tracked exception, so a fixture is
+available only if tests/testdata/generate_complete_testdata.py writes it or git
+carries it. Otherwise it exists on one developer's machine and the test that opens
+it fails everywhere else.
 
-Not hypothetical. tests/testdata/seg_eval_P001.json and _P002.json were
-referenced by tests/modules/merge_seg_eval.nf.test with `checkIfExists: true`
-and produced by nothing: the CSE removal in cea0b47 took the writer away and
-left the reader. They were 2 of the 3 nf-test failures standing on this branch,
-and had been failing since that commit.
-
-RULING R7, INVERTED. R7 says fixtures go in the generator and are never
-committed. This is the other direction -- a fixture the generator never writes
--- and it is the one that actually bit.
-
-WHY THIS CHECKS EXISTENCE RATHER THAN THE GENERATOR'S SOURCE. The first version
-of this file grepped the generator for each filename, and it was wrong twice
-over: it reported sample_DAPI_intensity.csv as an orphan (the generator writes
-it through an f-string, so the literal name never appears) and it would have
-missed a producer that had been deleted while its `open(...)` line survived.
-Existence is the property that matters and the only one with no blind spot.
-
-It binds in CI, which is where it must. Every job that touches fixtures runs the
-generator into a fresh checkout first, so "the file is there" can only mean the
-generator wrote it or git carries it. Locally it is weaker -- a stale file from
-an earlier branch satisfies it -- and that is an acceptable asymmetry: the
-failure being prevented is "green here, red in CI", and CI is where the strong
-form runs.
+This checks existence rather than grepping the generator's source: the generator
+writes some names through f-strings, and a deleted producer can leave its
+`open(...)` line behind. In CI every job runs the generator into a fresh checkout
+first, so existence there means "generated or tracked". Locally a stale file from
+another branch also satisfies it.
 """
 
 import json
@@ -45,54 +25,25 @@ GENERATOR = TESTDATA / "generate_complete_testdata.py"
 
 # Any tests/testdata/<name> reference in an nf-test file, a Python test or a
 # test config. A trailing '.' is prose punctuation, not part of the name.
-# `\w` is Python's default Unicode-aware word class (no re.UNICODE needed for a
-# str pattern), so this already matches an accented filename like
-# P001_ünïcode.ome.tiff -- it does NOT match a space, which is deliberate: this
-# regex also runs over prose (docstrings, assertion messages) where a bare
-# space would swallow the rest of a sentence as part of the "fixture name".
+# `\w` is Unicode-aware, so accented filenames match. No space: this also runs
+# over prose, where a space would swallow the rest of a sentence.
 _REF = re.compile(r"tests/testdata/([\w\-][\w\-.]*[\w\-])")
 
-# A tests/testdata/<name> reference INSIDE A CSV FIXTURE FIELD specifically
-# (space_path_input.csv, unicode_input.csv, and friends -- generate_complete_
-# testdata.py section 10i). A CSV field's own syntax already gives an
-# unambiguous terminator -- a comma (unquoted) or the closing quote (quoted) --
-# so unlike _REF above, this can safely allow a space or a `/` subdirectory
-# without risking swallowing trailing prose: a fixture CSV has no prose. This
-# is what lets "with space/P001 ref.ome.tiff" and a comma-free absolute path
-# resolve to the right file instead of just the first path segment.
+# A tests/testdata/<name> reference inside a CSV fixture field. A comma or closing
+# quote terminates it, and a fixture CSV has no prose, so a space or `/` is safe
+# ("with space/P001 ref.ome.tiff").
 _REF_CSV_FIELD = re.compile(r'tests/testdata/([^,"\n]+)')
 
-# A tests/testdata/<name> reference wrapped in a quoted argument -- e.g. an
-# nf-test `file('$projectDir/tests/testdata/with space/P001 ref.ome.tiff',
-# checkIfExists: true)` call. Like the CSV field pattern above (and unlike
-# _REF), a quoted Groovy/Python string argument has its own unambiguous
-# terminator -- the closing quote -- so this can safely allow a space or a
-# `/` subdirectory in the captured name. The char class before the literal
-# `tests/testdata/` accepts the opening quote itself OR a `/` (the case where
-# the fixture path is written as `$projectDir/tests/testdata/...`, so the
-# character immediately before `tests/testdata` is the path separator, not
-# the quote).
-#
-# The captured group is deliberately NOT "anything up to the next quote":
-# this file's own docstrings and assertion messages quote-wrap a *prose*
-# mention of a fixture path too (`'tests/testdata/<name>'` in an f-string
-# error message, `"tests/testdata/generate_complete_testdata.py first: " +
-# ...`), and an unrestricted `[^'"\n]+?` swallows the trailing English words
-# right up to that string's real closing quote. Restricting the group to
-# path-safe characters -- word chars, `-`, `.`, `/`, plus AT MOST ONE space
-# between path-safe runs (the "with space" case) -- makes every one of those
-# prose sentences fail to reach a quote at all (a bare `<`, or a `:` inside
-# "first:", breaks the run before any quote is in reach), while the one
-# legitimate multi-segment, space-containing fixture path still matches in
-# full. This pattern is unioned with _REF's matches in _referenced() below
-# rather than replacing it, and the text a quoted match consumed is masked
-# out first so _REF cannot also emit a truncated word-boundary match (e.g.
-# plain "with") for the same reference.
+# A tests/testdata/<name> reference in a quoted argument, e.g.
+# `file('$projectDir/tests/testdata/with space/P001 ref.ome.tiff')`. The closing
+# quote terminates it, so single spaces and `/` are allowed; the opening char may
+# be the quote or a `/`. The group is limited to path-safe characters so a quoted
+# prose sentence mentioning tests/testdata/ never reaches a quote. Its matches are
+# masked out before _REF runs, so _REF cannot also emit a truncated one ("with").
 _REF_QUOTED = re.compile(r"""['"/]tests/testdata/([\w\-./]+(?: [\w\-./]+)*)['"]""")
 
-# Fixtures that are DELIBERATELY empty, keyed on the name, with the reason. Each
-# entry is verified below to still exist AND still be empty -- a stale exemption is
-# a licence nobody is using that the next reader will trust.
+# Fixtures that are empty on purpose, keyed on the name, with the reason. Each entry
+# is verified below to still exist and still be empty.
 EMPTY_ON_PURPOSE = {
     "dummy_singularity.sif": (
         "not an image and never opened. tests/modules/"
@@ -106,15 +57,10 @@ EMPTY_ON_PURPOSE = {
     ),
 }
 
-# Fixtures that are DELIBERATELY CORRUPT -- non-empty, but built specifically so a
-# reader FAILS on them -- keyed on the name, with the reason. A DIFFERENT shape of
-# exemption from EMPTY_ON_PURPOSE above: these are not zero bytes and the zero-byte
-# check still applies to them (an unexpected truncation to 0 bytes would itself be a
-# regression worth catching); only `_openable()`'s "this must parse" assumption is
-# wrong for a fixture whose entire point is that it does not parse. Each entry is
-# verified below to still exist, still be non-empty, AND still actually fail to open --
-# a fixture that became openable again (or vanished) would make the exemption a stale
-# licence nobody is using.
+# Fixtures that are corrupt on purpose -- non-empty, built so a reader fails on them --
+# keyed on the name, with the reason. The zero-byte check still applies; only
+# `_openable()` is skipped. Each entry is verified to exist, be non-empty and still
+# fail to open.
 DELIBERATELY_UNOPENABLE = {
     "fmt_truncated.ome.tiff": (
         "the first 100 bytes of fmt_bigtiff.ome.tiff -- past the TIFF header, short of "
@@ -177,36 +123,18 @@ def _referenced():
             continue  # the generator naturally names everything it writes
         if TESTDATA in path.parents and path.suffix != ".csv":
             continue
-        # A GENERATED CHECKPOINT CSV IS A REFERENCE. tests/testdata/prior_run/csv/
-        # postprocessed.csv names P001_prior_pyramid.ome.tiff in its `pyramid` column
-        # and ADD_CYCLE stages that path into EXTRACT_MASK_SERIES and
-        # SPLIT_PRIOR_PYRAMID. Nothing else in tests/ mentions that fixture, so with
-        # tests/testdata/ excluded wholesale this guard could never have seen the one
-        # fixture whose emptiness had no other witness. (It was called
-        # P001_pyramid.ome.tiff until 2026-09-13, when a second producer of that name
-        # arrived from `main` and silently overwrote it -- see the generator's own
-        # note. `_prior_` is what keeps the two apart.)
+        # A generated checkpoint CSV is a reference: prior_run/csv/postprocessed.csv
+        # names P001_prior_pyramid.ome.tiff, which nothing else in tests/ mentions.
         #
-        # Comments blanked, STRINGS INTACT. A fixture named in a `//` comment --
-        # this repo's tests explain their fixtures constantly -- is not a
-        # reference, and would make this file demand a producer for a path
-        # nothing opens. The path itself lives inside a quoted `file('...')`
-        # argument, so the strings must survive or the scan finds nothing.
-        #
-        # A .csv fixture gets the CSV-FIELD pattern, not the prose-safe one: a
-        # fixture CSV has no prose to protect against, and its own comma/quote
-        # syntax is what lets a space or a `/` subdirectory be captured safely
-        # (see _REF_CSV_FIELD's doc above).
+        # Comments blanked, strings intact: a fixture named in a comment is not a
+        # reference, but the real path lives inside a quoted `file('...')` argument.
+        # A .csv fixture gets the CSV-field pattern (no prose to protect against).
         text = strip_comments(path.read_text(errors="ignore"))
         if path.suffix == ".csv":
             names = set(_REF_CSV_FIELD.findall(text))
         else:
-            # Quoted references (see _REF_QUOTED's doc above) are captured
-            # whole first, INCLUDING an embedded space, then masked out of the
-            # text before the prose-safe _REF pattern runs -- otherwise _REF
-            # would also match the same reference up to its first whitespace
-            # (e.g. "with" out of "with space/P001 ref.ome.tiff") and demand a
-            # producer for a fixture that was never really referenced.
+            # Quoted references are captured whole (spaces included), then masked
+            # out so _REF cannot also match a truncated prefix ("with").
             names = set()
             masked = list(text)
             for m in _REF_QUOTED.finditer(text):
@@ -279,13 +207,8 @@ def test_every_referenced_fixture_is_non_empty_and_openable():
 
 
 def test_the_empty_on_purpose_allowlist_has_no_dead_entries():
-    """An exemption for a fixture that is gone, or that now has real content, is a
-    licence nobody is using and the next reader will trust.
-
-    A THIRD way an entry goes dead: nothing references it any more. The fixture
-    still exists at zero bytes, so the two checks above stay silent, but no test
-    opens it -- the exemption is licensing a file the suite no longer looks at.
-    """
+    """An EMPTY_ON_PURPOSE entry is dead if its fixture is gone, has content, or
+    is referenced by no test."""
     stale = []
     refs = _referenced()
     for name, reason in EMPTY_ON_PURPOSE.items():
@@ -305,15 +228,8 @@ def test_the_empty_on_purpose_allowlist_has_no_dead_entries():
 
 
 def test_the_deliberately_unopenable_allowlist_has_no_dead_entries():
-    """Same shape as the EMPTY_ON_PURPOSE staleness check above, plus a FOURTH way
-    this particular exemption class goes dead that the empty one cannot: the fixture
-    quietly became openable. A DELIBERATELY_UNOPENABLE entry that _openable() now
-    accepts is licensing a claim ("this cannot be read") that is no longer true, and
-    the reader-side test the fixture exists for (e.g.
-    test_a_truncated_file_raises_rather_than_returning_a_partial_read) would then be
-    the only thing standing between a silent regression and the suite -- exactly the
-    blind spot this file exists to close.
-    """
+    """As the EMPTY_ON_PURPOSE check, plus: an entry is dead once _openable()
+    accepts the fixture, because its "this cannot be read" claim is then false."""
     stale = []
     refs = _referenced()
     for name, reason in DELIBERATELY_UNOPENABLE.items():

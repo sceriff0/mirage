@@ -188,10 +188,8 @@ nextflow_process {
                 { assert process.out.qc },
                 { assert process.out.qc_fullres },
                 { assert process.out.versions },
-                // `qc` is `path("qc/*_QC_RGB.{png,tif}")`, so slot 1 is a LIST of two
-                // files, not one path -- flatten before wrapping. (`qc_fullres` matches a
-                // single file and comes back as a bare String; `[x].flatten()` covers
-                // both without the assertion having to know which.)
+                // `qc` is `path("qc/*_QC_RGB.{png,tif}")`, so slot 1 is a list of two files;
+                // `qc_fullres` comes back as a bare String. `[x].flatten()` covers both.
                 { with(process.out.qc) {
                     assert size() == 1
                     def rendered = [get(0).get(1)].flatten().collect { file(it) }
@@ -210,20 +208,10 @@ nextflow_process {
 
     test("Should pass the configured nuclear markers to the QC script - rendered command") {
 
-        // The teeth for the DAPI-hardcode fix in bin/utils/qc.py. That script used to pick
-        // the overlay channel with `"DAPI" in ch.upper()`, and this process never passed
-        // it params.nuclear_markers at all -- so the resolver could not be used even in
-        // principle. It worked only because the literal test fell back to channel 0, which
-        // CONVERT_IMAGE reserves for the nuclear channel; a CELLTOX panel got a warning on
-        // every slide and would have picked the wrong channel had that invariant changed.
-        //
-        // Asserting the CELLTOX-first override (not just the shipped default) is what makes
-        // this a real check: it proves the flag is built from params.nuclear_markers rather
-        // than hardcoded to the default list.
-        //
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so no
-        // stub run can observe a rendered command. Same shape as
-        // tests/modules/tiled_coarse.nf.test's rendered-command cases.
+        // Pins that the overlay channel comes from params.nuclear_markers, not a hardcoded
+        // "DAPI". The CELLTOX-first override proves the flag is built from the param rather
+        // than the default list. `stub` tag but no `options "-stub"`: -stub never evaluates
+        // a script: block.
         tag "stub"
 
         when {
@@ -269,20 +257,11 @@ nextflow_process {
 
     test("Should pass the native pre-registration image to the QC script - rendered command") {
 
-        // The teeth for the before/after change. -stub NEVER evaluates a script:
-        // block, so no stub run can observe that --native reaches the command line
-        // -- the process could take the third input, ignore it, and every stub test
-        // in this file would still pass. Same shape as the nuclear-markers case
-        // above: `stub` tag so CI's blocking gate collects it, but NO
-        // options "-stub", because stub mode would substitute away the very
-        // command under assertion.
-        //
-        // P001_mov2 stands in for the native counterpart of P001_mov1. It has to be
-        // a DIFFERENT file: `path(native_image, stageAs: 'native/*')` and
-        // `path(registered)` would otherwise stage two entries under one basename.
-        //
-        // pixel_size is required here too: this is a real (non-stub) run, and the
-        // module unconditionally renders `--pixel-size-um ${meta.pixel_size}`.
+        // -stub never evaluates script:, so only this case shows --native reaches the command
+        // line. `stub` tag, no options "-stub".
+        // P001_mov2 stands in for the native counterpart of P001_mov1; it must be a different
+        // file or `native/*` and `path(registered)` would stage two entries under one basename.
+        // pixel_size is required: the module always renders `--pixel-size-um ${meta.pixel_size}`.
         tag "stub"
 
         when {

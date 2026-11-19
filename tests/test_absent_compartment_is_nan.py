@@ -1,26 +1,11 @@
 """An absent compartment must be distinguishable from a measured, signal-free one.
 
-`bin/quantify.py` filled an empty compartment with `0.0`:
+In `bin/quantify.py` a cell with no nuclear overlap at all gets NaN for its nuclear
+Median/Mean, while a cell whose nucleus was measured and dark gets 0.0. A 0.0 fill would
+read downstream as a negative call. The export layer treats NaN as missing:
+`build_measurements` skips it (`if pd.notna(val)`), so no bare `NaN` reaches the JSON.
 
-    ndimage.labeled_comprehension(flat_val, nuc_cell_labels, valid_labels, np.median,
-                                  np.float64, 0.0)
-
-so a cell with **no nuclear overlap at all** and a cell whose nucleus was **measured and dark**
-produced the identical number. Downstream that reads as a negative call rather than as a
-missing measurement, and nothing can tell the two apart afterwards.
-
-This is an internal inconsistency, not a matter of taste. The consumer already has a documented
-policy, at `bin/export_geojson.py:78`:
-
-    # For constant columns (std=0), zscore produces NaN for all rows — replace with 0.
-    # But preserve NaN for cells that had missing raw data (those should stay NaN).
-
-and `build_measurements` guards every value with `if pd.notna(val)`, so a NaN measurement is
-**omitted from the GeoJSON** rather than written as a bare `NaN` literal -- which matters,
-because bare `NaN` is not valid JSON and strict parsers reject it. The export layer was built
-for NaN-means-missing; the producer was the one contradicting it.
-
-`Sum` deliberately stays `0.0`: the sum over an empty set is zero, and that is a real answer.
+`Sum` stays `0.0`: the sum over an empty set is zero, and that is a real answer.
 Only `Median` and `Mean` become NaN, because the average of nothing is not a number.
 """
 
@@ -47,7 +32,7 @@ from quantify import compute_compartment_intensities  # noqa: E402
 
 
 def test_a_cell_with_no_nuclear_overlap_reports_nan_not_zero():
-    """The finding: 0.0 here is indistinguishable from "measured, no signal"."""
+    """No nuclear overlap gives NaN, not a 0.0 indistinguishable from "measured, no signal"."""
     cell_mask = np.array([[1, 1, 1], [1, 1, 1]])
     nuclei_mask = np.zeros_like(cell_mask)
     channel = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])

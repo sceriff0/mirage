@@ -34,20 +34,8 @@ nextflow_workflow {
             assertAll(
                 { assert workflow.success },
                 { assert workflow.out.checkpoint_csv },
-                // The brief asked for `registration_tre.size() >= 1` here ("VALIS emits an
-                // intrinsic TRE artifact"), on the theory that VALIS always produces one.
-                // On a REAL run it usually does (bin/register.py writes
-                // preprocessed/data/{name}_summary.csv from VALIS's error_df), which is why
-                // REGISTER's `summary` output is declared `optional: true` rather than
-                // Channel.empty()-by-design. But modules/local/register.nf's `stub:` block
-                // (register.nf:222-229) only `touch`es registered_slides/*, the registrar
-                // pickle, the channels manifest and (at reg_qc>=2) the stage checkpoint -- it
-                // never writes anything under preprocessed/data/*.csv. So under -stub the glob
-                // behind `summary`/intrinsic_tre matches nothing and the channel is empty,
-                // measured here as `registration_tre.size() == 0`. This is a real discrepancy
-                // between the brief's premise and current stub behaviour (not a defect: -stub
-                // deliberately only wires channels, per CLAUDE.md "Verification reality" #1),
-                // asserted as observed rather than as specified. See task-12-report.md.
+                // REGISTER's stub writes no preprocessed/data/*.csv, so under -stub the
+                // optional intrinsic_tre channel is empty; a real run usually has one.
                 { assert workflow.out.registration_tre.size() == 0,
                     "VALIS's REGISTER stub: block never touches preprocessed/data/*.csv, so " +
                     "the optional `summary` emit (intrinsic_tre) is empty under -stub, unlike " +
@@ -57,24 +45,12 @@ nextflow_workflow {
         }
     }
 
-    // Legacy GPU/CPU registration tests moved to legacy/
 
     test("Should run tiled/STARE registration - stub") {
 
-        // Same inputs as "Should run VALIS registration - stub", with
-        // registration_method flipped to 'tiled'.
-        //
-        // The brief for this case assumed intrinsic_tre follows the adapter seam's
-        // null-object rule for a method that "produces no TRE" -- but tiled_adapter.nf's
-        // own header and registration.nf's ch_registration_tre comment both say
-        // otherwise: "Both backends produce one (VALIS a feature-distance CSV, STARE a
-        // *_tre.json)". TILED_SOLVE declares `path("*_tre.json"), emit: tre` as a real,
-        // unconditional output (modules/local/tiled_solve.nf), so the tiled adapter's
-        // intrinsic_tre is NOT a Channel.empty() slot -- it is populated once per moving
-        // slide, including under -stub (its stub: block unconditionally writes
-        // *_tre.json, unlike VALIS's REGISTER stub -- see the comment on the VALIS case
-        // above). Asserted as such here rather than asserting an empty channel that
-        // would never be empty; see task-12-report.md for the full discrepancy note.
+        // Same inputs as the VALIS case, with registration_method 'tiled'.
+        // TILED_SOLVE always writes *_tre.json (stub included), so intrinsic_tre is
+        // populated once per moving slide, not a Channel.empty() slot.
         tag "stub"
         options "-stub"
 
@@ -144,10 +120,8 @@ nextflow_workflow {
         }
     }
 
-    // Invalid method test removed — REGISTRATION no longer takes method param.
-    // registration_method's allowed values are declared in nextflow_schema.json
-    // and enforced at launch by validateParameters(); see
-    // tests/param_validation.nf.test.
+    // registration_method's allowed values are enforced at launch by the schema;
+    // see tests/param_validation.nf.test.
 
     test("Should handle padding workflow - stub") {
 
@@ -212,29 +186,10 @@ nextflow_workflow {
     }
 
     /*
-     * NOTHING INFERS A REFERENCE. registration.nf's grouping closure used to promote
-     * items[0] -- whichever slide arrived first -- and it did so DOWNSTREAM of the
-     * preprocessing checkpoint writer, so a run that auto-promoted wrote
-     * csv/preprocessed.csv with is_reference=false on every row and its own
-     * `--start registration` then refused to read it. Auto-promotion, and the
-     * parameter that enabled it, are gone (commit b63b986); the reference is resolved
-     * once at samplesheet-read time in INPUT_CHECK (CsvUtils.resolveReferenceRows) and
-     * arrives in meta.is_reference. What survives in registration.nf is a GUARD on that
-     * invariant, and these two cases are what pin it.
-     *
-     * These cases used to set `allow_auto_reference` (true here, false below) to assert
-     * that the flag changed nothing. The flag no longer EXISTS -- it is absent from
-     * nextflow.config, nextflow_schema.json, lib/, subworkflows/ and workflows/ -- and
-     * nextflow.config sets validation.logging.unrecognisedParams = 'error', so a run
-     * that set it would ABORT. These cases survived only because nf-test drives the
-     * SUBWORKFLOW directly and never reaches workflows/mirage.nf's validateParameters()
-     * -- they were green for a reason unrelated to their premise. The premise that
-     * remains -- a reference-less
-     * patient is refused -- is still true and still worth testing, so it is what they
-     * now say.
-     *
-     * The refusal on a full run, from the samplesheet, is main.nf.test's "Should reject
-     * a samplesheet that marks no reference".
+     * The reference is resolved once in INPUT_CHECK (CsvUtils.resolveReferenceRows)
+     * and arrives in meta.is_reference; registration.nf only guards that invariant.
+     * These cases pin the guard: a reference-less patient is refused. The full-run
+     * refusal is main.nf.test's "Should reject a samplesheet that marks no reference".
      */
     test("Should reject a multi-slide patient that names no reference - stub") {
 
@@ -268,16 +223,9 @@ nextflow_workflow {
     }
 
     /*
-     * The SINGLE-SLIDE case, which is not a duplicate of the one above: a lone slide has
-     * nothing to register against and REGISTER_PATIENT branches it straight through to
-     * ch_registered. The guard must still fire, because the grouping closure runs BEFORE
-     * that branch -- otherwise a reference-less patient would be silently passed through
-     * as if it were registered, which is worse than the multi-slide failure since there
-     * is no downstream step left to notice.
-     *
-     * TAGGED `stub`. It carried no tag at all, so no job on any trigger collected it:
-     * CI's blocking gate is `nf-test test --tag stub`, the real leg is `--tag real`, and
-     * 243 collected cases were 213 stub + 28 real + 1 security + this orphan.
+     * Single slide: REGISTER_PATIENT passes it straight through to ch_registered, but
+     * the guard runs before that branch, so a reference-less lone slide must still be
+     * refused rather than passed through as if registered.
      */
     test("Should reject a single-slide patient that names no reference - stub") {
 
@@ -377,27 +325,10 @@ nextflow_workflow {
 
     test("Should seg-QC score a multi-slide patient whose reference is not the first slide by id - stub") {
 
-        // A multi-slide patient must be seg-QC scored regardless of WHERE its reference
-        // sits in the group. seg_qc.nf's reference/moving branch (seg_qc.nf:52-55) reads
-        // meta.is_reference, and such a patient once produced ZERO seg-QC output: the
-        // reference branch was empty, so the combine-by-patient join matched nothing.
-        //
-        // The MECHANISM that used to break it is gone. registration.nf's grouping closure
-        // used to pick a reference itself and mutate that item's meta to
-        // is_reference: true *inside the grouped list*, so whether a consumer saw the
-        // mutation depended on which channel it read from. The reference is now resolved
-        // once in INPUT_CHECK (CsvUtils.resolveReferenceRows) and arrives already
-        // stamped, so no consumer can disagree about it -- which is why the input below
-        // carries is_reference: true on one slide: that is exactly the shape INPUT_CHECK
-        // hands REGISTRATION.
-        //
-        // This case used to set `allow_auto_reference = true`, a parameter deleted in
-        // b63b986; it changed nothing here even when it existed, since the input below
-        // already names its reference. Removed rather than replaced.
-        //
-        // The assertion still earns its place: it pins the OUTCOME (this patient gets
-        // scored) rather than the mechanism, so it survives the next reshuffle of where
-        // SEG_QC draws its stream from.
+        // A multi-slide patient must be seg-QC scored whichever slide is its
+        // reference: seg_qc.nf splits reference/moving on meta.is_reference, and an
+        // empty reference branch makes the per-patient join match nothing. The input
+        // carries is_reference on one slide, the shape INPUT_CHECK hands REGISTRATION.
 
         tag "stub"
         options "-stub"
@@ -428,55 +359,26 @@ nextflow_workflow {
                 { assert workflow.trace.tasks().findAll {
                     it.name.contains('SEG_QC_GEOJSON')
                 }.size() == 2 },
-                // The reference/moving split in seg_qc.nf actually resolved: one
-                // moving slide was scored against the auto-picked reference. Before
-                // this task's channel swap this was empty (the bug this test guards).
+                // The reference/moving split in seg_qc.nf resolved: one moving
+                // slide was scored against the reference.
                 { assert workflow.out.seg_qc.size() == 1 }
             )
         }
     }
 
     /*
-     * THE ASSERTION WITH TEETH for the native-image join (Task 7). ch_for_qc pairs each
-     * moving slide's NATIVE (pre-registration) image to its own registered file via
-     * `.join(ch_natives_for_qc, by: 0)` keyed on meta.id. A join() drops an unmatched
-     * pair SILENTLY -- workflow.success stays true and workflow.out.qc simply has fewer
-     * entries -- and a wrong-but-present key cross-pairs one slide's native image with
-     * another slide's registered one, which no size/count assertion would catch either.
+     * Pins the native-image join: ch_for_qc pairs each moving slide's native image
+     * with its registered file via `.join(..., by: 0)` on meta.id. A join drops an
+     * unmatched pair silently, and a wrong key cross-pairs slides.
      *
-     * Two moving slides, each with a distinct channel set (so REGISTER's stub names
-     * their registered file distinctly, register.nf:199) AND a distinct native testdata
-     * file, is what makes the pairing checkable at all: GENERATE_REGISTRATION_QC stages
-     * its native input into its own `native/` subdirectory (stageAs: 'native/*'), so
-     * every task directory containing one is this process's, and the native file it
-     * staged must match the SAME slide as the registered file staged alongside it.
+     * The reference id sorts first (cycle1): with a non-unique key such as
+     * meta.patient_id, join() pairs FIFO, the reference's native image is queued first
+     * and every pair shifts by one, so the mutation fails deterministically. With the
+     * reference sorting last, FIFO order happens to be correct and the test is blind.
      *
-     * THE REFERENCE IS NAMED SO THAT IT SORTS FIRST, and that is load-bearing rather than
-     * cosmetic. registration.nf orders a patient's slides by meta.id (`items` is
-     * `.toSorted { it[0].id }`), and both the natives stream and the registered stream
-     * inherit that order. If the join key is degraded from meta.id to something
-     * NON-UNIQUE -- meta.patient_id is the obvious mistake, since it is right there in the
-     * same closure -- join() falls back to pairing the duplicates FIFO in arrival order,
-     * and with the reference sorting LAST (ids P004_ref/P004_mov1/P004_mov2) that FIFO
-     * order happens to be the correct one, so the mutation stayed GREEN and this test's
-     * cross-pair teeth were arrival-order luck. With cyclic-IF ids (the reference is
-     * cycle1, so it sorts FIRST) the reference's own native image is the first thing
-     * queued under the patient key, the first moving slide pops it, and every subsequent
-     * pair is shifted by one -- deterministically wrong, deterministically red. Drill
-     * performed 2026-09-03: changing BOTH `meta.id` keys in registration.nf's
-     * ch_natives_for_qc/ch_for_qc block to `meta.patient_id` fails this test.
-     *
-     * WHY THE REGISTERED FILE IS IDENTIFIED THROUGH qc/ AND NOT BY GLOBBING THE TASK DIR.
-     * GENERATE_REGISTRATION_QC takes FOUR inputs, and two of them end '_registered.ome.tiff':
-     * the moving slide's own registered file AND the patient's REFERENCE registered file
-     * (`reference` in the input tuple -- the stub REGISTER registers the reference too, and
-     * names it from ITS channels). So a `listFiles().find { it.name.endsWith(...) }` over the
-     * task directory returns whichever of the two the filesystem happens to hand back first
-     * -- the moving one on APFS, the REFERENCE on CI's ext4, which is exactly how this test
-     * passed locally and failed in GitHub Actions run 33723851819 reporting a mis-pairing
-     * that had not happened. qc/<registered.simpleName>_QC_RGB.png is derived from the
-     * `registered` input ALONE (modules/local/generate_registration_qc.nf's stub block), so
-     * it names exactly one slide and cannot collide with the reference.
+     * The registered file is identified through qc/<simpleName>_QC_RGB.png, not by
+     * globbing the task dir: two staged inputs end '_registered.ome.tiff' (the moving
+     * slide and the reference), and directory order differs between APFS and ext4.
      */
     test("Should pair each slide's own native image with its registered file, not the other slide's - stub") {
 
@@ -523,8 +425,8 @@ nextflow_workflow {
                         def nativeFiles = new File(dir, 'native').listFiles()
                         assert nativeFiles.size() == 1 :
                             "expected exactly one staged native file, found ${nativeFiles*.name}"
-                        // See the header: the qc/ output is the ONLY unambiguous name of
-                        // the `registered` input in this directory.
+                        // The qc/ output is the only unambiguous name of the
+                        // `registered` input in this directory (see header).
                         def qcFiles = new File(dir, 'qc').listFiles()
                             .findAll { it.name.endsWith('_QC_RGB.png') }
                         assert qcFiles.size() == 1 :
@@ -583,16 +485,8 @@ nextflow_workflow {
                     assert get(1).get(1) != null
                 }},
                 // patient_id preserved in all outputs
-                // Explicit receiver on the collect, NOT `with(...) { collect { ... } }`.
-                // Unqualified, `collect` inside a `with` block does not reach the
-                // delegate List: the closure is handed the WHOLE list as `it`, so
-                // `it[0]` is the first [meta, path] tuple and `.patient_id` spreads over
-                // it, giving `MissingPropertyException ... for java.util.ArrayList,
-                // Reason: No such property: patient_id for class: java.lang.String`.
-                // Measured on nightly runs 33633986188 and 33740335196. `get(n)` in a
-                // `with` block is fine (it is a real List method); it is the Groovy
-                // extension methods that miss. The stub cases in this file already use
-                // the explicit form and are green.
+                // Explicit receiver on collect: inside `with { }`, an unqualified
+                // `collect` gets the whole list as `it`, not the delegate's elements.
                 {
                     def patient_ids = workflow.out.registered.collect { it[0].patient_id }
                     assert patient_ids.size() == 2

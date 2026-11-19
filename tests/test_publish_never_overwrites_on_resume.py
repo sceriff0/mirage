@@ -1,14 +1,10 @@
 """No publishDir in conf/modules.config sets `overwrite: true`.
 
-Nextflow's default already overwrites the output of a task that RE-RUNS (measured on
-25.04.7: a resumed run whose task re-executed replaced the published file). What
-`overwrite: true` adds is re-copying the outputs of CACHED tasks on every `-resume`,
+Nextflow's default already overwrites the output of a task that re-runs. What
+`overwrite: true` adds is re-copying the outputs of cached tasks on every `-resume`,
 which rewrites each published file's mtime. Anything that reads a published file as a
-task input -- a `--start` run from a checkpoint CSV, the arm benchmark's segmentation
-arms reading their registration arm's registered slides -- hashes path + size + mtime,
-so it lost its cache after every resume of the run it read from (measured 2026-10-01:
-a cached `overwrite: true` task republished with a new mtime). It also re-copied every
-whole-slide image on every resume.
+task input (e.g. a `--start` run from a checkpoint CSV) hashes path + size + mtime, so
+it would lose its cache, and every whole-slide image would be re-copied.
 """
 
 from __future__ import annotations

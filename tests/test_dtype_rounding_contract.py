@@ -1,12 +1,11 @@
 """`.astype()` floors. Every float->integer cast in this repo must round first.
 
-`bin/apply_basic_profiles.py` states the convention and explains it (it inherited the
-rule from the deleted `bin/preprocess.py`, which stated it first):
+`bin/apply_basic_profiles.py` states the convention:
 
     * **The storage dtype rule.** Clip to the dtype's range, ROUND (half-to-even),
       then cast. ... astype() alone floors, a systematic -0.5 LSB bias.
 
-Three sites did not follow it, and two of them write published artefacts:
+Sites checked here, two of which write published artefacts:
 
   * `merge_channels_pyramid.write_pyramidal_ome_tiff` -- the QuPath-facing pyramid;
   * `merge_channels_pyramid._load_channel_stack` -- the same cast, same file, 250 lines apart;
@@ -20,8 +19,7 @@ On the 8-bit QC path it is worse than a bias: with `(img * 255).astype(np.uint8)
 input of exactly 1.0 reaches 255, so the top bin is 1/255 as wide as every other bin and the
 brightest tissue is systematically reported one level dark.
 
-The float->uint16 rule now has ONE owner, `merge_channels_pyramid.to_uint16`, because the two
-sites that drifted from the convention drifted together while sitting in the same file.
+The float->uint16 rule has one owner, `merge_channels_pyramid.to_uint16`.
 """
 
 import os
@@ -144,8 +142,8 @@ def test_normalize_image_top_bin_is_not_starved():
     """With truncation only an exact 1.0 reaches 255; the brightest tissue reads one level dark.
 
     The input must NOT be aligned to the 8-bit quantisation grid. `linspace(0, 1, 256)` gives
-    exactly i/255, so every value scales to a whole integer and rounding and truncation agree --
-    that input cannot see this bug at all. A dense off-grid ramp can.
+    exactly i/255, so every value scales to a whole integer and rounding and truncation agree.
+    A dense off-grid ramp discriminates.
 
     Under truncation, `out == 255` holds only for v == 1.0 exactly: one pixel, a bin of measure
     zero. Under rounding it holds for v >= 254.5/255, a bin of the usual half-width at the
@@ -170,18 +168,9 @@ def test_normalize_image_still_returns_uint8():
 # The two halves of one phase correlation, twelve lines apart
 # ---------------------------------------------------------------------------
 #
-# bin/tiled_reg_tile.py read the reference tile as float32 and the moving crop as `dtype=float`
-# (= float64). scikit-image promotes the pair internally, so the split cost float64 memory on
-# the two largest arrays in the task -- the warped moving tile and its source crop -- and bought
-# nothing: the source data is uint16, and float32 carries 24 mantissa bits.
-#
-# Measured over 6 seeded 384x384 tiles with a known (-3.4, +2.7) shift, comparing float32/float64
-# against float32/float32:
-#   recovered shift  identical to every printed digit (delta = 0.000e+00; upsample=10 quantises
-#                    to 0.1 px, orders of magnitude coarser than the difference)
-#   correlation error  differs by 7e-11 to 1.3e-09, against a gate threshold of 0.99
-# So unifying is inert where it is read, which is what keeps this change out of registration
-# output.
+# Both halves of the phase correlation must be float32. A float64 half costs float64 memory
+# on the two largest arrays in the task (scikit-image promotes the pair) and buys nothing: the
+# source data is uint16, float32 carries 24 mantissa bits, and the recovered shift is identical.
 
 
 def test_both_halves_of_the_phase_correlation_arrive_at_the_same_precision(

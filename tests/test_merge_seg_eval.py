@@ -37,7 +37,7 @@ def test_merge_two(tmp_path):
     rows = list(csv.DictReader(out.open()))
     assert {r["id"] for r in rows} == {"p1", "p2"}
     assert any(r["QualityScore"] == "0.7" for r in rows)
-    # New drift-visibility columns must round-trip through the merged CSV.
+    # Drift-visibility columns must round-trip through the merged CSV.
     assert "downsample_factor" in rows[0]
     assert "effective_pixel_size_um" in rows[0]
     assert any(r["downsample_factor"] == "2" for r in rows)
@@ -58,8 +58,7 @@ def test_flatten_carries_downsample_fields():
 
 
 def test_flatten_defaults_gracefully_on_older_format():
-    # Older per-patient JSONs (written before seg_quality_eval.py emitted the
-    # drift fields) lack these keys entirely; flatten() must not crash.
+    # Per-patient JSONs without the drift fields must not crash flatten().
     doc = {"id": "p1", "QualityScore": 0.5, "metrics": {}}
     row = flatten(doc)
     assert row["downsample_factor"] is None

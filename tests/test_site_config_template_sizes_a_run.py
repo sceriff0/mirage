@@ -8,12 +8,10 @@ A run that sets neither is refused before any process is submitted:
     ERROR ~ Validation of pipeline parameters failed!
     * Missing required parameter(s): max_cpus, max_memory
 
-Ruling R4 for 1.0.0 makes `-c site.config` the mechanism every documented command
-uses to satisfy them, and that file is copied from this template. A template that
-does not carry them makes every documented command in the repository refuse to
-launch, which is exactly the state the 2026-09-02 audit found.
+Every documented command satisfies them with `-c site.config`, copied from this
+template, so a template without them makes every documented command refuse to launch.
 
-The rule is DERIVED, not a hardcoded pair: every parameter that the schema marks
+The rule is derived, not a hardcoded pair: every parameter that the schema marks
 required and that `nextflow.config` declares `null` must appear in the template,
 apart from the per-run values a site template cannot know.
 """
@@ -128,8 +126,7 @@ def test_the_template_supplies_every_required_parameter_with_no_default():
 
 
 def test_the_per_run_exemptions_are_not_stale():
-    """An exemption for a parameter that is no longer required-and-defaultless is
-    a licence nobody is using and the next reader will trust."""
+    """Every exemption names a parameter that is still required-and-defaultless."""
     defaults = _config_defaults()
     required = _schema_required()
     for name, reason in PER_RUN.items():

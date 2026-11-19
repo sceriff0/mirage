@@ -2,19 +2,11 @@
 
 ``open_lazy`` is the shared entry point every lazy-zarr-view reader in this repo goes through
 (the STARE tiled fan-out, the illumination-correction tiling/apply pair, the two QC sites, the
-segmentation readers). Its callers rely on different guarantees it makes --
-``tests/test_tiled_coarse_thumbnail.py`` and ``tests/test_tiled_reg_tile_lazy.py`` already pin
-the region-read (bounded-memory) side. This file pins the OTHER guarantee: every call opens a
-genuinely fresh store, never one shared with a prior call on the same path -- so a caller that
-opens, reads and closes in a loop cannot be handed a handle a previous iteration already closed.
-
-That guarantee was originally pinned here because ``bin/preprocess.py`` read its channels from a
-``ThreadPoolExecutor`` and gave each worker its own handle. That module is deleted -- illumination
-correction now runs as three Nextflow processes around nf-core's BASICPY -- and NO script under
-``bin/`` uses a thread pool any more, so nothing in-process depends on it for thread safety
-today. It is kept because it is a real, stated property of ``open_lazy``'s contract that every
-remaining open/read/close caller depends on, and because the next threaded or forked caller would
-otherwise reintroduce the hazard with nothing pinning the property it needs.
+segmentation readers). ``tests/test_tiled_coarse_thumbnail.py`` and
+``tests/test_tiled_reg_tile_lazy.py`` pin the bounded-memory region read. This file pins the
+other guarantee: every call opens a fresh store, never one shared with a prior call on the same
+path, so a caller that opens, reads and closes in a loop (or a threaded caller) cannot be handed
+a handle another call already closed.
 """
 
 from __future__ import annotations
@@ -99,13 +91,12 @@ def test_read_decimated_matches_independent_direct_slice(
     """``read_decimated`` must equal ``src[index, ::factor, ::factor]`` computed a DIFFERENT way
     than the function under test: via a direct step-sliced getitem on the lazy view (which goes
     through zarr's own indexing engine), not by re-running read_decimated's own banded loop. A
-    height not a multiple of the (deliberately tiny) band size forces a ragged final band -- the
+    height not a multiple of the (tiny) band size forces a ragged final band -- the
     case the function's own docstring flags as the easiest to get wrong for a pre-allocated
     destination.
 
-    ``read_decimated`` always returns float32, unconditionally (it takes no ``dtype=``
-    argument -- see its docstring for why a narrow-dtype variant was tried and reverted).
-    ``source_dtype`` here varies only the SOURCE file's on-disk dtype, to prove the pre-
+    ``read_decimated`` always returns float32 (it takes no ``dtype=`` argument).
+    ``source_dtype`` here varies only the source file's on-disk dtype, to prove the pre-
     allocated streaming/striding logic is correct regardless of what native dtype it is
     reading from, not to exercise any caller-selectable output dtype.
     """
@@ -132,16 +123,12 @@ def test_read_decimated_matches_independent_direct_slice(
 
 
 def test_autoscale_uint16_vs_float32_disagree_at_a_real_triple():
-    """Regression pin for the counter-example that overturned this task's original precision
-    assumption: ``autoscale_for_display`` does NOT always return the same uint8 output for a
-    uint16 input as for the same values widened to float32.
+    """``autoscale_for_display`` does not always return the same uint8 output for a uint16
+    input as for the same values widened to float32.
 
-    An earlier version of this test asserted the two were identical over the full uint16
-    domain at ``min=0, max=65535`` and concluded (wrongly) that this generalised to every
-    ``(min, max)`` pair -- it does not, because the divergence depends on the ``(min, max,
-    value)`` triple jointly, and ``min=0, max=65535`` happens to be a clean case. At
-    ``min=13286, max=62449, value=52520`` (all reachable real uint16 pixel data) the two
-    dtypes disagree by 1:
+    The divergence depends on the ``(min, max, value)`` triple jointly. At
+    ``min=13286, max=62449, value=52520`` (reachable uint16 pixel data) the two dtypes
+    disagree by 1:
 
     - float64 path (uint16 input, numpy true-divide promotes ``(img - img_min) / range_val``
       to float64): quotient is ``39234 / 49163 = 0.7980391758029413``, scaled by 255 gives
@@ -151,17 +138,9 @@ def test_autoscale_uint16_vs_float32_disagree_at_a_real_triple():
       ``203.5``. ``np.round``'s round-half-to-even then resolves that spurious tie UP, to 204.
 
     This is why ``bin/utils/qc.py``'s ``create_registration_qc`` reads its nuclear channel at
-    ``read_decimated``'s float32 default and does NOT ask for a narrower uint8/uint16 dtype,
-    even though the only consumer of that plane is ``autoscale_for_display`` on the way to
-    uint8: a narrow read changes the arithmetic autoscale_for_display runs internally, and
-    this pixel is proof it is not merely "different precision" but a real, reachable
-    disagreement. This was tried (narrow read + a widen-back cast to correct it) and
-    reverted: the memory saving the narrow read appeared to offer does not survive the
-    widen-back that correctness requires -- measured (docs/perf/2026-08-26-rss.md) at statistically
-    indistinguishable peak RSS from never narrowing at all, on top of the added complexity of
-    the cast and its branching. So `qc.py` simply never narrows the read; this test's job is
-    to keep it that way by documenting exactly what breaks if someone "optimises" it back in
-    without re-deriving (or re-measuring) why it doesn't help.
+    ``read_decimated``'s float32 default rather than a narrower dtype: a narrow read changes
+    the arithmetic autoscale_for_display runs, and the widen-back cast that would correct it
+    saves no peak memory.
     """
     import os
     import sys

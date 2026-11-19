@@ -6,12 +6,9 @@ Two independent surfaces are compared:
 1. **Key sets** -- every param must appear in `nextflow.config`'s `params {}`
    block, in `nextflow_schema.json`, and (where referenced) in the code.
 2. **Default values** -- a param declared in both places must carry the *same*
-   default in both. `nextflow.config` is the single source of truth; the schema
-   only documents it. Drift here is silent and user-visible: the schema default
-   is what `--help` and the nf-core tooling print, so a stale schema entry makes
-   the pipeline advertise a default it does not actually use. Three params had
-   drifted this way before the check existed (embed_masks, quantify_compartments,
-   expanded_quantification).
+   default in both. `nextflow.config` is the source of truth; the schema only
+   documents it. The schema default is what `--help` prints, so a stale entry
+   advertises a default the pipeline does not use.
 """
 
 from __future__ import annotations
@@ -135,23 +132,10 @@ def extract_config_defaults(config_text: str) -> dict[str, object]:
 def extract_param_references() -> set[str]:
     """Every `params.<name>` READ across pipeline code.
 
-    A naive scan of raw file text over-reports in two ways that both bit this
-    checker in practice (`lib/SegBackends.groovy`'s `ctxParams()` docstring):
-
-    1. **Comments and filenames inside comments.** A `/* */` block explaining
-       ``params.subMap(...)`` reads as a reference to a param named `subMap`, and
-       the same block's mention of `tests/test_seg_backends_ctx_params.py` contains
-       the literal substring `params.py`, reading as a param named `py`. Scanning
-       `code_view(path)` (shared with `test_group_key_unwrapped.py`, see
-       `_code_view.py`) instead of raw text blanks comments and string contents
-       before the regex ever runs, so neither can match.
-    2. **`Map` method calls.** `params.subMap(CTX_PARAM_KEYS)` and
-       `params.containsKey(...)` are calls to methods `java.util.Map` (which
-       `params` behaves as) provides, not reads of a parameter named `subMap` or
-       `containsKey`. Rather than denylist specific method names -- a list that
-       silently goes stale the moment a new `Map` method is called this way --
-       any match immediately followed by `(` is excluded on that structural
-       ground: a real parameter read is never itself invoked as a method.
+    Scans `code_view(path)`, which blanks comments and strings, so a comment
+    mentioning `params.subMap(...)` or a filename like `params.py` is not a read.
+    A match followed by `(` is a `Map` method call (`params.subMap(...)`,
+    `params.containsKey(...)`), not a param read.
     """
     refs: set[str] = set()
     patterns = [
@@ -171,13 +155,8 @@ def extract_param_references() -> set[str]:
 def _refs_from_text(text: str) -> set[str]:
     """The `params.<name>` READ rule, applied to already-masked text.
 
-    Shared with `tests/nfmodel.param_refs`, which implements the identical
-    "followed by `(` is a Map method call" rule independently (see the
-    "meta-tested, string-aware" model in tests/nfmodel). Both live because
-    they scan different inputs -- this one needs the multi-directory glob and
-    default-drift plumbing above, `nfmodel.param_refs` is a bare function over
-    caller-supplied text -- but the RULE itself must not fork.
-    `tests/test_param_consistency_rule.py` pins that the two never diverge.
+    `tests/nfmodel.param_refs` implements the same rule over caller-supplied
+    text; `tests/test_param_consistency_rule.py` checks the two agree.
     """
     refs: set[str] = set()
     for m in PARAM_REF_RE.finditer(text):

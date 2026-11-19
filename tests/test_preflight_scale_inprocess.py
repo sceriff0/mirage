@@ -1,18 +1,10 @@
 """In-process counterpart of tests/test_preflight_scale.py.
 
-That file drives bin/preflight_scale.py through subprocess, which is faithful to
-how Nextflow runs it and invisible to coverage: the script measured 0% on
-2026-09-10 with nine passing tests. These call main(argv) in the test
-process, so the lines are counted, and they add the boundaries the subprocess
-file does not reach: the parser's own rejections and the warn-on-heterogeneity
-clustering.
-
-`_parse_pixel_size`'s docstring (bin/preflight_scale.py:55-59) promises "Raises
-ValueError for anything that is neither" a positive number nor 'auto' -- which
-includes "nan" and "inf": neither is a positive number of micrometres per
-pixel, so the guard must reject both (`math.isfinite`, alongside the existing
-`value <= 0` check), and `test_parse_pixel_size_rejects_nan_and_inf` below
-asserts exactly that contract directly.
+That file drives bin/preflight_scale.py through subprocess, which coverage
+cannot see. These call main(argv) in the test process and add the boundaries
+the subprocess file does not reach: the parser's own rejections (including
+"nan" and "inf", which are not positive pixel sizes) and the
+warn-on-heterogeneity clustering.
 """
 
 from __future__ import annotations
@@ -110,9 +102,9 @@ def test_main_with_a_space_in_the_filename(tmp_path):
 
 
 def test_warn_on_heterogeneous_scales_is_silent_below_two_values():
-    # `report` is keyed by image path -> {"pixel_size": ..., "source": ...}
-    # (bin/preflight_scale.py:97-130), not by a literal "images" key; an empty
-    # report has zero distinct pixel sizes, which is < 2 and must not warn.
+    # `report` is keyed by image path -> {"pixel_size": ..., "source": ...},
+    # not by a literal "images" key; an empty report has zero distinct pixel
+    # sizes, which is < 2 and must not warn.
     class Rec:
         def __init__(self):
             self.msgs = []

@@ -1,34 +1,20 @@
 /*
- * Characterisation tests for lib/Layout.groovy — the pipeline's one statement of
- * WHERE A PUBLISHED FILE LANDS.
+ * Characterisation tests for lib/Layout.groovy: where a published file
+ * lands.
  *
- * Layout is a plain Groovy class on Nextflow's `lib/` classpath, which nf-test's
- * assertion context cannot see (`No such property: Layout`), and the repo has no
- * JVM unit-test runner. So its path construction is asserted through its only
- * caller that writes the result down: the three checkpoint CSVs. Those CSVs are a
- * user-visible restart contract — `--start registration` reads registered.csv and
- * opens exactly the paths it names — so asserting the EXACT strings is the right
- * granularity anyway.
+ * nf-test's assertion context cannot see lib/ classes (`No such property: Layout`),
+ * so Layout is asserted through the checkpoint CSVs it writes. Those CSVs are a
+ * restart contract (`--start registration` opens exactly the paths they name), so
+ * the exact strings are the right granularity.
  *
- * What each assertion pins:
+ *   checkpointDir / checkpointCsvName  <outdir>/csv/<step>.csv
+ *   publishedPath                      <outdir>/<pid>/<kind>/[<producer subdir>/]<name>;
+ *                                      'registered_slides/' and 'export/' must survive,
+ *                                      or a restart opens a missing file.
+ *   isTaskDir                          matches <work>/<2 hex>/<30 hex> structurally.
  *
- *   checkpointDir / checkpointCsvName  the CSVs are at <outdir>/csv/<step>.csv
- *   publishedPath                      <outdir>/<pid>/<kind>/[<producer subdir>/]<name>
- *                                      — 'registered_slides/' (REGISTER) and 'export/'
- *                                      (EXPORT_GEOJSON) SURVIVE into the recorded path,
- *                                      because those publishDir blocks carry them
- *                                      there. Drop a subdirectory and every restart
- *                                      opens a file that is not there.
- *   isTaskDir                          recognises the task directory the subdirectory
- *                                      is measured against — STRUCTURALLY
- *                                      (<work>/<2 hex>/<30 hex>), not by name width.
- *
- * NOTE: every expected line ends in .toString(). List.contains() compares a GString
- * to a String by identity of class, so a bare "...$outputDir..." literal silently
- * never matches and the assertion passes for the wrong reason once negated.
- *
- * Tagged "stub" because CI's blocking gate is `nf-test test --tag stub`; an
- * untagged file never runs there.
+ * Every expected line ends in .toString(): List.contains() never matches a GString
+ * against a String.
  */
 
 nextflow_pipeline {
@@ -60,35 +46,25 @@ nextflow_pipeline {
                 { assert path("$outputDir/csv/postprocessed.csv").exists() },
 
                 // --- Layout.publishedPath: <outdir>/<pid>/<kind>/<basename> ------
-                // 'id' (RULING R17, Task 4.3) is the second field on every row --
-                // derived by Meta.identityFor from the samplesheet's OWN
-                // path_to_file column ('P001_ref.ome.tiff' -> 'P001_ref',
-                // 'P001_mov1.ome.tiff' -> 'P001_mov1'; see tests/testdata/test_input.csv),
-                // carried forward unchanged through preprocessing and registration.
-                // 'pixel_size' (this task) is appended last -- 0.325, the number
-                // PREFLIGHT_SCALE resolves under conf/test.config's pin.
+                // 'id' comes from Meta.identityFor on the samplesheet's path_to_file
+                // ('P001_ref.ome.tiff' -> 'P001_ref'). 'pixel_size' is last: 0.325,
+                // what PREFLIGHT_SCALE resolves under conf/test.config.
                 { assert path("$outputDir/csv/preprocessed.csv").readLines().contains(
                     "P001,P001_ref,$outputDir/P001/preprocessed/P001_ref_corrected.ome.tif,true,DAPI|PANCK|SMA,0.325".toString()) },
                 { assert path("$outputDir/csv/preprocessed.csv").readLines().contains(
                     "P001,P001_mov1,$outputDir/P001/preprocessed/P001_mov1_corrected.ome.tif,false,DAPI|CD3|CD8,0.325".toString()) },
 
                 // --- Layout.publishedPath: the producer subdirectory survives ----
-                // 'registered_slides/' is REGISTER's own output subdirectory and
-                // publishDir's `pattern:` carries it into the published path. If
-                // this ever collapses to <pid>/registered/<name>, every
-                // `--start registration` run breaks on a missing file.
+                // REGISTER's 'registered_slides/' subdirectory is carried into the
+                // published path; dropping it breaks every `--start registration`.
                 { assert path("$outputDir/csv/registered.csv").readLines().contains(
                     "P001,P001_ref,$outputDir/P001/registered/registered_slides/P001_DAPI_PANCK_SMA_registered.ome.tiff,true,DAPI|PANCK|SMA,0.325".toString()) },
                 { assert path("$outputDir/csv/registered.csv").readLines().contains(
                     "P001,P001_mov1,$outputDir/P001/registered/registered_slides/P001_DAPI_CD3_CD8_registered.ome.tiff,false,DAPI|CD3|CD8,0.325".toString()) },
 
                 // --- Layout.publishedPath across five different `kind`s ----------
-                // The two geojson columns carry EXPORT_GEOJSON's own `export/`
-                // output subdirectory, exactly as REGISTER's `registered_slides/`
-                // is carried above. Recording the bare basename here named files
-                // that did not exist; see tests/checkpoint_manifest.nf.test.
-                // 'postprocessed' rows are per-PATIENT: id == patient_id (see
-                // lib/Checkpoint.groovy's 'postprocessed' entry).
+                // The geojson columns carry EXPORT_GEOJSON's `export/` subdirectory.
+                // 'postprocessed' rows are per patient: id == patient_id.
                 { assert path("$outputDir/csv/postprocessed.csv").readLines().contains(
                     "P001,P001," +
                     "$outputDir/P001/geojson/export/cells_data.csv," +
@@ -99,7 +75,7 @@ nextflow_pipeline {
                     "0.325".toString()) },
 
                 // --- column order is part of the contract ------------------------
-                // 'pixel_size' (this task) is appended LAST on every schema.
+                // 'pixel_size' is the last column on every schema.
                 { assert path("$outputDir/csv/preprocessed.csv").readLines()[0] ==
                     "patient_id,id,preprocessed_image,is_reference,channels,pixel_size" },
                 { assert path("$outputDir/csv/registered.csv").readLines()[0] ==

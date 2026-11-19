@@ -1,10 +1,8 @@
 """STARE has no cost tiers: its four geometry knobs are plain defaults, read directly.
 
-STARE's `reg_tiled_mode` tiers (`high | medium | low | custom`) were removed on 2026-11-04,
-and VALIS has had none since 2026-11-05, so `lib/RegPresets.groovy` held nothing and is gone.
-This file replaces `tests/test_reg_presets_inlined_in_config.py`, which pinned the tier table
-to the copies `conf/modules.config` had to inline: with no table there is nothing to pin, and
-what is left to guard is that the removal is complete and that it changed no behaviour:
+Neither STARE nor VALIS has `reg_tiled_mode` tiers (`high | medium | low | custom`), and there
+is no `lib/RegPresets.groovy`. This file guards that the removal is complete and changed no
+behaviour:
 
 * the four knobs default to the former `high` row (read from `ParamUtils.RETIRED_STARE_TIERS`,
   the table the launch refusal names), in nextflow.config AND in the schema;

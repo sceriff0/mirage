@@ -1,37 +1,14 @@
 /*
- * THE INVARIANT: a checkpoint manifest never names a file that does not exist.
+ * A checkpoint manifest never names a file that does not exist.
  *
- * csv/preprocessed.csv, csv/registered.csv, csv/segmented.csv and csv/postprocessed.csv
- * are published artifacts AND restart inputs — `--start registration` opens the paths
- * registered.csv names, `--start postprocessing` opens the ones segmented.csv names
- * (csv/segmented.csv, Task 1 of arch-B-split, is the fourth manifest the "globbed, not
- * hardcoded" counts below now pick up automatically). A row pointing at a path nothing
- * published is not a cosmetic defect; it is a restart that fails, or a downstream
- * consumer silently reading the wrong file.
+ * csv/{preprocessed,registered,segmented,postprocessed}.csv are published artifacts
+ * and restart inputs: `--start registration` opens what registered.csv names. The
+ * paths are predicted, not observed, so a publishDir that emits into a subdirectory,
+ * a reference that is passed through unregistered, or a bare task-directory output
+ * can each make a row point at nothing.
  *
- * These paths are CONSTRUCTED, not observed: the workflow predicts where publishDir
- * will put a file. THREE independent ways to mispredict it had accumulated by the
- * time this test was written, all three caught on its first run:
- *
- *   (b) EXPORT_GEOJSON emits into an `export/` subdirectory and publishDir carries
- *       that segment into the published path, but postprocess.nf recorded only the
- *       basename -> postprocessed.csv named <pid>/geojson/cells.geojson, which does
- *       not exist.
- *   (c) A reference that is never registered — a single-slide patient's, or EVERY
- *       patient's under the tiled backend — was recorded under <pid>/registered/,
- *       where no process publishes it. For a single-slide patient that directory
- *       does not exist at all.
- *   (d) The work-hash test that was supposed to recognise a bare task-directory
- *       output tested for a 32-character hash. Nextflow task directories are 30
- *       characters (`<work>/<2 hex>/<30 hex>`), so it never fired, and a bare output
- *       was recorded as <pid>/registered/<30-hex-hash>/<name>.
- *
- * The fixes are consequences of this test, not the other way round. Keep it general
- * — every absolute field of every row of every checkpoint — rather than asserting
- * the corrected paths: the next publishDir that emits into a subdirectory should
- * fail HERE, not on a user's restart.
- *
- * Tagged "stub" because CI's blocking gate is `nf-test test --tag stub`.
+ * Keep the check general (every absolute field of every row of every manifest) so the
+ * next mispredicted path fails here, not on a user's restart.
  */
 
 nextflow_pipeline {
@@ -42,21 +19,10 @@ nextflow_pipeline {
     tag "pipeline"
     tag "checkpoint_manifest"
 
-    // RFC 4180 field split (Task 4.5). lib/Checkpoint.groovy's row() now quotes a
-    // value containing a comma (an --outdir with a comma in it, embedded in every
-    // published path, used to shift every later column of a bare `.join(',')` row).
-    // Every REAL reader in the pipeline parses with Nextflow's own
-    // `splitCsv(header: true)`, which already understands RFC 4180 quoting — but
-    // this test's `then:` blocks read the published CSV text by hand, AFTER the
-    // pipeline session has already exited, so `Channel`/`splitCsv` are not
-    // available here. A naive `line.split(',')` in THIS file would be exactly the
-    // "quoting writer, naive reader" trap Task 4.5 warns about: it would itself
-    // mis-split a quoted field and corrupt the very invariant this test protects
-    // (silently under-counting `checked`, or reporting a quoted path with its
-    // wrapping `"` as a spurious "does not exist"). This closure splits on a comma
-    // only when it is outside a quoted span, then strips a field's own surrounding
-    // quotes and un-doubles any embedded `""` — the RFC 4180 decode paired with
-    // Checkpoint.groovy's encode.
+    // RFC 4180 field split. Checkpoint.row() quotes values containing a comma; the
+    // `then:` blocks read the CSV text by hand after the session ends, so a naive
+    // split(',') would mis-split quoted fields. This splits on commas outside quotes,
+    // strips a field's surrounding quotes and un-doubles `""`.
     def csvFields = { String line ->
         line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/, -1).collect { raw ->
             (raw.startsWith('"') && raw.endsWith('"') && raw.length() >= 2)
@@ -76,13 +42,8 @@ nextflow_pipeline {
                 // output subdirectory into the published path.
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST. A
-                // manifest is written at the default --cleanup_level=none (since
-                // 2026-09-10); this case pins it explicitly so the profile does not
-                // move with the default. At --cleanup_level=final the artifacts a
-                // manifest's rows would name are not published, so every path
-                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
-                // own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
             }
         }
@@ -91,26 +52,11 @@ nextflow_pipeline {
             assert workflow.success
 
             // --- the invariant ------------------------------------------------
-            // TWO properties, not one.
-            //
-            //   1. every recorded path EXISTS, and
-            //   2. no recorded path lies under the run's work directory.
-            //
-            // (2) is not redundant. Existence alone is blind to the failure mode this
-            // manifest actually has: under the pre-fix `{32}` work-hash width the
-            // single-slide reference was recorded as
-            // <workDir>/49/bc25521f0d35abf9510e09738cbcad/P001_ref_corrected.ome.tif —
-            // a path that EXISTS, so an existence-only check waves it through. The
-            // work directory is scratch: -w is cleanable, it is not published, and a
-            // manifest that points into it is a restart that breaks the first time
-            // someone runs `nextflow clean`.
-            //
-            // Deliberately NOT "every path must start with outputDir". That would be
-            // wrong: with --start registration a run legitimately records the
-            // passthrough reference at the PRIOR run's outdir (verified — a run with
-            // --outdir /tmp/A correctly wrote /tmp/B/P001/preprocessed/... into its
-            // own registered.csv). Excluding workDir is the correct shape; requiring
-            // an outputDir prefix is not.
+            // 1. every recorded path exists, and
+            // 2. no recorded path lies under the work directory: a path into work/ can
+            //    exist and still break after `nextflow clean`.
+            // Not "must start with outputDir": --start registration legitimately records
+            // the passthrough reference under the prior run's outdir.
             def csvDir = new File("${outputDir}/csv".toString())
             assert csvDir.isDirectory() : "no csv/ directory was published"
 
@@ -145,9 +91,7 @@ nextflow_pipeline {
             // from a manifest without anyone noticing.
             assert checked == 19 :
                 "expected 19 recorded paths, examined ${checked} — did the CSV columns change?"
-            // ONE assertion covering both properties, deliberately: Groovy aborts at
-            // the first failed assert, so splitting them would hide the work-directory
-            // findings behind the existence findings whenever a change breaks both.
+            // One assertion for both properties: Groovy stops at the first failed assert.
             assert problems.isEmpty() :
                 "checkpoint manifest has ${problems.size()} bad path(s):\n  " +
                 problems.join("\n  ")
@@ -160,19 +104,12 @@ nextflow_pipeline {
 
         when {
             params {
-                // One reference and nothing else: registration has nothing to
-                // register, so registration.nf's ch_passthrough branch carries the
-                // reference through unregistered and NOTHING publishes it into
-                // <pid>/registered/ — that directory is not created at all.
+                // One reference and nothing else: registration passes it through unregistered and
+                // nothing publishes <pid>/registered/.
                 input  = "$projectDir/tests/testdata/single_sample.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST. A
-                // manifest is written at the default --cleanup_level=none (since
-                // 2026-09-10); this case pins it explicitly so the profile does not
-                // move with the default. At --cleanup_level=final the artifacts a
-                // manifest's rows would name are not published, so every path
-                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
-                // own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
             }
         }
@@ -181,26 +118,11 @@ nextflow_pipeline {
             assert workflow.success
 
             // --- the invariant ------------------------------------------------
-            // TWO properties, not one.
-            //
-            //   1. every recorded path EXISTS, and
-            //   2. no recorded path lies under the run's work directory.
-            //
-            // (2) is not redundant. Existence alone is blind to the failure mode this
-            // manifest actually has: under the pre-fix `{32}` work-hash width the
-            // single-slide reference was recorded as
-            // <workDir>/49/bc25521f0d35abf9510e09738cbcad/P001_ref_corrected.ome.tif —
-            // a path that EXISTS, so an existence-only check waves it through. The
-            // work directory is scratch: -w is cleanable, it is not published, and a
-            // manifest that points into it is a restart that breaks the first time
-            // someone runs `nextflow clean`.
-            //
-            // Deliberately NOT "every path must start with outputDir". That would be
-            // wrong: with --start registration a run legitimately records the
-            // passthrough reference at the PRIOR run's outdir (verified — a run with
-            // --outdir /tmp/A correctly wrote /tmp/B/P001/preprocessed/... into its
-            // own registered.csv). Excluding workDir is the correct shape; requiring
-            // an outputDir prefix is not.
+            // 1. every recorded path exists, and
+            // 2. no recorded path lies under the work directory: a path into work/ can
+            //    exist and still break after `nextflow clean`.
+            // Not "must start with outputDir": --start registration legitimately records
+            // the passthrough reference under the prior run's outdir.
             def csvDir = new File("${outputDir}/csv".toString())
             assert csvDir.isDirectory() : "no csv/ directory was published"
 
@@ -235,9 +157,7 @@ nextflow_pipeline {
             // from a manifest without anyone noticing.
             assert checked == 12 :
                 "expected 12 recorded paths, examined ${checked} — did the CSV columns change?"
-            // ONE assertion covering both properties, deliberately: Groovy aborts at
-            // the first failed assert, so splitting them would hide the work-directory
-            // findings behind the existence findings whenever a change breaks both.
+            // One assertion for both properties: Groovy stops at the first failed assert.
             assert problems.isEmpty() :
                 "checkpoint manifest has ${problems.size()} bad path(s):\n  " +
                 problems.join("\n  ")
@@ -250,13 +170,9 @@ nextflow_pipeline {
 
         when {
             params {
-                // conf/test.config pins skip_preprocessing=false, so every other case here
-                // runs the BaSiC branch, where an unregistered reference is published under
-                // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
-                // the slide and it is published under <pid>/converted/ -- and the passthrough
-                // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
-                // real single-slide run, 2026-09-17; the STARE reference is passed through the
-                // same way for every patient).
+                // conf/test.config pins skip_preprocessing=false, so other cases publish an
+                // unregistered reference under <pid>/preprocessed/. At the shipped default (true) it
+                // is published under <pid>/converted/, and the passthrough row must say so.
                 input               = "$projectDir/tests/testdata/single_sample.csv"
                 outdir              = "$outputDir"
                 registration_method = "valis"
@@ -297,13 +213,9 @@ nextflow_pipeline {
 
         when {
             params {
-                // conf/test.config pins skip_preprocessing=false, so every other case here
-                // runs the BaSiC branch, where an unregistered reference is published under
-                // <pid>/preprocessed/. At the SHIPPED default (true) CONVERT_IMAGE's output is
-                // the slide and it is published under <pid>/converted/ -- and the passthrough
-                // row named <pid>/preprocessed/ anyway, a file that does not exist (found on a
-                // real single-slide run, 2026-09-17; the STARE reference is passed through the
-                // same way for every patient).
+                // conf/test.config pins skip_preprocessing=false, so other cases publish an
+                // unregistered reference under <pid>/preprocessed/. At the shipped default (true) it
+                // is published under <pid>/converted/, and the passthrough row must say so.
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
                 registration_method = "tiled"
@@ -344,20 +256,13 @@ nextflow_pipeline {
 
         when {
             params {
-                // The tiled backend passes EVERY patient's reference through
-                // unregistered (it defines the frame), so this exercises the
-                // passthrough branch on a MULTI-slide patient — and
-                // TILED_STITCH's own `registered/` output subdirectory on the
-                // moving slide.
+                // The tiled backend passes every patient's reference through unregistered, so this
+                // exercises the passthrough branch on a multi-slide patient plus TILED_STITCH's
+                // `registered/` subdirectory on the moving slide.
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST. A
-                // manifest is written at the default --cleanup_level=none (since
-                // 2026-09-10); this case pins it explicitly so the profile does not
-                // move with the default. At --cleanup_level=final the artifacts a
-                // manifest's rows would name are not published, so every path
-                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
-                // own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
                 registration_method = 'tiled'
             }
@@ -367,26 +272,11 @@ nextflow_pipeline {
             assert workflow.success
 
             // --- the invariant ------------------------------------------------
-            // TWO properties, not one.
-            //
-            //   1. every recorded path EXISTS, and
-            //   2. no recorded path lies under the run's work directory.
-            //
-            // (2) is not redundant. Existence alone is blind to the failure mode this
-            // manifest actually has: under the pre-fix `{32}` work-hash width the
-            // single-slide reference was recorded as
-            // <workDir>/49/bc25521f0d35abf9510e09738cbcad/P001_ref_corrected.ome.tif —
-            // a path that EXISTS, so an existence-only check waves it through. The
-            // work directory is scratch: -w is cleanable, it is not published, and a
-            // manifest that points into it is a restart that breaks the first time
-            // someone runs `nextflow clean`.
-            //
-            // Deliberately NOT "every path must start with outputDir". That would be
-            // wrong: with --start registration a run legitimately records the
-            // passthrough reference at the PRIOR run's outdir (verified — a run with
-            // --outdir /tmp/A correctly wrote /tmp/B/P001/preprocessed/... into its
-            // own registered.csv). Excluding workDir is the correct shape; requiring
-            // an outputDir prefix is not.
+            // 1. every recorded path exists, and
+            // 2. no recorded path lies under the work directory: a path into work/ can
+            //    exist and still break after `nextflow clean`.
+            // Not "must start with outputDir": --start registration legitimately records
+            // the passthrough reference under the prior run's outdir.
             def csvDir = new File("${outputDir}/csv".toString())
             assert csvDir.isDirectory() : "no csv/ directory was published"
 
@@ -421,9 +311,7 @@ nextflow_pipeline {
             // from a manifest without anyone noticing.
             assert checked == 19 :
                 "expected 19 recorded paths, examined ${checked} — did the CSV columns change?"
-            // ONE assertion covering both properties, deliberately: Groovy aborts at
-            // the first failed assert, so splitting them would hide the work-directory
-            // findings behind the existence findings whenever a change breaks both.
+            // One assertion for both properties: Groovy stops at the first failed assert.
             assert problems.isEmpty() :
                 "checkpoint manifest has ${problems.size()} bad path(s):\n  " +
                 problems.join("\n  ")
@@ -436,19 +324,12 @@ nextflow_pipeline {
 
         when {
             params {
-                // The STARE method is a per-tile fan-out ending in TILED_STITCH —
-                // a different producer from VALIS's REGISTER, publishing into the
-                // same `registered/` subdirectory. Asserted separately so a change
-                // to either producer's output layout fails here.
+                // STARE ends in TILED_STITCH, a different producer from VALIS's REGISTER publishing
+                // into the same `registered/` subdirectory.
                 input               = "$projectDir/tests/testdata/test_input.csv"
                 outdir              = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST. A
-                // manifest is written at the default --cleanup_level=none (since
-                // 2026-09-10); this case pins it explicitly so the profile does not
-                // move with the default. At --cleanup_level=final the artifacts a
-                // manifest's rows would name are not published, so every path
-                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
-                // own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
                 registration_method = 'tiled'
             }
@@ -458,26 +339,11 @@ nextflow_pipeline {
             assert workflow.success
 
             // --- the invariant ------------------------------------------------
-            // TWO properties, not one.
-            //
-            //   1. every recorded path EXISTS, and
-            //   2. no recorded path lies under the run's work directory.
-            //
-            // (2) is not redundant. Existence alone is blind to the failure mode this
-            // manifest actually has: under the pre-fix `{32}` work-hash width the
-            // single-slide reference was recorded as
-            // <workDir>/49/bc25521f0d35abf9510e09738cbcad/P001_ref_corrected.ome.tif —
-            // a path that EXISTS, so an existence-only check waves it through. The
-            // work directory is scratch: -w is cleanable, it is not published, and a
-            // manifest that points into it is a restart that breaks the first time
-            // someone runs `nextflow clean`.
-            //
-            // Deliberately NOT "every path must start with outputDir". That would be
-            // wrong: with --start registration a run legitimately records the
-            // passthrough reference at the PRIOR run's outdir (verified — a run with
-            // --outdir /tmp/A correctly wrote /tmp/B/P001/preprocessed/... into its
-            // own registered.csv). Excluding workDir is the correct shape; requiring
-            // an outputDir prefix is not.
+            // 1. every recorded path exists, and
+            // 2. no recorded path lies under the work directory: a path into work/ can
+            //    exist and still break after `nextflow clean`.
+            // Not "must start with outputDir": --start registration legitimately records
+            // the passthrough reference under the prior run's outdir.
             def csvDir = new File("${outputDir}/csv".toString())
             assert csvDir.isDirectory() : "no csv/ directory was published"
 
@@ -512,9 +378,7 @@ nextflow_pipeline {
             // from a manifest without anyone noticing.
             assert checked == 19 :
                 "expected 19 recorded paths, examined ${checked} — did the CSV columns change?"
-            // ONE assertion covering both properties, deliberately: Groovy aborts at
-            // the first failed assert, so splitting them would hide the work-directory
-            // findings behind the existence findings whenever a change breaks both.
+            // One assertion for both properties: Groovy stops at the first failed assert.
             assert problems.isEmpty() :
                 "checkpoint manifest has ${problems.size()} bad path(s):\n  " +
                 problems.join("\n  ")
@@ -527,28 +391,14 @@ nextflow_pipeline {
 
         when {
             params {
-                // Precisely the shape a `csv/registered.csv` from a completed
-                // registration run has -- reusing the existing single-slide-reference
-                // fixture (its name predates the segmentation step; before it,
-                // 'postprocessing' was the step keyed on 'registered_image', the same
-                // column 'segmentation' now shares). --start segmentation reads this
-                // through INPUT_CHECK, so `registered_image`'s value is ALREADY an
-                // absolute published path from outside this run -- exactly the shape
-                // review found segmentation.nf's writer mis-recording (it applied
-                // Layout.publishedPath unconditionally, double-nesting/rewriting the
-                // path against the wrong outdir; fixed via Layout.publishedOrAsIs's
-                // isUnderTaskDir check). No --stop, so this run continues into
-                // postprocessing too, exercising the chained failure review also
-                // found ("--start postprocessing against that file fails").
+                // The shape of a completed run's csv/registered.csv (the fixture name predates the
+                // segmentation step). registered_image is already an absolute published path from
+                // outside this run, which segmentation.nf must record as is (Layout.publishedOrAsIs).
+                // No --stop, so postprocessing then reads segmented.csv too.
                 input  = "$projectDir/tests/testdata/valid_checkpoint_postprocessing.csv"
                 outdir = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST. A
-                // manifest is written at the default --cleanup_level=none (since
-                // 2026-09-10); this case pins it explicitly so the profile does not
-                // move with the default. At --cleanup_level=final the artifacts a
-                // manifest's rows would name are not published, so every path
-                // would dangle (Checkpoint.writesAtLevel); that behaviour has its
-                // own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
                 start  = 'segmentation'
             }
@@ -568,14 +418,11 @@ nextflow_pipeline {
             assert manifests*.name == ['postprocessed.csv', 'segmented.csv'] :
                 "expected postprocessed.csv + segmented.csv, found ${manifests*.name}"
 
-            // segmented.csv's registered_image must be the ORIGINAL fixture path
-            // (already published, outside this run entirely) -- not rewritten
-            // against this run's outdir. This is the exact property Critical 1
-            // broke: publishedPath applied unconditionally reconstructed it as
-            // <outputDir>/P001/registered/<name>, which nothing ever publishes.
+            // segmented.csv's registered_image must be the original fixture path, not rebuilt
+            // as <outputDir>/P001/registered/<name>, which nothing publishes.
             def segLines = manifests.find { it.name == 'segmented.csv' }.readLines()
             def segRow = csvFields(segLines[1])
-            // index 2, not 1: 'id' (RULING R17, Task 4.3) is now column 1.
+            // index 2: 'id' is column 1.
             assert segRow[2] == "$projectDir/tests/testdata/P001_ref.ome.tiff".toString() :
                 "segmented.csv rewrote registered_image against the wrong outdir: ${segRow[2]}"
 
@@ -612,26 +459,16 @@ nextflow_pipeline {
 
         when {
             params {
-                // The add_cycle path never goes through REGISTRATION, and until the
-                // checkpoint writer was made mode-independent it wrote NO
-                // csv/registered.csv at all — so this invariant had never once
-                // observed an add_cycle run. It is the path with the least prior
-                // coverage; assert it the moment there is something to assert.
+                // add_cycle never goes through REGISTRATION but writes the same manifests.
                 //
-                // The prior run is the minimal tests/testdata/prior_run/ fixture and
-                // the new cycle is a single non-reference slide (no reference row by
-                // design — the registration reference is the frozen prior one).
+                // The prior run is tests/testdata/prior_run/; the new cycle is one non-reference
+                // slide (the registration reference is the frozen prior one).
                 //
-                // Defaults everywhere else (reg_qc=2, quantify_compartments=true),
-                // like the four cases above — the manifest is what is under test, and
-                // pinning unrelated knobs only makes it drift from a real run.
+                // Defaults elsewhere (reg_qc=2, quantify_compartments=true), like the cases above.
                 input        = "$projectDir/tests/testdata/new_cycle.csv"
                 outdir       = "$outputDir"
-                // Every case in this file asserts on a checkpoint MANIFEST, and no
-                // manifest is written at the default --cleanup_level=final: the
-                // artifacts its rows name are not published there, so every path
-                // would dangle (Checkpoint.writesAtLevel). The 'final' behaviour has
-                // its own case at the end of this file.
+                // Manifests are written only at cleanup_level 'none' (Checkpoint.writesAtLevel);
+                // pinned so the case does not move with the default. 'final' has its own case below.
                 cleanup_level = 'none'
                 mode         = 'add_cycle'
                 prior_outdir = "$projectDir/tests/testdata/prior_run"
@@ -647,39 +484,28 @@ nextflow_pipeline {
             def manifests = (csvDir.listFiles() ?: [])
                 .findAll { it.name.endsWith('.csv') }
                 .sort { it.name }
-            // THREE. add_cycle has no POSTPROCESSING step -- the masks and the base
-            // quantification table are reused rather than re-derived -- but it does
-            // produce every artifact a postprocessed row names (it rebuilds the
-            // combined geojson, csv and pyramid wholesale over the merged channel
-            // set), so subworkflows/local/postprocessed_checkpoint.nf writes the
-            // manifest from this path too. Nothing is recomputed to get it.
+            // Three manifests. add_cycle has no POSTPROCESSING step but rebuilds every artifact
+            // a postprocessed row names, so postprocessed_checkpoint.nf writes it here too.
             //
-            // Both halves of Layout.ADD_CYCLE_CHECKPOINTS are therefore present, which
-            // is the whole point: until they were, cycle 3 refused at LAUNCH with
-            // "required checkpoint 'csv/postprocessed.csv' not found under
-            // --prior_outdir" and cyclic-IF stopped at two cycles. See the chained
-            // case below, which runs cycle 3 against a cycle-2 outdir for real.
+            // Both halves of Layout.ADD_CYCLE_CHECKPOINTS must exist, or a third cycle is refused
+            // at launch; the chained case below runs cycle 3 against a cycle-2 outdir.
             assert manifests*.name == ['postprocessed.csv', 'preprocessed.csv', 'registered.csv'] :
                 "expected preprocessed.csv + registered.csv + postprocessed.csv, found ${manifests*.name}"
 
             // Same column contract as the linear path's postprocessed.csv, because
             // the same writer produced it.
             def postLines = manifests.find { it.name == 'postprocessed.csv' }.readLines()
-            // 'pixel_size' (this task) is appended LAST -- add_cycle.nf now threads
-            // the new cycle's resolved scale through its own hand-built metas so this
-            // writer, shared with the linear path, can supply it too.
+            // 'pixel_size' is the last column, supplied from add_cycle.nf's metas.
             assert postLines[0] == 'patient_id,id,cell_csv,cell_geojson,merged_csv,cell_mask,pyramid,pixel_size' :
                 "postprocessed.csv header drifted: ${postLines[0]}"
             def postRows = postLines.drop(1).findAll { it.trim() }
             assert postRows.size() == 1 : "expected 1 postprocessed row, got ${postRows.size()}"
 
-            // --- the manifest the linear path already had, now on this path -------
-            // Same column contract as the linear registered.csv, because the same
-            // writer produced it — pinned here so a divergence fails rather than
-            // quietly producing a manifest add_cycle's own reader cannot consume.
+            // --- registered.csv on this path -----------------------------------------
+            // Same column contract as the linear registered.csv, so add_cycle's own reader can
+            // consume it.
             def regLines = manifests.find { it.name == 'registered.csv' }.readLines()
-            // 'id' (RULING R17, Task 4.3) is column 1 now; 'pixel_size' (this task) is
-            // appended last.
+            // 'id' is column 1; 'pixel_size' is last.
             assert regLines[0] == 'patient_id,id,registered_image,is_reference,channels,pixel_size' :
                 "registered.csv header drifted: ${regLines[0]}"
 
@@ -688,7 +514,7 @@ nextflow_pipeline {
             // cycle. The reference row is not optional — it is the row a follow-on
             // add_cycle filters on to recover its registration target.
             assert rows.size() == 2 : "expected 2 registered rows, got ${rows.size()}"
-            // index 3, not 2: is_reference shifted one column right by 'id'.
+            // index 3: is_reference is shifted right by 'id'.
             assert rows.count { it[3] == 'true' } == 1 :
                 "registered.csv must carry exactly one is_reference=true row"
             assert rows.every { it[0] == 'P001' }
@@ -729,20 +555,12 @@ nextflow_pipeline {
 
         when {
             params {
-                // THE DIRECT PROOF (Task 4.5, lib/Checkpoint.groovy:140-ish). Every
-                // published path is built from --outdir, so a comma in --outdir is
-                // the realistic way a checkpoint field ends up carrying a comma — no
-                // synthetic filename needed. Before Checkpoint.row() quoted fields, a
-                // bare `.join(',')` could not tell "a value with a comma in it" from
-                // "a column boundary", so this comma would have shifted every LATER
-                // column of every row whose path embedded it. Same fixture as the
-                // first test above (two-slide VALIS) so the "checked" count below is
-                // directly comparable.
+                // A comma in --outdir lands in every published path, the realistic way a field
+                // carries a comma; Checkpoint.row() must quote it. Same fixture as the first case,
+                // so the "checked" count below is comparable.
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "${outputDir}/has,a,comma"
-                // See the note on the first case: no manifest is written at the
-                // default --cleanup_level=final, and a manifest is what this
-                // asserts on.
+                // No manifest is written unless cleanup_level is 'none'; see the first case.
                 cleanup_level = 'none'
             }
         }
@@ -760,10 +578,8 @@ nextflow_pipeline {
                 "expected 4 checkpoint manifests, found ${manifests.size()}: " +
                 manifests*.name
 
-            // Sanity guard against a vacuous pass: at least one published field must
-            // actually have been wrapped in RFC 4180 quotes, or this test would not
-            // be exercising the fix at all (e.g. if --outdir were silently sanitized
-            // upstream before reaching Checkpoint.row()).
+            // Guard against a vacuous pass: at least one field must actually be quoted (e.g.
+            // not sanitized upstream before Checkpoint.row()).
             def sawQuotedField = manifests.any { csv -> csv.readLines().drop(1).any { it.contains('"') } }
             assert sawQuotedField :
                 "no field in any manifest was quoted — this test did not exercise the " +
@@ -777,16 +593,13 @@ nextflow_pipeline {
                 def headerCols = csvFields(lines[0]).size()
                 lines.drop(1).findAll { it.trim() }.each { line ->
                     def fields = csvFields(line)
-                    // THE PROPERTY A BARE JOIN CANNOT GUARANTEE: every data row
-                    // parses to the SAME field count as its own header. A shifted
-                    // column (the pre-fix failure mode) fails here directly, instead
-                    // of surfacing later as a wrong-looking path.
+                    // Every data row parses to the same field count as its header; a shifted
+                    // column fails here directly.
                     assert fields.size() == headerCols :
                         "${csv.name}: row has ${fields.size()} field(s), header declares " +
                         "${headerCols} (comma in --outdir shifted a column): ${line}"
                     fields.each { field ->
-                        // No field is the bare four-character literal "null" — the
-                        // failure mode an unquoted `null` VALUE used to produce.
+                        // No field is the bare literal "null", what an unquoted null value produces.
                         assert field != 'null' :
                             "${csv.name}: field literally reads the text 'null': ${line}"
                         if (field.startsWith('/')) {
@@ -812,28 +625,20 @@ nextflow_pipeline {
         tag "stub"
         options "-stub"
 
-        // The other side of the invariant, and the reason every case above had to
-        // name --cleanup_level=none explicitly.
+        // The other side of the invariant, and why every case above names
+        // --cleanup_level=none.
         //
-        // At the opt-in 'final' level the intermediates are not published, so a manifest
-        // written anyway would record paths that do not exist -- turning the
-        // invariant above red for a DESIGNED reason, which is the worst possible
-        // outcome for a guard. Checkpoint.writesAtLevel makes the writers
-        // level-aware instead, and this asserts the result rather than trusting it.
+        // At 'final' the intermediates are not published, so the writers skip the
+        // manifests (Checkpoint.writesAtLevel) rather than record dangling paths.
         //
-        // Note the postprocessed manifest is absent TOO, which does not follow from
-        // "final artifacts are published": its cell_csv, cell_geojson, merged_csv
-        // and pyramid columns are all final, but its cell_mask column names a
-        // segmentation mask, and segmentation is an intermediate. One dangling
-        // column is enough to make the whole manifest a lie.
+        // postprocessed.csv is absent too: its cell_mask column names a segmentation mask,
+        // an intermediate.
 
         when {
             params {
                 input  = "$projectDir/tests/testdata/test_input.csv"
                 outdir = "$outputDir"
-                // 'final' is the OPT-IN cleaning level, not the shipped default
-                // (nextflow.config:485 has been 'none' since 2026-09-10), so this
-                // case has to name it and would be testing nothing without it.
+                // 'final' is opt-in (the default is 'none'), so the case must name it.
                 cleanup_level = 'final'
             }
         }
@@ -856,9 +661,8 @@ nextflow_pipeline {
             assert readme.text.contains('--cleanup_level none') :
                 "csv/README.txt does not name the flag that restores the manifests"
 
-            // And the run is still USEFUL: the final artifacts are all there. If
-            // this ever passed with an empty output tree, the assertions above
-            // would be satisfied by a pipeline that published nothing at all.
+            // The final artifacts are all there, so this cannot pass on a run that published
+            // nothing.
             ['geojson', 'pyramid', 'quantification'].each { kind ->
                 def dir = new File("${outputDir}/P001/${kind}".toString())
                 assert dir.isDirectory() && (dir.listFiles() ?: []).size() > 0 :

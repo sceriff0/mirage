@@ -1,33 +1,14 @@
 """A directory git ignores must not be uploaded to the Docker builder either.
 
-THE BUILD CONTEXT IS THE REPOSITORY ROOT. `.github/workflows/containers.yml` passes
-`context: .` because ten of the eleven Dockerfiles COPY their pins from `requirements/`
-and all eleven COPY their own `containers/<dir>/smoke.sh`. A per-directory context
-cannot reach outside itself, so the context had to widen -- and `.dockerignore` is the
-only thing keeping the upload small.
+`.github/workflows/containers.yml` builds with `context: .` (the Dockerfiles COPY from
+`requirements/` and `containers/<dir>/`), so `.dockerignore` is what keeps the upload
+small. CI's clean checkout cannot show the problem: the directories at stake are untracked
+local scratch, which on a developer's checkout can be many GB.
 
-WHY CI CANNOT TELL YOU THIS IS BROKEN. The runner's checkout is clean: every directory
-this guard is about is untracked local scratch, so `docker build .` on a runner uploads
-~10 MB whatever `.dockerignore` says. On a developer's checkout the same command
-uploaded ~13 GB when this guard was written (`challenge/` alone was 12 GB), because
-`challenge/`, `valis_lib/`, `notebooks/`, `traces/`, `.venv-bench/`, `illum_bench/`,
-`legacy/`, `pixie-main/` and `site/` were gitignored but not dockerignored. A green CI
-build is silent about the entire class, which is what makes a static guard the right
-instrument.
-
-SCOPE IS TOP-LEVEL DIRECTORIES ONLY, and deliberately so. A `.gitignore` rule like
-`tests/output/` names a directory INSIDE a tracked one; dockerignoring its first segment
-(`tests`) would be wrong. Only a rule that is exactly `name`, `name/` or `name/*` is
-treated as a claim this guard can check.
-
-A CLAIM COUNTS EVEN WHEN NOTHING IS ON DISK YET. A rule shaped `name/` or `name/*` is
-unambiguously a directory claim by .gitignore's own syntax -- gitignore's trailing `/`
-means "only match a directory" -- so it is trusted without checking `is_dir()`. A bare
-`name` rule (no trailing slash) is ambiguous between a file and a directory, so THAT form
-is still gated on `is_dir()`. Without the union, this guard is vacuous on any clean
-checkout (this repo's own fresh worktrees, and CI): none of the scratch directories are
-materialised there, so `is_dir()` returns False for every one of them and coverage
-"passes" by comparing nothing against nothing.
+Scope is top-level directories only: dockerignoring the first segment of `tests/output/`
+would be wrong. A rule shaped `name/` or `name/*` is a directory claim by gitignore syntax
+and is trusted without `is_dir()`, so the guard is not vacuous on a clean checkout; a bare
+`name` is ambiguous and is included only when it is a directory on disk.
 """
 
 import re
@@ -60,8 +41,8 @@ def gitignored_top_level_dirs():
     exists on disk -- a clean checkout has none of these scratch directories materialised,
     and this guard must still see the claim. A bare `name` rule (no trailing slash) is
     ambiguous between a file and a directory, so it is included only when `is_dir()`
-    confirms it -- see test_the_root_html_reviews_are_excluded for the file-shaped case
-    this deliberately excludes (`/*.html`, which is not even a bare-name rule).
+    confirms it. `/*.html` is file-shaped and handled by
+    test_the_root_html_reviews_are_excluded.
     """
     found = set()
     for line in _rules(GITIGNORE):
@@ -107,12 +88,8 @@ def test_the_scan_is_not_vacuous():
 
     Both halves have a failure mode that reports success: an unreadable .gitignore
     yields an empty claim set and every assertion below then passes having compared
-    nothing. This deliberately does NOT assert on-disk existence -- checking that a
-    gitignored scratch directory currently exists on disk fails on every clean checkout
-    and in CI, where none of them have been materialised, which is not evidence the
-    parser is stale. It counts RULES instead: how many top-level-shaped entries
-    .gitignore's text claims, independent of whether any of them exist right now.
-    Measured 2026-09-03 in this checkout: 54.
+    nothing. It counts top-level-shaped rules in .gitignore's text rather than
+    directories on disk, which a clean checkout does not have.
     """
     claimed = _gitignore_top_level_rule_names()
     assert len(claimed) >= 40, (
@@ -146,9 +123,8 @@ def test_the_root_html_reviews_are_excluded():
 
 
 def test_environment_yml_is_gone():
-    """It was a conda file nothing referenced and pinning nothing (`python=3.9` plus bare
-    package names, including `aicsimageio`, which tests/test_container_harmonisation.py's
-    FORBIDDEN tuple bans from every image)."""
+    """environment.yml stays deleted: nothing referenced it, it pinned nothing, and it
+    named `aicsimageio`, which test_container_harmonisation.FORBIDDEN bans."""
     assert not (REPO / "environment.yml").exists(), (
         "environment.yml is back. Nothing references it, it pins no version, and it "
         "installs aicsimageio, which is on test_container_harmonisation.FORBIDDEN. The "

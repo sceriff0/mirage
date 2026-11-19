@@ -1,36 +1,14 @@
 #!/usr/bin/env python3
 """Guard: the nf-test (stub) matrix's shard list and its `--shard` divisor agree.
 
-Added 2026-09-02 (release 1.0, phase 02, task 3b) when `_test-suite.yml`'s
-`nf-test-stub` job was sharded four ways. Measured on CI run 33641966166:
-every other job in that file finishes in <= 5 min while `nf-test (stub)` alone
-ran > 25 min over 214 tests, serially -- it was the whole CI wall-clock. nf-test
-0.9.0+ (the pinned `NFTEST_VERSION`) supports `--shard i/n --shard-strategy
-round-robin`, so the job became a 4-leg matrix instead.
+`_test-suite.yml`'s `nf-test-stub` job runs as a matrix using nf-test's
+`--shard i/n --shard-strategy round-robin`. `strategy.matrix.shard: [1, 2, 3, 4]`
+and the run step's `--shard ${{ matrix.shard }}/4` both encode the shard count,
+and nothing else forces them to agree. With `shard: [1, 2, 3]` and `/4`, a
+quarter of the suite would run on no leg while every leg stays green.
 
-WHAT CAN GO WRONG SILENTLY. `strategy.matrix.shard: [1, 2, 3, 4]` and the run
-step's `--shard ${{ matrix.shard }}/4` are two independent places that both
-encode "there are 4 shards", and nothing forces them to agree. `shard: [1, 2,
-3]` with a divisor still reading `/4` would run only 3 of 4 quarters --
-`round-robin` guarantees every fourth test lands on shard 4, so that quarter of
-the suite would run on NO leg at all, and every leg that DID run would still be
-green, because each shard only ever asserts on its own subset. That is exactly
-this repository's "verification reality" failure shape (CLAUDE.md item 7,
-generalised): nothing here is a comment, so `strip_line_comment` is not the
-gap -- the gap is two numbers that were typed twice and can drift apart with no
-test noticing either one.
-
-This guard reads the shard divisor out of the job's `run:` bodies via
-`ci_actions.job_run_scripts`, which strips whole-line AND trailing shell
-comments (quote-aware) before matching -- so a `--shard` occurrence left behind
-only inside a comment (e.g. commenting out the flag but leaving `# --shard
-${{ matrix.shard }}/4` as an explanation) does not satisfy this test. See
-CLAUDE.md, "Verification reality" item 7, and `tests/ci_actions.py`'s own
-docstring for why a raw-text scan is the wrong view for a "does CI run this"
-question.
-
-Plain pytest, no pipeline-runtime imports, paths derived from `__file__` per
-this repo's other guard tests (`test_ci_job_hygiene.py`, `test_ci_stack_pinned.py`).
+The divisor is read from the job's `run:` bodies via `ci_actions.job_run_scripts`
+(comments stripped), so a `--shard` left only in a comment does not count.
 """
 
 from __future__ import annotations
@@ -51,14 +29,9 @@ ci_actions = importlib.import_module("ci_actions")
 SUITE = ci_actions.WORKFLOWS_DIR / "_test-suite.yml"
 JOB_ID = "nf-test-stub"
 
-# `--shard 2/4`, `--shard ${{ matrix.shard }}/4`, ... -- the divisor is whatever
-# follows the NEAREST `/` after `--shard `. Not `\S*?`: a GitHub Actions
-# expression (`${{ matrix.shard }}`) contains internal spaces, so the divisor
-# does not always sit in the same whitespace-delimited token as `--shard`
-# itself. `.*?` (non-greedy) stops at the first `/`, which is exactly the one
-# closing the expression, and is anchored on `--shard` followed by whitespace
-# so it does not also match `--shard-strategy` (a different flag with no
-# `/n` of its own).
+# `--shard 2/4`, `--shard ${{ matrix.shard }}/4`: the divisor follows the nearest
+# `/` after `--shard `. `.*?` rather than `\S*?` because `${{ matrix.shard }}`
+# contains spaces; the trailing whitespace anchor keeps `--shard-strategy` out.
 SHARD_RE = re.compile(r"--shard\s+.*?/(\d+)")
 
 
@@ -76,9 +49,8 @@ def test_shard_matrix_list_is_contiguous_from_one():
     """`strategy.matrix.shard` must be exactly `[1, 2, ..., n]` for its length n.
 
     A gap (`[1, 2, 4]`) or a duplicate (`[1, 1, 2, 3]`) either strands a shard
-    number nf-test never sees or runs one leg's slice twice while starving
-    another -- and every individual leg still reports green, because a matrix
-    leg only asserts on its own run.
+    number nf-test never sees or runs one leg's slice twice, while every leg
+    still reports green.
     """
     job = _nf_test_stub_job()
     matrix = (job.get("strategy") or {}).get("matrix") or {}
@@ -97,10 +69,7 @@ def test_shard_matrix_list_is_contiguous_from_one():
 def test_shard_divisor_matches_the_matrix_length():
     """Every `--shard i/n` invocation in the job must use n == len(matrix.shard).
 
-    Read through `ci_actions.job_run_scripts`, which strips shell comments
-    (whole-line and trailing, quote-aware) before matching -- the same
-    comment-blind view every "does CI run X" guard in this repo must use
-    (CLAUDE.md, "Verification reality" item 7).
+    Read through `ci_actions.job_run_scripts`, which strips shell comments.
     """
     job = _nf_test_stub_job()
     matrix = (job.get("strategy") or {}).get("matrix") or {}
@@ -129,13 +98,9 @@ def test_shard_strategy_is_round_robin():
     """The job's `run:` body must actually pass `--shard-strategy round-robin`.
 
     Without it, `--shard i/n` alone falls back to nf-test's default splitting
-    strategy, which shards by FILE rather than by individual test -- given how
-    unevenly sized this repo's nf-test files are, that would silently starve
-    some legs and overload others while every leg still reports green (the
-    same "verification reality" failure shape the two guards above exist for).
-    Read through `ci_actions.job_run_scripts`, the same comment-stripped view
-    used above, so a `--shard-strategy round-robin` left behind only in a
-    comment does not satisfy this test.
+    strategy, which shards by file rather than by test; with unevenly sized
+    nf-test files that unbalances the legs. Read through the comment-stripped
+    `ci_actions.job_run_scripts`.
     """
     job = _nf_test_stub_job()
     script = ci_actions.job_run_scripts(job)

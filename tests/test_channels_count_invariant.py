@@ -25,21 +25,13 @@ number for two different purposes:
      in the general case it needs the grouping to close at the EMITTED-FILE
      count.
 
-`resolveKeptChannelsPerSlide`'s one-name-per-patient claim rule (each marker
-name claimed exactly once, reference first then samplesheet order) is what
-collapses these into the SAME number: claiming a name marks it emitted, so
-"emitted" and "distinct" can never drift apart -- and `countChannelsPerPatient`
-is correct for whichever of the two consumers above is asking, without
-needing to know which one it is.
+`resolveKeptChannelsPerSlide`'s claim rule (each marker name claimed once per patient,
+reference first then samplesheet order) makes these the same number: claiming a name
+marks it emitted, so "emitted" and "distinct" cannot drift apart.
 
-This logic is Groovy-only (`lib/CsvUtils.groovy`, `lib/Meta.groovy`), so it is
-only reachable through `tests/lib_probe.nf` -- nf-test's own assertion context
-cannot see `lib/` (see that file's header). `tests/lib_probe.nf` pins the
-dual invariant already for a duplicate declared ACROSS two slides (one
-patient's `CELLTOX` claimed by one slide, re-declared by another); this file
-adds and then EXERCISES the case this plan calls out specifically: a
-duplicate channel name declared TWICE WITHIN ONE SLIDE's own `channels` cell
-(e.g. `DAPI|DAPI|KI67`), which the pre-existing block never constructed.
+The logic is Groovy-only, reachable only through `tests/lib_probe.nf`. The probe covers
+a duplicate across two slides; this file exercises a duplicate within one slide's own
+`channels` cell (e.g. `DAPI|DAPI|KI67`).
 
 These tests shell out to `nextflow`, which the pytest CI job does not
 install (see tests/test_cleanup_validation.py's identical rationale), so they
@@ -83,7 +75,7 @@ def _run_probe():
 
 
 def test_channels_count_dual_invariant_holds_for_a_within_slide_duplicate():
-    """tests/lib_probe.nf's new 'duplicate marker declared twice on one row'
+    """tests/lib_probe.nf's 'duplicate marker declared twice on one row'
     block must run and hold: the pipeline's live Groovy claim rule
     (lib/CsvUtils.groovy::resolveKeptChannelsPerSlide) already drops the
     same-row repeat, so channels_count, the emitted-file count, and the
@@ -96,10 +88,8 @@ def test_channels_count_dual_invariant_holds_for_a_within_slide_duplicate():
 
 
 def test_the_probe_actually_contains_the_within_slide_duplicate_case():
-    """If the block above were ever deleted or renamed away, the test above
-    would keep passing (the probe would just run less) and silently stop
-    covering this scenario. Anchor on the case's own CSV text so a missing
-    scenario fails loudly here instead."""
+    """If the probe's block were deleted, the test above would still pass, so
+    anchor on the case's own CSV text."""
     text = LIB_PROBE.read_text()
     assert "DAPI|DAPI|KI67|CD20" in text, (
         "tests/lib_probe.nf no longer declares the within-slide duplicate "

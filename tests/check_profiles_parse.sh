@@ -1,19 +1,11 @@
 #!/usr/bin/env bash
-# ============================================================================
-# Profile parse guard
-# ============================================================================
-# Prevents the strict-parser regression that took CI down twice (see Phase 1
-# of the hardening campaign): a committed profile must NEVER `includeConfig` a
-# gitignored / possibly-missing file (e.g. conf/ieo.config). The latest
-# Nextflow parser eagerly evaluates EVERY profile's includes at parse time, so
-# one missing include breaks ALL profiles in CI and fresh clones.
-#
-# This guard temporarily removes conf/ieo.config (the gitignored site overlay)
-# and asserts that every committed profile still parses (`nextflow config`
-# exits 0). Run it in CI before the stub tests.
+# Profile parse guard: a committed profile must never `includeConfig` a
+# gitignored or possibly-missing file (e.g. conf/ieo.config). Nextflow evaluates
+# every profile's includes at parse time, so one missing include breaks all
+# profiles on CI and fresh clones. This moves conf/ieo.config aside and asserts
+# every committed profile still parses (`nextflow config` exits 0).
 #
 # Usage: tests/check_profiles_parse.sh [comma-separated-profiles]
-# ============================================================================
 
 PROFILES="${1:-test,shipped_defaults_test,ieo,singularity,docker,conda,slurm,local}"
 
@@ -22,11 +14,7 @@ if [ -f conf/ieo.config ]; then
     mv conf/ieo.config /tmp/ieo.config.guard.bak
     moved=1
 fi
-# NOT `[ "$moved" = 1 ] && mv ... || true`. That was the classic `A && B || C`
-# trap: the `|| true` existed only to stop the `&&` returning 1 when the file was
-# never moved, and it swallowed a FAILED `mv` at the same time -- which would
-# leave the developer's conf/ieo.config sitting in /tmp with the guard reporting
-# success. The `if` says the same thing and hides nothing.
+# An `if`, not `A && mv || true`: the `|| true` would also hide a failed restore.
 restore() {
     if [ "$moved" = 1 ]; then
         mv /tmp/ieo.config.guard.bak conf/ieo.config

@@ -1,23 +1,11 @@
 """`f.write(json.dumps(o))` is faster than `json.dump(o, f)` -- and only safe on small outputs.
 
 `json.dump` serialises straight into the file through many small `f.write` calls;
-`json.dumps` builds the entire document as one string and writes it once. Measured on a
-~49 MB document (60 000 objects, a 40-vertex ring each -- the `contours.json` /
-`cells.geojson` regime):
+`json.dumps` builds the whole document as one string, about 5x faster but costing roughly
+3x the output size in peak memory. Free on a small manifest; wrong on a per-cell artifact
+(`contours.json`, `cells.geojson`), which must stream.
 
-    json.dump(o, f)           3.65 s    peak RSS  +0.3 MB
-    f.write(json.dumps(o))    0.65 s    peak RSS  +156.2 MB     (5.6x faster)
-
-So the speed-up costs roughly 3.2x the output size in peak memory. On a manifest of a few
-hundred bytes that is free. On a per-cell artifact it is the wrong trade in exactly the place
-this pipeline is most memory-bound -- PERF-PLAN.md measures the correct fix for EXPORT_GEOJSON
-as a **streamed** write worth -1004 MB, i.e. the opposite direction.
-
-The source review's item reads "json.dump(o,f) -> f.write(json.dumps(o)), 9 call sites in bin/,
-5.3x". The speed-up reproduces (5.65x here), but "9 call sites" is the wrong unit: applying it
-to the per-cell writers would trade time for a gigabyte of peak RSS.
-
-This guard pins the boundary in both directions, so neither half can be "finished" by mistake.
+This guard pins the boundary in both directions.
 """
 
 import re
@@ -28,10 +16,8 @@ REPO = Path(__file__).resolve().parent.parent
 # Writers whose output is one entry PER CELL. None may serialise the WHOLE document into a
 # string before writing it.
 #
-# Note the distinction the first version of this guard got wrong: `json.dumps` applied to ONE
-# FEATURE at a time is exactly right -- that is what `_stream_collection` does, and it is the
-# -1004 MB fix. What is forbidden is `dumps` on the whole collection. So each file below is
-# checked against the specific form it should be using, not against the token `json.dumps`.
+# `json.dumps` on one feature at a time (what `_stream_collection` does) is fine; `dumps` on
+# the whole collection is not. So each file is checked for its specific form, not the token.
 PER_CELL_WRITERS = {
     "bin/mask_to_geojson.py": "one polygon per label",
     "bin/extract_cell_properties.py": "contours.json -- one ring per cell",

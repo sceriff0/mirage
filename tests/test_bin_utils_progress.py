@@ -1,9 +1,7 @@
 """bin/utils/progress.py — the ETA arithmetic and the phase bookkeeping.
 
-Neither class had a test. They are pure bookkeeping over a clock, which is
-exactly the shape that rots unnoticed: a division by zero on the first step, or
-a phase timer that never resets, produces a wrong LOG LINE and nothing else --
-so nothing fails and nobody looks.
+Both classes are pure bookkeeping over a clock: a division by zero on the first
+step, or a phase timer that never resets, produces only a wrong log line.
 """
 
 from __future__ import annotations
@@ -11,13 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# progress.py follows the repo-wide bin/ convention of a FLAT internal import
-# (`from logger import log_progress`, not `from utils.logger import ...`), so
-# bin/utils must be on sys.path before `from utils import progress` runs its
-# module body -- observed directly: without this, collection fails with
-# `ModuleNotFoundError: No module named 'logger'` raised from inside
-# progress.py itself. registration_utils.py and logger.py have no such
-# internal import, so their test files need no equivalent.
+# progress.py does a flat `from logger import log_progress`, so bin/utils must be on
+# sys.path before `from utils import progress` runs its module body.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin" / "utils"))
 
 from utils import progress  # noqa: E402
@@ -45,15 +38,10 @@ def test_the_eta_is_formatted_in_the_right_unit():
     """Seconds, minutes and hours have three different suffixes, and the
     boundaries are exact -- a report reading '3600s' is unreadable.
 
-    ``current_step = total_steps - 1`` (exactly one step remaining) is
-    load-bearing, not arbitrary: ``_estimate_remaining`` multiplies the
-    average step time by the REMAINING step count, so a naive
-    ``current_step = 1`` against ``total_steps = 100`` leaves 99 steps
-    remaining and the ``step_times = [60.0]`` case comes out as
-    ``99 * 60s = 5940s`` -- past the 3600s hour boundary, not the minute
-    range the case is named for. Observed directly: that version fails with
-    ``AssertionError`` on ``'1.6h'.endswith('m')``. With exactly one step
-    left, each step_times value maps onto exactly one boundary."""
+    ``current_step = total_steps - 1`` (one step remaining) matters:
+    ``_estimate_remaining`` multiplies the average step time by the remaining
+    step count, so with one step left each step_times value maps onto exactly
+    one boundary."""
     tracker = progress.ProgressTracker(total_steps=100, operation_name="test")
     tracker.start()
     tracker.current_step = 99

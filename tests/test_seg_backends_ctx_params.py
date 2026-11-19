@@ -1,17 +1,13 @@
 """SegBackends' ctx.params reads must all be supplied by SEGMENT's ctx construction.
 
-modules/local/segment.nf used to hand SegBackends the WHOLE params map
-(`params: params`). Nextflow hashes the free variables a process `script:` block
-references, so that bound SEGMENT's task hash to every parameter in the pipeline:
-changing only `--pyramid_resolutions` re-ran SEGMENT and everything downstream of
-it, defeating `-resume`. SEGMENT now receives a slice, declared by
-SegBackends.CTX_PARAM_KEYS and applied in subworkflows/local/segmentation.nf.
+SEGMENT receives a slice of params, declared by SegBackends.CTX_PARAM_KEYS and
+applied in subworkflows/local/segmentation.nf, because passing the whole map
+(`params: params`) puts every parameter into SEGMENT's task hash and defeats
+`-resume`.
 
-The cost of that fix is a silent failure mode. `ctx.params.some_new_key` on a map
-that does not carry the key yields NULL, not an error -- the backend would build a
-command with an empty flag and the run would go green with wrong arguments. This
-test is what makes the "add the key in both places" comment enforceable rather
-than aspirational.
+The trap: `ctx.params.some_new_key` on a map that lacks the key yields null,
+not an error, so the backend builds a command with an empty flag and the run
+stays green. This test enforces "add the key in both places".
 """
 
 import re
@@ -67,7 +63,7 @@ def test_no_unused_keys_are_supplied():
 
 
 def test_segment_does_not_pass_the_whole_params_map():
-    """The regression this guards: `params: params` re-broadens the hash to everything."""
+    """`params: params` would broaden the hash to every parameter."""
     text = SEGMENT_NF.read_text()
     assert not re.search(r"params\s*:\s*params\b", text), (
         "modules/local/segment.nf passes the whole params map into ctx again. Nextflow hashes "

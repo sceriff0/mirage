@@ -1,23 +1,13 @@
 """`extract_mask_series.py` must write masks the way every other mask writer here does.
 
-`bin/extract_mask_series.py:50` wrote full-resolution uint32 label masks with no keyword
-arguments at all -- uncompressed, and in classic TIFF. Both matter, and neither is a judgment
-call about compression policy: this one writer had drifted from three siblings and a rule the
-repo states elsewhere.
+Full-resolution uint32 label masks must be written:
 
-  * **Compression.** `segment.py:476`, `segment_cellsam.py:304` and `segment_instantseg.py:252`
-    all write their masks `compression="zlib"`. Label masks compress extremely well -- they are
-    large runs of identical integers -- so this is close to free.
+  * compressed (`zlib`), like the segment writers: label masks are long runs of identical
+    integers, so this is close to free;
+  * as BigTIFF: classic TIFF's 32-bit offsets overflow once the output crosses 4 GB, and a
+    40000x40000 uint32 mask is 6.4 GB uncompressed.
 
-  * **BigTIFF.** `tiled_stitch.py:118` puts it plainly: bigtiff is "mandatory, not an
-    optimisation ... classic TIFF's 32-bit offsets overflow (struct.error: 'I' format requires
-    0 <= number <= 4294967295) the moment the output crosses 4 GB". A 40000x40000 uint32 mask is
-    40000 * 40000 * 4 = 6.4 GB on its own, so the *uncompressed* write overflows before the pair
-    is considered.
-
-This is on the add_cycle path, which reads masks back out of a prior run's pyramid -- so the
-failure lands on someone extending a completed patient run, at the point where the prior run is
-largest.
+This is on the add_cycle path, which reads masks back out of a prior run's pyramid.
 """
 
 import os

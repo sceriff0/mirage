@@ -2,48 +2,21 @@ r"""Every `nextflow run` command in the docs must survive launch validation.
 
 Three parameters have no default and are required by `nextflow_schema.json`:
 `outdir`, `max_cpus` and `max_memory`. nextflow.config declares the last two
-`null` deliberately -- see the comment above `max_cpus = null`. A command that
-supplies none of them is refused before any process is submitted:
+`null` on purpose. A command that supplies none of them is refused before any
+process is submitted ("Missing required parameter(s): max_cpus, max_memory").
 
-    ERROR ~ Validation of pipeline parameters failed!
-    * Missing required parameter(s): max_cpus, max_memory
+A documented command satisfies the sizing pair through `-c site.config` (copied
+from conf/site.config.template), a profile that pins them, or a `-params-file`
+preset that carries them. Commands are read the way a reader copies them: out of
+fenced code blocks, following backslash continuations.
 
-25 of the 32 `nextflow run` commands in README.md and docs/*.md were in exactly
-that state on 2026-09-02, including the one the Usage page calls "the minimal
-command". Nothing executes a fenced code block, so no test caught it and the
-reader's first run failed on a perfectly good pipeline.
-
-Ruling R4 for 1.0.0: a documented command satisfies the sizing pair through
-`-c site.config` (copied from conf/site.config.template, which carries them),
-through a profile that pins them, or through a `-params-file` preset that
-carries them. This guard reads the commands the way a reader does -- out of the
-fenced code blocks, following backslash continuations -- so it fails on the
-copy-paste the reader would actually make.
-
-WHAT THIS FILE ACTUALLY CHECKS, AND WHAT IT DOES NOT. `_verdict()` below is a
-STATIC TOKEN CHECK: it looks for `--outdir`/`-c`/`max_cpus`/`max_memory`
-substrings and sizing-pinning profile names in the command text. It never
-invokes Nextflow, so it is blind to anything that only surfaces at real launch
-validation -- an unrecognised flag, a samplesheet that does not exist, a column
-the schema rejects. `_verdict("nextflow run . --nonexistent_param 1 --outdir
-results -c site.config")` reports no offense, even though nf-schema refuses
-that exact command with "Missing required parameter(s): input" /
-"* --nonexistent_param: 1". That gap is real and is not closed here -- closing
-it needs an actual `nextflow` invocation per command, which this file's fast
-in-process assertions deliberately are not.
-
-The execution counterpart is `tests/documented_commands_launch.sh`. It calls
-this file's `_commands()` (via `python3 -m tests.test_documented_commands_are_runnable
---emit`, the ONE extractor -- no second regex) to get the same command list,
-substitutes each command's `--input`/`--outdir`/`--prior_outdir`/`-profile
-<placeholder>`/`-params-file` tokens for real repo fixtures, and actually runs
-`nextflow -stub -params-file params/dry_run.json -c <site.config>` for every
-one, asserting real launch validation passes. `--dry_run` is what makes that
-affordable: CLAUDE.md's own words are "everything runs before any process is
-instantiated, and --dry_run exercises exactly that surface", so each of the
-~30 commands validates in a few seconds with no container ever pulled and no
-process ever submitted -- confirmed by inspecting the resulting work directory
-(0 files) after a passing dry run.
+`_verdict()` is a static token check and never invokes Nextflow, so it cannot see
+an unrecognised flag or a missing samplesheet. The execution counterpart is
+`tests/documented_commands_launch.sh`: it takes the same command list from
+`python3 -m tests.test_documented_commands_are_runnable --emit`, substitutes real
+fixtures for placeholders, and runs each with `-stub -params-file
+params/dry_run.json`, which validates without pulling a container or submitting
+a process.
 """
 
 import json
@@ -52,11 +25,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# rglob, not glob: docs/validation/format_validation.md is a navigated page
-# (mkdocs.yml) that a top-level glob silently left outside this guard. The
-# excluded author-facing trees (docs/superpowers, docs/_archive, docs/perf --
-# see mkdocs.yml's exclude_docs) are not published, so they are skipped here
-# for the same reason CHANGELOG.md is: they quote history, not instructions.
+# rglob: navigated pages live in subdirectories too. The trees mkdocs.yml's
+# exclude_docs leaves unpublished quote history, not instructions, so they are skipped.
 _UNPUBLISHED = {"superpowers", "_archive", "perf"}
 SCAN = [
     REPO / "README.md",
@@ -74,8 +44,7 @@ SIZING_PROFILES = {"test", "test_full", "local", "ieo", "shipped_defaults_test"}
 OUTDIR_PROFILES = {"test", "test_full", "shipped_defaults_test"}
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
-# A line may show a deliberately broken command if it says so ON THE SAME LINE --
-# docs/usage.md's "Boolean parameters" section does exactly that.
+# A line may show a broken command if it says so on the same line (`# x fails`).
 _COUNTEREXAMPLE = re.compile(r"#\s*x\s+fails\b", re.I)
 _TRAILING_COMMENT = re.compile(r"\s+#.*$")
 
@@ -192,10 +161,9 @@ def _executable(command):
 
     A substitution only ever REPLACES A VALUE, never removes or adds a flag
     the doc itself did not choose -- `-profile docker`/`slurm,singularity`/etc.
-    are left exactly as written. `--dry_run` exits before any process (and
-    therefore any container) is ever touched -- see the module docstring for
-    the measured 0-files-in-work-dir proof -- so the reader's own profile
-    choice is exactly what gets exercised, at no extra cost.
+    are left exactly as written. `--dry_run` exits before any process or
+    container is touched, so the reader's own profile choice is exercised at
+    no extra cost.
     """
     command = _TRAILING_COMMENT.sub("", command)
 
@@ -236,13 +204,8 @@ def _executable(command):
     return command
 
 
-# The "no reason" sentinel, printed literally rather than left as an empty
-# field. Bash's `read` treats tab as IFS WHITESPACE regardless of what IFS is
-# set to, which means it COLLAPSES an empty field between two tabs instead of
-# preserving it -- measured: `IFS=$'\t' read -r a b c d <<<"x\t1\t\ty"` gives
-# c=y, d=(empty), silently shifting every field after the gap. A sentinel that
-# is never empty sidesteps the collapse entirely and stays human-readable in
-# `--emit`'s own output, unlike switching to a control-character separator.
+# The "no reason" sentinel, never an empty field: bash's `read` treats tab as IFS
+# whitespace and collapses an empty field between two tabs, shifting the rest.
 _NO_REASON = "-"
 
 

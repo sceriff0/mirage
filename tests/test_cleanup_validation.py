@@ -1,14 +1,9 @@
 """Cleanup interacts with three things that must fail at LAUNCH, not halfway.
 
-`--dry_run` exercises exactly this surface, so each case below is a launch-time
-check with an actionable message rather than a surprise forty minutes into a
-run -- or, for add_cycle, a whole cycle later.
+Each case is a `--dry_run` launch check with an actionable message.
 
-These shell out to `nextflow`, which the pytest CI job does not install, so they
-skip cleanly there and run locally and in any job that has it. The static half
-of the same contract (that the vocabulary exists, that the schema enum agrees
-with Layout, that 'none' survives) is in tests/test_cleanup_vocabulary.py and
-runs everywhere.
+They shell out to `nextflow` and skip where it is not installed (the pytest CI job).
+The static half of the contract is tests/test_cleanup_vocabulary.py.
 """
 
 import shutil
@@ -23,14 +18,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def _launch(*args, outdir):
-    # `-params-file params/dry_run.json`, NOT `--dry_run`. Nextflow 26 delivers
-    # every CLI --param as a String, so a bare `--dry_run` (or `--dry_run true`)
-    # is rejected by the schema as "[string] but should be [boolean]" and the run
-    # fails for a reason that has nothing to do with what is under test.
-    # docs/usage.md documents this for every boolean param.
-    #
-    # --outdir is redirected because -profile test writes to `test_results/` in
-    # the repo root, and a validation test must not leave a tree behind.
+    # `-params-file params/dry_run.json`: Nextflow 26 passes every CLI --param as a
+    # String, so a boolean on the command line fails schema validation.
+    # --outdir is redirected so the test leaves no tree in the repo root.
     return subprocess.run(
         [
             # No `-q`: Nextflow's quiet mode suppresses log.warn from stdout
@@ -56,13 +46,10 @@ def _launch(*args, outdir):
 
 def test_add_cycle_at_a_cleaning_level_is_refused(tmp_path):
     """mode=add_cycle must PUBLISH registered/ and segmentation/ for the NEXT
-    cycle to read. At --cleanup_level=final it would not, so cycle N+1 would
-    fail launch validation on a checkpoint this run silently declined to write
-    -- discovering the mistake one whole registration too late.
+    cycle to read; at --cleanup_level=final it would not.
 
-    --prior_outdir points at nothing on purpose: the cleanup rule must fire
-    BEFORE the prior-run checks, or the message a user sees is about a missing
-    checkpoint rather than about the flag that caused it."""
+    --prior_outdir points at nothing: the cleanup rule must fire before the
+    prior-run checks, so the message names the flag that caused it."""
     r = _launch(
         "--mode",
         "add_cycle",

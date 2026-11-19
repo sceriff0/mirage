@@ -39,21 +39,11 @@ nextflow_process {
 
     test("Should render --max-dim so the anchor runs on a thumbnail - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate collects it, but
-        // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:`
-        // block, so no stub run can observe a rendered command. Same shape as
-        // tests/modules/seg_qc_geojson.nf.test's "rendered command" case.
-        //
-        // This is the assertion with teeth for the OOM fix: --max-dim is what bounds the
-        // COARSE anchor to a thumbnail. Without it the anchor would warp and FFT the
-        // native-resolution plane ~50 times, against a memory request derived from this very
-        // flag. (When the anchor was a U-Net that was thousands of GB -- how patient 052
-        // exhausted all four attempts with exit status 137; the pre-change module rendered no
-        // such flag at all.) 1024 is the default refine resolution since 2026-09-27.
-        //
-        // The assertions read the rendered .command.sh rather than the process outcome, so
-        // the case holds whether tiled_coarse.py itself succeeds; under `--profile test` no
-        // container engine is active and the host may lack skimage/zarr.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`.
+        // --max-dim bounds the COARSE anchor to a thumbnail; without it the anchor warps and
+        // FFTs the native-resolution plane ~50 times, far beyond the memory request derived
+        // from this flag. 1024 is the default refine resolution.
+        // Asserts .command.sh, not the outcome (no container engine under `--profile test`).
         tag "stub"
 
         when {
@@ -81,7 +71,7 @@ nextflow_process {
                     "no rendered TILED_COARSE .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--max-dim 1024') },
                     "rendered command missing --max-dim (params.reg_tiled_coarse_max_dim default 1024): " + rendered.join(' --- ') },
-                // the pre-existing flags must survive the change
+                // the other flags must still be rendered
                 { assert rendered.every { it.contains('--tile 2048') },
                     "rendered command missing --tile: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--halo 256') },
@@ -92,14 +82,10 @@ nextflow_process {
 
     test("Should resolve the nuclear index from channel metadata, not a fixed 0 - rendered command") {
 
-        // The teeth for the DAPI-hardcode fix. `channels` here has NO DAPI and puts the
-        // nuclear marker (CELLTOX, params.nuclear_markers' second entry) at index 1, so a
-        // correct module renders `--nuclear-index 1`. The pre-change module read the fixed
-        // `params.reg_tiled_dapi_index = 0` and rendered `--dapi-index 0` for this same
-        // input -- estimating the whole-slide anchor from CD3 instead of the fiducial.
-        //
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, and
-        // the rendered command is the whole assertion. Same shape as the --max-dim case above.
+        // `channels` has no DAPI and puts the nuclear marker (CELLTOX, params.nuclear_markers'
+        // second entry) at index 1, so the module must render `--nuclear-index 1`, not a fixed
+        // index 0 (which would estimate the anchor from CD3).
+        // `stub` tag but no `options "-stub"`: the rendered command is the whole assertion.
         tag "stub"
 
         when {
@@ -163,8 +149,7 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_COARSE .command.sh found under the task work dir" },
-                // 0 is what metadata resolution would NOT pick here, so this proves the
-                // override is honoured rather than coincidentally agreeing with the resolver.
+                // Metadata resolution would not pick 0 here, so this proves the override is honoured.
                 { assert rendered.every { it.contains('--nuclear-index 0') },
                     "explicit params.reg_tiled_nuclear_index was not honoured: " + rendered.join(' --- ') }
             )
@@ -173,8 +158,8 @@ nextflow_process {
 
     test("Should let an explicit reg_tiled_tile override its default and keep the others - rendered command") {
 
-        // STARE has no cost tiers (2026-11-04): each knob is a plain param, set directly.
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
+        // STARE has no cost tiers: each knob is a plain param, set directly.
+        // `stub` tag but no `options "-stub"`: -stub never evaluates a script: block.
         tag "stub"
 
         when {
@@ -204,7 +189,7 @@ nextflow_process {
                 { assert rendered.size() >= 1, "no rendered TILED_COARSE .command.sh found" },
                 { assert rendered.every { it.contains('--tile 4096') },
                     "the explicit reg_tiled_tile was not rendered: " + rendered.join(' --- ') },
-                // ...and everything NOT overridden keeps its default (the former 'high' row)
+                // ...and everything not overridden keeps its default
                 { assert rendered.every { it.contains('--halo 256') },
                     "halo did not keep its default 256: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--max-dim 1024') },

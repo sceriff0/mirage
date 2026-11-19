@@ -57,7 +57,7 @@ def test_no_mask_stack_writes_single_series(tmp_path):
 
 
 def test_merge_channels_embeds_masks_with_real_segment_filenames(tmp_path):
-    """Regression test for the SEGMENT filename mismatch bug.
+    """merge_channels() finds patient-prefixed mask names.
 
     SEGMENT emits `${patient_id}_cell_mask.tif` / `${patient_id}_nuclei_mask.tif`
     (see modules/local/segment.nf), and Nextflow's `stageAs: 'masks/*'` preserves
@@ -121,7 +121,7 @@ def test_merge_channels_masks_dir_with_no_masks_raises(tmp_path):
 
     masks_dir = tmp_path / "masks"
     masks_dir.mkdir()
-    # Deliberately empty -- no cell/nuclei mask files present.
+    # Empty: no cell/nuclei mask files present.
 
     out = tmp_path / "pyramid.ome.tiff"
     import pytest

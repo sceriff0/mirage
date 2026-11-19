@@ -8,11 +8,9 @@ nextflow_process {
     tag "modules_local"
     tag "segment"
 
-    // The three backend tests below assert the SAME four-channel output contract
-    // (nuclei_mask / cell_mask / versions / size_log). That identity is what lets
-    // postprocess.nf consume SEGMENT without knowing which segmenter ran, and it is the
-    // property the shared backend table (lib/SegBackends.groovy) has to preserve --
-    // everything the backends do differently happens behind it.
+    // All three backend tests assert the same four-channel output contract
+    // (nuclei_mask / cell_mask / versions / size_log), so postprocess.nf can consume
+    // SEGMENT without knowing which segmenter ran.
     test("Should segment cells from merged image - stub") {
 
         tag "stub"
@@ -52,23 +50,16 @@ nextflow_process {
                 assert get(0).get(1).toString().endsWith('_cell_mask.tif')
             }
 
-            // The `test` profile pins seg_method='stardist' (conf/test.config), so this
-            // case covers the StarDist branch of the dispatch without saying so in its
-            // own params block. Named explicitly so a profile change is a test diff.
+            // The `test` profile pins seg_method='stardist' (conf/test.config); named here so a
+            // profile change is a test diff.
             assert process.out.versions.get(0).toString().endsWith('versions.yml')
-            // THE STUB versions.yml NOW NAMES THE BACKEND'S REAL TOOLS. It used to say
-            // `seg_method: stardist` -- a key no real run ever emits -- because the two
-            // heredocs were hand-written independently and `-stub` never evaluates the
-            // script: block that would have contradicted it. Both blocks now render
-            // through ProcessEnvelope from SegBackends' one `versionTools` list, so this
-            // stub run is direct evidence about what a REAL run reports.
+            // The stub versions.yml names the backend's real tools: both blocks render through
+            // ProcessEnvelope from SegBackends' one `versionTools` list.
             with(path(process.out.versions.get(0)).text) {
                 assert contains('tensorflow: stub')
                 assert contains('python: stub')
-                // The old hand-written key, `deepcell` (a phantom -- no image installs
-                // it, and it was removed from SegBackends' versionTools 2026-09-02), and
-                // the OTHER backends' tools: a stub that names any of these is reporting
-                // a stack this task never loaded.
+                // `deepcell` (no image installs it) and the other backends' tools: a stub naming any
+                // of these reports a stack this task never loaded.
                 assert !contains('seg_method')
                 assert !contains('deepcell')
                 assert !contains('torch')
@@ -113,17 +104,9 @@ nextflow_process {
         tag "real"
         tag "slow"
 
-        // Segments P001_seg_nuclei.ome.tiff, NOT the P001_ref.ome.tiff the rest of
-        // this file uses. P001_ref's DAPI channel is 40 gaussian blobs of radius
-        // 6-13 packed into 128x128 and merged with np.maximum: measured on the
-        // generated file, 37.7% of the frame is foreground and it forms exactly ONE
-        // connected component. There are no separate nuclei in it to find, so
-        // StarDist's 2D_versatile_fluo returned nothing and this case got a 145-byte
-        // (all-zero) mask on nightly 33633986188. That density is deliberate -- it is
-        // what gives VALIS the shared texture the REGISTER cases need -- so
-        // segmentation got its own image instead (generate_complete_testdata.py
-        // section 10: 45 nuclei, 10-18 px across, none touching, asserted at
-        // generation time).
+        // Segments P001_seg_nuclei.ome.tiff, not P001_ref.ome.tiff: P001_ref's DAPI is one
+        // dense connected blob (needed for VALIS texture), so StarDist finds no nuclei in it.
+        // The segmentation fixture has 45 separate nuclei (generate_complete_testdata.py section 10).
 
         when {
             params {
@@ -150,11 +133,8 @@ nextflow_process {
                 { assert process.success },
                 { assert process.out.nuclei_mask },
                 { assert process.out.cell_mask },
-                // > 1000, not > 100: an EMPTY 256x256 zlib-compressed mask is 624
-                // bytes (measured), so > 100 would pass on the exact all-zero
-                // failure mode this fixture exists to catch. Matches the sibling
-                // "Should detect cells in synthetic image with DAPI signal -
-                // regression" case below.
+                // > 1000, not > 100: an empty 256x256 zlib-compressed mask is 624 bytes, so > 100
+                // would pass on the all-zero failure this fixture exists to catch.
                 {
                     def maskSize = file(process.out.nuclei_mask.get(0).get(1)).size()
                     assert maskSize > 1000, "Nuclei mask should be > 1KB (got ${maskSize} bytes), indicating actual segmentation"
@@ -215,10 +195,8 @@ nextflow_process {
                 assert get(0).get(1).toString().endsWith('_cell_mask.tif')
             }
 
-            // Same four outputs, same names, different backend -- and the stub's
-            // versions.yml follows the backend, which is exactly what the single
-            // `versionTools` list buys. Under the old hand-written stub heredoc every
-            // backend reported the same two keys (`python` + `seg_method`).
+            // Same four outputs, same names, different backend; the stub's versions.yml follows
+            // the backend.
             with(path(process.out.versions.get(0)).text) {
                 assert contains('instanseg: stub')
                 assert contains('torch: stub')
@@ -344,21 +322,15 @@ nextflow_process {
 
     test("Should reject an unknown seg_method rather than silently run StarDist - stub") {
 
-        // Stub is sufficient here, unusually: the throw comes from SegBackends.of() in
-        // the `container` DIRECTIVE, which Nextflow evaluates for every task whichever
-        // block runs. The stub block itself never touches SegBackends, so what this case
-        // pins is the directive, not the script.
+        // Stub is enough here: the throw comes from SegBackends.of() in the `container`
+        // directive, which Nextflow evaluates for every task whichever block runs.
         tag "stub"
         options "-stub"
 
         when {
             params {
-                // A plausible typo. The old nested `container` ternary treated anything
-                // that was not 'cellsam' or 'instantseg' as StarDist, so this ran a
-                // different segmenter than asked for -- either dying later on StarDist's
-                // channel-0 check with an error naming the wrong problem, or succeeding
-                // with the wrong algorithm. seg_method has no schema enum, so
-                // SegBackends.of() is the only place the typo can be caught.
+                // A plausible typo. seg_method has no schema enum, so SegBackends.of() is the only
+                // place it is caught; otherwise a different segmenter than asked for would run.
                 seg_method = 'instaseg'
             }
             process {
@@ -382,24 +354,15 @@ nextflow_process {
 
     test("Should enforce the CONFIGURED nuclear marker, not the literal DAPI - real") {
 
-        // Real (not stub): like its sibling above, the channel-0 hard check lives in the
-        // script block, which a stub does not execute. It exits before Python runs, so
-        // this costs a container start and nothing else.
+        // Real (not stub): the channel-0 hard check lives in the script block. It exits
+        // before Python runs, so this costs only a container start.
         tag "real"
         tag "slow"
 
         when {
             params {
-                // The inversion that proves the literal 'DAPI' is gone. Channel 0 IS
-                // DAPI, which the old hardcoded check accepted unconditionally -- but
-                // DAPI is not one of the CONFIGURED markers here, so StarDist would be
-                // pointed at the wrong channel and must refuse.
-                //
-                // This is the site that turned Task 3's relaxed launch validation into a
-                // later, less legible failure in the other direction too: a
-                // CELLTOX-configured sheet passed validation, CONVERT_IMAGE correctly
-                // moved CELLTOX to channel 0, and then SEGMENT rejected it for not
-                // being DAPI.
+                // Channel 0 is DAPI, but DAPI is not one of the configured markers here, so StarDist
+                // would be pointed at the wrong channel and must refuse.
                 nuclear_markers = ['CELLTOX']
             }
             process {
@@ -428,22 +391,8 @@ nextflow_process {
         tag "slow"
         tag "regression"
 
-        // Segments P001_seg_nuclei.ome.tiff, NOT the P001_ref.ome.tiff the rest of
-        // this file uses. P001_ref's DAPI channel is 40 gaussian blobs of radius
-        // 6-13 packed into 128x128 and merged with np.maximum: measured on the
-        // generated file, 37.7% of the frame is foreground and it forms exactly ONE
-        // connected component. There are no separate nuclei in it to find, so
-        // StarDist's 2D_versatile_fluo returned nothing and this case got a 145-byte
-        // (all-zero) mask on nightly 33633986188. That density is deliberate -- it is
-        // what gives VALIS the shared texture the REGISTER cases need -- so
-        // segmentation got its own image instead (generate_complete_testdata.py
-        // section 10: 45 nuclei, 10-18 px across, none touching, asserted at
-        // generation time).
-        //
-        // `seg_model` was set here and is not a parameter this pipeline has -- the
-        // model name comes from `segmentation_model`, which conf/test.config already
-        // pins to the same built-in. The line selected nothing; it is spelled
-        // correctly now so the case says what it runs on.
+        // Segments P001_seg_nuclei.ome.tiff, not P001_ref.ome.tiff (see the case above).
+        // The model name comes from `segmentation_model`, pinned in conf/test.config.
         when {
             params {
                 segmentation_model = "2D_versatile_fluo"
@@ -486,18 +435,10 @@ nextflow_process {
 
     test("Should render the backend's versions.yml probes, not a seg_method row - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"`. That is the entire point of this case:
-        // `-stub` never evaluates a `script:` block, so the stub cases above -- however
-        // thorough -- say nothing about the versions.yml a REAL run writes. The heredoc
-        // this task replaced lived only in `script:`, which means every assertion that
-        // could see it had to be a rendered-command assertion. Same shape and same reason
-        // as tests/modules/generate_qc_report.nf.test's `-rendered command` case.
-        //
-        // SEGMENT is not runnable without its container, and that is fine: the assertions
-        // read the rendered .command.sh, which Nextflow writes before it executes
-        // anything, so this case holds whether the task succeeds or dies importing
-        // tensorflow. It asserts nothing about process outcome for exactly that reason.
+        // Tagged `stub` so CI's gate runs it, but without `options "-stub"`: `-stub` never
+        // evaluates `script:`, so only a rendered-command assertion can see the versions.yml a
+        // real run writes. The assertions read .command.sh, which is written before anything
+        // executes, so this holds whether the task succeeds or fails without its container.
         tag "stub"
 
         when {
@@ -528,22 +469,14 @@ nextflow_process {
                 { assert rendered.size() >= 1,
                     "no rendered SEGMENT .command.sh found under the task work dir" },
 
-                // The `test` profile pins seg_method='stardist', so the rendered command
-                // must carry StarDist's one probe -- the row ProcessEnvelope built from
-                // SegBackends' versionTools list, byte-for-byte what the hand-written
-                // heredoc used to contain. `deepcell` was removed from that list
-                // 2026-09-02 (it was a phantom -- no image installs it, and StarDist has
-                // nothing to do with DeepCell); its absence is asserted below, alongside
-                // `torch`, as one of the "negative with teeth" checks.
+                // The `test` profile pins seg_method='stardist', so the rendered command carries
+                // StarDist's one probe from SegBackends' versionTools list.
                 { assert rendered.every {
                     it.contains('tensorflow: $(python -c "import tensorflow; print(tensorflow.__version__)" 2>/dev/null || echo "unknown")') },
                     "rendered command: " + rendered.join(' --- ') },
 
-                // The shared `python:` row ProcessEnvelope prepends, with a BARE `$(`.
-                // `<<-END_VERSIONS` is an unquoted heredoc, so bash command-substitutes a
-                // bare `$(...)` and prints an escaped `\$(...)` as literal text -- the
-                // over-escaping bug that once wrote shell commands into every published
-                // versions.yml, invisibly, because -stub never runs script:.
+                // The shared `python:` row with a bare `$(`: `<<-END_VERSIONS` is unquoted, so bash
+                // substitutes `$(...)`, while an escaped `\$(...)` would print the command literally.
                 { assert rendered.every { it.contains('python: $(python --version 2>&1 | sed \'s/Python //\')') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('\\$(python') },
@@ -553,10 +486,8 @@ nextflow_process {
                 { assert rendered.every { it.contains('cat <<-END_VERSIONS > versions.yml') },
                     "rendered command: " + rendered.join(' --- ') },
 
-                // The negative with teeth. `seg_method` is not a tool and no real run ever
-                // reported it -- it existed ONLY in the stub heredoc. Its appearance in a
-                // rendered command means the two blocks are being maintained separately
-                // again. Likewise the other backends' tools: exactly one backend runs.
+                // `seg_method` is not a tool; in a rendered command it means the stub and script
+                // heredocs have diverged. Likewise the other backends' tools: exactly one backend runs.
                 { assert rendered.every { !it.contains('seg_method:') },
                     "rendered command carries the stub-only seg_method row: " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('import torch') },
@@ -570,24 +501,11 @@ nextflow_process {
 
     test("Should render the inlined StarDist flag string, in order - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:`
-        // block, and ext.args is only interpolated there, so no stub run can observe
-        // these flags at all. Same shape and same reason as the versions.yml case above.
-        //
-        // THIS IS THE CASE THAT PINS THE INLINING. The StarDist flag list used to be a
-        // `def starDistCommonFlags(params)` at the top of conf/modules.config; Nextflow
-        // 26's strict (v2) parser rejects a function declaration in a config file, so the
-        // list was inlined into the `withName: 'SEGMENT'` ext.args closure. Nothing about
-        // that move is observable from a stub run, from `nextflow config` (which prints a
-        // closure's SOURCE, not its evaluation), or from the process outputs -- only from
-        // the rendered command. The assertion is the whole string, contiguous, so a
-        // dropped flag AND a reordered one both fail.
-        //
-        // Values are the `test` profile's (conf/test.config): seg_method='stardist',
-        // segmentation_model='2D_versatile_fluo', seg_n_tiles_y/x=2, seg_prob_thresh=0.3,
-        // seg_gpu=false, segmentation_model_dir=null; seg_expand_distance=10,
-        // seg_pmin=1.0, seg_pmax=99.8 from nextflow.config. A profile change is a test diff.
+        // `stub` tag but no `options "-stub"`: ext.args is only interpolated in `script:`.
+        // Pins the StarDist flag list inlined into the `withName: 'SEGMENT'` ext.args closure
+        // (Nextflow 26's strict parser forbids a config-level function). The whole string is
+        // asserted contiguous, so a dropped or reordered flag fails.
+        // Values are the `test` profile's (conf/test.config) plus nextflow.config defaults.
         tag "stub"
 
         when {
@@ -617,9 +535,8 @@ nextflow_process {
                 { assert rendered.size() >= 1,
                     "no rendered SEGMENT .command.sh found under the task work dir" },
 
-                // The flag string, whole and contiguous. Order is part of the contract
-                // only because preserving it byte-for-byte is what makes the inlining a
-                // no-op; segment.py itself does not care.
+                // The flag string, whole and contiguous. segment.py does not care about order; the
+                // order is pinned so the inlined list stays byte-identical.
                 { assert rendered.every { it.contains(
                     '--model-name 2D_versatile_fluo --n-tiles 2 2 --expand-distance 10 ' +
                     '--pmin 1.0 --pmax 99.8 --prob-thresh 0.3') },
@@ -643,8 +560,8 @@ nextflow_process {
 
         // Copy of "Should render the inlined StarDist flag string, in order", switched
         // to seg_method='cellsam' to name seg_cellsam_bbox_threshold, seg_cellsam_overlap
-        // and seg_cellsam_use_wsi (conf/modules.config:1047-1056). `stub` tag but NO
-        // `options "-stub"` -- ext.args is only interpolated in script:, invisible to -stub.
+        // and seg_cellsam_use_wsi (conf/modules.config). `stub` tag but no `options "-stub"`:
+        // ext.args is only interpolated in script:.
         tag "stub"
 
         when {
@@ -693,7 +610,7 @@ nextflow_process {
 
         // Copy of "Should render the inlined StarDist flag string, in order", switched
         // to seg_method='instantseg' to name seg_instantseg_batch_size
-        // (conf/modules.config:1033-1045). `stub` tag but NO `options "-stub"`.
+        // (conf/modules.config). `stub` tag but no `options "-stub"`.
         tag "stub"
 
         when {
@@ -734,10 +651,8 @@ nextflow_process {
 
     test("Should omit --use-wsi when seg_cellsam_use_wsi is false - rendered command") {
 
-        // Third CellSAM case: seg_cellsam_use_wsi's shipped default (nextflow.config) is
-        // `true`, so the positive case above only shows it explicitly named at the
-        // default value -- this is the case that actually flips the ternary
-        // (conf/modules.config:1054, `params.seg_cellsam_use_wsi ? '--use-wsi' : ''`).
+        // seg_cellsam_use_wsi defaults to `true`, so this is the case that flips the ternary
+        // (`params.seg_cellsam_use_wsi ? '--use-wsi' : ''` in conf/modules.config).
         tag "stub"
 
         when {
@@ -778,12 +693,8 @@ nextflow_process {
 
     test("Should render --model-dir and drop --prob-thresh when configured so - rendered command") {
 
-        // The other state of both conditionals, which the case above cannot reach: the
-        // inlined list keeps `params.segmentation_model_dir ? ... : ''` and
-        // `params.seg_prob_thresh != null ? ... : ''`, and a rewrite that flattened either
-        // into an unconditional flag would still pass the case above.
-        //
-        // Same tagging rationale: `stub` for CI's gate, no `options "-stub"`.
+        // The other state of both conditionals (`segmentation_model_dir`, `seg_prob_thresh`),
+        // which the case above cannot reach. `stub` tag, no `options "-stub"`.
         tag "stub"
 
         when {
@@ -817,9 +728,8 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered SEGMENT .command.sh found under the task work dir" },
-                // --model-dir leads the list, and --use-gpu is appended once AFTER the
-                // backend's own flags -- it is shared by all three backends, so it is not
-                // part of the StarDist list itself.
+                // --model-dir leads the list; --use-gpu is appended once after the backend's flags
+                // because all three backends share it.
                 { assert rendered.every { it.contains(
                     '--model-dir /opt/models/stardist --model-name 2D_versatile_fluo ' +
                     '--n-tiles 2 2 --expand-distance 10 --pmin 1.0 --pmax 99.8 --use-gpu') },

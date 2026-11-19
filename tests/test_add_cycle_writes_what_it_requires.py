@@ -5,27 +5,10 @@
 of manifests add_cycle READS is exactly the set it must WRITE, or cyclic-IF
 cannot chain past two cycles.
 
-It could not. Reproduced 2026-08-25 under -stub:
-
-    cycle 2 (prior = the fixture)     exit 0,  csv/: preprocessed registered
-    cycle 3 (prior = cycle 2's outdir) exit 1,
-        mode='add_cycle': required checkpoint 'csv/postprocessed.csv' not found
-        under --prior_outdir '...'. Was the prior run completed through
-        postprocessing?
-
-`subworkflows/local/registered_checkpoint.nf` had already been split out to fix
-exactly this for the registered half; the postprocessed half was still owned by
-`postprocess.nf`, which add_cycle never runs.
-
-WHY A STATIC GUARD RATHER THAN A CHAINED nf-test. Proving it end to end takes a
-run whose --prior_outdir is a previous run's --outdir: two pipeline invocations
-in one case. nf-test's assertion context cannot see lib/ classes at all
-(tests/layout.nf.test:5 records this), and no test in this repo uses a `setup`
-block to stage a second run, so that harness would be new machinery for one
-case. What actually regresses is cheaper to state: a writer disappearing from
-add_cycle's reachable include graph. That is what this checks, and it reads the
-required set from Layout rather than restating it -- so a THIRD entry in
-ADD_CYCLE_CHECKPOINTS is covered the day it is added.
+Static rather than a chained nf-test (two pipeline runs, the second reading the
+first's outdir): what regresses is a writer leaving add_cycle's reachable include
+graph, and that is what this checks. The required set is read from Layout, so a
+new ADD_CYCLE_CHECKPOINTS entry is covered automatically.
 
 tests/checkpoint_manifest.nf.test's mode=add_cycle case asserts the resulting
 files exist and that every path in them resolves; the two together are the
@@ -83,12 +66,8 @@ def _reachable_from(entry: Path):
     return seen
 
 
-# `CHECKPOINT_WRITER(Layout.<CONST>, ...)` -- the call that commits a file to writing a
-# given manifest. Before subworkflows/local/checkpoint_writer.nf existed this was found
-# by looking for a `collectFile(` and a `Layout.checkpointCsvName(Layout.<CONST>)` in the
-# SAME file, because every writer carried both. Now exactly one file carries the
-# collectFile and it takes the step as a parameter, so what identifies a writer is the
-# call site that names the step.
+# `CHECKPOINT_WRITER(Layout.<CONST>, ...)`: the call site that names the step
+# identifies a file as that manifest's writer.
 _CKPT_CALL = re.compile(r"CHECKPOINT_WRITER\s*\(\s*Layout\.(\w+)")
 
 
@@ -156,8 +135,6 @@ def test_the_scan_is_not_vacuous():
     # checkpoint_writer.nf directly -- it reaches it through REGISTER_PATIENT and
     # through POSTPROCESSED_CHECKPOINT, both of which it does include. If this stops
     # holding, the walk has silently become one-level and would report a false pass.
-    # (The anchor used to be registered_checkpoint.nf, which was deleted once the write
-    # moved into checkpoint_writer.nf and it had nothing left to own.)
     direct = {
         (SUBWORKFLOWS / "add_cycle.nf")
         .parent.joinpath(rel)

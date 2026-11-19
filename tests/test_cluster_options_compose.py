@@ -2,30 +2,13 @@
 append.
 
 nextflow.config's `slurm` profile sets `process.clusterOptions` to the site's
-`--account`/`--qos`. conf/modules.config then assigned SEGMENT its own
-`clusterOptions = { params.seg_gpu ? "--gres=gpu:..." : '' }`, which overrode
-that outright -- so every process on the cluster carried the account except the
-single GPU process, which is the one a scheduler is most likely to reject
-without it.
+`--account`/`--qos`. A process-level `clusterOptions` (SEGMENT's GPU request)
+overrides that outright, so it must restate the site settings.
 
-WHY THE FIX IS A DUPLICATED DERIVATION AND NOT A COMPOSITION.
-
-The obvious fix reads the profile value and appends to it:
-
-    clusterOptions = { (task.clusterOptions ?: '') + ' --gres=...' }
-
-It does not work. Inside a clusterOptions closure, `task.clusterOptions` IS
-this closure -- verified 2026-08-25 on NXF_VER=26.04.6, where it does not fall
-back to the profile value but recurses: java.lang.StackOverflowError, the task
-fails, the run aborts. Shipping it would have replaced a wrong `--account` with
-a crashed GPU path.
-
-And there is nowhere shared to put the derivation: conf/*.config cannot see
-lib/*.groovy, and NF26's strict parser forbids a helper shared between blocks.
-So the account/qos clause is inlined -- the same forced duplication as
-any closure that needs a lib/ rule -- and what this file guards is the thing duplication
-actually costs: the two copies drifting apart, silently, because neither one
-mentions the other at runtime.
+It cannot compose: inside a clusterOptions closure `task.clusterOptions` is the
+closure itself and recurses to a StackOverflowError. And conf/*.config cannot share
+a helper, so the account/qos clause is inlined. This file guards the two copies
+against drifting apart.
 """
 
 import re
@@ -42,10 +25,9 @@ _PARAM = re.compile(r"params\.(slurm_\w+)")
 def _profile_cluster_options_body():
     """The `slurm` profile's process.clusterOptions closure body.
 
-    Read off the comments-blanked, strings-INTACT view: the closure interpolates
+    Read off the comments-blanked, strings-intact view: the closure interpolates
     params inside quoted flags ("--account=${params.slurm_account}"), which the
-    fully-stripped view blanks away -- a scan on that view would find no params
-    at all and this whole file would compare two empty sets and pass.
+    fully-stripped view would blank away.
     """
     src = strip_comments((REPO_ROOT / "nextflow.config").read_text())
     m = re.search(r"process\.clusterOptions\s*=\s*\{", src)
@@ -98,9 +80,7 @@ def test_no_process_level_cluster_options_drops_the_site_settings():
 
 def test_no_cluster_options_closure_reads_its_own_directive():
     """`task.clusterOptions` inside a clusterOptions closure is self-referential
-    and recurses to a StackOverflowError -- a crash, not a fallback. It reads
-    like the obvious composition, so it is worth failing loudly rather than at
-    the first GPU submission."""
+    and recurses to a StackOverflowError -- a crash, not a fallback."""
     offenders = [
         f"conf/modules.config:{line} withName: '{selector}' reads "
         f"task.clusterOptions from inside its own clusterOptions closure -- "
@@ -116,20 +96,9 @@ def test_recursion_scan_ignores_a_comment_but_catches_real_code():
     strings intact) for both this file's checks, rather than a second,
     strings-blanked view for the recursion check specifically.
 
-    `_process_cluster_options()` extracts each closure body through
-    `strip_comments`, and both `test_no_process_level_cluster_options_drops_the_site_settings`
-    (needs string contents, since the composed `--account=${params.slurm_account}`
-    text lives inside a quoted literal) and this file's recursion check read
-    that same body. That is only safe because SEGMENT's own explanatory
-    comment in conf/modules.config literally contains the string
-    `task.clusterOptions` in prose (documenting the exact trap this guard
-    exists to catch) -- if the recursion check read a view that kept comments
-    intact, it would trip on its own documentation. `strip_comments` blanks
-    comments (so the prose mention vanishes) while keeping strings (so a real
-    reference, including one hidden inside a GString interpolation, survives).
-    Demonstrated here on synthetic text mirroring the real shape, so a future
-    change to `_process_cluster_options()`'s view choice fails a fast, direct
-    test rather than only the slow, indirect one against the real file.
+    A comment in conf/modules.config names `task.clusterOptions` in prose, so the
+    recursion check must not read comments; the site-settings check needs string
+    contents. `strip_comments` does both. Demonstrated on synthetic text.
     """
     commented = (
         "withName: 'FOO' {\n"
@@ -155,13 +124,9 @@ def test_the_scan_finds_the_gpu_block():
     )
 
 
-# Each site SLURM knob's real consumer inside nextflow.config's `slurm` profile.
-# `slurm_qos` (with `slurm_account`, not named by this task) feeds the composed
-# `process.clusterOptions` closure this file already parses above. `slurm_partition`
-# does NOT: it drives a separate scalar, `process.queue = params.slurm_partition`,
-# two lines above that closure -- a real distinction, not an oversight, so this
-# test checks each param against what it actually reaches rather than assuming
-# both funnel through clusterOptions.
+# Each site SLURM knob's consumer inside nextflow.config's `slurm` profile:
+# `slurm_qos` feeds the `process.clusterOptions` closure; `slurm_partition` drives
+# `process.queue`.
 _SLURM_SITE_PARAM_CONSUMERS = {
     "slurm_partition": "queue",
     "slurm_qos": "clusterOptions",
@@ -175,19 +140,8 @@ def test_slurm_site_param_is_named_and_reaches_its_consumer(param, consumer):
     `conf/site.config.template`, and be referenced by name inside
     nextflow.config's `slurm` profile.
 
-    conf/site.config.template does NOT itself define a `clusterOptions`
-    closure (or a `process.queue` assignment) -- it only sets the params
-    (both `null`, "leave null when not using SLURM"); the closures that
-    consume them live in nextflow.config's `slurm` profile, read here via
-    `Path.read_text()` and `tests.nfmodel.strip_comments` rather than a
-    private parse.
-
-    This is a config reader, not a Nextflow-source parser (nf-test's own
-    `.nf.test` files and the `modules/*.nf` process bodies are out of scope
-    here), so it is exempted from `tests.nfmodel`'s block/closure extraction
-    only for the `process.queue` half of the check -- the `clusterOptions`
-    half reuses this file's own `_profile_cluster_options_body()` rather than
-    re-parsing the closure a second way.
+    The template only sets the params (both `null`); the consumers live in
+    nextflow.config's `slurm` profile, read via `tests.nfmodel.strip_comments`.
     """
     nextflow_cfg = strip_comments((REPO_ROOT / "nextflow.config").read_text())
     site_template = strip_comments(

@@ -1,19 +1,15 @@
 """Memory-shape + correctness tests for the thumbnail coarse anchor in tiled_coarse.py.
 
-TILED_COARSE was the last caller of the eager ``nuclear_channel(load_channels(path))`` whole-slide
-decode that test_tiled_reg_tile_lazy.py already retired from the per-tile step. On top of the
-full decode it matched at *native* resolution, which is how patient 052 exhausted all four
-attempts with exit 137. The design always specified this step as a THUMBNAIL feature-align to a
-global rigid M0, and the thumbnail is what these tests pin.
+TILED_COARSE is a thumbnail feature-align to a global rigid M0. Decoding the whole slide and
+matching at native resolution runs out of memory (exit 137) on real slides.
 
-The bound still matters: the anchor (NCC rotation sweep + refine, ORB fallback) warps and FFTs
+The bound matters: the anchor (NCC rotation sweep + refine, ORB fallback) warps and FFTs
 the whole plane it is handed ~50 times, and TILED_COARSE's memory request is derived from
 ``--max-dim``. An unbounded plane is not a slow run, it is an unschedulable one.
 
 Properties pinned here:
   1. The anchor never sees a full-resolution plane: the arrays handed to estimate_anchor have
-     their longest side bounded by --max-dim. This is the test that fails against the
-     pre-change code.
+     their longest side bounded by --max-dim.
   2. No whole-slide array is ever materialised: every region read off either slide is a bounded
      row band, not the whole plane.
   3. M0 is written in FULL-RESOLUTION coordinates -- estimating on a decimated pair and
@@ -114,8 +110,7 @@ def _run(tmp_path, ref_f, mov_f, max_dim, nuclear_index=1, tile=256, halo=32, ex
 def test_the_matcher_never_sees_a_full_resolution_plane(tmp_path, monkeypatch):
     """The arrays handed to estimate_anchor must be bounded by --max-dim.
 
-    Fails against the pre-change code, which passed the native-resolution DAPI plane straight
-    into the matcher (1024 px here, 8x over the 128 px bound).
+    Here a native-resolution plane would be 1024 px, 8x over the 128 px bound.
     """
     n, max_dim = 1024, 128
     ref_f, mov_f = _write_pair(tmp_path, n=n, shift=(16, -8))
@@ -146,9 +141,7 @@ def test_the_matcher_never_sees_a_full_resolution_plane(tmp_path, monkeypatch):
 def test_slides_are_read_lazily_in_bounded_bands(tmp_path, monkeypatch):
     """Both slides must be reached through open_lazy region reads, each within the band budget.
 
-    Fails against the pre-change code in the most direct way available: that code called
-    ``tifffile.imread`` via ``load_channels`` and never touched ``open_lazy`` at all, so no
-    region read is recorded and ``reads`` is empty.
+    An eager ``tifffile.imread`` path records no region read, so ``reads`` would be empty.
     """
     from tiled_io import DEFAULT_BAND_BYTES
 
@@ -335,11 +328,10 @@ def test_small_slide_is_not_decimated(tmp_path, monkeypatch):
 
 
 def test_an_unanchorable_pair_is_anchored_unverified_with_a_warning(tmp_path, caplog):
-    """STARE >= 1.1.0 is permissive by default: two unrelated slides still get an M0 (the
-    best guess), but a wrong anchor fails nothing downstream (tiles are simply read from the
-    wrong place), so the M0 JSON says `coarse_trusted: false` and the log names both slides.
-    Since 1.2.0 the candidates are first checked at full resolution (`coarse_probe`); on
-    unrelated slides that check confirms none."""
+    """STARE is permissive by default: two unrelated slides still get a best-guess M0, but a
+    wrong anchor fails nothing downstream, so the M0 JSON says `coarse_trusted: false` and the
+    log names both slides. Candidates are first checked at full resolution (`coarse_probe`);
+    on unrelated slides that check confirms none."""
     # 512 vs 1024 draws of the textured field are different random fields, not a crop.
     ref_f, mov_f = _write_pair(tmp_path, n=512, ref_n=1024, shift=(0, 0))
     with caplog.at_level("WARNING"):

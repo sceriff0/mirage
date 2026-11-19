@@ -6,10 +6,8 @@ here operates on AnnData and plain frames.
 
 One test builds its `obsm["spatial"]` with the REAL
 `export_spatialdata.build_table`, stubbing only `TableModel` (a pass-through
-wrapper). That coupling is deliberate: `join_by_centroid`'s inverse is only
-correct relative to whatever pixel convention `build_table` stores, so a
-hand-written coordinate array cannot notice when that changes -- which is
-exactly how this file went stale when the store moved to corner-of-pixel.
+wrapper): `join_by_centroid`'s inverse is only correct relative to the pixel
+convention `build_table` stores, which a hand-written array would not track.
 """
 
 from __future__ import annotations
@@ -22,10 +20,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# anndata is not in the base CI dependency set. CI now installs it unconditionally (the
-# `|| echo` fallback went away with the Python 3.9 matrix leg that justified it), so this
-# does not skip there; it is kept for dev environments without anndata, because an
-# ImportError here takes the whole pytest run down rather than just these tests.
+# CI installs anndata; the skip is for dev environments without it, where an
+# ImportError would take the whole pytest run down.
 ad = pytest.importorskip("anndata")
 
 BIN = Path(__file__).resolve().parents[1] / "bin"

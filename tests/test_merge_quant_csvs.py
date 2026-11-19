@@ -57,17 +57,10 @@ def test_dapi_is_protected_from_overwrite(tmp_path):
 
 
 def test_reorder_columns_preserves_prior_cell_size_without_area():
-    """Regression (add_cycle path): a prior merged table can carry fov/cell_size
-    without an ``area`` column (e.g. an older schema, or cell_size computed some
-    other way). Before adopting the canonical 12-entry MORPHOLOGY_COLS (which
-    includes fov/cell_size), a hardcoded ``col not in ("fov", "cell_size")``
-    clause excluded them from BOTH morpho_present and marker_cols_all, so the
-    `merged[final_column_order]` column selection dropped them entirely.
-    cell_size was only ever recreated from `area` a few lines later, so a prior
-    cell_size with no matching area column was silently lost forever.
+    """add_cycle: a prior table's fov/cell_size survive without an ``area`` column.
 
-    With the canonical 12-entry list, fov/cell_size are ordinary morphology
-    columns and survive the selection unconditionally.
+    fov/cell_size are ordinary entries of MORPHOLOGY_COLS, so the column
+    selection keeps them even when cell_size cannot be recomputed from area.
     """
     prior = pd.DataFrame(
         {
@@ -80,27 +73,24 @@ def test_reorder_columns_preserves_prior_cell_size_without_area():
     out = mqc.reorder_columns(prior.copy(), patient_id="cycle2_patient")
 
     # cell_size survives from the base table exactly -- no `area` column
-    # existed, so it is never overwritten/recomputed. This is the bug fix.
+    # existed, so it is never overwritten/recomputed.
     assert "cell_size" in out.columns
     assert list(out["cell_size"]) == [111.0, 222.0, 333.0]
 
-    # fov is still (unconditionally, unrelated to this change) refreshed to
-    # the current patient_id -- required for Pixie fov tagging.
+    # fov is always refreshed to the current patient_id (Pixie fov tagging).
     assert list(out["fov"]) == ["cycle2_patient"] * 3
 
 
 # ---------------------------------------------------------------------------
-# The nuclear/fiducial marker is whatever params.nuclear_markers says it is.
-# Both behaviours below used to key off the literal string "DAPI", so a panel
-# whose fiducial is CELLTOX silently lost the protection and the ordering.
+# The nuclear/fiducial marker is whatever params.nuclear_markers says it is,
+# not the literal string "DAPI" (e.g. a CELLTOX panel).
 # ---------------------------------------------------------------------------
 
 
 def test_reorder_puts_the_configured_fiducial_first_not_literal_dapi():
     """CELLTOX leads the marker block when it is the configured fiducial.
 
-    Without the marker list it sorts alphabetically -- CD3 would come first --
-    which is what the hardcoded "DAPI" check produced for every non-DAPI panel.
+    Without the marker list it sorts alphabetically and CD3 would come first.
     """
     df = pd.DataFrame(
         {"label": [1, 2], "CD3": [1.0, 2.0], "CELLTOX": [3.0, 4.0], "PANCK": [5.0, 6.0]}
@@ -129,8 +119,8 @@ def test_a_marker_outside_the_configured_list_does_not_lead():
 def test_configured_fiducial_is_protected_from_overwrite(tmp_path):
     """The prior cycle's fiducial column wins over an incoming one.
 
-    protected_cols is now derived from the marker list by the caller, so this
-    pins the mechanism the CLI wires up: a protected column keeps the BASE value
+    protected_cols is derived from the marker list by the caller; this pins
+    the mechanism the CLI wires up: a protected column keeps the BASE value
     and drops the incoming one, while an unprotected marker is overwritten.
     """
     base = pd.DataFrame({"label": [1, 2], "CELLTOX": [10.0, 20.0], "CD3": [1.0, 2.0]})
@@ -146,14 +136,11 @@ def test_configured_fiducial_is_protected_from_overwrite(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Characterisation of merge_intensities, written before PERF-PLAN 1.4 replaces
-# the N sequential merges with one concat (measured 2.05x / -274 MB).
+# Characterisation of merge_intensities.
 #
-# These pin the behaviour the refactor must preserve. The subtle one is
-# FILE-vs-FILE collision: the loop mutates `merged` as it goes, so by the time
-# the second file is considered its marker is already in the base. A deferred
-# concat that only checks the ORIGINAL base columns would silently change both
-# the overwrite and the protection outcome, and no existing test covered it.
+# The subtle case is file-vs-file collision: protection and overwrite are
+# judged against the running table, so a marker from file 1 counts as already
+# in the base when file 2 is merged.
 # ---------------------------------------------------------------------------
 
 
@@ -246,12 +233,10 @@ def test_base_row_order_is_preserved_even_if_the_file_is_shuffled(tmp_path):
 
 
 def test_a_duplicate_label_is_refused_rather_than_silently_duplicating_cells(tmp_path):
-    """DELIBERATE DIVERGENCE from the old sequential merge.
+    """A duplicated label in an incoming file does not duplicate base rows.
 
-    `merged.merge(..., on="label", how="left")` with a duplicated label in the incoming file
-    duplicated every matching base row, silently inflating the cell count for everything
-    downstream. The reindex cannot reproduce that, and reproducing it would be wrong: one row
-    per cell is the contract for a per-cell quantification CSV.
+    One row per cell is the contract for a per-cell quantification CSV; a left merge on a
+    duplicated label would inflate the cell count downstream.
     """
     import pytest
 

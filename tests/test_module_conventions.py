@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
 """Guard against multi-process module files.
 
-CLAUDE.md states an explicit convention: "one process per file in
-`modules/local/`". A file that defines more than one `process` block forces
-its callers into a two-name `include`, and lets a second process silently
-grow inside a module named after the first. This test asserts every
-`modules/local/*.nf` file defines exactly one `process`.
-
-Note: this deliberately scans only `modules/local/*.nf`, matching the other
-guard tests in this campaign. Widening the scan to `workflows/` or
-`subworkflows/` (which don't define `process` blocks under this convention
-anyway) is out of scope here.
+Convention: one process per file in `modules/local/`. A second `process` block
+forces callers into a two-name `include` and hides a process inside a module
+named after another. Only `modules/local/*.nf` is scanned.
 """
 
 from __future__ import annotations

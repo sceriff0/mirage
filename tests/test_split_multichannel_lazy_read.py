@@ -1,12 +1,8 @@
-"""SPLIT_CHANNELS must stop eagerly decoding the whole multi-channel stack.
+"""SPLIT_CHANNELS reads one channel at a time instead of decoding the whole stack.
 
-``bin/split_multichannel.py:split_multichannel_tiff`` used to call
-``tifffile.imread`` on the *entire* ``(C, H, W)`` slide, then wrote one
-single-channel TIFF per marker from ``data[i]`` -- so a slide with a dozen-plus
-marker channels sat fully decoded in memory while the write loop only ever
-touched one plane at a time. Unlike ``generate_preprocess_qc`` (Task 2), nothing
-downstream of the read needs every channel at once, so per-channel reads are a
-genuine, not just peak-memory, optimization here.
+``bin/split_multichannel.py:split_multichannel_tiff`` writes one single-channel
+TIFF per marker, and nothing needs every channel at once, so the whole
+``(C, H, W)`` slide is never decoded together.
 
 This file pins three properties:
 
@@ -20,34 +16,13 @@ This file pins three properties:
    whole-image statistics (negative-pixel count, percentage of the WHOLE
    image, min before/after) and emits ONE log line. Reading one channel at a
    time must not fragment that into one line per channel with per-channel
-   (therefore wrong) percentages -- the new code must accumulate across
-   channels and emit a single equivalent line, still with the SAME numbers a
-   whole-image call would have produced.
+   (therefore wrong) percentages -- the code accumulates across channels and
+   emits a single line with the numbers a whole-image call would produce.
 
-Property 2 does not fail against the pre-change code by construction (old code
-already produces the correct pixels, so "old vs. new" is old-vs-old before the
-fix lands); it is included anyway as the equivalence regression guard the
-task requires, and was falsified during development by deliberately reading
-the wrong channel index (see task-3-report.md). Property 3 similarly cannot RED
-against the pre-change code (which never loops per channel, so it trivially
-emits one line already); it was falsified by deliberately reverting to a naive
-per-channel ``clip_negative_values`` call and confirming this test then fails
-with C lines instead of one (see task-3-report.md).
-
-Property 2 used to be checked byte-for-byte. It no longer is, because of a *later*
-change layered on top of the read-path change this docstring otherwise describes:
-``split_multichannel_tiff`` now writes each single-channel output TILED
-(``tile=(SPLIT_TIFF_TILE, SPLIT_TIFF_TILE)``) instead of the striped layout
-``tifffile.imwrite`` defaults to -- see ``split_multichannel.SPLIT_TIFF_TILE`` for why
-(striped output makes every downstream region read -- MERGE_AND_PYRAMID,
-quantification -- decode a whole plane). ``_old_split_multichannel_tiff`` below is a
-frozen copy of the writer as it stood *before that tiling change too* (it never passes
-``tile=``), so it stays a genuinely striped reference. Tiling changes which TIFF tags
-get written and therefore the raw bytes, so the equivalence tests below decode both
-files and compare pixels/dtype/resolution tags instead of comparing bytes;
-``test_the_write_is_tiled`` is the one that positively pins the new layout, so a revert
-of the ``tile=`` argument fails a test rather than silently passing this weakened
-equivalence check.
+The output is written tiled (``split_multichannel.SPLIT_TIFF_TILE``), while
+``_old_split_multichannel_tiff`` is a striped whole-stack reference, so
+equivalence is checked on decoded pixels, dtype and resolution tags, not bytes.
+``test_the_write_is_tiled`` pins the tiled layout itself.
 """
 
 from __future__ import annotations
@@ -127,9 +102,8 @@ def _write_stack(
 def _old_split_multichannel_tiff(
     input_path, output_dir, is_reference, channel_names, nuclear_markers, pixel_size
 ):
-    """Reimplements the PRE-CHANGE whole-stack read path verbatim (frozen copy of
-    the git history before this task's change), used as the independent "old"
-    reference for the byte-identity tests below.
+    """Whole-stack read path with a striped write, kept as the independent
+    reference for the equivalence tests below.
     """
     from image_utils import ensure_dir, normalize_image_dimensions
     from metadata import extract_channel_names_from_ome, is_nuclear
@@ -200,9 +174,9 @@ def _old_split_multichannel_tiff(
 def _assert_pixels_and_tags_equivalent(old_path, new_path):
     """Decoded-pixel equivalence, used in place of a byte comparison.
 
-    The new writer tiles its output (``split_multichannel.SPLIT_TIFF_TILE``) while
-    ``_old_split_multichannel_tiff`` above deliberately does not, so the two files'
-    raw bytes differ on purpose (different TIFF tags, different tile/strip layout).
+    The writer tiles its output (``split_multichannel.SPLIT_TIFF_TILE``) while
+    ``_old_split_multichannel_tiff`` above does not, so the two files' raw bytes
+    differ (different TIFF tags, different tile/strip layout).
     What must still match is the published PIXELS, dtype, and the resolution tags
     ``split_multichannel_tiff`` stamps on for MERGE_AND_PYRAMID to read.
     """
@@ -225,9 +199,6 @@ def test_split_multichannel_reads_one_channel_at_a_time(tmp_path, monkeypatch):
     """The slide must be reached through ``open_lazy`` and read one channel at a
     time, never via a whole-array ``tifffile.imread``.
 
-    Fails against the pre-change code, which has no ``open_lazy`` attribute on
-    the ``split_multichannel`` module at all -- this assertion cannot even be
-    wired up until the routing lands.
     """
     channel_names = ["DAPI", "CD4", "CD8"]
     image_path = _write_stack(tmp_path, channel_names)
@@ -287,14 +258,13 @@ def test_split_multichannel_reads_one_channel_at_a_time(tmp_path, monkeypatch):
 def test_split_multichannel_outputs_pixel_identical_to_old_whole_stack_read(
     tmp_path, is_reference, dtype
 ):
-    """Every output TIFF from the new per-channel-read path must have the same
-    decoded pixels, dtype, and resolution tags as what the old whole-stack-read
-    path wrote, including a case with real negative pixels (int16) that exercises
+    """Every output TIFF from the per-channel-read path must have the same
+    decoded pixels, dtype, and resolution tags as the whole-stack reference,
+    including a case with real negative pixels (int16) that exercises
     clip_negative_values.
 
-    Not a byte comparison: the new writer tiles its output (see the module
-    docstring), so its bytes differ from the striped reference on purpose --
-    ``_assert_pixels_and_tags_equivalent`` is the equivalence that must hold.
+    Not a byte comparison: the writer tiles its output, so its bytes differ
+    from the striped reference.
     """
     channel_names = ["DAPI", "CD4", "CD8"]
     neg = {1: 25, 2: 5} if dtype == np.int16 else None
@@ -333,10 +303,9 @@ def test_split_multichannel_outputs_pixel_identical_to_old_whole_stack_read(
 
 def test_split_multichannel_channel_last_layout_still_matches_old_read(tmp_path):
     """A hypothetical (Y, X, C) input (never produced by this pipeline's own
-    producers, but the original defensive branch handled it) must still fall
-    back to a whole-stack read and produce output equivalent to the pre-change
-    code (pixels/dtype/resolution tags -- see ``_assert_pixels_and_tags_equivalent``
-    for why not raw bytes).
+    producers, but a defensive branch handles it) must fall back to a
+    whole-stack read and produce output equivalent to the reference
+    (pixels/dtype/resolution tags).
     """
     channel_names = ["DAPI", "CD4"]
     image_path = _write_stack(tmp_path, channel_names, axes="YXC")
@@ -369,7 +338,7 @@ def test_split_multichannel_negative_clip_stats_logged_once_for_whole_image(
     a real whole-array computation -- not fragmented into one line per channel
     with per-channel (and therefore wrong) percentages.
 
-    Channel 0 (DAPI, the nuclear channel) is deliberately given negative pixels
+    Channel 0 (DAPI, the nuclear channel) is also given negative pixels
     too, and the run is is_reference=False (so DAPI is READ, for stats purposes,
     but never WRITTEN) -- pinning that a channel skipped from output still has
     to count toward the aggregate.
@@ -431,38 +400,27 @@ def test_split_multichannel_negative_clip_stats_logged_once_for_whole_image(
 
 
 # ---------------------------------------------------------------------------
-# the tiled layout -- what Task 2 exists to change
+# the tiled layout
 # ---------------------------------------------------------------------------
 
 
 def test_the_write_is_tiled(tmp_path):
-    """Pin the layout change this task exists to make, and state why.
+    """Each single-channel TIFF is written tiled.
 
-    ``split_multichannel_tiff`` used to write each single-channel TIFF STRIPED
-    (tifffile's default): a plain ``tifffile.imread(path, aszarr=True)`` view of
-    that reports ``chunks=(1, H, W)``, one chunk for the whole plane, so a single
-    "read just this region" call downstream (MERGE_AND_PYRAMID, quantification)
-    has to decode the ENTIRE plane to slice it out. Measured on a 6000x6000
-    uint16 plane: a single 2048^2 region read peaks at 76.7 MiB striped vs
-    16.0 MiB tiled.
-
-    Checked two ways, so a revert of the ``tile=`` argument in
-    ``split_multichannel_tiff`` fails here rather than silently reintroducing
-    that cost:
+    A striped TIFF (tifffile's default) is one zarr chunk per plane, so every
+    region read downstream (MERGE_AND_PYRAMID, quantification) decodes the
+    whole plane. Checked two ways:
 
     1. the TIFF tags tifffile itself writes (``TileWidth``/``TileLength``),
        against ``sm.SPLIT_TIFF_TILE`` rather than a bare ``2048``, so the two
        stay in sync if the constant ever changes;
     2. the zarr chunk shape the pipeline's own region reader actually sees
-       (``bin/utils/tiled_io.py:open_lazy`` uses exactly this ``aszarr=True`` +
-       ``zarr.open`` pattern), which is the property the whole task is about --
-       the TIFF tags could in principle be present without the zarr view
-       honouring them, and this check is the one that would catch that.
+       (``bin/utils/tiled_io.py:open_lazy`` uses this ``aszarr=True`` +
+       ``zarr.open`` pattern), since the tags could be present without the zarr
+       view honouring them.
 
-    The un-tiled reference writer (``_old_split_multichannel_tiff``, i.e. the
-    writer this task's write replaced) is asserted to be striped, as the
-    contrast: this is not merely "some file happens to be tiled", it is "the
-    write changed layout and the old one did not".
+    The striped reference writer (``_old_split_multichannel_tiff``) is asserted
+    to be striped, as the contrast.
     """
     import zarr
 

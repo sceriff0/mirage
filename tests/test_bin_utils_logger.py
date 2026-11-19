@@ -1,4 +1,4 @@
-"""bin/utils/logger.py — the singleton, untested until now.
+"""bin/utils/logger.py — the logging singleton.
 
 Every bin/ script calls configure_logging() then get_logger(__name__). The two
 properties that matter are invisible when broken: configuring twice must not

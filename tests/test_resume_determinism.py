@@ -1,11 +1,8 @@
 """Guards for `nextflow -resume`: every fan-in must order by data, never by arrival.
 
-WHY THIS FILE EXISTS. Five identical stub runs of this pipeline cached 22, 8, 22, 22
-and 22 of 28 tasks. Nothing changed between them. The 8 came from
-`registration.nf`'s `.groupTuple()` handing REGISTER its slides in a different order,
-which changed the task hash (Nextflow hashes list inputs POSITIONALLY) and cascaded a
-re-run of everything downstream. On a real WSI run that is days of recomputation, and
-it is invisible -- the run is green either way.
+Nextflow hashes list inputs positionally, so a `.groupTuple()` that emits in arrival
+order can change a task hash between identical runs and re-run everything downstream,
+while the run stays green.
 
 Two of these checks guard something worse than a cache miss:
 
@@ -13,19 +10,14 @@ Two of these checks guard something worse than a cache miss:
     sorted by their own natural orders and silently re-paired. Demonstrated:
         in:  ['k','zeta','a.txt'], ['k','alpha','z.txt']   # zeta<->a.txt, alpha<->z.txt
         out: [k, [alpha, zeta], [a.txt, z.txt]]            # alpha now <-> a.txt
-    It is the fix a reader reaches for first, and it is wrong. Pair first (transpose),
-    then sort the pairs.
+    Pair first (transpose), then sort the pairs.
 
   * A bare `params` inside a process `script:` block puts the WHOLE params map into
-    that task's hash, so ANY parameter change anywhere re-runs it. Measured: changing
-    only `--pyramid_resolutions` (a postprocessing knob) re-ran REGISTER and SEGMENT
-    and cascaded 20 of 28 tasks.
+    that task's hash, so any parameter change anywhere re-runs it.
 
-These are STATIC checks: they assert the ordering mechanism is present at each site.
-They are cheap, run in CI's blocking python-tests gate, and cannot pass by luck --
-unlike a run-twice cache measurement, where an intermittent regression (the REGISTER
-miss showed up in roughly one run in four) can go unnoticed. tests/resume_check.sh is
-the behavioural counterpart; see its header for why it is not in the gate.
+These are static checks: they assert the ordering mechanism is present at each site,
+so they cannot pass by luck the way a run-twice check of an intermittent miss can.
+tests/resume_check.sh is the behavioural counterpart.
 """
 
 import re
@@ -106,11 +98,8 @@ def test_every_fan_in_orders_by_data():
 
 def test_final_qc_collects_are_sorted():
     body = _strip_comments_only((ROOT / "subworkflows/local/final_qc.nf").read_text())
-    # Real calls are 3-arg -- artifactsOf(ch_artifacts, 'kind', consumed_kinds) -- since
-    # f892012 added consumed_kinds. A 2-arg-only pattern here matches zero real call
-    # sites regardless of whether sort: true is present, so it can never fail: verified
-    # by planting a bare .collect() on a real 3-arg call and confirming the 2-arg
-    # version stayed green while this one catches it.
+    # Real calls are 3-arg -- artifactsOf(ch_artifacts, 'kind', consumed_kinds); a
+    # 2-arg-only pattern would match no real call site and could never fail.
     unsorted = re.findall(
         r"artifactsOf\(ch_artifacts, '([a-z_]+)'(?:,\s*\w+)?\)\.collect\(\)", body
     )

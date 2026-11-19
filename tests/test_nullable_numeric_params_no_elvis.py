@@ -5,19 +5,11 @@
 by construction: `null` means unset, `0` is a legal value with a meaning, and Elvis silently
 turns the second into the first.
 
-Live instance this guard was written for: `conf/modules.config` had
+Example: `params.reg_tiled_max_disp ?: params.reg_tiled_halo` turns a requested `0` into the
+halo value.
 
-    def maxDisp = params.reg_tiled_max_disp ?: params.reg_tiled_halo
-
-while `nextflow_schema.json` declares `reg_tiled_max_disp` as `["number", "null"]` with
-`"minimum": 0`. A user asking for `--reg_tiled_max_disp 0` -- reject any control point with a
-non-zero displacement -- silently got `256`, the read halo, which rejects almost nothing. The
-parameter appeared to work and did the opposite of what was asked.
-
-**String parameters are deliberately out of scope.** For a string, `''` and `null` both mean
-"not supplied" to every consumer here, so `?:` is idiomatic and correct -- `params.stop`,
-`instanseg_model_dir` and `cellsam_model_path` all rely on it. Widening this guard to strings
-would produce noise, not safety.
+String parameters are out of scope: for a string, `''` and `null` both mean "not supplied",
+so `?:` is idiomatic there (`params.stop`, `instanseg_model_dir`, `cellsam_model_path`).
 
 The fix in every case is an explicit null test: `params.x != null ? params.x : fallback`.
 """

@@ -1,29 +1,15 @@
 """The export fixtures must produce a feature per cell, not an empty collection.
 
-WHAT THIS REPRODUCES. `.github/workflows/nightly.yml`'s header records, as red
-cause (2) of the `nf-test --tag real` suite, "the exported GeoJSON carries 0
-features against 20 rows in the quantification CSV", and calls it downstream of
-cause (1), the empty nuclei mask. It is not downstream of anything. The failing
-case is the export_geojson nf-test module's "Should produce valid GeoJSON with
-cell features - real" case, whose only inputs are tests/testdata/sample_merged_quant.csv
-and tests/testdata/sample_contours.json.
+The export_geojson nf-test's real case reads tests/testdata/sample_merged_quant.csv and
+tests/testdata/sample_contours.json. Their shapes must match what the producers write:
 
-Two fixture defects, both measured by running the module's own script by hand:
+  * the CSV carries `x`/`y` (bin/export_geojson._iter_rows_positional skips any row
+    whose centroid is missing, so `centroid_x`/`centroid_y` gives 0 features);
+  * the contours map str(label) -> [[x, y], ...], as
+    bin/extract_cell_properties.extract_contours returns and _polygon_geometry reads.
 
-  * sample_merged_quant.csv carried `centroid_x`/`centroid_y`.
-    bin/export_geojson._iter_rows_positional looks up "x"/"y", gets None for both,
-    and every row takes the `pd.isna(x_px)` -> `skipped += 1` branch. 20 rows in,
-    0 features out. The correct column list was already written down TWICE in the
-    generator that produces the fixture -- sample_morphology.csv's
-    morphology_columns, and expected/merged_quant_columns.txt.
-  * sample_contours.json wrapped each ring as {"coordinates": [...]}.
-    bin/extract_cell_properties.extract_contours -- the real producer -- returns
-    str(label) -> [[x, y], ...], and _polygon_geometry uses the value AS the ring.
-
-WHY A PYTEST AND NOT ONLY THE nf-test. The nf-test that catches this is tagged
-`real`, and `--tag real` runs on the nightly schedule against the default branch
-only -- so on `dev` it runs nowhere at all. This runs in the blocking suite, in
-about a second, with no container and no Nextflow.
+That nf-test is tagged `real` and runs only nightly on the default branch; this runs in
+the blocking suite in about a second.
 """
 
 import json
@@ -128,7 +114,7 @@ def test_each_feature_carries_a_closed_polygon_ring(exported):
 
 def test_every_feature_has_a_nucleus_geometry(exported):
     """The combined export's whole point: cell polygon as `geometry`, nucleus polygon
-    as top-level `nucleusGeometry`. Zero of them had one."""
+    as top-level `nucleusGeometry`."""
     out, log = exported
     features = json.loads((out / "cells.geojson").read_text())["features"]
     assert features, (

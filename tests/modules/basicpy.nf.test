@@ -28,17 +28,14 @@ nextflow_process {
             assertAll(
                 { assert process.success },
                 { assert process.out.profiles },
-                // The naming is load-bearing, not cosmetic. subworkflows/local/preprocess.nf
-                // joins the profiles back to the tile stack's sidecar on
-                // "<patient_id>/<meta.id>", and meta.id is set to the tile stack's
-                // simpleName precisely so the two sides agree. The module derives its
-                // output names from `ext.prefix ?: "${meta.id}"`, so if that stops holding
-                // the join silently produces nothing and APPLY_PROFILES never runs.
+                // subworkflows/local/preprocess.nf joins the profiles back to the tile stack's
+                // sidecar on "<patient_id>/<meta.id>", and the outputs are named from
+                // `ext.prefix ?: "${meta.id}"`; if the names drift the join yields nothing and
+                // APPLY_PROFILES never runs.
                 { assert process.out.profiles.get(0).get(1).endsWith('P001_ref_tiles-dfp.ome.tif') },
                 { assert process.out.profiles.get(0).get(2).endsWith('P001_ref_tiles-ffp.ome.tif') },
-                // Darkfield first, flatfield second -- upstream's tuple order, which
-                // APPLY_PROFILES' input tuple has to match. Getting these the wrong way
-                // round would divide by the darkfield and subtract the flatfield.
+                // Darkfield first, flatfield second, matching APPLY_PROFILES' input tuple; swapped,
+                // it would divide by the darkfield and subtract the flatfield.
                 { assert process.out.profiles.get(0).get(1).contains('-dfp.') },
                 { assert process.out.profiles.get(0).get(2).contains('-ffp.') }
             )
@@ -47,27 +44,14 @@ nextflow_process {
 
     test("Should invoke /opt/main.py with no arguments at all - rendered command") {
 
-        // Tagged `stub` for CI's gate but deliberately NOT run with `options "-stub"`:
-        // `-stub` never evaluates a `script:` block, and the whole point here is the
-        // rendered invocation.
-        //
-        // WHAT IS UNDER ASSERTION: that nothing is appended after the four flags the
-        // module itself renders. Running at nf-core's upstream defaults is a decision --
-        // mirage's previous in-process call was
-        // `BaSiC(get_darkfield=True, smoothness_flatfield=1)` and is deliberately NOT
-        // reproduced -- and an empty `ext.args` looks exactly like an oversight to the
-        // next reader. `--no_autotune` is the flag to watch: its name is INVERTED
-        // (`action="store_false"`, `default=True`, gated by `if not args.no_autotune`),
-        // so adding it to "turn autotune off" turns it ON.
-        //
-        // tests/test_basicpy_defaults_are_deliberate.py checks the same decision
-        // statically, in conf/modules.config. This checks it in the string the container
-        // is actually handed, which is the only place an `ext.args` from a site profile
-        // or a `-c` override would show up.
-        //
-        // No container engine is active under `-profile test`, so /opt/main.py does not
-        // exist and the task fails; the assertions read the rendered .command.sh rather
-        // than the process outcome.
+        // `stub` tag but no `options "-stub"`: the rendered invocation is the subject.
+        // Asserts nothing is appended after the module's own four flags: BaSiCPy runs at
+        // nf-core's upstream defaults on purpose. `--no_autotune` is inverted
+        // (`action="store_false"`), so adding it to "turn autotune off" turns it on.
+        // tests/test_basicpy_defaults_are_deliberate.py checks conf/modules.config; this
+        // checks the rendered string, where a site profile or `-c` override would show up.
+        // No container engine under `-profile test`, so the task fails; the assertions read
+        // .command.sh only.
         tag "stub"
 
         when {
@@ -92,9 +76,8 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered BASICPY .command.sh found under the task work dir" },
-                // NB: the `+` continuations below stay at END of line. Leading `+` is
-                // parsed by Groovy as a unary plus on a String and fails at assertion
-                // time with `No signature of method: java.lang.String.positive()`.
+                // Keep the `+` continuations at end of line: a leading `+` is a unary plus on a
+                // String and fails with `java.lang.String.positive()`.
                 { assert rendered.every { !it.contains('--darkfield') },
                     "BASICPY was handed --darkfield; the shipped configuration estimates " +
                     "no darkfield on purpose: " + rendered.join(' --- ') },

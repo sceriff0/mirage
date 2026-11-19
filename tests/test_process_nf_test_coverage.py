@@ -2,24 +2,13 @@
 command carries a tunable has at least one nf-test case that RENDERS it in the
 blocking gate.
 
-Why two rules. `-stub` never evaluates a `script:` block (CLAUDE.md,
-"Verification reality" 1), so a stub-only test of a process that reads
-`params.*` in its script or takes `ext.args` from conf/modules.config proves
-its channel wiring and nothing about the flags it passes. CI's gate is
-`nf-test test --tag stub`, so a rendered case tagged only `real` runs in
-nightly.yml on the default branch and nowhere else. The 2026-09-10 audit
-found 5 processes with no module test and 11 tunable processes with no gated
-rendered case; the 2026-09-10 build-out closed all sixteen, so KNOWN_GAPS was
-left empty and the list can only shrink. On `dev` it is not empty: it holds the
-dev-only EXTRACT_MASK_SERIES, which add_cycle owns and the build-out -- run on
-`main`, which carries neither -- never saw, until
-tests/modules/extract_mask_series.nf.test exists.
+`-stub` never evaluates a `script:` block, so a stub-only test of a process that
+reads `params.*` in its script or takes `ext.args` proves its channel wiring and
+nothing about its flags. CI's gate is `nf-test test --tag stub`, so a rendered
+case tagged only `real` runs only in nightly.yml.
 
-All parsing goes through tests.nfmodel (test_nfmodel.py forbids a private one).
-Tunables are read off `strip_comments(raw)` views. `ext.args` is an identifier,
-so the blanked `body` view would find that one too; the `params.` scan is the
-one that needs strings kept, because the rendered command -- and every
-`params.x` inside it -- lives in the module's quoted script string.
+Parsing goes through tests.nfmodel. Tunables are read off `strip_comments(raw)`
+views, because the `params.x` reads live inside the module's quoted script string.
 """
 
 from __future__ import annotations
@@ -30,22 +19,13 @@ import pytest
 
 from tests.nfmodel import nf_test_cases, processes, strip_comments, with_name_blocks
 
-# Shrink-only. Each entry is a process the audit found short on 2026-09-10 and
-# the reason. Delete the entry in the same commit that closes the gap;
-# test_known_gaps_only_shrink fails on an entry that is no longer a gap.
-# Empty is the goal state, and the dict is kept rather than deleted so that a
-# future entry re-arms test_known_gaps_only_shrink; shrink-only is enforced by
-# review (nothing here can tell a new entry from a re-added old one).
+# Shrink-only: process -> reason it is short. Delete an entry in the same commit
+# that closes the gap; test_known_gaps_only_shrink fails on an entry that is no
+# longer a gap. Keep the dict even when empty so a future entry re-arms that test.
 KNOWN_GAPS = {
-    # dev only. EXTRACT_MASK_SERIES is add_cycle's process, and add_cycle lives on
-    # `dev` (CLAUDE.md, "Branch model"), so the 2026-09-10 audit and build-out --
-    # which ran on `main` -- never saw it. It has no module-level nf-test of its
-    # own; tests/subworkflows/add_cycle.nf.test asserts it RUNS inside ADD_CYCLE
-    # (`trace.tasks().findAll { it.name.contains('EXTRACT_MASK_SERIES') }.size() == 1`)
+    # add_cycle's process (dev only). tests/subworkflows/add_cycle.nf.test runs it
     # but names no `process` directive, which is what this guard counts. Not
-    # tunable: its withName: block sets no ext.args and its script reads no
-    # params., so only the first rule bites. Listed 2026-09-13 as the honest
-    # state, not waived -- closing it means adding tests/modules/extract_mask_series.nf.test.
+    # tunable. Closing it means adding tests/modules/extract_mask_series.nf.test.
     "EXTRACT_MASK_SERIES": "no module test (dev-only process, add_cycle)",
 }
 

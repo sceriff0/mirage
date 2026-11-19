@@ -1,14 +1,11 @@
 """A wrong pixel size does not just get carried through the pipeline -- it corrupts
 every reported measurement.
 
-`tests/test_pixel_size_is_actually_passed.py` proves the value ARRIVES at every
-`bin/*.py` consumer that needs a scale. It does not prove that a wrong value produces
-wrong numbers -- that is a different claim, and it is the one that makes the
-PREFLIGHT_SCALE warning (see `bin/preflight_scale.py`) load-bearing rather than
-decorative. Without a test like this one, someone could weaken that warning to a debug
-line and nothing here would object.
+`tests/test_pixel_size_is_actually_passed.py` proves the value reaches every
+`bin/*.py` consumer. This test proves a wrong value produces wrong numbers, which is
+why the PREFLIGHT_SCALE warning (`bin/preflight_scale.py`) matters.
 
-Exercises the REAL production chain rather than reimplementing area math:
+Exercises the real production chain rather than reimplementing area math:
 
   1. ``bin/extract_cell_properties.py::extract_morphology`` -- regionprops on a
      synthetic mask, producing ``area`` in raw pixels (no scale involved yet).

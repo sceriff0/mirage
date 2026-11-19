@@ -33,12 +33,8 @@ nextflow_pipeline {
             params {
                 input = "$projectDir/tests/testdata/test_input.csv"
                 start = "preprocessing"
-                // outdir is explicitly nulled out here: the "test,docker" profile
-                // (nf-test.config) includes conf/test.config, which sets a default
-                // outdir = "test_results". Simply omitting `outdir` from this block
-                // would inherit that default and never exercise a null outdir, so
-                // this test-params override (highest precedence) sets it to null
-                // directly to reproduce the missing-flag case.
+                // outdir is nulled here because conf/test.config sets a default outdir;
+                // omitting it would never exercise the missing-flag case.
                 outdir = null
             }
         }
@@ -46,11 +42,8 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.failed },
-                // nf-schema reports "Missing required parameter(s): outdir" on
-                // stderr, while the Groovy fallback (ParamUtils.validateOutdir)
-                // surfaces via stdout/errorReport — search all three so this
-                // asserts the operator is told *which* parameter is missing,
-                // whichever layer catches it.
+                // nf-schema reports a missing outdir on stderr, the ParamUtils.validateOutdir
+                // fallback via stdout/errorReport: search all three for the parameter name.
                 { assert (workflow.stdout + workflow.stderr).any { it.contains("outdir") } ||
                          (workflow.errorReport ?: '').contains("outdir") }
             )
@@ -289,15 +282,6 @@ nextflow_pipeline {
         }
     }
 
-    // Legacy registration methods (gpu, cpu, valis_pairs, cpu_tiled) moved to legacy/.
-    // A "Should run registration with padding - stub" test used to live here; `padding`
-    // was dropped along with PAD_IMAGES (e8c10b4) and nothing in the pipeline has read
-    // `params.padding` since, so the test had become a byte-for-byte duplicate of
-    // "Should run registration with VALIS method - stub" above, plus one dead param.
-    // `validation.logging.unrecognisedParams = 'error'` in nextflow.config (task 1.5)
-    // turned that dead param from silently-ignored into a launch failure, which is what
-    // surfaced it -- removed rather than kept, since VALIS coverage above is identical.
-
     //==========================================================================
     // POSTPROCESSING STEP TESTS
     //==========================================================================
@@ -382,11 +366,9 @@ nextflow_pipeline {
         tag "stub"
         tag "channel_set"
 
-        // RegisteredMatch pairs VALIS's renamed outputs back to their metas by channel
-        // SET, so two slides with the same set are indistinguishable after REGISTER.
-        // That was discovered by RegisteredMatch.pair -- after REGISTER had run the
-        // whole 12-slide group (head_neck patient 046, 2026-09-11). dry_run proves the
-        // refusal now happens in CsvUtils.validateInputSemantics, before any task.
+        // RegisteredMatch pairs VALIS outputs back to metas by channel set, so two slides
+        // with the same set are indistinguishable after REGISTER. dry_run proves the refusal
+        // happens in CsvUtils.validateInputSemantics, before any task.
         when {
             params {
                 input = "$projectDir/tests/testdata/duplicate_channel_set.csv"
@@ -411,10 +393,9 @@ nextflow_pipeline {
         tag "stub"
         tag "channel_set"
 
-        // The VALIS-only signature rule (Rule B, RegBackends.of('tiled').pairsOutputsBySignature
-        // is false) does not apply to tiled -- but rows 3 and 4 of this sheet also share the
-        // non-nuclear channels CD3 and CD8, and CsvUtils.validateInputSemantics's unconditional
-        // cross-slide rule (Rule A) refuses that regardless of backend or requireUniqueChannelSets.
+        // The VALIS-only signature rule (Rule B) does not apply to tiled, but rows 3 and 4
+        // share the non-nuclear channels CD3 and CD8, which the unconditional cross-slide
+        // rule (Rule A) refuses on any backend.
         when {
             params {
                 input = "$projectDir/tests/testdata/duplicate_channel_set.csv"
@@ -439,11 +420,8 @@ nextflow_pipeline {
         tag "stub"
         tag "channel_set"
 
-        // --start segmentation reads a registered.csv this pipeline wrote; REGISTER does not
-        // run, so the VALIS-only signature rule (Rule B) has nothing to protect and is skipped
-        // on re-entry (the negative assertion below still proves that). But the unconditional
-        // cross-slide rule (Rule A) is not backend- or entry-point-gated: rows 3 and 4 share
-        // the non-nuclear channels CD3 and CD8, so it refuses this checkpoint sheet too.
+        // --start segmentation does not run REGISTER, so Rule B is skipped (the negative
+        // assertion below checks that); Rule A still refuses rows 3 and 4 sharing CD3/CD8.
         when {
             params {
                 input = "$projectDir/tests/testdata/duplicate_channel_set_registered.csv"
@@ -466,11 +444,8 @@ nextflow_pipeline {
     test("Should reject a samplesheet that marks no reference") {
         tag "stub"
 
-        // Unconditional now. This used to be half of a pair -- the other half asserted
-        // that `allow_auto_reference = true` made the same sheet ACCEPTABLE by promoting
-        // the patient's first row. That flag and that promotion are gone, so a sheet
-        // naming no reference is refused on every path but add_cycle's, whose reference
-        // is the prior run's and never a row in its own sheet.
+        // A sheet naming no reference is refused on every path but add_cycle's, whose
+        // reference comes from the prior run.
         when {
             params {
                 input = "$projectDir/tests/testdata/invalid_no_ref.csv"
@@ -504,24 +479,11 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                // The per-patient groupKey sizes come from
-                // CsvUtils.countChannelsPerPatient, which drops the nuclear channel for
-                // NON-reference rows. The REFERENCE keeps its own, so P001 counts
-                // {DAPI,PANCK,SMA} + {CD3,CD8} = 5, not 4. (This case used to reach the
-                // same 5 through --allow_auto_reference promoting an unmarked row; that
-                // flag is gone, so it now runs the shipped path -- a declared reference --
-                // and pins the same arithmetic.) Counting 4 instead would make
-                // groupTuple emit at size and then emit the surplus as a SECOND group —
-                // and the two per-patient consumers do NOT fail the same way:
-                // MERGE_QUANT_CSVS's `.join(ch_morphology, by: 0)` (postprocess.nf) is a
-                // keyed inner join, so the surplus group would be silently DISCARDED
-                // (merged_quant.csv loses markers, no error); MERGE_AND_PYRAMID's
-                // sized-group + remainder (postprocess.nf's ch_split_grouped) would instead
-                // trip the memory closure (conf/modules.config:330-337) on the one-file
-                // surplus and ABORT the run. See QUANTIFY_MARKERS' GROUP comment
-                // (subworkflows/local/quantify_markers.nf) for the full account.
-                // `assert workflow.success` alone does not see any of that, hence the
-                // explicit task counts below, which pin the correct (non-miscounted) run.
+                // CsvUtils.countChannelsPerPatient drops the nuclear channel for non-reference rows
+                // only, so P001 counts {DAPI,PANCK,SMA} + {CD3,CD8} = 5. A count of 4 would make
+                // groupTuple emit the surplus as a second group: MERGE_QUANT_CSVS's keyed join would
+                // silently drop it, MERGE_AND_PYRAMID would abort on it. `workflow.success` sees
+                // neither, hence the explicit task counts.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:QUANTIFY_MARKERS:QUANTIFY') }.size() == 5 },
                 { assert workflow.trace.tasks().findAll {
@@ -539,9 +501,7 @@ nextflow_pipeline {
 
         when {
             params {
-                // NOTE: nuclear_markers is deliberately NOT overridden. This runs on the
-                // SHIPPED DEFAULT ['DAPI','CELLTOX'], whose CELLTOX half was unreachable
-                // while every consumer hardcoded the literal 'DAPI'.
+                // nuclear_markers is not overridden: this runs on the shipped ['DAPI','CELLTOX'].
                 input  = "$projectDir/tests/testdata/celltox_nonreference.csv"
                 outdir = "$outputDir"
                 start  = "preprocessing"
@@ -554,32 +514,16 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                // Reference keeps {DAPI,PANCK,SMA}. The non-reference slide keeps
-                // {CELLTOX,CD3,CD8}: CELLTOX matches params.nuclear_markers but the
-                // REFERENCE never carried it, so nothing has claimed that name and it
-                // survives. Six markers, six QUANTIFY tasks, ONE per-patient consumer.
+                // Reference keeps {DAPI,PANCK,SMA}; the other slide keeps {CELLTOX,CD3,CD8}, since
+                // the reference never claimed CELLTOX. Six markers, six QUANTIFY tasks, one
+                // per-patient consumer.
                 //
-                // This assertion read 5 until the keep-set moved to
-                // CsvUtils.resolveKeptChannelsPerSlide. The old rule dropped every
-                // channel matching the configured nuclear list from every non-reference
-                // slide, which silently discarded a cohort's second nuclear stain --
-                // DAPI and CellTox Green measure different things, so they are not the
-                // redundant copies that rule assumed.
-                //
-                // This is the count HALF of the invariant. The other half --
-                // bin/split_multichannel.py emitting exactly these six in a real run --
-                // is pinned by tests/unit/test_nuclear_markers.py, because the stub
-                // block reads meta.keep_channels and so cannot see a Python-side
-                // disagreement. Keep the two expectations in step.
+                // This is the count half of the invariant; tests/unit/test_nuclear_markers.py pins
+                // bin/split_multichannel.py emitting the same six. Keep the two in step.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:QUANTIFY_MARKERS:QUANTIFY') }.size() == 6 },
-                // This assertion would NOT catch an under-count by going to 2: this
-                // MERGE_QUANT_CSVS is fed via postprocess.nf's `.join(ch_morphology, by: 0)`,
-                // a keyed inner join, so an under-count's surplus groupTuple emission would
-                // be silently DISCARDED (merged_quant.csv loses markers, no error, no second
-                // task) rather than producing a second MERGE_QUANT_CSVS run. See
-                // QUANTIFY_MARKERS' GROUP comment (subworkflows/local/quantify_markers.nf)
-                // for the full per-caller account of what an under-count actually does.
+                // An under-count would not show as 2 here: the keyed inner join upstream silently
+                // drops the surplus group instead of running a second MERGE_QUANT_CSVS.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:MERGE_QUANT_CSVS') }.size() == 1 },
                 { assert workflow.trace.tasks().findAll {
@@ -595,11 +539,8 @@ nextflow_pipeline {
 
         when {
             params {
-                // P001_ref carries DAPI|PANCK|SMA and is the reference; the moving slide
-                // carries ONLY DAPI. CsvUtils.resolveKeptChannelsPerSlide therefore
-                // resolves that slide's keep-set to the EMPTY list -- a legitimate answer
-                // ("contributes no new markers"), which countChannelsPerPatient counts as
-                // ZERO, giving the patient a channels_count of 3.
+                // The moving slide carries only DAPI, so resolveKeptChannelsPerSlide gives it an
+                // empty keep-set ("no new markers"), counted as zero: channels_count is 3.
                 input  = "$projectDir/tests/testdata/keepset_exhausted.csv"
                 outdir = "$outputDir"
                 start  = "preprocessing"
@@ -612,21 +553,12 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                // THE regression. While the lookup used `?:` (Groovy treats [] as falsy)
-                // the empty keep-set was indistinguishable from an absent one, so the
-                // slide was injected with its FULL declared list and DAPI was split and
-                // quantified a SECOND time -- 4 QUANTIFY tasks against a channels_count of
-                // 3, exit 0, and which slide's DAPI reached merged_quant.csv and the
-                // pyramid decided by arrival order at the `.unique()` calls in
-                // quantify_markers.nf / postprocess.nf. Watched failing at exactly 4
-                // before the fix.
+                // An empty keep-set must not fall back to the full channel list (Groovy treats []
+                // as falsy under `?:`): that would quantify DAPI twice, 4 tasks against a count of 3.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:QUANTIFY_MARKERS:QUANTIFY') }.size() == 3 },
-                // And the empty-keep-set slide is not split at all: ONE SPLIT_CHANNELS
-                // task, not two. SPLIT_CHANNELS declares `path("*.tiff")` as a MANDATORY
-                // output -- kept mandatory deliberately, since it is a real guard that a
-                // genuinely failed split still trips -- so the slide is filtered out of
-                // the process's input by postprocess.nf instead.
+                // The empty-keep-set slide is filtered out before SPLIT_CHANNELS, whose `*.tiff`
+                // output stays mandatory so a genuinely failed split still fails.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:SPLIT_CHANNELS') }.size() == 1 },
                 // Exactly one DAPI, and the three names are the reference's panel.
@@ -647,19 +579,12 @@ nextflow_pipeline {
 
         when {
             params {
-                // cycle1/slide.ome.tiff (DAPI|CD3, reference) + cycle2/slide.ome.tiff
-                // (DAPI|CD8). One directory per cycle is the ordinary cyclic-IF layout, so
-                // a shared BASENAME across a patient's rows is not a pathological input.
+                // cycle1/slide.ome.tiff (DAPI|CD3, reference) + cycle2/slide.ome.tiff (DAPI|CD8):
+                // one directory per cycle, so a shared basename is an ordinary input.
                 //
-                // reg_qc=0 and skip_preprocess_qc are set because this sheet also trips a
-                // SEPARATE, PRE-EXISTING defect that this branch does not fix: meta.id is
-                // built from the image's simpleName, so both rows are `P001_slide` and the
-                // per-slide QC artifacts collide by filename (WARP_SEG_QC at reg_qc=2,
-                // else GENERATE_QC_REPORT's preprocess_qc PNGs). That late guard is NOT a
-                // defence against the keep-set defect below -- it fires only after
-                // postprocessing has already published a wrong pyramid and quant table --
-                // which is exactly why this test disables the paths that carry it and
-                // asserts on the keep-set directly.
+                // reg_qc=0 and skip_preprocess_qc avoid a separate defect: meta.id comes from
+                // simpleName, so both rows are `P001_slide` and per-slide QC artifacts collide by
+                // filename. The keep-set is asserted directly instead.
                 input  = "$projectDir/tests/testdata/duplicate_basename.csv"
                 outdir = "$outputDir"
                 start  = "preprocessing"
@@ -674,12 +599,8 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                // Patient total is 3: the reference claims DAPI+CD3, cycle2 keeps CD8.
-                // While resolveKeptChannelsPerSlide keyed its inner map on the BASENAME the
-                // two rows overwrote each other, both looked up the single surviving entry,
-                // and the run ABORTED with "No such file or directory: channels" after
-                // publishing CD8.tiff alone and running ZERO QUANTIFY tasks. Watched
-                // failing in exactly that way before the fix.
+                // Patient total is 3: the reference claims DAPI+CD3, cycle2 keeps CD8. Keying the
+                // keep-set on basename would collapse the two rows.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:QUANTIFY_MARKERS:QUANTIFY') }.size() == 3 },
                 { assert workflow.trace.tasks().findAll {
@@ -702,9 +623,7 @@ nextflow_pipeline {
 
         when {
             params {
-                // No DAPI channel anywhere. CsvUtils used to reject this sheet before the
-                // run started ("DAPI channel not found") and SEGMENT rejected it again at
-                // runtime, so the marker list was configurable in name only.
+                // No DAPI channel anywhere: the marker list is fully configurable.
                 input           = "$projectDir/tests/testdata/celltox_only.csv"
                 nuclear_markers = ['CELLTOX']
                 outdir          = "$outputDir"
@@ -735,12 +654,9 @@ nextflow_pipeline {
 
         when {
             params {
-                // Nextflow hands `--nuclear_markers CELLTOX` through as a bare String.
-                // Iterating it as a List yields the CHARACTERS C,E,L,L,T,O,X, and then
-                // 'PANCK' matches on 'C' and is classified nuclear -- dropping a real
-                // marker from every non-reference slide. MarkerUtils.markerList coerces
-                // the scalar instead, so this must count the same 5 markers as the List
-                // spelling above.
+                // Nextflow passes `--nuclear_markers CELLTOX` as a bare String; iterated as a List
+                // it would yield characters and match 'PANCK' on 'C'. MarkerUtils.markerList coerces
+                // it, so this counts the same 5 markers as the List spelling above.
                 input           = "$projectDir/tests/testdata/celltox_only.csv"
                 nuclear_markers = 'CELLTOX'
                 outdir          = "$outputDir"
@@ -767,14 +683,9 @@ nextflow_pipeline {
 
         when {
             params {
-                // The shape a params file produces when the list is written as a single
-                // string. It is a valid Collection, so nothing coerces it -- unsplit, the
-                // one marker 'CELLTOX,DAPI' matches NO channel, every channel is
-                // classified non-reference-safe, and SPLIT_CHANNELS keeps the nuclear
-                // channel on the moving slide. That emits SIX files against a groupTuple
-                // sized 5 (the union dedupes CELLTOX, so the count is unchanged), which
-                // is the surplus-second-group case: 6 QUANTIFY and TWO MERGE_QUANT_CSVS
-                // writing the same merged_quant.csv. Silent -- no error anywhere.
+                // The single-string list shape from a params file. Unsplit, 'CELLTOX,DAPI' would
+                // match no channel and keep the nuclear channel on the moving slide: six files
+                // against a groupTuple of 5, a silent second MERGE_QUANT_CSVS.
                 input           = "$projectDir/tests/testdata/celltox_only.csv"
                 nuclear_markers = ['CELLTOX,DAPI']
                 outdir          = "$outputDir"
@@ -942,11 +853,7 @@ nextflow_pipeline {
         tag "stub"
         options "-stub"
 
-        // `segmentation` was carved out of `postprocessing` as its own step
-        // (lib/ParamUtils.groovy's STEPS), and --stop segmentation was set
-        // NOWHERE in this repository until this case: of the ten legal
-        // --start/--stop pairs, the three ending at segmentation had no coverage
-        // at all, so the step's own gate was never exercised as a STOP.
+        // Covers --stop segmentation, the step's own gate as a stop.
         when {
             params {
                 input = "$projectDir/tests/testdata/test_input.csv"
@@ -1007,12 +914,8 @@ nextflow_pipeline {
         tag "stub"
         options "-stub"
 
-        // valid_checkpoint_postprocessing.csv is a patient_id/registered_image/
-        // is_reference/channels sheet -- precisely the shape a completed
-        // registration run's csv/registered.csv has, and the entry column
-        // `segmentation` reads (lib/ParamUtils.groovy's STEPS). The same fixture
-        // is what tests/checkpoint_manifest.nf.test uses for --start segmentation;
-        // its name predates the step existing.
+        // valid_checkpoint_postprocessing.csv has the shape of a registration run's
+        // csv/registered.csv, which is what `segmentation` reads; the name predates the step.
         when {
             params {
                 input = "$projectDir/tests/testdata/valid_checkpoint_postprocessing.csv"
@@ -1061,13 +964,9 @@ nextflow_pipeline {
     //==========================================================================
 
     /*
-     * The router used to carry TWO copies of the end-of-run aggregation (the
-     * add_cycle copy was introduced as "Mirrors the standard-path aggregation
-     * below"). Both paths now go through subworkflows/local/final_qc.nf, so the
-     * QC report must come from exactly one call site — and the fully-qualified
-     * task name is the evidence of which one. Asserting only that a report exists
-     * would still pass if a second, differently-fed aggregation reappeared and
-     * overwrote it.
+     * Both the standard and add_cycle paths aggregate QC through final_qc.nf. The
+     * fully-qualified task name proves the report comes from exactly one call site; a
+     * bare existence check would pass if a second aggregation overwrote it.
      */
     test("Should aggregate QC exactly once, through FINAL_QC - stub") {
 
@@ -1093,19 +992,14 @@ nextflow_pipeline {
                     it.name.startsWith('MIRAGE:FINAL_QC:GENERATE_QC_REPORT') }.size() == 1 },
                 { assert workflow.trace.tasks().findAll {
                     it.name.contains('GENERATE_QC_REPORT') }.size() == 1 },
-                // `enable_trace` (a boolean param; set it in a profile or -params-file)
-                // defaults true, so the size rollup is the other half of FINAL_QC and
+                // enable_trace defaults true, so the size rollup (the other half of FINAL_QC)
                 // must also run exactly once.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:FINAL_QC:AGGREGATE_SIZE_LOGS') }.size() == 1 },
                 { assert path("$outputDir/qc").list().any {
                     it.toString().contains('mirage_qc_report_') } },
                 { assert path("$outputDir/size_logs/input_sizes.csv").exists() },
-                // The aggregated stub CSV is now a real artifact, not a bare header.
-                // Before this phase: AGGREGATE_SIZE_LOGS' stub block wrote the header
-                // and discarded its inputs, and every row it discarded said `STUB` as
-                // its process name anyway -- so a stub run proved nothing at all about
-                // the size-log path. Both halves are fixed, so assert both.
+                // The aggregated stub CSV carries real rows, not just a header: assert both.
                 { def sizes = new File("$outputDir/size_logs/input_sizes.csv").readLines()
                   assert sizes[0] == 'process,sample_id,filename,bytes'
                   assert sizes.size() > 1
@@ -1116,9 +1010,8 @@ nextflow_pipeline {
     }
 
     /*
-     * FINAL_QC is now invoked unconditionally; the two gates live inside it. A run
-     * that wants neither half must still complete cleanly rather than hang on an
-     * unconsumed artifact channel.
+     * FINAL_QC runs unconditionally with its gates inside. A run wanting neither half
+     * must complete rather than hang on an unconsumed channel.
      */
     test("Should complete with no report and no size rollup when both are off - stub") {
 
@@ -1153,10 +1046,8 @@ nextflow_pipeline {
     }
 
     /*
-     * The samplesheet is read exactly once, by INPUT_CHECK, with the column fixed
-     * by --start. Starting mid-pipeline must read the checkpoint's own column
-     * (registered_image here) — reading path_to_file instead would fail at launch
-     * rather than silently, but only if the mapping stays in step with --start.
+     * The samplesheet is read once, by INPUT_CHECK, with the column fixed by --start.
+     * Starting mid-pipeline must read the checkpoint's own column (registered_image).
      */
     test("Should read the entry step's image column, once - stub") {
 
@@ -1178,21 +1069,14 @@ nextflow_pipeline {
         then {
             assertAll(
                 { assert workflow.success },
-                // One patient, TWO registered images -> two per-image SPLIT_CHANNELS and
-                // one per-patient merge. A second read of the sheet (or a lost
-                // images_count) would change these. This asserted one
-                // MIRAGE:POSTPROCESSING:SEGMENT until the segmentation step was split
-                // out: SEGMENT is neither under POSTPROCESSING nor run at all at
-                // --start postprocessing, where the masks come from the checkpoint --
-                // so the old assertion could only ever have matched zero tasks. It was
-                // masked because this test pointed at the pre-segmentation-step
-                // 4-column fixture and died in validateInputCSV before reaching here.
+                // One patient, two registered images -> two SPLIT_CHANNELS and one per-patient
+                // merge. A second read of the sheet or a lost images_count would change these.
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:SPLIT_CHANNELS') }.size() == 2 },
                 { assert workflow.trace.tasks().findAll {
                     it.name.startsWith('MIRAGE:POSTPROCESSING:MERGE_QUANT_CSVS') }.size() == 1 },
-                // --start postprocessing REUSES the checkpoint's masks; re-segmenting
-                // here would silently discard them.
+                // --start postprocessing reuses the checkpoint's masks; re-segmenting would
+                // silently discard them.
                 { assert workflow.trace.tasks().findAll {
                     it.name.contains(':SEGMENT') }.size() == 0 },
                 { assert path("$outputDir/csv/postprocessed.csv").exists() }
@@ -1202,16 +1086,8 @@ nextflow_pipeline {
 
     test("Should name the trace path it looked for when no report can be made") {
 
-        // F3: the resource report's real defect was silent trace discovery. main.nf
-        // built "${params.trace_dir}/trace.txt" from the raw param and cmd.execute()
-        // resolved it against the JVM's working directory, so a relative trace_dir
-        // pointed somewhere else entirely on any launch that was not from the run
-        // directory -- and the script exited 0 over an empty page, so main.nf printed
-        // a SUCCESS line.
-        //
-        // trace_dir is RELATIVE here on purpose: the leading slash in the asserted
-        // path is the whole proof that ResourceReport.tracePath resolved it against
-        // launchDir rather than passing the raw param through.
+        // trace_dir is relative on purpose: the leading slash in the asserted path proves
+        // ResourceReport.tracePath resolved it against launchDir.
         tag "stub"
         options "-stub"
 
@@ -1228,14 +1104,8 @@ nextflow_pipeline {
         }
 
         then {
-            // The message is a log.warn from workflow.onComplete. nf-test launches
-            // Nextflow with -quiet unless it is itself run with --verbose (CI is),
-            // and under -quiet Nextflow 25 AND 26 drop log.warn from the console
-            // streams entirely -- workflow.stdout/stderr come back empty while the
-            // line sits in the run log. Measured 2026-09-03: 4/4 local failures
-            // without --verbose, 0 with; what the master plan recorded as a 'stdout
-            // capture race' was this. So read the run log too: nf-test writes it to
-            // <launchDir>/meta/nextflow.log, and the assertion holds in both modes.
+            // Also read meta/nextflow.log: without nf-test --verbose, Nextflow runs with -quiet
+            // and log.warn never reaches stdout/stderr.
             def runLog = new File("${launchDir}/meta/nextflow.log")
             def said = workflow.stdout + workflow.stderr +
                        (runLog.exists() ? runLog.readLines() : [])
@@ -1254,32 +1124,11 @@ nextflow_pipeline {
 
     test("Should write the resource report when the trace is where it says it is") {
 
-        // The other half of the same fix: when a trace file genuinely exists at the
-        // resolved path, the report IS produced. This is the regression guard for the
-        // discovery change -- there is no in-DAG process to hang a rendered-command
-        // nf-test on, because the report is generated from workflow.onComplete
-        // deliberately, so the artifact's existence is the assertion available.
+        // When a trace file exists at the resolved path, the report is produced.
         //
-        // trace_dir is deliberately an ABSOLUTE path under $outputDir here, pre-seeded
-        // with a minimal trace.txt before the pipeline launches -- it is NOT enough to
-        // rely on the shipped `enable_trace` default (a boolean param; set it in a
-        // profile or -params-file) and let Nextflow's own trace{}
-        // scope write the file during the run. nf-test unconditionally appends its OWN
-        // `-with-trace <meta/trace.csv>` to every `nextflow run` invocation it makes
-        // (confirmed via .nf-test/tests/*/meta/nextflow.log: only ONE
-        // "TraceFileObserver ... saving trace file" line ever appears, and only
-        // meta/trace.csv gets written -- .trace/trace.txt is never created). CLI
-        // options win over `nextflow.config`, so nf-test's flag silently overrides
-        // this pipeline's `trace.file` setting for the run; a competing `-with-trace`
-        // added from a test's own `options` does not help either -- Nextflow's CLI
-        // parser rejects a second occurrence outright ("Can only specify option
-        // -with-trace once"), watched failing while investigating this. Pre-seeding
-        // the exact file ResourceReport.tracePath will resolve to is therefore the
-        // only way to exercise the "found -> report produced" branch under nf-test;
-        // it is not a workaround for anything main.nf gets wrong, and CI's own
-        // `nf-test test` invocation (.github/workflows/_test-suite.yml) carries the
-        // same unconditional `-with-trace`, so this is the real CI shape, not a local
-        // artifact.
+        // The trace is pre-seeded under $outputDir because nf-test adds its own `-with-trace`
+        // to every run, which overrides trace.file, and a second `-with-trace` is rejected.
+        // CI's nf-test run has the same flag, so this is the real CI shape.
         tag "stub"
         options "-stub"
 
@@ -1393,12 +1242,9 @@ nextflow_pipeline {
         }
     }
 
-    // The fixture repeats BOTH DAPI (nuclear, legal) and PANCK (not nuclear, illegal)
-    // across P001's two slides, so a refusal here cannot be the trivial "any repeated
-    // name is rejected". The `trace.tasks().size() == 0` assertion is the real subject:
-    // the rule must fire in samplesheet validation, before a single process is
-    // instantiated, not later inside registration where one of the two acquisitions
-    // would already have been silently dropped by the keep-set.
+    // The fixture repeats both DAPI (nuclear, legal) and PANCK (illegal) across P001's
+    // slides. `trace.tasks().size() == 0` is the subject: the rule must fire in
+    // samplesheet validation, before any process runs.
     test("Should refuse a non-nuclear channel shared by two slides of one patient, before any process runs") {
         tag "stub"
         options "-stub"

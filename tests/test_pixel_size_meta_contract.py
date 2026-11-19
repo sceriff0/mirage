@@ -1,20 +1,13 @@
 """Guard: no process may render `params.pixel_size` directly unless it is handed an
 image it can resolve `'auto'` from itself.
 
-The CRITICAL defect this guards against: `nextflow.config` ships `pixel_size = 'auto'`,
-a string nothing resolves except `PREFLIGHT_SCALE` (subworkflows/local/input_check.nf),
-which reads every input image's OME metadata once and injects the resolved NUMBER into
-`meta.pixel_size`. A process with no image of its own -- EXPORT_GEOJSON (a CSV),
-EXPORT_SPATIALDATA (no pyramid unless `--spatialdata_include_image`), SEG_QUALITY_EVAL
-(its own tool never reads scale from `image`, see its script comment), and SEGMENT's
-instantseg backend (whose `--pixel-size` is `type=float`, so the literal string 'auto'
-fails argparse before the tool ever runs) -- cannot resolve that string itself. Reading
-`params.pixel_size` directly there reaches the tool as the literal 'auto' at the shipped
-default; reading `meta.pixel_size` gets the number PREFLIGHT_SCALE already resolved.
+`nextflow.config` ships `pixel_size = 'auto'`, which only `PREFLIGHT_SCALE`
+(subworkflows/local/input_check.nf) resolves, injecting the number into
+`meta.pixel_size`. A process with no image of its own (EXPORT_GEOJSON,
+EXPORT_SPATIALDATA, SEG_QUALITY_EVAL, SEGMENT's instantseg backend) would pass the
+literal 'auto' to its tool; it must read `meta.pixel_size` instead.
 
-This is a STATIC guard over the same tests/nfmodel this repo's other Nextflow-source
-guards use (see tests/test_nfmodel.py's discovery rule) -- never a private regex over
-`.nf`/`conf/modules.config` text.
+A static guard built on tests/nfmodel.
 """
 
 from __future__ import annotations
@@ -26,15 +19,9 @@ from tests.nfmodel import (
     with_name_blocks,
 )
 
-# Every entry here is a process that IS handed an image (or, for PREFLIGHT_SCALE, is
-# THE resolver) and can therefore legitimately read params.pixel_size directly --
-# resolve_pixel_size(params.pixel_size, <that image>, ...) is how each of bin/
-# convert_image.py, bin/tiled_stitch.py, bin/apply_basic_profiles.py,
-# bin/split_multichannel.py and bin/merge_channels_pyramid.py resolve 'auto' on their
-# own (see tests/test_pixel_size_is_passed.py). A process reached ONLY via this file's
-# guard failing is not automatically safe to add here -- add it only once you have
-# confirmed its script is actually given an image and calls resolve_pixel_size (or
-# equivalent) against it.
+# Processes handed an image (or, for PREFLIGHT_SCALE, the resolver itself), whose
+# scripts resolve 'auto' from that image via resolve_pixel_size. Add one only after
+# confirming its script does that.
 SAFE_PIXEL_SIZE_CONSUMERS = {
     "PREFLIGHT_SCALE",  # the one place params.pixel_size is resolved to a number
     "CONVERT_IMAGE",  # given the raw slide; resolves 'auto' from its own OME metadata
@@ -77,9 +64,7 @@ def _config_offenders() -> list[str]:
 
 
 def test_the_safelist_still_names_real_processes():
-    """A safelist entry for a renamed/deleted process is dead weight that can hide a
-    real regression (an entry that no longer matches anything makes the scan look
-    stricter than it is). Every name must resolve to an actual process."""
+    """Every safelist name resolves to an actual process, so no entry is stale."""
     known = set(processes())
     for block in with_name_blocks():
         known.update(block.names)

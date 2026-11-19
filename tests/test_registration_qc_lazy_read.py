@@ -1,30 +1,16 @@
-"""Registration QC must stop eagerly decoding the whole multi-channel slide.
+"""Registration QC must not eagerly decode the whole multi-channel slide.
 
-``bin/utils/qc.py:create_registration_qc`` used to call ``tifffile.imread`` on the
-*entire* reference and registered stacks (every marker channel, full resolution) just
-to slice out the one nuclear/fiducial channel the overlay is built from. On a
-gigapixel cyclic-IF slide with a dozen-plus marker channels, that is an order of
-magnitude more data decoded than the QC step ever uses -- paid twice, once per slide.
+``bin/utils/qc.py:create_registration_qc`` needs only the nuclear/fiducial channel of
+each slide, so it reads that one channel through ``tiled_io.open_lazy`` at a chosen
+decimation (``decimation_factor`` + ``read_decimated``) instead of decoding every
+marker channel at full resolution.
 
-``bin/utils/tiled_io.py`` already has the machinery to read one channel through a
-lazy, region-readable zarr view (``open_lazy``) at a chosen decimation
-(``decimation_factor`` + ``read_decimated``), proven correct by the STARE coarse-align
-path (``tests/test_tiled_coarse_thumbnail.py::test_banded_read_is_numerically_identical_to_full_decimation``).
-This file pins two properties for routing ``create_registration_qc`` through it:
+Pinned:
 
-1. The whole-stack eager read is gone -- both slides are opened through ``open_lazy``.
-2. The result is EXACTLY what the old whole-stack read produced, not merely similar:
-   same pixel values, same shape, same dtype, through the untouched
-   ``create_nuclear_overlay``/``autoscale_for_display`` pipeline.
-
-Property 2 does not fail against the pre-change code by construction: the pre-change
-code already reads the correct channel via ``tifffile.imread``, so an "old vs. new"
-pixel comparison built from the SAME resolved index is old-vs-old before the fix
-lands, and only exercises the new code path's arithmetic once the fix is in. It is
-included anyway as a regression guard against the real failure mode here -- silently
-different pixels, not a crash -- and was falsified during development by temporarily
-asserting the arrays were NOT equal (see task-1-report.md for the transcript), which
-failed until the assertion was reverted, proving the comparison is not vacuous.
+1. Both slides are opened through ``open_lazy``, never a whole-stack ``tifffile.imread``.
+2. The result is exactly what a whole-stack read produces: same pixel values, shape and
+   dtype through ``create_nuclear_overlay``/``autoscale_for_display``. This guards
+   against silently different pixels.
 """
 
 from __future__ import annotations
@@ -86,11 +72,7 @@ def _write_pair(tmp_path, h=96, w=80, channel_names=("SMA", "DAPI")):
 
 
 def test_registration_qc_never_eagerly_decodes_the_whole_stack(tmp_path, monkeypatch):
-    """Both slides must be reached through ``open_lazy``, not a whole-array ``tifffile.imread``.
-
-    Fails against the pre-change code, which has no ``open_lazy`` attribute on the ``qc``
-    module at all -- this assertion cannot even be wired up until the routing lands.
-    """
+    """Both slides must be reached through ``open_lazy``, not a whole ``tifffile.imread``."""
     ref_path, reg_path = _write_pair(tmp_path)
     out_path = tmp_path / "out" / "qc.tif"
     out_path.parent.mkdir()
@@ -114,11 +96,9 @@ def test_registration_qc_never_eagerly_decodes_the_whole_stack(tmp_path, monkeyp
             imread_full_calls.append(str(path))
         return orig_imread(path, *args, **kwargs)
 
-    # qc.py no longer binds the name `tifffile` at all (Task 7 routed its two writes
-    # through ome_io.write_tiff and its reads always went through open_lazy/read_decimated),
-    # so the spy patches the shared tifffile module object directly -- the same object any
-    # `import tifffile; tifffile.imread(...)` in qc.py's call chain would resolve to, were
-    # one ever reintroduced.
+    # qc.py does not bind the name `tifffile` (writes go through ome_io.write_tiff), so the
+    # spy patches the shared tifffile module object, which any reintroduced
+    # `tifffile.imread(...)` in qc.py's call chain would resolve to.
     monkeypatch.setattr(tifffile, "imread", spying_imread)
 
     qc.create_registration_qc(
@@ -144,9 +124,8 @@ def test_registration_qc_never_eagerly_decodes_the_whole_stack(tmp_path, monkeyp
 def test_qc_overlay_pixels_match_the_old_whole_stack_read(tmp_path):
     """The decimated-read overlay must equal the old full-read overlay bit-for-bit.
 
-    Builds the "old" reference the way ``create_registration_qc`` used to: a plain
-    ``tifffile.imread`` of the whole stack, sliced at the ``pick_nuclear_index``-resolved
-    channel, pushed through the untouched ``create_nuclear_overlay``. Compares that against
+    Builds the reference from a plain ``tifffile.imread`` of the whole stack, sliced at
+    the ``pick_nuclear_index``-resolved channel, pushed through ``create_nuclear_overlay``. Compares that against
     what the real (patched) ``create_registration_qc`` actually wrote to disk.
     """
     ref_path, reg_path = _write_pair(tmp_path)
@@ -239,31 +218,25 @@ def test_qc_png_and_fullres_tiff_are_byte_identical_to_the_old_float32_widened_r
 ):
     """``create_registration_qc``'s own read+render plumbing must match a direct call to the
     same functions -- byte-for-byte, for both the published QC PNG and the full-resolution
-    TIFF. (A narrower uint8/uint16 read was also tried at this call site and reverted -- see
-    ``bin/utils/qc.py``'s comment above the read and
-    ``test_autoscale_uint16_vs_float32_disagree_at_a_real_triple`` in test_tiled_io.py for
-    why.)
+    TIFF.
 
-    NOTE on what this test does and does NOT prove: it builds its "expectation" by calling
-    ``read_decimated`` itself (same function under test), so it cannot catch a bug INSIDE
-    ``read_decimated``'s pre-allocated-destination streaming loop -- a wrong banded/ragged-band
-    computation would corrupt both sides identically and this test would still pass. That
-    proof lives elsewhere, built against a genuinely independent code path:
+    It builds its expectation by calling ``read_decimated`` itself, so it cannot catch a
+    bug inside ``read_decimated``'s banded streaming loop. That is covered against
+    independent code paths:
     ``tests/test_tiled_io.py::test_read_decimated_matches_independent_direct_slice`` (expected
     built via a direct step-sliced ``src[...]`` getitem, through zarr's own indexing engine)
     and
     ``tests/test_tiled_coarse_thumbnail.py::test_banded_read_is_numerically_identical_to_full_decimation``
-    (expected built via a plain ``tifffile.imread``). What THIS test covers, and is worth
-    having independently, is that ``create_registration_qc``'s own orchestration --
-    channel-index resolution, ``open_lazy``/``read_decimated`` wiring, and the
-    ``create_nuclear_overlay``/``autoscale_for_display``/PNG-TIFF-write chain -- matches
-    calling those same pieces directly, with nothing lost or reordered in between.
+    (expected built via a plain ``tifffile.imread``). This test checks that
+    ``create_registration_qc``'s own orchestration (channel-index resolution,
+    ``open_lazy``/``read_decimated`` wiring, and the
+    ``create_nuclear_overlay``/``autoscale_for_display``/PNG-TIFF-write chain) matches
+    calling those same pieces directly.
 
-    Builds the "before" expectation independently, by calling ``read_decimated`` directly
-    (its only supported dtype, float32, matching exactly what ``create_registration_qc``
-    gets) and pushing it through the SAME untouched ``create_nuclear_overlay`` /
-    ``autoscale_for_display`` pipeline the real function uses. Compares that against what the
-    real ``create_registration_qc`` actually writes to disk.
+    The expectation calls ``read_decimated`` directly (float32, as
+    ``create_registration_qc`` gets) and pushes it through the same
+    ``create_nuclear_overlay`` / ``autoscale_for_display`` chain, then is compared with
+    what ``create_registration_qc`` writes to disk.
     """
     from tiled_io import open_lazy, read_decimated
 
@@ -327,19 +300,15 @@ def test_qc_output_is_exact_at_the_known_adversarial_pixel_triple(tmp_path):
     for the underlying counter-example this fixture is built on.
 
     ``create_registration_qc`` reads its nuclear channel through ``read_decimated``, which
-    always returns float32 (it has no ``dtype=`` parameter -- a narrow-read variant was
-    tried and reverted; see ``bin/utils/qc.py``'s comment above the read for why). What this
-    function has therefore ALWAYS emitted, for every slide, is the float32-arithmetic path
-    (204 at this triple). The float64/uint16-native path (203) is more precise in isolation
-    but is NOT what this function has ever produced, and is not the correctness bar here.
+    always returns float32 (see ``bin/utils/qc.py``'s comment above the read). Its output is
+    therefore the float32-arithmetic path (204 at this triple). The float64/uint16-native
+    path (203) is more precise in isolation but is not the correctness bar here.
 
     The reference slide's nuclear channel is engineered so its min, max, and one interior
     pixel are EXACTLY the adversarial triple (13286, 62449, 52520) that makes a naive
     uint16-input read diverge from the real float32-input read by one uint8 level. This test
-    is what would fail the moment someone "optimises" ``create_registration_qc`` back into
-    reading a narrow dtype without an accompanying widen-back: the real pipeline's output
-    would silently drop from 204 to 203 at this pixel while the independently-built
-    (always-float32) expectation stayed at 204.
+    fails if ``create_registration_qc`` reads a narrow dtype without a widen-back: its output
+    would drop from 204 to 203 at this pixel while the float32 expectation stays at 204.
     """
     from tiled_io import open_lazy, read_decimated
 
@@ -387,9 +356,8 @@ def test_qc_output_is_exact_at_the_known_adversarial_pixel_triple(tmp_path):
     reg_idx = pick_nuclear_index(reg_channels, None)
     assert ref_idx == 1
 
-    # Sanity: confirm this fixture actually reproduces the known divergence, and pin which
-    # value is the historical/G1 baseline (float32 -> 204) versus which would be a silent
-    # regression if a narrow read were ever reintroduced without a widen-back).
+    # Sanity: this fixture reproduces the known divergence. float32 -> 204 is the baseline;
+    # 203 would be a narrow read without a widen-back.
     naive_narrow = qc.autoscale_for_display(dapi, method="minmax")
     historical_float32 = qc.autoscale_for_display(
         dapi.astype(np.float32), method="minmax"

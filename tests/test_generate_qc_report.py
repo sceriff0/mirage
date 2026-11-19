@@ -139,16 +139,12 @@ def test_seg_qc_stage_plots_on_an_empty_directory_is_a_notice(tmp_path):
     assert 'class="empty-notice"' in out
 
 
-# ── fix round 1: unit-mislabelled / unit-mixed plots (Important 1) ──────────────
+# ── unit-mislabelled / unit-mixed plots ─────────────────────────────────────────
 def test_seg_qc_stage_plots_never_mix_units_and_label_each_correctly(tmp_path):
-    """A directory can hold a calibrated (VALIS, um) slide and an uncalibrated
+    """A calibrated (VALIS, um) and an uncalibrated (STARE, px) slide of one stage
+    must not share a histogram, and each plot's title must name its unit.
 
-    (STARE, no pixel size -> px) slide for the same stage. The tiled WARP_SEG_QC
-    Nextflow process passes no pixel size on that path, bin/warp_seg_qc.py
-    forwards None, and bin/utils/cell_pairs.py only emits displacement_um_* when
-    a pixel size was given -- so px is the norm there, not an edge case. The two
-    must never share one histogram, and each plot's own title must say which
-    unit it is.
+    The tiled WARP_SEG_QC passes no pixel size, so px is the norm there.
     """
     gqr = _load()
     d = tmp_path / "seg_qc"
@@ -173,7 +169,7 @@ def test_seg_qc_stage_plots_never_mix_units_and_label_each_correctly(tmp_path):
     assert "µm" not in px_svg  # the px-only slide must never be captioned as microns
 
 
-# ── fix round 1: matched-cell count dropped from the caption (Important 2) ──────
+# ── matched-cell count in the caption ───────────────────────────────────────────
 def test_seg_qc_stage_plots_caption_reports_matched_cell_counts(tmp_path):
     """A p50 over 12 matched cells must not read the same as one over 40000."""
     gqr = _load()
@@ -203,7 +199,7 @@ def test_seg_qc_stage_plots_caption_omits_matched_cells_when_matching_block_abse
     assert "Matched cells" not in out
 
 
-# ── fix round 1: fix SEG_QC_STAGE_ORDER for the tiled backend (Minor 3) ─────────
+# ── SEG_QC_STAGE_ORDER for the tiled backend ────────────────────────────────────
 def test_seg_qc_stage_order_includes_the_tiled_refined_stage():
     gqr = _load()
     assert "refined" in gqr.SEG_QC_STAGE_ORDER
@@ -321,11 +317,8 @@ def test_end_to_end_cli_smoke(tmp_path):
 
 
 # ── characterisation: the report's section list ────────────────────────────────
-# Removing a section must be a DELIBERATE edit to the list below, not a silent
-# consequence of deleting a function. Before this test existed the only check on
-# the section set was `test_end_to_end_cli_smoke`'s `in html` loop, which is
-# satisfied by a section that is present and says nothing about one that is gone
-# for the wrong reason, about their ORDER, or about a section appearing twice.
+# Removing, reordering or duplicating a section must be an edit to the list below,
+# not a side effect of deleting a function.
 _SECTION_H2 = re.compile(r"<h2>(.*?)</h2>", re.S)
 
 
@@ -688,11 +681,7 @@ def test_registration_section_renders_stare_tre_from_valis_dir(tmp_path):
     assert "No registration-accuracy summary found" not in html
 
 
-# ── pin: VALIS CSV shape, preserved across the _read_valis_tre -> _read_intrinsic_tre rename ────
-# This assertion was first written and run green against the unmodified `_read_valis_tre` (see
-# task-5b-report.md for the pre-refactor pytest output). Only the callee name below was updated
-# afterward, so a green result here proves the VALIS path is unchanged by the refactor rather than
-# merely "whatever the new code happens to do".
+# ── pin: the VALIS CSV shape _read_intrinsic_tre reads ──────────────────────────
 def test_read_intrinsic_tre_valis_csv_shape_preserved(tmp_path):
     gqr = _load()
     out = gqr._read_intrinsic_tre(str(_valis_csvs(tmp_path)))
@@ -780,30 +769,12 @@ def test_reconcile_rows_merges_valis_csv_and_stare_json_rather_than_shadowing(tm
 
 
 def test_reconcile_rows_yields_a_comparable_point_on_the_committed_repo_fixtures():
-    """The reconciliation scatter's own end-to-end proof, on the TRACKED
-    tests/testdata/ fixtures rather than a synthetic tmp_path pair.
+    """The reconciliation scatter, end to end, on the TRACKED tests/testdata/ fixtures.
 
-    tests/testdata/sample_seg_qc.json and tests/testdata/sample_valis_summary.csv
-    are both hand-authored (generate_complete_testdata.py does not write either --
-    see .gitignore's per-file exception list), and BOTH had drifted from the
-    schema reconcile_rows/its readers actually expect: sample_seg_qc.json carried
-    an old {dice_matched, median_displacement_um, n_matched} stage shape instead
-    of the current {n_pairs, iou_*, displacement_px_*, displacement_um_*} bin/
-    warp_seg_qc.py writes (see docs/registration_qc.md's documented example),
-    and sample_valis_summary.csv carried {img_name, original_rTRE, rigid_rTRE,
-    non_rigid_rTRE, n_matches} instead of the {from, rigid_D, non_rigid_D}
-    _read_intrinsic_tre actually reads (matching _valis_csvs() above and VALIS's
-    real preprocessed_summary.csv). Neither file is asserted on by content
-    anywhere else -- the two nf-test files wiring GENERATE_QC_REPORT and
-    FINAL_QC's fixture channel to these paths (under tests/modules and
-    tests/subworkflows/local respectively) only check that the process accepts
-    them as an input path -- so the drift produced ZERO comparable points in
-    bin/generate_qc_report.py's reconciliation scatter with no test catching
-    it. Pointing reconcile_rows at tests/testdata itself (both files live there
-    alongside many unrelated CSVs/JSONs the generator DOES write; both readers
-    silently skip anything missing their required keys/columns) is what makes
-    this a real regression test rather than a copy of the synthetic fixtures
-    above.
+    sample_seg_qc.json and sample_valis_summary.csv are hand-authored (the generator
+    does not write them) and nothing else asserts on their content, so a schema drift
+    in either yields zero comparable points. Both readers silently skip files missing
+    their keys, which is why this reads the real directory.
     """
     gqr = _load()
     testdata = str(REPO / "tests" / "testdata")
@@ -1033,8 +1004,8 @@ def test_seg_residuals_section_with_no_csvs_is_a_notice(tmp_path):
     assert "No per-cell registration residuals found" in out
 
 
-# ── fix round 1: seg_residuals_section must not abort on a non-csv.Error read
-# failure, e.g. a non-UTF-8 CSV's UnicodeDecodeError (Minor 4) ──────────────────
+# ── seg_residuals_section must not abort on a non-csv.Error read failure,
+# e.g. a non-UTF-8 CSV's UnicodeDecodeError ─────────────────────────────────────
 def test_seg_residuals_section_reports_a_non_csv_error_read_failure_instead_of_raising(
     tmp_path,
 ):
@@ -1050,8 +1021,8 @@ def test_seg_residuals_section_reports_a_non_csv_error_read_failure_instead_of_r
     assert "Could not parse" in out
 
 
-# ── fix round 1: non-finite residuals must count as unparseable, not silently
-# vanish between the caption's count and the plot's n (Minor 5) ─────────────────
+# ── non-finite residuals count as unparseable, not silently vanish between the
+# caption's count and the plot's n ──────────────────────────────────────────────
 def test_read_residual_column_counts_non_finite_values_as_unparseable(tmp_path):
     gqr = _load()
     d = tmp_path / "seg_residuals"

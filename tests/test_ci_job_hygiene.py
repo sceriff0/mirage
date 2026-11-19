@@ -2,50 +2,20 @@
 """Guard: workflow job hygiene — every job bounds its own runtime, and no job
 sets up Docker buildx it never uses.
 
-`.github/workflows/ci.yml` used to declare no `timeout-minutes` on any job, so a
-hung job (a wedged `nextflow run`, a stuck `nf-test`, ...) would burn the full
-6-hour GitHub Actions runner default before the run was killed. Separately, two
-jobs (`nextflow-stub`, `nf-test-stub`) installed `docker/setup-buildx-action`
-even though both run entirely container-free (`-profile test`, no `docker`
-profile in any of their own run steps) — a `Set up Docker` step that does
-nothing but slow the job down and give a false impression that a container
-engine matters here.
+Without `timeout-minutes` a hung job burns GitHub's 6-hour default. A job that
+sets up buildx but runs container-free (`-profile test`) only slows itself down.
 
-SCOPE: every workflow under `.github/workflows/`, discovered by glob — NOT a
-hardcoded `ci.yml`. The hardcoded version of this guard passed green while
-`.github/workflows/release.yml` declared no `timeout-minutes` on a single one of
-its jobs and set up buildx in a test gate that runs `-profile test` (no docker).
-Do not reintroduce a filename list here.
+Scope is every workflow under `.github/workflows/`, discovered by glob (do not
+reintroduce a filename list), plus `.github/actions/**`: a job's steps include
+those of every `uses: ./.github/actions/<name>` it references, resolved through
+`tests/ci_actions.py`. Two checks own the actions directory: every referenced
+action exists, and every action is referenced.
 
-SCOPE WIDENED 2026-09-01 (CI redesign, Phase 2) TO `.github/actions/**`. Roughly
-70 duplicated step instances moved into four local composite actions, and a job's
-step list is now its own steps PLUS the steps of every
-`uses: ./.github/actions/<name>` it references. Two effects here:
+`timeout-minutes` is checked on workflows only: GitHub rejects it on a composite
+action's steps, so those are bounded by the calling job's timeout.
 
-  * `test_buildx_job_must_actually_use_buildx` reads its evidence through
-    `tests/ci_actions.py`. Nothing sets up buildx inside an action TODAY, but
-    both halves of the rule — "sets up buildx" and "uses it" — became answerable
-    only from the resolved view the moment steps started moving, and a guard that
-    is correct only until the next move is not a guard.
-  * Two new checks own the actions directory itself: every referenced action
-    exists (a typo'd `uses:` path is a runtime failure GitHub reports late and
-    unhelpfully), and every action is referenced by something (an orphan action
-    is dead YAML that reads as live infrastructure).
-
-`timeout-minutes` stays workflow-only: composite actions have no jobs, and
-GitHub rejects `timeout-minutes` on a composite action's steps entirely — which
-is itself worth knowing, because it means an action's steps are bounded by the
-CALLING job's timeout and by nothing else.
-
-This test needs PyYAML to parse `jobs:` structurally rather than by regex — the
-brief is explicit that a hand-rolled YAML parser is not wanted here.
-`pytest.importorskip` is used per that guidance, but an importorskip that always
-skips guards nothing: PyYAML is importable in this repo's ambient interpreter
-(verified `python3 -c "import yaml"` -> 6.0.2), so this test genuinely runs
-rather than silently no-op'ing everywhere it matters.
-
-Plain pytest, no pipeline-runtime imports, all paths derived from `__file__` per
-this repo's other guard tests (see test_layout.py, test_ci_stack_pinned.py).
+PyYAML parses `jobs:` structurally; it is installed in CI, so the importorskip
+does not silently skip there.
 """
 
 from __future__ import annotations
@@ -141,14 +111,9 @@ def test_buildx_job_must_actually_use_buildx():
       (`docker/build-push-action`, `docker/login-action`), i.e. the job's whole
       purpose IS the image build.
 
-    The second clause is a refinement forced by widening this guard past
-    `ci.yml`: `containers.yml`'s matrix job is the legitimate buildx user in
-    this repo — it never runs a pipeline at all, so a "must reference a docker
-    profile" rule would have flagged it for doing exactly the thing buildx
-    exists to do. Exempting the *file* would have re-opened the hole this
-    widening closed; refining the *rule* to "buildx must be used, by either of
-    its two real uses" keeps every job in scope. A job matching neither clause
-    has set up a container engine it does not use.
+    The second clause covers `containers.yml`'s matrix job, which builds images
+    and never runs a pipeline. A job matching neither clause has set up a
+    container engine it does not use.
     """
     docker_profile_re = re.compile(r"-profile\s+[^\s]*docker|-with-docker")
     docker_build_actions = ("docker/build-push-action", "docker/login-action")
@@ -269,9 +234,7 @@ def test_every_local_action_is_used():
 
     Same rule this repo already applies to `bin/utils/*.py`
     (tests/test_no_dead_bin_modules.py): a module nothing imports is deleted, not
-    kept "just in case". The .github/actions/changed-images action from the CI
-    redesign spec is deliberately NOT built for exactly this reason -- its only
-    caller is a workflow that does not exist yet.
+    kept "just in case".
     """
     used = set()
     for path in ci_actions.scanned_files():
@@ -291,9 +254,8 @@ def test_every_composite_action_run_step_declares_a_shell():
     reads correctly, and fails on the runner with "Required property is missing:
     shell".
 
-    actionlint catches this too and now runs blocking in CI's `ruff` job, but that
-    check lives on a GitHub runner behind a Docker pull; this one runs in the
-    Python suite everyone runs locally.
+    actionlint catches this too, in CI; this check also runs in the local Python
+    suite.
     """
     offenders = []
     steps_seen = 0

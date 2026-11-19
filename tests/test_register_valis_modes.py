@@ -1,6 +1,6 @@
 """reg_valis_mode: VALIS's own two configurations, `default` and `hires`, and nothing else.
 
-Ruling 2026-11-05: VALIS in the pipeline is valis-wsi 1.2.0's own default call, or its own
+VALIS in the pipeline is valis-wsi 1.2.0's own default call, or its own
 high-resolution example (``docs/examples.rst:122-149`` at v1.2.0, the benchmark's
 ``valis120_hires`` row in ``benchmarks/regbench/methods/valis.py`` on ``regbench-paper``), AS
 SHIPPED, with no fix for its micro-pass defect. ``hires`` differs from ``default`` in exactly

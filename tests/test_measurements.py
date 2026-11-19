@@ -1,21 +1,10 @@
 """Unit tests for bin/utils/measurements.py: the single-owner measurement vocabulary.
 
-Two things used to be declared independently (kept in sync only by a
-comment) across bin/merge_quant_csvs.py, bin/export_geojson.py,
-bin/export_spatialdata.py, bin/generate_postprocessing_qc.py, and
-bin/quantify.py:
-
-- the 12-entry morphology column list, in three different container types
-  (list/set/tuple) and one under a different name (MORPHOLOGY_COLUMNS in
-  generate_postprocessing_qc.py), with merge_quant_csvs.py's copy actually
-  short by two entries (fov, cell_size);
-- the measurement-key grammar "<marker>: <Compartment>: <Statistic>", built
-  independently in quantify.py and parsed in export_spatialdata.py.
-
-This test asserts all four former copies now resolve back to the same
-canonical set, and pins measurement_key()'s exact output (G5: a
-case-/space-sensitive contract with the sibling qupath-extension-flowpath
-repo).
+Asserts that the morphology column list used by merge_quant_csvs.py,
+export_geojson.py, export_spatialdata.py and generate_postprocessing_qc.py
+resolves to the one canonical set, and pins measurement_key()'s exact output
+("<marker>: <Compartment>: <Statistic>"; G5: a case- and space-sensitive
+contract with the sibling qupath-extension-flowpath repo).
 """
 
 from __future__ import annotations
@@ -62,13 +51,11 @@ def test_canonical_morphology_cols_is_12_entry_tuple():
 
 
 def test_all_former_copies_resolve_to_the_canonical_set():
-    """The four former independent copies must now all equal the shared set.
+    """All four consumers' morphology columns equal the shared set.
 
     merge_quant_csvs.py (a list), export_geojson.py (a set),
-    export_spatialdata.py (a tuple), and generate_postprocessing_qc.py's
-    MORPHOLOGY_COLUMNS (a set) were each declared by hand; merge_quant_csvs.py's
-    was short by `fov` and `cell_size`. All four must now be identical sets
-    sourced from bin/utils/measurements.py.
+    export_spatialdata.py (a tuple) and generate_postprocessing_qc.py's
+    MORPHOLOGY_COLUMNS (a set), all sourced from bin/utils/measurements.py.
     """
     canonical = set(m.MORPHOLOGY_COLS)
 
@@ -101,7 +88,7 @@ def test_measurement_key_exact_literal_string():
     This is the format qupath-extension-flowpath parses from GeoJSON
     measurement names ("marker: Compartment: Statistic"), reproduced from
     quantify.py::compute_compartment_intensities
-    (`f"{channel_name}: {comp}: Median"`, bin/quantify.py:180).
+    (`f"{channel_name}: {comp}: Median"`).
     """
     assert m.measurement_key("CD3", "Nucleus", "Median") == "CD3: Nucleus: Median"
 
@@ -145,7 +132,7 @@ def test_identify_marker_columns_excludes_morphology_and_non_numeric():
     assert m.identify_marker_columns(df) == ["CD3: Cell: Median", "DAPI"]
 
 
-# ── QC: and MORPH: measurement keywords (2026-09-27) ──────────────────────────
+# ── QC: and MORPH: measurement keywords ───────────────────────────────────────
 import pytest  # noqa: E402, F401
 from measurements import (  # noqa: E402
     MORPH_EXPORT,

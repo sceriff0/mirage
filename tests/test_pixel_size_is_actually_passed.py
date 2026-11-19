@@ -1,32 +1,15 @@
 """Every process that converts pixels to micrometres must be HANDED the scale.
 
-WHAT THIS CAUGHT. `modules/local/export_geojson.nf` did not pass `--pixel_size` at all,
-and `bin/export_geojson.py` carried `default=0.325` in its own argparse. So every
-"Centroid X µm", "Centroid Y µm", "MORPH: Area µm²", "MORPH: Perimeter µm",
-"MORPH: Convex Area µm²" and axis length written into `cells.geojson` was computed at
-0.325 µm/px no matter what the run configured. A run on a 0.5 µm/px objective published
-measurements 35% wrong, silently, and the symptom surfaced one repository away -- in
-`qupath-extension-flowpath`, which reads exactly those keys.
-
-The bug needed BOTH halves to hide: a module that forgot to pass the flag, and a script
-default that made the omission invisible. So this guard checks both halves, statically:
+A module that forgets the flag, hidden by a script default such as `default=0.325`, would
+publish every µm measurement in `cells.geojson` at the wrong scale. Both halves are checked
+statically:
 
   1. no `bin/*.py` may carry a hardcoded pixel-size default in its argparse, and
   2. every module whose script calls one of those consumers must pass the flag.
 
-Static, not behavioural, on purpose. `-stub` never evaluates a `script:` block, so a stub
-run cannot see a rendered command; and the rendered-command nf-test pattern used
-elsewhere in this suite could not be made to FAIL for this case when the fix was backed
-out (it kept reporting the flag present), so it would have been a guard that proves
-nothing -- the exact failure mode CLAUDE.md's "watch every new guard fail" rule is about.
-
-Reads `tests/nfmodel`, never a private regex over the raw file. The first draft of this
-guard did use one, and passed with the fix removed: the module still mentioned
-`--pixel_size` in the COMMENT explaining why the flag matters, and a raw substring search
-cannot tell a comment from an invocation. `strip_comments` is the right view here rather
-than `strip_comments_and_strings`, because the flag under assertion lives inside the
-script block's quoted shell text -- blanking strings would blank the very thing being
-checked.
+Static because `-stub` never renders a `script:` block. Reads `tests/nfmodel`'s
+`strip_comments` view: a comment naming the flag is not an invocation, and the flag itself
+lives in the script block's quoted shell text, which must be kept.
 """
 
 from __future__ import annotations

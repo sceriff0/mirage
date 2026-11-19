@@ -1,27 +1,13 @@
 /*
- * Characterisation test for ParamUtils.validateAddCycle's --outdir/--prior_outdir
- * guard, plus (fix round 1) the add_cycle branch's unknown-column warning.
+ * ParamUtils.validateAddCycle's --outdir/--prior_outdir guard, plus the add_cycle
+ * branch's unknown-column warning.
  *
- * add_cycle writes csv/registered.csv via collectFile(storeDir:), which OVERWRITES.
- * If a user pointed --outdir at the very directory named by --prior_outdir, that
- * write would clobber the prior run's complete registered.csv with add_cycle's
- * partial one, while csv/postprocessed.csv (untouched by add_cycle) survives
- * untouched -- leaving --prior_outdir internally inconsistent and the prior run
- * unrecoverable. docs/add_cycle.md has always said to use a fresh --outdir; nothing
- * enforced it until now.
+ * add_cycle overwrites csv/registered.csv, so an --outdir equal to --prior_outdir
+ * would leave the prior run inconsistent. The check compares canonical paths, so
+ * it must fire for a trailing slash or a `.` segment too.
  *
- * The check compares CANONICAL paths, not raw strings, so it must still fire when
- * the two flags spell the same directory differently (trailing slash, a `.`
- * segment) -- a bare string compare would miss exactly that case.
- *
- * This is also the only nf-test file that runs `main.nf` end to end with
- * mode='add_cycle' under -stub (tests/subworkflows/add_cycle.nf.test targets the
- * ADD_CYCLE subworkflow directly, so it never reaches workflows/mirage.nf's
- * add_cycle branch at all) -- which is why the unknown-column warning case below
- * lives here rather than in a file whose name suggests it, despite being a
- * different concern from the --outdir/--prior_outdir guard above.
- *
- * Tagged "stub" because CI's blocking gate is `nf-test test --tag stub`.
+ * This is the only nf-test that runs main.nf with mode='add_cycle', which is why
+ * the unknown-column case lives here.
  */
 
 nextflow_pipeline {
@@ -80,13 +66,7 @@ nextflow_pipeline {
         options "-stub"
 
         // new_cycle_extra_column.csv is new_cycle.csv plus one unknown column,
-        // `operator` (generate_complete_testdata.py section 3f). Before fix round
-        // 1, workflows/mirage.nf's add_cycle branch called
-        // CsvUtils.validateInputCSV(params.input,
-        // ParamUtils.requiredColumnsForStep('preprocessing')) exactly like the
-        // linear path, but nothing after it warned -- warnUnknownColumns was
-        // wired into the linear start/stop path only. A mistyped column in a
-        // new-cycle samplesheet stayed silent on this path specifically.
+        // `operator`; the add_cycle path must warn about it like the linear path.
         when {
             params {
                 input        = "$projectDir/tests/testdata/new_cycle_extra_column.csv"
@@ -97,14 +77,8 @@ nextflow_pipeline {
         }
 
         then {
-            // The message is a log.warn, emitted from workflows/mirage.nf before
-            // INPUT_CHECK ever runs. nf-test launches Nextflow with -quiet unless
-            // nf-test itself is run with --verbose, and under -quiet Nextflow 25
-            // AND 26 drop log.warn from the console streams entirely -- so this
-            // reads the run log too, exactly as tests/main.nf.test's
-            // "Should name the trace path it looked for..." case does:
-            // <launchDir>/meta/nextflow.log carries the line even when
-            // workflow.stdout/stderr do not.
+            // Also read meta/nextflow.log: without nf-test --verbose, Nextflow runs
+            // with -quiet and log.warn never reaches stdout/stderr.
             def runLog = new File("${launchDir}/meta/nextflow.log")
             def said = workflow.stdout + workflow.stderr +
                        (runLog.exists() ? runLog.readLines() : [])

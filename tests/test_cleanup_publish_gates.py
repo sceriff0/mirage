@@ -1,21 +1,12 @@
 """Every intermediate publishDir is gated on --cleanup_level; no final one is.
 
-The gate is the inlined literal `params.cleanup_level == 'none'`, repeated at
-each site. That repetition is NOT an oversight: conf/*.config cannot see
-lib/*.groovy, and under Nextflow 26's strict parser there is no legal way to
-share a helper between two `withName:` blocks -- a top-level `def` fails to
-parse and a top-level closure assignment is rejected as a dynamic option. So
-the seam CLAUDE.md permits is: inline it verbatim, and assert on the config
-text through the shared source model. This file is that assertion, and
-Layout.FINAL_KINDS -- read here rather than restated -- is what the copies are
-held to.
+The gate is the literal `params.cleanup_level == 'none'`, inlined at each site
+because conf/*.config cannot share a helper between `withName:` blocks. The
+copies are held to Layout.FINAL_KINDS, read here rather than restated.
 
-Checked PER publishDir ENTRY, not per block. A `withName:` block's publishDir
-is often a LIST of maps with different destinations, and REGISTER is exactly
-that case: one map publishes the registered slides (an intermediate) and
-another publishes registered/summary (small text provenance that survives every
-level). A block-level `'params.cleanup_level' in block.body` check would call
-that block gated on the strength of either one.
+Checked per publishDir entry, not per block: a block's publishDir can be a list
+of maps with different destinations (REGISTER publishes an intermediate and the
+ungated registered/summary).
 """
 
 import re
@@ -155,9 +146,8 @@ def test_run_level_and_qc_paths_are_never_gated():
 
 
 def test_the_unrouted_fallthrough_is_never_gated():
-    """_UNROUTED_PUBLISH exists to make an unrouted process VISIBLE. Hiding it
-    at the default level would restore exactly the silent overwrite it was
-    introduced to expose."""
+    """_UNROUTED_PUBLISH makes an unrouted process visible; gating it would hide
+    the overwrite it exists to expose."""
     wrong = [
         f"conf/modules.config:{line} withName: '{selector}' gates the "
         f"_UNROUTED_PUBLISH fall-through"
@@ -168,14 +158,10 @@ def test_the_unrouted_fallthrough_is_never_gated():
 
 
 def test_the_gate_text_is_identical_everywhere():
-    """Twelve inlined copies of one predicate. They cannot be shared, so the
-    only thing standing between them and drift is that they are compared -- a
-    site that read `!= 'final'` would behave identically today and differently
-    the moment a third level is added."""
-    # Every occurrence of the predicate, wherever it sits. `publishDir =
-    # [ enabled: false ]` appears as a deliberate "this process publishes
-    # nothing" marker (SEG_QC's per-slide masks, the solve steps'
-    # intermediates) and never names cleanup_level, so it is not matched.
+    """The inlined copies of the predicate are identical. A site reading
+    `!= 'final'` behaves the same today but differently once a third level exists."""
+    # `publishDir = [ enabled: false ]` marks a process that publishes nothing and
+    # never names cleanup_level, so it is not matched.
     variants = {
         " ".join(v.split())
         for v in re.findall(
@@ -193,34 +179,15 @@ def test_the_gate_is_lazy_never_an_eager_enabled_boolean():
     """The gate must be evaluated PER FILE, at publish time -- inside `saveAs:`
     -- never as an `enabled:` boolean computed when the config is parsed.
 
-    `enabled:` cannot be right in either form:
+    `enabled:` is wrong in either form:
 
-      * `enabled: { ... }` (a closure) is not resolved the way `path:`/`saveAs:`
-        closures are; the closure OBJECT is coerced and comes out false, so every
-        gated publish is dropped at EVERY level. Measured 2026-08-25 on
-        NXF_VER=26.04.6: 30 files at both levels.
-      * `enabled: params.cleanup_level == 'none'` (a plain boolean) is evaluated
-        EAGERLY at the line it appears on, and nextflow.config includes
-        conf/modules.config BEFORE it declares `profiles {}` and before any `-c`
-        file is merged. So the gate freezes against the SHIPPED 'final' and no
-        profile or site-config pin ever reaches it -- while the resolved config
-        prints `cleanup_level = 'none'` and every static guard passes. Measured
-        2026-09-06 on main @ c201f443, stub, one patient:
+      * `enabled: { ... }`: the closure object is coerced to false, so every gated
+        publish is dropped at every level.
+      * `enabled: <boolean>`: evaluated when conf/modules.config is included, before
+        profiles and `-c` files are merged, so a pin of cleanup_level never reaches it.
 
-            -profile test                    (conf/test.config pins 'none') -> 32
-            -profile test -c site.config     (params { cleanup_level='none' }) -> 32
-            -profile test --cleanup_level none                                -> 64
-
-        The README routes every external operator through `-c site.config`, and
-        'none' is what makes `--start` and add_cycle re-entry possible. That was
-        the plain-boolean form's price, and it was too high.
-
-    `saveAs:` is a closure Nextflow resolves per published file, in a context
-    where `params` is the FINAL merged map. `{ fn -> <GATE> ? fn : null }` keeps
-    the file at 'none' and skips it (null) at every other level, and it
-    composes with the existing versions.yml filter in the same closure. The
-    behavioural counterpart -- three stub runs through the profile, a `-c`
-    pin and a `-c` override -- is tests/cleanup_level_pin.sh.
+    `saveAs: { fn -> <GATE> ? fn : null }` is resolved per file against the final
+    merged params. The behavioural counterpart is tests/cleanup_level_pin.sh.
     """
     config = strip_comments((REPO_ROOT / "conf" / "modules.config").read_text())
     eager = [

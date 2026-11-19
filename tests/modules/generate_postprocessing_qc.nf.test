@@ -46,11 +46,9 @@ nextflow_process {
 
     test("Should pass the mask, CSV, output dir and prefix to generate_postprocessing_qc.py - rendered command") {
 
-        // Tagged `stub` so the blocking gate runs it, deliberately WITHOUT
-        // options "-stub": a stub run never evaluates script:, so it can never see
-        // the rendered command. bin/generate_postprocessing_qc.py needs matplotlib
-        // and skimage, which are not on the local PATH under -profile test, so the
-        // process may fail -- the assertions read .command.sh, not the outcome.
+        // `stub` tag, no options "-stub": a stub run never evaluates script:. The script needs
+        // matplotlib and skimage, absent under -profile test, so the process may fail; the
+        // assertions read .command.sh, not the outcome.
         tag "stub"
 
         when {

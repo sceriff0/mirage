@@ -1,8 +1,7 @@
 """bin/generate_postprocessing_qc.py — three PNGs, and what they are made of.
 
-No behavioural test existed for this script. Its process now carries a
-retry-then-fail policy, i.e. the pipeline treats a QC failure as fatal -- so
-"it produced a file" is the minimum contract, and it was unasserted.
+Its process carries a retry-then-fail policy, so a QC failure is fatal and "it
+produced a file" is the minimum contract.
 
 Uses the generator's own fixtures (P001_cell_mask.tif, sample_merged_quant.csv)
 rather than synthesising a mask, because the point is that the script reads what
@@ -66,8 +65,8 @@ def test_the_prefix_names_every_output(tmp_path):
 
 
 def test_load_mask_reads_both_shapes_segment_can_write(tmp_path):
-    """SEGMENT writes a uint32 TIFF; the fixtures also carry the .npy the older
-    tests use. load_mask has to squeeze both to 2-D -- a (1, H, W) mask reaching
+    """SEGMENT writes a uint32 TIFF; the fixtures also carry a .npy. load_mask has
+    to squeeze both to 2-D -- a (1, H, W) mask reaching
     regionprops counts zero cells and reports it as a successful QC panel."""
     tif = gpq.load_mask(_fixture("P001_cell_mask.tif"))
     npy = gpq.load_mask(_fixture("P001_cell_mask.npy"))

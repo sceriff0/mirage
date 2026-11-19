@@ -1,26 +1,17 @@
-# Skips this suite is allowed to have. A RATCHET: it may only shrink.
+# Skips this suite is allowed to have. It may only shrink.
 #
-# Read by tests/conftest.py's pytest_sessionfinish hook, which runs only when
-# MIRAGE_STRICT_SKIPS is set (CI's blocking full-suite step). Any skip whose
-# nodeid is not listed here fails the session, named, with its reason. Any
-# entry here that matches no skip ALSO fails the session, so a stale exemption
-# cannot sit here quietly widening.
+# Read by tests/conftest.py when MIRAGE_STRICT_SKIPS is set (CI's blocking full-suite
+# step). A skip not listed here fails the session, and so does an entry that matches
+# no skip, so a stale exemption cannot linger.
 #
-# Format: one exact pytest nodeid per line. No globs, no prefixes -- the entry
-# names one test, or, for a module-scope importorskip that stops a file being
-# collected at all, one file. Blank lines and lines starting with `#` ignored.
-#
-# Every entry needs a reason. A skip that cannot be justified in a sentence is
-# not a legitimate skip; it is a test that stopped running.
+# Format: one exact pytest nodeid per line (a file, for a module-scope importorskip).
+# No globs or prefixes. A leading `?` marks an environment-conditional entry, exempt
+# from the stale check. Blank lines and `#` lines are ignored. Every entry needs a
+# one-sentence reason.
 
-# --- containers/ that pin inline in their Dockerfile rather than in a
-# --- requirements/<image>.txt file. The parametrisation covers all 11 images;
-# --- these 7 have no such file for the harmonisation check to read, which is a
-# --- property of the repo, not of the environment. (They are still constrained:
-# --- each COPYs requirements/constraints.txt and passes it to pip with `-c`,
-# --- which tests/test_ci_stack_pinned.py checks.) Deliberately listed one image
-# --- at a time: a 12th image arriving without a requirements file should be a
-# --- reviewed line in this file, not a silent inheritance.
+# Images that pin inline in their Dockerfile, with no requirements/<image>.txt for the
+# harmonisation check to read. Each still passes requirements/constraints.txt to pip
+# with `-c`. Listed one image at a time so a new image is a reviewed line here.
 tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_installed[cellsam]
 tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_installed[convert]
 tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_installed[instanseg]
@@ -29,75 +20,36 @@ tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_
 tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_installed[quantify]
 tests/test_container_harmonisation.py::test_every_requirements_file_is_actually_installed[stardist]
 
-# --- containers/spatialdata is the documented python:3.12 / zarr>=3 island;
-# --- harmonising it against the zarr==2.18.3 set would be wrong, not missing.
-# --- The exception is stated in the test itself and in requirements/ci.txt's
-# --- anndata pin.
+# containers/spatialdata is the python:3.12 / zarr>=3 island; harmonising it against
+# the zarr==2.18.3 set would be wrong.
 tests/test_container_harmonisation.py::test_shared_packages_match_the_harmonised_version[spatialdata]
 
-# --- The two images that cannot take requirements/constraints.txt, one line
-# --- each. Both are DERIVED, not asserted here: the skip fires only for a
-# --- container in test_container_harmonisation.PY312_ISLAND or in its
-# --- PINNED_EXCEPTIONS table, where each divergence names the upstream
-# --- constraint that forces it. Passing `-c` to either would not "let the
-# --- constraint win" -- pip reports ResolutionImpossible and the image stops
-# --- building. A companion check,
-# --- test_every_exempt_image_is_still_diverging, fails if either exemption
-# --- goes stale, so these entries cannot quietly outlive their reason.
-# ---   spatialdata: python:3.12 + zarr>=3.0.0 vs the harmonised zarr==2.18.3.
-# ---   convert:     bioio-ome-tiff 1.4.0 caps tifffile<2025.1.10 on py<3.11,
-# ---                and the bioio 3.5.0 plugin set will not resolve against
-# ---                numpy 1.26.4.
+# The two images that cannot take requirements/constraints.txt (pip reports
+# ResolutionImpossible). Derived from test_container_harmonisation's PY312_ISLAND and
+# PINNED_EXCEPTIONS; test_every_exempt_image_is_still_diverging fails if either goes stale.
+#   spatialdata: python:3.12 + zarr>=3.0.0 vs the harmonised zarr==2.18.3.
+#   convert:     bioio-ome-tiff 1.4.0 caps tifffile<2025.1.10 on py<3.11, and the
+#                bioio 3.5.0 plugin set will not resolve against numpy 1.26.4.
 tests/test_ci_stack_pinned.py::test_image_installing_a_constrained_package_reads_the_constraints_file[convert]
 tests/test_ci_stack_pinned.py::test_image_installing_a_constrained_package_reads_the_constraints_file[spatialdata]
 
-# --- bin/utils/tiled_pipeline.py has no production importer by design: it is a
-# --- test/benchmark oracle for the STARE registration path (CHANGELOG.md:487-488).
-# --- The skip comes from that file's own permanent allowlist, so this entry is
-# --- a pointer to a decision recorded elsewhere, not a second decision.
-
-# --- bin/utils/reg_benchmark.py lost its only production importer,
-# --- bin/registration_benchmark.py, deleted from this branch for release 1.0
-# --- (it survives on `benchmarking`, alongside the sweep that drives it). The
-# --- library stays: it is a deliberate accuracy-measurement oracle kept
-# --- independent of the pipeline's own DISK/LightGlue front-end, imported by
-# --- tests/test_reg_benchmark.py and tests/test_tiled_fanout.py. The skip
-# --- comes from that file's own permanent allowlist, so this entry is a
-# --- pointer to a decision recorded elsewhere, not a second decision.
+# bin/utils/reg_benchmark.py has no production importer on this branch: it is an
+# accuracy oracle kept for tests/test_reg_benchmark.py and tests/test_tiled_fanout.py.
+# The skip comes from that test's own permanent allowlist.
 tests/test_no_dead_bin_modules.py::test_bin_utils_module_has_a_real_importer[reg_benchmark.py]
 
-# --- DEBT, not an exemption. Read this one before adding anything like it.
-# ---
-# --- This case skips when stardist/csbdeep are not importable. The pytest job
-# --- does not install them -- _test-suite.yml's `python-tests`, which is the
-# --- ONE job running this suite since CI redesign Phase 5 merged ci.yml's and
-# --- release.yml's copies -- so it does not merely skip here, it skips
-# --- EVERYWHERE and has never run in CI. It is listed rather than fixed because Phase 0's
-# --- mandate is to put a floor under the suite, not to change what CI
-# --- installs; making the floor red on day one over a pre-existing condition
-# --- would just get the floor reverted.
-# ---
-# --- What keeps this honest: the file's environment-independent structural
-# --- counterpart (test_segment_py_delegates_to_the_lazy_reader, same module)
-# --- always runs, so the delegation is not unverified -- only the live import
-# --- path is. Phase 1 (requirements/) is where this gets settled: either
-# --- csbdeep lands in the CI set and this line is deleted, or the case is.
+# Debt, not an exemption: skips wherever stardist/csbdeep are not installed, which
+# includes CI's python-tests job, so it never runs there. Its structural counterpart
+# test_segment_py_delegates_to_the_lazy_reader always runs. Fix by adding csbdeep to the
+# CI set and deleting this line, or by deleting the case.
 tests/test_segment_lazy_dapi_read.py::test_segment_py_delegation_is_live_when_importable
 
-# --- R4 (1.0.0): params/test.json is the one preset allowed to bake in site
-# --- sizing -- it pins tiny self-contained ceilings (2 cpus / 6.GB / 6.h) so the
-# --- test suite does not depend on a developer's -c site.config. The other six
-# --- presets are checked by the same parametrised test; this is the one
-# --- permanent, deliberate skip.
+# params/test.json is the one preset allowed to pin site sizing (tiny self-contained
+# ceilings), so the test suite does not depend on a developer's -c site.config.
 tests/test_param_presets_are_coherent.py::test_a_preset_does_not_bake_in_site_sizing[test.json]
 
-# --- ENVIRONMENT-CONDITIONAL (`?` prefix: suppressed when they fire, exempt from
-# --- the stale-entry check). These six skip in CI's python-tests job, which
-# --- deliberately does not install Nextflow, and do NOT skip on a developer
-# --- machine where nextflow is on PATH. Each names where its compensating check
-# --- runs, so the coverage is not lost -- it moves to a job that has an engine.
-# --- Found by this floor going red on its own first CI run, which is the floor
-# --- doing its job: the allowlist had been calibrated locally.
+# Environment-conditional: these skip in CI's python-tests job, which does not install
+# Nextflow, and run on a machine with nextflow on PATH.
 ?tests/test_channels_count_invariant.py::test_channels_count_dual_invariant_holds_for_a_within_slide_duplicate
 ?tests/test_channels_count_invariant.py::test_the_probe_actually_contains_the_within_slide_duplicate_case
 ?tests/test_cleanup_validation.py::test_add_cycle_at_a_cleaning_level_is_refused
@@ -105,16 +57,10 @@ tests/test_param_presets_are_coherent.py::test_a_preset_does_not_bake_in_site_si
 ?tests/test_cleanup_validation.py::test_start_past_preprocessing_at_a_cleaning_level_says_something
 ?tests/test_cleanup_validation.py::test_the_default_path_still_launches
 
-# --- NOT environment-conditional (no `?`): these three skip because
-# --- docs/validation/format_validation.md is in the explicit, honest "pending"
-# --- state (RULING R3 -- the vendor formats need a cluster and private images
-# --- CI never has). That is a property of the REPO's content, the exact case
-# --- this file's own docstring says an unconditional entry is for. Once
-# --- tests/cluster/validate_formats.sh's real output is copied over that file
-# --- (Task 14 Steps 5-7 / tests/cluster/README.md), these three stop skipping
-# --- and start running for real -- at which point these lines match nothing
-# --- and the stale-entry check fails, on purpose, so landing the real evidence
-# --- forces this file to be cleaned up in the same commit.
+# These skip while docs/validation/format_validation.md is in its "pending" state (the
+# vendor formats need a cluster and private images). Once the real output of
+# tests/cluster/validate_formats.sh lands there, they run, these lines match nothing,
+# and the stale check forces their removal in the same commit.
 tests/test_validation_report_is_real.py::test_the_report_names_the_commit_it_was_produced_from
 tests/test_validation_report_is_real.py::test_the_report_names_the_container_the_probe_ran_in
 tests/test_validation_report_is_real.py::test_the_report_records_at_least_one_successful_conversion

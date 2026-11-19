@@ -22,18 +22,8 @@ nextflow_pipeline {
 
                 preproc_tile_size = 64
 
-                // Both `preprocessed_image` and `registered_image` name INTERMEDIATE
-                // artifacts, and their publishDir carries `enabled:
-                // params.cleanup_level == 'none'` -- a PLAIN boolean, evaluated
-                // eagerly where it appears in conf/modules.config, which
-                // `includeConfig` pulls in BEFORE `profiles {}` runs. So
-                // conf/test.config's own `cleanup_level = 'none'` pin never reaches
-                // the gate, and the file is produced in work/ but never copied to
-                // <outdir>. Setting it HERE does reach it: nf-test hands a `params
-                // {}` block to Nextflow as a -params-file, and that is in the
-                // binding before conf/modules.config is parsed. Measured on nightly
-                // 33633986188 -- these two cases were family 3, and the sole reason
-                // both nightly jobs were red.
+                // These cases read intermediates, which publish only at cleanup_level 'none';
+                // pinned here so the case does not depend on the profile.
                 cleanup_level = 'none'
             }
         }
@@ -83,7 +73,7 @@ nextflow_pipeline {
                 max_memory = '6.GB'
                 skip_registration_qc = true
 
-                // Same eager-publish-gate reason as the preprocessing case above.
+                // Same cleanup_level pin as the preprocessing case above.
                 cleanup_level = 'none'
             }
         }
@@ -201,11 +191,8 @@ nextflow_pipeline {
                     def lines = checkpoint.readLines()
                     assert lines.size() >= 2, "P002 checkpoint should have header + data"
                 },
-                // preprocessed.csv is a single GLOBAL multi-patient checkpoint, so
-                // it legitimately contains both patients. Verify no cross-contamination
-                // by asserting it holds EXACTLY the expected patient ids (both present,
-                // nothing leaked). The previous two assertions each demanded the global
-                // file contain only one patient — mutually contradictory and unpassable.
+                // preprocessed.csv is one global checkpoint holding both patients: assert it
+                // holds exactly the expected patient ids.
                 {
                     def checkpoint = path("$outputDir/csv/preprocessed.csv")
                     def lines = checkpoint.readLines()

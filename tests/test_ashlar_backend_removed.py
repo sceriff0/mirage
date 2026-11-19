@@ -1,28 +1,13 @@
-"""ASHLAR was a benchmark baseline, not a production backend. v1.0.0 ships two:
-valis and tiled. It survives on the `benchmarking` branch, which is the only place it
-was ever used.
+"""ASHLAR is not a production backend (it is a benchmark baseline on `benchmarking`).
 
-This guard is deliberately NARROW -- it checks the backend's own files and the
-registration_method enum, NOT every occurrence of the word. Prose describing mcmicro
-applying BaSiC profiles inside ASHLAR, and the provenance note on tile_residual's
-correlation kernel, are correct and must survive; a blanket grep would delete them.
+The guard is narrow: the backend's own files, the registration_method enum, its params,
+the warp CLI's `--method` choices and conf/modules.config's withName selectors. Prose
+mentioning ASHLAR (mcmicro applying BaSiC profiles inside it, the provenance note on
+tile_residual's correlation kernel) is correct and must survive.
 
-The nextflow.config check goes through `tests.nfmodel.strip_comments` rather than
-raw text, per this repo's rule that a guard asserts against the model. That is not
-ceremony here: the model view separates "the parameter is DECLARED" from "the string
-appears in a comment", so the two get their own assertions and their own messages.
-Both must be clean -- a leftover comment naming a parameter the schema now rejects is
-its own defect -- but only the first is a broken pipeline.
-
-Every check below whose passing answer is "zero" is paired with a positive assertion
-on the same input, so an empty or mis-rooted scan fails loudly instead of passing
-vacuously.
-
-NARROW IS NOT THE SAME AS BLIND. The file/enum/params checks alone all stayed green
-against a MEASURED break -- restoring both `choices=[..., "ashlar"]` and
-`if a.method in ("tiled", "ashlar")` in bin/warp_seg_qc.py -- so the two live surfaces
-that break reaches, the warp CLI and conf/modules.config's withName selectors, get
-their own assertions below.
+The nextflow.config check reads `tests.nfmodel.strip_comments`, so "the parameter is
+declared" and "the string appears in a comment" get separate assertions. Every check whose
+passing answer is "zero" is paired with a positive assertion on the same input.
 """
 
 import json
@@ -72,14 +57,8 @@ def test_ashlar_backend_files_are_deleted():
 def test_registration_method_enum_matches_the_backend_table():
     """The enum has one owner: lib/RegBackends.groovy's BACKENDS table.
 
-    This used to assert `enum == ["valis", "tiled"]` -- a second, independent
-    statement of a fact the table already owns, which would have gone on passing
-    while the table gained a third backend and the two silently disagreed. It now
-    asks tests/test_reg_backends.py for the same list that file's own schema check
-    uses, so retiring or adding a backend is one edit, in the table.
-
-    The ASHLAR-specific property this file exists for is unchanged and still
-    asserted above: the backend's own files are gone.
+    Asks tests/test_reg_backends.py for the same list its schema check uses, so
+    adding or retiring a backend is one edit, in the table.
     """
     from tests.test_reg_backends import reg_backend_methods
 
@@ -133,17 +112,9 @@ def test_no_reg_ashlar_params_remain():
 def test_the_warp_dispatch_surface_names_only_two_backends():
     """`bin/warp_seg_qc.py --method` is the backend's other live entry point.
 
-    The three checks above all stay GREEN if someone restores
-    `choices=["valis", "tiled", "ashlar"]` together with
-    `if a.method in ("tiled", "ashlar")`. That is measured, not assumed: the pair was
-    re-applied to this tree and this module reported `3 passed` before this test
-    existed. A partial re-introduction of the CLI surface is the most plausible way the
-    backend creeps back, so it gets an assertion of its own.
-
-    Flat rather than model-based, deliberately: this is a Python script, not Nextflow
-    source, and the name must be gone from the argparse choices, the help text and the
-    dispatch comment alike. Every blind spot a smarter parse could have would make this
-    MISS a hit, never accept one.
+    The checks above stay green if `"ashlar"` is restored to the argparse choices and
+    the dispatch. A flat text scan: the name must be gone from the choices, the help
+    text and the dispatch comment alike.
     """
     text = (REPO / "bin" / "warp_seg_qc.py").read_text()
     assert '"--method"' in text and '"tiled"' in text, (
@@ -160,10 +131,8 @@ def test_no_ashlar_withname_selector_survives_in_conf_modules_config():
     """No `withName:` block may select a process the ashlar backend owned.
 
     Queried through `tests.nfmodel.with_name_blocks`, which filters out a `withName:`
-    that appears only inside a comment -- so this asserts on LIVE selectors, not on the
-    word. ASHLAR_STITCH was an include ALIAS of TILED_STITCH declared once, in the
-    deleted adapter; a surviving selector for it would configure a process no include
-    creates, which Nextflow accepts silently.
+    that appears only inside a comment. A selector for a process no include creates is
+    accepted silently by Nextflow.
     """
     names = sorted({n.strip() for b in with_name_blocks() for n in b.names})
     assert "TILED_STITCH" in names, (

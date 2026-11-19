@@ -1,39 +1,16 @@
-"""Preprocess QC must stop eagerly decoding the whole multi-channel stack.
+"""Preprocess QC must not eagerly decode the whole multi-channel stack.
 
-``bin/generate_preprocess_qc.py:generate_preprocess_qc`` used to call
-``tifffile.imread`` on the *entire* ``(C, H, W)`` stack just to slice out one
-channel at a time, normalize it, and downsample it for a PNG preview -- an image
-with a dozen-plus marker channels means every one of them sits fully decoded in
-memory while only one is ever used at a time.
+``generate_preprocess_qc`` reads one channel at a time through
+``tiled_io.open_lazy`` and ``read_decimated(..., factor=1)``: full resolution, one
+channel, one plane (or band) of memory at a time. This bounds peak memory, not I/O:
+``downsample_image``'s anti-aliased resize needs every source pixel.
 
-This is a peak-MEMORY fix, not an I/O-size fix: ``downsample_image`` uses
-``skimage.transform.resize(order=1, anti_aliasing=True)``, an anti-aliased
-(area-averaged) resize that needs every source pixel by definition, so there is no
-read-size saving available here (unlike the naive ``[::factor, ::factor]``
-decimation ``tiled_io.read_decimated`` performs at nonzero ``factor``, which is
-NOT used at this call site -- see ``bin/generate_preprocess_qc.py``'s comment).
-``bin/utils/tiled_io.py`` already has the machinery (proven correct by the STARE
-coarse-align path and by Task 1's registration-QC change) to read one channel
-through a lazy, region-readable zarr view (``open_lazy``) banded via
-``read_decimated(..., factor=1)`` -- full resolution, one channel, one plane (or
-band) of memory at a time.
+Pinned:
 
-This file pins two properties for routing ``generate_preprocess_qc`` through it:
-
-1. The whole-stack eager read is gone -- the image is opened through ``open_lazy``,
-   and channels are read one at a time via ``read_decimated``.
-2. The result is EXACTLY what the old whole-stack read produced, not merely
-   similar: same PNG bytes, same shape, same dtype.
-
-Property 2 does not fail against the pre-change code by construction: the
-pre-change code already reads the correct channel via ``tifffile.imread``, so an
-"old vs. new" pixel comparison built from the same channel index is old-vs-old
-before the fix lands, and only exercises the new code path's arithmetic once the
-fix is in. It is included anyway as a regression guard against the real failure
-mode here -- silently different pixels, not a crash -- and was falsified during
-development by temporarily comparing against the WRONG channel (see
-task-2-report.md for the transcript), which failed until the mutation was
-reverted, proving the comparison is not vacuous.
+1. The image is opened through ``open_lazy`` and channels are read one at a time via
+   ``read_decimated``, never a whole-stack ``tifffile.imread``.
+2. The result is exactly what a whole-stack read produces: same PNG bytes, same shape,
+   same dtype. This guards against silently different pixels.
 """
 
 from __future__ import annotations
@@ -90,9 +67,8 @@ def _write_stack(tmp_path, channel_names, h=64, w=48, seed=1234, axes="CYX"):
 
 
 def _old_generate_preprocess_qc(image_path, output_dir, channel_names, scale_factor):
-    """Reimplements the PRE-CHANGE whole-stack read path, using the untouched
-    ``normalize_image``/``downsample_image`` functions, to build an independent
-    "old" reference for the equivalence tests below.
+    """A whole-stack read path, using ``normalize_image``/``downsample_image``,
+    as an independent reference for the equivalence tests below.
     """
     img_stack = tifffile.imread(image_path)
     if img_stack.ndim == 2:
@@ -122,10 +98,6 @@ def _old_generate_preprocess_qc(image_path, output_dir, channel_names, scale_fac
 def test_preprocess_qc_never_eagerly_decodes_the_whole_stack(tmp_path, monkeypatch):
     """The image must be reached through ``open_lazy`` and per-channel ``read_decimated``
     calls, not a whole-array ``tifffile.imread``.
-
-    Fails against the pre-change code, which has no ``open_lazy``/``read_decimated``
-    attribute on the ``generate_preprocess_qc`` module at all -- this assertion cannot
-    even be wired up until the routing lands.
     """
     channel_names = ["DAPI", "CD4", "CD8"]
     image_path = _write_stack(tmp_path, channel_names)
@@ -178,7 +150,7 @@ def test_preprocess_qc_never_eagerly_decodes_the_whole_stack(tmp_path, monkeypat
 
 
 def test_preprocess_qc_png_pixels_match_old_whole_stack_read(tmp_path):
-    """The per-channel-read PNGs must equal the old whole-stack-read PNGs bit-for-bit."""
+    """The per-channel-read PNGs must equal the whole-stack-read PNGs bit-for-bit."""
     channel_names = ["DAPI", "CD4", "CD8"]
     image_path = _write_stack(tmp_path, channel_names)
 
@@ -212,9 +184,8 @@ def _read_png(path):
 
 
 def test_preprocess_qc_channel_last_layout_still_matches_old_read(tmp_path):
-    """A hypothetical (Y, X, C) input (never produced by this pipeline's own writers, but
-    the original defensive branch handled it) must still fall back to a whole-stack read
-    and produce output identical to the pre-change code.
+    """A (Y, X, C) input (never produced by this pipeline's own writers) must fall back
+    to a whole-stack read and produce output identical to the reference.
     """
     channel_names = ["DAPI", "CD4"]
     image_path = _write_stack(tmp_path, channel_names, axes="YXC")
