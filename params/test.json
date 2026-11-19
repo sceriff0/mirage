@@ -1,28 +1,16 @@
 {
-    "_comment_io": "=== Input/Output ===",
     "input": "tests/testdata/test_input.csv",
     "outdir": "./test_results",
-    "start": "preprocessing",
 
-    "_comment_workflow": "=== Workflow Control ===",
-    "dry_run": false,
-
-    "_comment_preproc": "=== Preprocessing ===",
     "skip_preprocessing": false,
-    "preproc_skip_nuclear": true,
-    "preproc_tile_size": 1950,
-    "preprocess_qc_scale_factor": 0.25,
     "pixel_size": 0.325,
-
-    "_comment_seg": "=== Segmentation ===",
+    "preproc_tile_size": 1950,
     "seg_gpu": false,
 
-    "_comment_resources": "=== Resource Limits ===",
+    "_comment_resources": "A self-contained test preset, so it carries its own small ceilings.",
     "max_memory": "6.GB",
     "max_cpus": 2,
     "max_time": "6.h",
 
-    "_comment_trace": "=== Tracing ===",
-    "enable_trace": false,
-    "trace_dir": ".trace"
+    "enable_trace": false
 }
