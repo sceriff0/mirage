@@ -381,12 +381,11 @@ nextflow_workflow {
     }
 
     /*
-     * Round ids (Meta.identityFor) are unique only WITHIN a patient. Two patients whose
-     * moving slides share meta.id 'mov1' must each get THEIR OWN retention and residual
-     * CSV at CELL_QC -- the round joins key on [patient_id, id]. The stub .command.sh
-     * of every task names its patient (ProcessEnvelope.sizeLogStub's `<process>,<pid>,stub,0` row), so the
-     * staged retention symlink is traced back to the NUCLEAR_RETENTION task that wrote
-     * it. The residual CSVs are two differently-named files so each is identifiable.
+     * Round ids (Meta.identityFor) are unique only within a patient. Two patients whose
+     * moving slides share meta.id 'mov1' must each get their own retention and residual
+     * CSV at CELL_QC (the joins key on [patient_id, id]). Each stub .command.sh names its
+     * patient (ProcessEnvelope.sizeLogStub's row), so the staged retention symlink is
+     * traced back to the NUCLEAR_RETENTION task that wrote it.
      */
     test("Should pair each patient's round CSVs with that patient when slide ids collide - stub") {
 

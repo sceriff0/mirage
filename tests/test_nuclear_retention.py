@@ -85,7 +85,7 @@ def test_resolve_channel_names_pads_and_truncates_length_mismatch_like_split_mul
 
 
 def test_channels_arg_finds_nuclear_plane_when_ome_names_are_generic(tmp_path):
-    """SPLIT_CHANNELS prefers meta.channels over generic OME names (finding 1);
+    """SPLIT_CHANNELS prefers meta.channels over generic OME names;
     NUCLEAR_RETENTION must agree on which plane is nuclear under the same input."""
     import tifffile
 

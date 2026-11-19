@@ -62,9 +62,8 @@ nextflow_process {
                 { assert rendered.every { it.contains('--nuclear-markers DAPI') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--nuclei_mask_file P001_nuclei_mask.tif') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--output P001_mov1_nuclear_retention.csv') }, rendered.join(' --- ') },
-                // Finding 1: same condition + rendering as SPLIT_CHANNELS -- meta.channels,
-                // when present, is passed through as --channels so the script can prefer
-                // it over the image's own (possibly generic) OME channel names.
+                // Same condition and rendering as SPLIT_CHANNELS: meta.channels, when present, is
+                // passed as --channels so the script can prefer it over generic OME channel names.
                 { assert rendered.every { it.contains('--channels DAPI CD3') }, rendered.join(' --- ') }
             )
         }

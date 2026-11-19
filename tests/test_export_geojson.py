@@ -424,7 +424,7 @@ def test_export_combined_geojson_survives_a_nan_centroid(tmp_path, caplog):
 
 
 # ---------------------------------------------------------------------------
-# QC: passthrough and MORPH: prefixing (2026-09-27 spec)
+# QC: passthrough and MORPH: prefixing
 # ---------------------------------------------------------------------------
 
 

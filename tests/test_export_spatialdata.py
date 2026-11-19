@@ -568,7 +568,7 @@ def test_shapes_keep_the_contour_ring_verbatim(tmp_path, fake_geo_stack):
         )
 
 
-# ── QC: columns land in obs, not var (2026-09-27 spec) ──────────────────────────
+# ── QC: columns land in obs, not var ────────────────────────────────────────────
 def test_build_table_puts_qc_columns_in_obs_not_var(tmp_path, fake_geo_stack):
     """A `QC: ...` column in the quantification CSV becomes an `obs` column,
     verbatim, and is never treated as a marker (excluded from `X`/`var`)."""

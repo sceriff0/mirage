@@ -132,7 +132,7 @@ def test_identify_marker_columns_excludes_morphology_and_non_numeric():
     assert m.identify_marker_columns(df) == ["CD3: Cell: Median", "DAPI"]
 
 
-# ── QC: and MORPH: measurement keywords (2026-09-27) ──────────────────────────
+# ── QC: and MORPH: measurement keywords ───────────────────────────────────────
 import pytest  # noqa: E402, F401
 from measurements import (  # noqa: E402
     MORPH_EXPORT,
