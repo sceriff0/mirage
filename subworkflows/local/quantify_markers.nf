@@ -2,24 +2,15 @@
 ========================================================================================
     SUBWORKFLOW: QUANTIFY_MARKERS
 ========================================================================================
-    The per-marker quantification chain, shared by the linear postprocessing path
-    and the incremental add_cycle path:
+    The per-marker quantification chain, shared by postprocessing and add_cycle:
 
         split-channel stacks -> per-marker fan-out -> QUANTIFY -> per-patient group
 
-    ONE grouping implementation, shared: it carries the `groupKey(patient_id, channels_count)`
-    streaming hint, which a per-caller copy is free to lose and which nothing else asserts.
+    The grouping carries the `groupKey(patient_id, channels_count)` streaming hint.
+    Callers differ only in where the masks come from and what they do with the
+    grouped CSVs; nothing here branches on params.mode.
 
-    The two callers differ only in where the masks come from (SEGMENT vs the prior
-    run's reused masks) and in what they do with the grouped CSVs afterwards
-    (join morphology.csv vs merge onto a prior base table). Both differences are
-    parameterised through `take:`/`emit:` — nothing in here branches on params.mode.
-
-    This file also exports `groupTiffsByPatient`, a plain function (not a process
-    or workflow — Nextflow's `include` can pull in either) used by both callers'
-    OWN pyramid-channel grouping, the same drift-prone shape as the CSV grouping
-    above. See its own doc comment for why it lives here rather than in
-    postprocess.nf or assemble_export.nf.
+    Also exports `groupTiffsByPatient`, the pyramid-channel grouping both callers use.
 ========================================================================================
 */
 
@@ -30,21 +21,12 @@ def viewIfDebug(channel, Closure formatter) {
     return params.debug_channels ? channel.view(formatter) : channel
 }
 
-// The pyramid-channel grouping shared by postprocess.nf's ch_split_grouped and
-// add_cycle.nf's ch_all_channels. Both group one-tiff-per-marker entries into a
-// single per-patient list feeding ASSEMBLE_EXPORT/MERGE_AND_PYRAMID, and both need
-// the EXACT SAME channels_count-sized groupKey + remainder:true streaming hint
-// this file's CSV grouping above uses, for the same reason: an under-count here is
-// the worse of the two grouping's failure modes (see the GROUP comment above) — it
-// trips MERGE_AND_PYRAMID's memory closure (conf/modules.config:330-337) and
-// ABORTS the run outright, rather than silently degrading — which is why the size hint
-// is not optional and why this grouping lives in exactly one place.
+// Groups one-tiff-per-marker entries into a per-patient list for ASSEMBLE_EXPORT, with a
+// channels_count-sized groupKey. An under-count splits the group, and a one-file group
+// aborts in MERGE_AND_PYRAMID's memory closure.
 //
-// ch_tagged: [patient_id, channels_count, tiff] — one entry per patient+marker,
-// ALREADY deduplicated by [patient_id, marker] by the caller (postprocess.nf keeps
-// the first occurrence of a repeated marker name; add_cycle keeps whichever cycle's
-// tiff should win a new-vs-prior collision). channels_count may be null, in which
-// case grouping falls back to a bare key — correct, just non-streaming.
+// ch_tagged: [patient_id, channels_count, tiff], already deduplicated by [patient_id, marker]
+// by the caller. A null channels_count falls back to a bare (non-streaming) key.
 def groupTiffsByPatient(ch_tagged) {
     return ch_tagged
         .map { patient_id, channels_count, tiff ->
@@ -55,12 +37,8 @@ def groupTiffsByPatient(ch_tagged) {
         }
         .groupTuple(by: 0, remainder: true)
         .map { patient_id, tiffs_unordered ->
-            // CANONICAL ORDER. groupTuple emits in ARRIVAL order, and this list becomes
-            // MERGE_AND_PYRAMID's `path` input, which Nextflow hashes POSITIONALLY -- so
-            // an identical rerun produced a different task hash and -resume missed.
-            // Sorting by name makes the order a function of the data. Safe to sort in
-            // isolation here (unlike the metas+csvs grouping below) because this group
-            // carries exactly ONE list, so there is no pairing to break.
+            // Sort: groupTuple emits in arrival order and path lists hash positionally.
+            // One list only, so there is no pairing to break.
             def tiffs = tiffs_unordered.toSorted { it.name }
             // Extract actual patient_id from groupKey wrapper if needed
             def pid = patient_id.toString()
@@ -90,14 +68,8 @@ workflow QUANTIFY_MARKERS {
             // Ensure tiffs is always a list (handle both single file and multiple files)
             def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
 
-            // Create unique meta map for each channel file. `+` creates a new
-            // top-level map, but Groovy's Map.plus() is
-            // cloneSimilarMap(left).putAll(right) -- clone-then-putAll,
-            // operationally identical to clone(). meta.channels is still the
-            // same List reference as in the original meta. See
-            // subworkflows/local/adapters/valis_adapter.nf:82-88 for why
-            // that matters and why toSorted() (not sort()) is mandatory
-            // wherever meta.channels is read.
+            // One meta per channel file. meta.channels stays a shared List: read it with
+            // toSorted(), never sort(), which would mutate every copy.
             tiff_list.collect { tiff ->
                 def channel_meta = meta + [
                     id: "${meta.patient_id}_${tiff.baseName}",
@@ -118,8 +90,7 @@ workflow QUANTIFY_MARKERS {
         { patient_id, _meta, _tiff -> "Before combine: key=${patient_id}, channel=${_meta.channel_name}" }
     )
 
-    // Both masks (cell + nuclei) arrive keyed by patient_id. QUANTIFY only reads the
-    // nuclear one when params.quantify_compartments is set (per-compartment signal).
+    // Masks keyed by patient_id; QUANTIFY reads the nuclear one only under quantify_compartments.
     ch_masks_viewed = viewIfDebug(
         ch_masks,
         { patient_id, _cell, _nuc -> "Masks available: key=${patient_id}, cell=${_cell.name}, nuclei=${_nuc.name}" }
@@ -137,54 +108,13 @@ workflow QUANTIFY_MARKERS {
     QUANTIFY(ch_for_quant)
 
     // ========================================================================
-    // GROUP - Collect per-marker CSVs by patient_id
-    // Deduplicate by patient_id + marker (take first occurrence if same marker appears multiple times)
-    // Use groupKey for streaming - emits as soon as channels_count items collected
-    //
-    // channels_count is EXACT for both callers: CsvUtils.countChannelsPerPatient sums
-    // CsvUtils.resolveKeptChannelsPerSlide, the SAME resolver whose answer travels to
-    // SPLIT_CHANNELS as meta.keep_channels, so it counts the markers that actually
-    // reach QUANTIFY rather than the channels the samplesheet declares. That resolver
-    // claims each marker name exactly once per patient, so the distinct-name total this
-    // grouping needs (it .unique()s below) and the emitted-file total are the SAME
-    // number — one count is correct for every consumer, whichever of the two it is
-    // effectively asking for. (It used to union declared channels with no reference
-    // awareness, which over-counted a reference-less add_cycle sheet — the group could
-    // then never fill.)
-    //
-    // Do not restate the old justification that groupTiffsByPatient "needs the file
-    // count because it has no .unique". The FUNCTION has none, but BOTH of its callers
-    // dedup on [patient_id, marker] immediately upstream — postprocess.nf's `.unique`
-    // and add_cycle.nf's priority groupTuple on [pid, marker] — so no live consumer
-    // needs the file count today. The one-name-per-patient rule earns its keep by making
-    // the winner DETERMINISTIC (reference first, then samplesheet order) instead of
-    // arrival-ordered, and by making channels_count exact against what actually arrives.
-    //
-    // `remainder: true` is kept anyway, as a safety net against a future miscount. An
-    // OVER-count is safe either way, and strictly better than before this branch: the
-    // surplus slot never fills at its (too-large) target size, but `remainder: true`
-    // still emits it -- complete, just late, at channel close -- instead of the
-    // pre-branch silent drop where an over-counted group never emitted at all. An
-    // UNDER-count is NOT uniformly safe, and it is NOT "a per-patient
-    // consumer runs twice" in general — an undercount makes groupTuple emit the patient
-    // TWICE (once at the too-small target size, once as the `remainder: true` leftover),
-    // and what happens to those two emissions depends entirely on how the CALLER
-    // consumes this grouped_csv, which differs per caller:
-    //   - add_cycle.nf's `.combine(by: 0)` against the prior base table (the "MERGE new
-    //     marker CSVs onto the prior merged table" section) is a true cross-product:
-    //     MERGE_QUANT_CSVS actually runs TWICE, both invocations writing the SAME
-    //     <pid>/quantification/merged_quant.csv.
-    //   - postprocess.nf's `.join(ch_morphology, by: 0)` feeding MERGE_QUANT_CSVS on the
-    //     linear path is a keyed inner join: the surplus group is silently DISCARDED, so
-    //     merged_quant.csv loses markers with no error at all.
-    //   - postprocess.nf's OWN, separately-built grouping for the pyramid path
-    //     (ch_split_grouped, same channels_count, same remainder:true — see its comment)
-    //     is worse still: a one-file surplus group trips the MERGE_AND_PYRAMID memory
-    //     closure (conf/modules.config:330-337 — pre-existing, NOT fixed here) and the
-    //     run ABORTS with "No such file or directory: channels".
-    // Over-counting is still the safe direction, which is why countChannelsPerPatient
-    // errs high whenever it cannot be certain.
+    // GROUP - per-marker CSVs by patient, deduplicated on [patient_id, marker]
     // ========================================================================
+    // groupKey(channels_count) streams each patient as soon as its markers arrive.
+    // channels_count is exact: it comes from the same resolver that picks the markers
+    // SPLIT_CHANNELS emits. remainder: true is a safety net. An over-count only emits late;
+    // an under-count emits the patient twice, which makes add_cycle run MERGE_QUANT_CSVS
+    // twice and makes postprocess.nf's join silently drop markers.
     ch_grouped_csvs = QUANTIFY.out.individual_csv
         .map { meta, csv ->
             def marker = meta.channel_name  // Extract marker name
@@ -200,31 +130,13 @@ workflow QUANTIFY_MARKERS {
         }
         .groupTuple(by: 0, remainder: true)
         .map { patient_id, metas_unordered, csvs_unordered ->
-            // CANONICAL ORDER, and it is not only a caching concern here. groupTuple
-            // emits in ARRIVAL order, so BOTH the csv list reaching MERGE_QUANT_CSVS
-            // (hashed positionally -> -resume missed) AND `metas[0]` below were
-            // whichever marker finished quantifying first. Two identical runs picked
-            // different metas, so the channels/is_reference/channel_name carried into
-            // MERGE_QUANT_CSVS, EXPORT_GEOJSON and EXPORT_SPATIALDATA differed run to
-            // run:
-            //     run A: [... is_reference:true,  channels:[DAPI, PANCK, SMA], channel_name:SMA]
-            //     run B: [... is_reference:false, channels:[DAPI, CD3, CD8],   channel_name:CD3]
-            //
-            // Pair FIRST, then sort the pairs. NEVER `groupTuple(sort:)` -- it orders
-            // each grouped list independently and silently re-pairs meta with the wrong
-            // file (see registration.nf's grouping for the worked example).
+            // groupTuple emits in arrival order, so sort for stable -resume hashes and a
+            // stable metas[0]. Pair first, then sort; groupTuple(sort:) would re-pair wrongly.
             def paired = [metas_unordered, csvs_unordered].transpose()
                             .toSorted { it[0].channel_name }
             def metas = paired.collect { it[0] }
             def csvs  = paired.collect { it[1] }
-            // `+` creates a new top-level map, but Groovy's Map.plus() is
-            // cloneSimilarMap(left).putAll(right) -- clone-then-putAll,
-            // operationally identical to clone(). metas[0].channels is still
-            // the same List reference as in the original meta. See
-            // subworkflows/local/adapters/valis_adapter.nf:82-88 for why
-            // that matters and why toSorted() (not sort()) is mandatory
-            // wherever meta.channels is read.
-            // Extract actual patient_id from groupKey wrapper if needed
+            // patient_id.toString() unwraps the groupKey.
             def meta = metas[0] + [id: patient_id.toString()]
             [meta, csvs]
         }
@@ -233,10 +145,6 @@ workflow QUANTIFY_MARKERS {
     // [meta, [per-marker quant csvs]] — one entry per patient.
     grouped_csv = ch_grouped_csvs
     size_logs   = QUANTIFY.out.size_log
-    // `.first()` is applied HERE, inside the subworkflow, matching seg_qc.nf:112 and
-    // adapters/valis_adapter.nf:151 — NOT the call-site style postprocess.nf:420-442
-    // uses for its own inline processes. registration.nf:309 documents that
-    // asymmetry; every new subworkflow de-duplicates its own versions so callers
-    // never have to know which convention a given emit follows.
+    // Versions are de-duplicated here, so callers need not.
     versions    = QUANTIFY.out.versions.first()
 }

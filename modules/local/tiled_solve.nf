@@ -1,12 +1,10 @@
 /*
  * TILED_SOLVE - STARE fan-out step 3/4: assemble the manifest from per-tile control points.
  *
- * One cheap per-slide reduction (kilobytes): gathers every tile's control point and writes the
- * self-contained transform manifest (M0 + mesh) the stitch and reg_qc=2 warper consume.
- * SOLVE lays every tile's window vectors on the slide-global lattice, drops those at or beyond
- * the range gate (--max-disp), and solves the mesh with dctpls (robust affine + robust DCT-PLS,
- * stare.solve) -- the only solver since STARE v2. Background is kept out upstream: REG_TILE only
- * emits foreground-masked vectors whose correlation peak ratio clears its floor.
+ * Per-slide reduction: lays every tile's window vectors on the slide-global lattice, drops
+ * those beyond the range gate (--max-disp), solves the mesh with dctpls (robust affine +
+ * robust DCT-PLS), and writes the transform manifest (M0 + mesh) used by the stitch and the
+ * reg_qc=2 warper. REG_TILE already drops background vectors.
  */
 process TILED_SOLVE {
     tag "${meta.patient_id}:${meta.channels.join('_')}"
@@ -28,8 +26,7 @@ process TILED_SOLVE {
     script:
     def prefix    = "${meta.patient_id}_${meta.channels.join('_')}"
     def slidename = meta.channels.join('_')
-    // --max-disp: the range gate on the window vectors, from conf/modules.config's ext.args
-    // for this process.
+    // carries --max-disp (conf/modules.config)
     def args      = task.ext.args ?: ''
     """
     tiled_solve.py \\

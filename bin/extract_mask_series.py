@@ -22,12 +22,9 @@ from ome_io import write_tiff  # noqa: E402
 
 logger = get_logger(__name__)
 
-#: TIFF tile size (px) for the cell/nuclei mask writes below -- a TIFF LAYOUT choice, not a
-#: processing tile size. See ``bin/convert_image.py:35-49`` for why an untiled write forces
-#: every downstream region read to decode the whole plane. Deliberately half of
-#: CONVERT_TIFF_TILE/WRITE_TILE's 2048, not copied from it: measured directly on the mask's
-#: own read pattern (many small windowed per-cell/per-region reads, not whole-plane decodes)
-#: -- see docs/perf/2026-08-26-rss.md's tiled-vs-striped table.
+#: TIFF tile size (px) for the mask writes below: a TIFF layout choice, so windowed
+#: per-cell reads need not decode the whole plane. Half of the 2048 image tile, sized
+#: for the mask's many small region reads.
 MASK_TIFF_TILE = 1024
 
 
@@ -54,10 +51,8 @@ def main() -> None:
             "mask series has shape %s; expected (2, H, W) [cell, nuclei].", masks.shape
         )
         raise SystemExit(1)
-    # Fast-fail on dtypes that cannot losslessly represent uint32 label IDs.
-    # Accept unsigned-integer masks (uint8/uint16/uint32 -> lossless upcast) and
-    # reject anything else (float probability maps, signed/int64 arrays) loudly
-    # rather than silently corrupting downstream quantification.
+    # Accept unsigned-integer masks (lossless upcast to uint32) and reject anything
+    # else (float probability maps, signed/int64) rather than corrupting labels.
     if masks.dtype not in (np.uint8, np.uint16, np.uint32):
         logger.error(
             "mask series in %s has dtype %s; expected an unsigned integer label mask "
@@ -70,12 +65,9 @@ def main() -> None:
         masks = masks.astype(np.uint32)  # lossless upcast from uint8/uint16
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    # zlib matches every other mask writer here (segment.py, segment_cellsam.py,
-    # segment_instantseg.py) and is close to free on label masks -- long runs of identical
-    # integers. bigtiff is not an optimisation: a 40000x40000 uint32 mask is 6.4 GB, and classic
-    # TIFF's 32-bit offsets overflow past 4 GB (struct.error: 'I' format requires
-    # 0 <= number <= 4294967295), which is the same reason tiled_stitch.py:118 sets it.
-    # Guarded by tests/test_mask_series_write_contract.py.
+    # zlib, like every other mask writer here; cheap on label masks. bigtiff is
+    # required: a 40000x40000 uint32 mask is 6.4 GB and classic TIFF offsets overflow
+    # past 4 GB (tests/test_mask_series_write_contract.py).
     for name, plane in (("cell_mask.tif", masks[0]), ("nuclei_mask.tif", masks[1])):
         write_tiff(
             args.outdir / name,

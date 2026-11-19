@@ -1,32 +1,21 @@
-# The CONVERT IMAGE'S READER STACK, for the `format-tests` job in
+# The convert image's reader stack, for the `format-tests` job in
 # .github/workflows/_test-suite.yml.
 #
-# WHY THIS FILE IS NOT `-c constraints.txt`, AND NOT PART OF requirements/ci.txt.
-# containers/convert is one of the two documented images that cannot take the
-# harmonised set (test_container_harmonisation.PINNED_EXCEPTIONS records both
-# divergences with the upstream constraint forcing each):
+# Not `-c constraints.txt` and not part of requirements/ci.txt: containers/convert cannot
+# take the harmonised set (see test_container_harmonisation.PINNED_EXCEPTIONS):
 #
 #   * bioio-ome-tiff 1.4.0 requires tifffile[zarr]<2025.1.10 on python_version
-#     < "3.11" and >=2025.5.21 on >=3.11. The harmonised pin is 2025.5.10, so
-#     BOTH of CI's python legs conflict with it. 1.4.0 is the newest release.
+#     < "3.11" and >=2025.5.21 on >=3.11, which conflicts with the harmonised 2025.5.10.
 #   * the bioio 3.5.0 plugin set will not resolve against numpy 1.26.4.
 #
-# Dropping bioio-ome-tiff and keeping only bioio-tifffile DOES resolve against
-# the harmonised set -- and is worthless: measured 2026-09-02, an OME-TIFF
-# written with Channel Names and PhysicalSizeX=0.325 reads back through
-# bioio-tifffile as ['Channel:0:0', 'Channel:0:1', 'Channel:0:2'] with
-# PhysicalPixelSizes(X=1.0). A format suite on that stack tests a reader
-# production does not ship.
+# Using bioio-tifffile alone resolves but reads channel names and pixel sizes wrongly,
+# so it would test a reader production does not ship.
 #
-# So the format suite gets its own job, on python 3.10 (containers/convert's
-# base is eclipse-temurin:21-jre-jammy, i.e. 3.10), with the image's own pins.
-# tests/test_format_test_env_matches_the_convert_image.py asserts every version
-# below equals the one containers/convert/Dockerfile installs.
+# Python 3.10 (the convert image's base). tests/test_format_test_env_matches_the_convert_image.py
+# asserts every version below equals the one containers/convert/Dockerfile installs.
 #
-# NO bioio-bioformats. It needs a JVM and the Bio-Formats jars baked at image
-# build time (RULING R2), which only the image has, and RULING R3 means there
-# are no committable .svs/.czi fixtures to route through it anyway. The vendor
-# formats are validated on the cluster -- tests/cluster/README.md.
+# No bioio-bioformats: it needs a JVM and the baked Bio-Formats jars, which only the image
+# has. Vendor formats are validated on the cluster (tests/cluster/README.md).
 numpy==2.2.6
 tifffile==2024.12.12
 imagecodecs==2025.3.30
@@ -38,6 +27,5 @@ bioio-ome-tiff==1.4.0
 bioio-tifffile==1.3.0
 dask[array]==2026.7.1
 
-# CI-only tooling. pytest names no version anywhere in requirements/, here
-# included -- see requirements/ci.txt.
+# CI-only tooling, unpinned as in requirements/ci.txt.
 pytest

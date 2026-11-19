@@ -17,41 +17,17 @@ include { MIRAGE } from './workflows/mirage'
 ================================================================================
     POST-RUN: COMPUTATIONAL RESOURCE REPORT (best-effort)
 ================================================================================
-    trace.txt is only finalized at workflow completion, so the resource report
-    is generated here rather than as an in-DAG process. Any failure (no python3
-    on the head node, missing trace) logs a warning and never fails the run;
-    the script is also runnable by hand against an existing outdir + trace dir.
+    trace.txt is only final at workflow completion, so the report is built here, not
+    in the DAG. Any failure logs a warning and never fails the run.
 
-    Why this is a function called from a handler rather than the handler itself:
-
-      * Nextflow 26's strict parser rejects a top-level `workflow.onComplete { }`
-        with "Statements cannot be mixed with script declarations". The handler
-        has to be registered from inside the entry `workflow { }` block.
-      * A closure registered from there does NOT see the script binding. Inside
-        it, `params`, `workflow` and `projectDir` all evaluate to null — under
-        the v1 parser as well as v2, so this is a Nextflow scoping fact and not
-        a migration artifact. Everything the report needs is therefore captured
-        into a plain Map in the workflow body (where those names resolve) and
-        handed in as `cfg`.
-      * `log` resolves normally inside a script-level function, which is why the
-        warn/info calls live here rather than in the handler closure.
-
-    `cfg` deliberately carries only raw params and plain Strings (outdir, trace_dir,
-    launch_dir, project_dir): every Layout call stays inside the try below, so a
-    Layout failure is still caught and downgraded to a warning exactly as before,
-    rather than being hoisted to DAG-construction time where it would fail the run.
-
-    launch_dir is captured for the same reason the others are, and used because
-    Nextflow resolves `trace.file` against launchDir while cmd.execute() resolves a
-    relative path against the JVM's working directory. lib/ResourceReport.groovy owns
-    that arithmetic so tests/lib_probe.nf can assert it -- a script-level function in
-    this file has no unit-test surface of its own.
+    Called from onComplete, whose closure cannot see `params`, `workflow` or
+    `projectDir`; everything is captured into `cfg` in the workflow body. `log`
+    resolves in a script-level function. Layout calls stay inside the try so a
+    failure is downgraded to a warning. lib/ResourceReport.groovy resolves the trace
+    path against launchDir, as Nextflow's trace scope does.
 */
 def generateResourceReport(Map cfg) {
-    // The path Nextflow's trace scope actually wrote to. lib/ResourceReport.groovy
-    // owns the resolution rule and the diagnostic text; see its header for why a
-    // relative trace_dir resolved against the JVM's working directory was wrong, and
-    // why the previous silence was worse than the wrong path.
+    // The path Nextflow's trace scope actually wrote to.
     def trace_txt
     try {
         trace_txt = ResourceReport.tracePath(cfg.trace_dir, cfg.launch_dir)
@@ -65,11 +41,8 @@ def generateResourceReport(Map cfg) {
         return
     }
     if (!new File(trace_txt).exists()) {
-        // Deliberately do NOT invoke the script here. bin/generate_resource_report.py
-        // renders "Trace data not available" and exits 0 for a missing trace, so
-        // running it would produce a page that LOOKS like a report and a log line
-        // that says the report was written. An absent file plus this warning is the
-        // honest outcome.
+        // Do not run the script: on a missing trace it writes a placeholder page that
+        // looks like a report.
         log.warn ResourceReport.missingTraceMessage(trace_txt, true)
         return
     }
@@ -80,12 +53,7 @@ def generateResourceReport(Map cfg) {
         def qc_dir    = Layout.runDir(cfg.outdir, 'qc')
         def out_html  = "${qc_dir}/mirage_resource_report.html"
         new File(qc_dir).mkdirs()
-        // Derived from trace_txt's own resolved parent, not the raw cfg.trace_dir:
-        // trace_txt is already the RESOLVED absolute path (ResourceReport.tracePath
-        // above), so its parent is unambiguous regardless of whether trace_dir was
-        // passed relative or absolute. Building these two from the raw param instead
-        // silently pointed at the wrong directory under the exact relative-trace_dir
-        // launch this class's header describes.
+        // From the resolved trace path, not the raw (possibly relative) trace_dir.
         def trace_dir_resolved = new File(trace_txt).parent
         def cmd = [
             'python3', script,
@@ -111,16 +79,9 @@ def generateResourceReport(Map cfg) {
 ================================================================================
     POST-RUN: EXPLAIN AN EMPTY CHECKPOINT DIRECTORY
 ================================================================================
-    At a cleaning --cleanup_level no checkpoint manifest is written, because the
-    artifacts every manifest names were not published (Checkpoint.writesAtLevel).
-    An empty csv/ is then indistinguishable from a run that crashed before its
-    first checkpoint, so the directory says which it is.
-
-    Written from a handler rather than a process for the same reason the resource
-    report is: it is provenance about the run as a whole, it must not appear in
-    the DAG, and it must not change the task graph or the stub manifest's task
-    count. `cfg` carries raw params for the reason generateResourceReport's
-    comment gives -- the handler closure cannot see `params`.
+    At a cleaning --cleanup_level no checkpoint manifest is written
+    (Checkpoint.writesAtLevel), so csv/ gets a README saying why it is empty rather
+    than looking like a crashed run. A handler, not a process, so the DAG is unchanged.
 */
 def writeCheckpointReadme(Map cfg) {
     if (cfg.cleanup_level == 'none') {
@@ -152,23 +113,9 @@ add_cycle is refused at any other level, at launch.
 ================================================================================
     POST-RUN: ANNOUNCE DROPPED TASKS
 ================================================================================
-    A `retry-then-drop` errorStrategy lets the run report success with an
-    artifact missing. That is a deliberate policy (conf/modules.config names it,
-    tests/test_error_strategy_policy.py pins it), but it must not be SILENT —
-    "it OOMed, the strategy swallowed it, and the run went green" is the exact
-    history that made the CSE scorer look permanently broken.
-
-    The announcement lives here rather than in the errorStrategy closure that
-    knows the most about it, for the reason the closure's own comment gives:
-    `log` is unbound in conf/*.config under the v1 config parser, so logging
-    from a closure there resolves against ConfigObject and ABORTS the run past
-    the retry budget — the opposite of 'ignore'. Reproduced 2026-08-25 on
-    NXF_VER=25.04.7, which manifest.nextflowVersion still accepts.
-
-    Same script-level-function shape as generateResourceReport above, and for
-    the same reason: `log` and `workflow` resolve in a script-level function but
-    are null inside the handler closure. `workflow.stats` is final by the time
-    onComplete fires, so reading the count here is safe.
+    A `retry-then-drop` errorStrategy lets a run succeed with an artifact missing;
+    this makes that visible. It lives here because `log` is unbound in a
+    conf/*.config closure on Nextflow 25 and would abort the run.
 */
 def announceDroppedTasks() {
     try {
@@ -197,15 +144,9 @@ def announceDroppedTasks() {
 ================================================================================
     POST-RUN: PRUNE THE EMPTY PUBLISH DIRECTORIES A CLEANING LEVEL LEAVES
 ================================================================================
-    publishDir creates its target directory when the process starts, before the
-    `saveAs:` gate has decided whether any file lands there. At a cleaning
-    --cleanup_level every intermediate's gate returns null for every file, so a
-    successful run leaves an empty converted/, preprocessed/, split_channels/,
-    segmentation/, quantify/, cell_properties/ and registered/summary/ per patient
-    (measured 2026-09-09: seven on the stub dataset). They are noise that reads as
-    "something was supposed to be here", so they go. Only EMPTY directories, and
-    only outside any .zarr store; never a file. tests/cleanup_work.sh asserts none
-    remain.
+    publishDir creates its directory before `saveAs:` decides, so a cleaning
+    --cleanup_level leaves empty intermediate directories per patient. Remove only
+    empty directories, never inside a .zarr store. tests/cleanup_work.sh checks it.
 */
 def pruneEmptyPublishDirs(Map cfg) {
     if (cfg.cleanup_level == 'none') {
@@ -242,10 +183,7 @@ def pruneEmptyPublishDirs(Map cfg) {
 workflow {
     main:
 
-    // Captured before MIRAGE() so the handler is registered even if the
-    // workflow throws during DAG construction — that is when the previous
-    // top-level registration took effect, and onComplete fires on failed runs
-    // too.
+    // Registered before MIRAGE() so onComplete also fires if DAG construction throws.
     def report_cfg = [
         enable_trace : params.enable_trace,
         outdir       : params.outdir,

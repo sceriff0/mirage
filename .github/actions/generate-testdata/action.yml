@@ -1,18 +1,9 @@
-# =============================================================================
-# Generate the test fixtures (composite action)
-# =============================================================================
-# `tests/testdata/` is gitignored with a small enumerated exception, so a fixture
-# exists in CI only because `tests/testdata/generate_complete_testdata.py` wrote
-# it. Ten jobs across ci.yml and release.yml therefore ran that script, and eight
-# of them prefixed it with the same two-package install — the duplication this
-# action removes.
+# Generate the test fixtures (composite action). tests/testdata/ is gitignored,
+# so CI has a fixture only if generate_complete_testdata.py writes it.
 #
-# `setup-python: 'false'` is for the one shape that differs: the python-tests /
-# test-python jobs have already installed requirements/ci.txt (a superset of
-# requirements/testdata.txt) into a matrixed interpreter, and re-running
-# actions/setup-python here would pin that job's Python back to 3.10 and undo
-# the 3.11 matrix leg.
-# =============================================================================
+# `setup-python: 'false'` is for jobs that already installed requirements/ci.txt
+# (a superset) into a matrixed interpreter; re-running setup-python would reset
+# that job to 3.10.
 name: 'Generate test data'
 description: 'Generate the gitignored tests/testdata/ fixtures, optionally installing Python first.'
 
@@ -33,9 +24,7 @@ runs:
   using: composite
   steps:
     - name: Install Python for test data generation
-      # numpy and tifffile at the harmonised versions, taken from
-      # requirements/constraints.txt -- the same file every container image
-      # reads. No version is named here; there is nothing to keep in step by hand.
+      # Versions come from requirements/constraints.txt, as for the images.
       if: inputs.setup-python == 'true'
       uses: ./.github/actions/setup-python-env
       with:

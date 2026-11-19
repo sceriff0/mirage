@@ -1,19 +1,12 @@
-"""Registration accuracy harness for the STARE method (and any other).
+"""Registration accuracy measures for STARE (or any method), without ground truth.
 
-Quantifies how well a *registered* image aligns to the *reference* with two ground-truth-free
-measures, so it works on real WSIs exactly as on synthetic data:
-
-  * **residual TRE** — the median/p90 distance between ORB features matched between the reference
-    and the registered image. Both are in the reference frame, so a well-registered pair has
-    near-coincident matches (small TRE) and a misaligned pair large ones. This is the same
-    quantity you would compute to compare a tiled output against a VALIS output on real slides:
-    run :func:`benchmark` on each method's registered image and compare the numbers.
+  * **residual TRE**: median/p90 distance between ORB features matched between the
+    reference and the registered image. Both are in the reference frame, so good
+    registration gives near-coincident matches.
   * **intensity correlation** over the interior (borders excluded).
 
-:func:`benchmark` reports both before (reference vs moving) and after (reference vs registered),
-so the improvement is explicit.
-
-Pure NumPy + scikit-image.
+:func:`benchmark` reports both before (reference vs moving) and after (reference vs
+registered). Pure NumPy + scikit-image.
 """
 
 from __future__ import annotations
@@ -24,16 +17,12 @@ __all__ = ["feature_residual", "benchmark"]
 
 
 def _orb_xy(img, n_keypoints, fast_threshold):
-    # This ORB is an INDEPENDENT ACCURACY ORACLE, not a registration front-end. COARSE's own
-    # front-ends were reduced to DISK+LightGlue for v1.0.0; scoring the result with the very
-    # matcher that produced it would measure nothing, so the oracle deliberately stays
-    # classical. tests/test_no_legacy_frontends.py allow-lists this file for that reason.
+    # ORB here is an accuracy oracle, not a registration front-end
+    # (tests/test_no_legacy_frontends.py allow-lists this file).
     #
-    # normalize_intensity is imported from coarse_align rather than duplicated so the unit-scale
-    # contract has ONE owner: `fast_threshold` is an absolute intensity difference, so raw uint16
-    # counts make FAST fire on ~38% of pixels and corner_peaks (quadratic in that count) turns
-    # minutes into hours. This path is the more exposed of the two -- feature_residual scores
-    # FULL-RESOLUTION registered slides, not the bounded thumbnail COARSE works on.
+    # Normalise first: `fast_threshold` is an absolute intensity difference, and on raw
+    # uint16 counts FAST fires on a large share of pixels, turning minutes into hours on
+    # full-resolution slides.
     from coarse_align import normalize_intensity
     from skimage.feature import ORB
 

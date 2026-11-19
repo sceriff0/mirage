@@ -2,8 +2,7 @@
 ========================================================================================
     SUBWORKFLOW: ASSEMBLE_EXPORT
 ========================================================================================
-    The final per-patient assembly, shared by the linear postprocessing path and the
-    incremental add_cycle path:
+    Per-patient export, shared by postprocessing and add_cycle:
 
       1. EXPORT_GEOJSON  — merged quantification + cell/nucleus contours ->
                            cells.geojson + cells_data.csv
@@ -11,22 +10,11 @@
                            `embed_masks` gate deciding whether the segmentation masks
                            ride along as a second uint32 OME series.
 
-    Both callers used to carry byte-identical copies of the export tuple assembly and
-    of the `embed_masks` gate (comment included). They now exist once, here.
-
-    Caller differences are parameterised through `take:`, never by branching on
-    params.mode in here:
+    Caller differences come in through `take:`, not by branching on params.mode:
       - `ch_nuc_contours`  — real nucleus contours under quantify_compartments, or the
                              cell contours as a harmless placeholder.
       - `ch_pyramid_masks` — [patient_id, cell_mask, nuclei_mask]: freshly segmented in
                              POSTPROCESSING, reused from the prior run in add_cycle.
-
-    One deliberate normalisation: the embed_masks gate below joins ch_pyramid_masks with
-    `join(by: 0)`, which is what POSTPROCESSING's copy did; add_cycle's copy used
-    `combine(by: 0)`. Both channels carry exactly one entry per patient, so at the
-    reachable cardinality the two operators are equivalent — but join is the stricter of
-    the pair (a duplicate mask entry would fan out under combine and error under join),
-    so the shared version keeps join.
 ========================================================================================
 */
 
@@ -40,11 +28,7 @@ workflow ASSEMBLE_EXPORT {
     ch_nuc_contours     // [patient_id, nucleus_contours.json | contours.json placeholder]
     ch_pyramid_channels // [meta, [per-marker tiffs]]  — one entry per patient
     ch_pyramid_masks    // [patient_id, cell_mask, nuclei_mask]
-    compartment_mode    // ParamUtils.compartmentMode(params) — resolved once by
-                        // workflows/mirage.nf, threaded through postprocess.nf /
-                        // add_cycle.nf unchanged. Replaces this workflow's own former
-                        // `params.embed_masks && params.quantify_compartments &&
-                        // params.expanded_quantification` raw read below.
+    compartment_mode    // ParamUtils.compartmentMode(params), resolved in workflows/mirage.nf
 
     main:
 
@@ -64,13 +48,10 @@ workflow ASSEMBLE_EXPORT {
     // ========================================================================
     // PYRAMID - merge the per-patient channel TIFFs
     // ========================================================================
-    // Merge intensity channels, and optionally embed cell + nuclei segmentation
-    // masks as a SECOND, single-resolution uint32 OME series (Image:1). The
-    // masks are never mixed into the intensity series itself: a >65,535-cell
-    // uint32 label mask would force the whole intensity OME-TIFF to uint32,
-    // which Bio-Formats/QuPath cannot read as a normal multi-channel image.
-    // Cell objects are always delivered separately via cells.geojson; this
-    // second series is an optional, additional way to carry the raw masks.
+    // Optionally embed cell + nuclei masks as a second, single-resolution uint32 OME
+    // series (Image:1). Never in the intensity series: a uint32 mask would force the whole
+    // image to uint32, which QuPath cannot read as a normal multi-channel image.
+    // join (not combine) so a duplicate mask entry errors instead of fanning out.
     def emit_masks = compartment_mode.embedMasks && compartment_mode.compartments && compartment_mode.expanded
     ch_pyramid_in = emit_masks
         ? ch_pyramid_channels
@@ -79,9 +60,7 @@ workflow ASSEMBLE_EXPORT {
             .map { _pid, meta, tiffs, cell_mask, nuclei_mask -> [meta, tiffs, [cell_mask, nuclei_mask]] }
         : ch_pyramid_channels.map { meta, tiffs -> [meta, tiffs, []] }
 
-    // MERGE_AND_PYRAMID combines merge + pyramid generation in one step
-    // This preserves OME-XML metadata (channel names, colors, pixel sizes)
-    // and generates QuPath-compatible pyramidal OME-TIFF directly
+    // Merge + pyramid in one step, keeping OME-XML metadata (channel names, colours, pixel sizes).
     MERGE_AND_PYRAMID(ch_pyramid_in)
 
     emit:
@@ -90,11 +69,7 @@ workflow ASSEMBLE_EXPORT {
     csv               = EXPORT_GEOJSON.out.csv
     pyramid           = MERGE_AND_PYRAMID.out.pyramid
     size_logs         = EXPORT_GEOJSON.out.size_log.mix(MERGE_AND_PYRAMID.out.size_log)
-    // `.first()` is applied HERE, inside the subworkflow, matching seg_qc.nf:112 and
-    // adapters/valis_adapter.nf:151 — NOT the call-site style postprocess.nf:420-442
-    // uses for its own inline processes. registration.nf:309 documents that
-    // asymmetry; every new subworkflow de-duplicates its own versions so callers
-    // never have to know which convention a given emit follows.
+    // Versions are de-duplicated here, so callers need not.
     versions          = EXPORT_GEOJSON.out.versions.first()
         .mix(MERGE_AND_PYRAMID.out.versions.first())
 }

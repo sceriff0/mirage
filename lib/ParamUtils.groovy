@@ -1,23 +1,17 @@
 /*
  * ParamUtils - validation helpers for the pipeline's step-routing parameters.
  *
- * Scope note: single-parameter checks (is this a valid step name? a valid
- * segmentation backend? a reg_qc level in range?) are NOT here. They are stated
- * once in nextflow_schema.json and enforced by nf-schema's validateParameters()
- * at the top of workflows/mirage.nf. What remains below is what no JSON Schema
- * can express: cross-parameter rules (--stop must not precede --start,
- * --expanded_quantification implies --quantify_compartments), mode-conditional
- * rules (add_cycle), filesystem prerequisites, and plain control-flow helpers.
+ * Single-parameter checks (types, enums, ranges) live in nextflow_schema.json and run
+ * via validateParameters() in workflows/mirage.nf. This holds what a schema cannot
+ * express: cross-parameter rules, mode-conditional rules (add_cycle), filesystem
+ * prerequisites, and step-routing helpers.
  */
 class ParamUtils {
 
     /*
-     * The single table answering "what is a step?". Everything else that used
-     * to restate the step vocabulary — STEP_ORDER, requiredColumnsForStep,
-     * mirage.nf's entry_column map, knownArtifactKinds() below, and
-     * nextflow_schema.json's start/stop enums — is either derived from this or
-     * checked against it (the schema can't be generated at build time, so
-     * tests/test_step_vocabulary_consistency.py asserts it agrees instead).
+     * What a step is. STEP_ORDER, requiredColumnsForStep, entryColumnForStep and
+     * knownArtifactKinds() derive from it; the schema's start/stop enums are checked
+     * against it (tests/test_step_vocabulary_consistency.py).
      *
      *   name            - the step's canonical identifier; also the value
      *                      --start/--stop accept.
@@ -25,13 +19,9 @@ class ParamUtils {
      *                      is the run's entry point (its own input, not a
      *                      downstream checkpoint column).
      *   entryColumn     - the checkpoint-CSV column INPUT_CHECK reads when this
-     *                      step is the run's entry point (mirage.nf reads the
-     *                      sheet exactly once, at --start).
-     *   qcKinds         - the artifact-stream tags this step alone contributes
-     *                      to FINAL_QC (see final_qc.nf). 'versions' and
-     *                      'size_log' are cross-cutting — every step emits them
-     *                      — so they are not listed per-step; they are added
-     *                      once in UNIVERSAL_QC_KINDS below.
+     *                      step is the entry point.
+     *   qcKinds         - the FINAL_QC artifact tags this step alone contributes
+     *                      ('versions'/'size_log' are in UNIVERSAL_QC_KINDS).
      */
     static final List STEPS = [
         [
@@ -50,65 +40,31 @@ class ParamUtils {
             name           : 'segmentation',
             requiredColumns: ['patient_id', 'registered_image', 'is_reference', 'channels'],
             entryColumn    : 'registered_image',
-            // Empty by design, not an oversight: SEGMENT and the two property
-            // extractors emit only 'versions' and 'size_log', which are
-            // UNIVERSAL_QC_KINDS below, so they contribute nothing here. No QC
-            // image belongs to segmentation alone — GENERATE_POSTPROCESSING_QC
-            // consumes the mask AND the merged quantification table, so it stays
-            // postprocessing's.
+            // empty: segmentation emits only universal kinds
             qcKinds        : [],
         ],
         [
             name           : 'postprocessing',
-            // 'cell_mask' and 'nuclei_mask' (beyond the registered-image base four) make
-            // a plain csv/registered.csv -- still what every doc's `--start postprocessing`
-            // example names, pre-dating the segmentation step -- fail HERE with a
-            // clear "Missing required column" error. Without them, CsvUtils.validateInputCSV
-            // and validateInputSemantics both pass (registered.csv satisfies the base
-            // four), and the run dies much later inside segmentation.nf's
-            // READ_SEGMENTED_CHECKPOINT -- which dereferences BOTH file(row.cell_mask) and
-            // file(row.nuclei_mask) unconditionally -- with "Argument of 'file' function cannot be
-            // null" -- a two-layer validation contract that silently skipped its job.
-            //
-            // 'id' (RULING R17, lib/Checkpoint.groovy) is here for the identical reason:
-            // READ_SEGMENTED_CHECKPOINT builds its meta through Meta.fromCheckpointRow,
-            // which throws on a row with no 'id' column -- but only once channel
-            // construction actually runs, well past --dry_run. Requiring it here instead
-            // makes a checkpoint written before this column existed fail at validation
-            // time, with "Missing required column 'id'", visible under --dry_run like
-            // every other required column -- not a confusing failure deep inside the
-            // reader. (Meta.fromCheckpointRow's own row.containsKey('id') check stays as
-            // defense in depth for any future caller that reaches it without going
-            // through CsvUtils.validateInputCSV first.)
+            // cell_mask, nuclei_mask and id are required so a plain registered.csv, or a
+            // checkpoint predating the id column, fails at validation (and --dry_run)
+            // rather than deep inside READ_SEGMENTED_CHECKPOINT.
             requiredColumns: ['patient_id', 'id', 'registered_image', 'is_reference', 'channels', 'cell_mask', 'nuclei_mask'],
             entryColumn    : 'registered_image',
             qcKinds        : ['postprocess_qc'],
         ],
     ]
 
-    // Artifact-stream tags every step contributes, so they belong to no single
-    // step's qcKinds. See knownArtifactKinds() below.
+    // artifact tags every step emits
     static final List UNIVERSAL_QC_KINDS = ['versions', 'size_log']
 
     /**
      * The complete FINAL_QC artifact vocabulary: every step's own qcKinds plus the
      * two kinds every step emits.
      *
-     * This lives here rather than in final_qc.nf because it is a pure derivation of
-     * the table above and because a `.nf` file has nowhere to put it: under
-     * Nextflow 26's strict parser a bare top-level assignment is rejected
-     * ("Statements cannot be mixed with script declarations"), and the obvious
-     * alternative -- a script-level `def` -- is scoped to the file's implicit
-     * run() method and is therefore invisible to the functions in that same file.
-     * A static accessor has neither problem: it is visible from every call site,
-     * from a subworkflow body, and from an nf-test `nextflow_function` test.
-     *
-     * Returns a fresh list each call, so no caller can mutate the vocabulary for
-     * everyone else in the JVM.
-     *
-     * Both FINAL_QC call sites in workflows/mirage.nf hand-write these tags (21
-     * literals across the two calls) and nothing else checks that the two
-     * vocabularies agree -- this list is that check. See final_qc.nf's header.
+     * Here rather than in final_qc.nf because Nextflow 26's strict parser allows no
+     * top-level assignment there, and a script-level `def` is invisible to the file's
+     * functions. Returns a fresh list each call. It is the check that mirage.nf's
+     * hand-written FINAL_QC tags agree.
      */
     static List knownArtifactKinds() {
         return STEPS.collectMany { it.qcKinds } + UNIVERSAL_QC_KINDS
@@ -119,9 +75,7 @@ class ParamUtils {
     /**
      * Require a non-blank --outdir.
      *
-     * Without it every publishDir closure interpolates a null and the whole run
-     * publishes under a literal 'null/' path -- which succeeds, so nothing else
-     * catches it.
+     * Otherwise everything publishes, successfully, under a literal 'null/' path.
      *
      * @throws IllegalArgumentException when outdir is null, empty or whitespace.
      */
@@ -146,26 +100,11 @@ class ParamUtils {
     /**
      * Launch-time validation of mode='add_cycle'.
      *
-     * Three rules, all checked before any process is instantiated:
-     *
-     *  1. --prior_outdir must be given; add_cycle re-enters a completed run's tree.
-     *  2. --outdir must not resolve to the same directory as --prior_outdir.
-     *     Compared as CANONICAL paths, so a trailing slash, a '.', or a symlink
-     *     cannot defeat it. add_cycle writes its registered-checkpoint CSV through
-     *     collectFile(storeDir:), which OVERWRITES: sharing the directory would
-     *     clobber the prior run's complete manifest with add_cycle's partial one
-     *     while the postprocessed checkpoint survived untouched, leaving
-     *     --prior_outdir internally inconsistent and unrecoverable.
-     *  3. Every checkpoint in Layout.ADD_CYCLE_CHECKPOINTS must already exist under
-     *     --prior_outdir. Absence means either the prior run did not reach
-     *     postprocessing, or it ran at --cleanup_level=final, which does not publish
-     *     the intermediates add_cycle re-enters from. NOT the default: 'none' is the
-     *     default since 2026-09-10 and publishes everything, so the common case is a
-     *     prior run that opted IN to cleaning. Same statement as the thrown message
-     *     below; keep the two in step.
-     *
-     * Which checkpoints those are, and where they live, is Layout's to say --
-     * add_cycle.nf reads the very same files.
+     *  1. --prior_outdir must be given.
+     *  2. --outdir must not be --prior_outdir (compared canonically): the checkpoint
+     *     write overwrites, which would leave the prior tree inconsistent.
+     *  3. Every Layout.ADD_CYCLE_CHECKPOINTS file must exist under --prior_outdir
+     *     (absent if the prior run stopped early or ran at --cleanup_level=final).
      *
      * @throws IllegalArgumentException for rules 1 and 2.
      * @throws FileNotFoundException for rule 3, naming the missing checkpoint.
@@ -175,13 +114,7 @@ class ParamUtils {
             throw new IllegalArgumentException(
                 "mode='add_cycle' requires --prior_outdir pointing at the previous run's --outdir")
         }
-        // add_cycle writes its registered-checkpoint CSV via collectFile(storeDir:),
-        // which OVERWRITES. If --outdir resolved to the same directory as
-        // --prior_outdir, that write would clobber the prior run's complete
-        // manifest with add_cycle's partial one, while the postprocessed-checkpoint
-        // CSV (untouched by add_cycle) survives — leaving --prior_outdir internally
-        // inconsistent and unrecoverable. Compare canonical paths, not raw strings:
-        // a trailing slash, a '.', or a symlink must not defeat this check.
+        // canonical paths, so a trailing slash, '.' or symlink cannot defeat the check
         if (outdir?.trim()) {
             def outdirCanonical = new File(outdir).canonicalPath
             def priorOutdirCanonical = new File(priorOutdir).canonicalPath
@@ -196,8 +129,6 @@ class ParamUtils {
                     "--outdir for the incremental run, as docs/add_cycle.md describes.")
             }
         }
-        // Which checkpoints a prior run must have left behind, and where they live,
-        // is Layout's to state — add_cycle.nf reads the very same two files.
         Layout.ADD_CYCLE_CHECKPOINTS.each { step ->
             def rel = Layout.checkpointCsvRelative(step)
             def f = new File(Layout.checkpointCsv(priorOutdir, step))
@@ -221,61 +152,26 @@ class ParamUtils {
     }
 
     /**
-     * Effective registration-QC depth: 0 = none, 1 = DAPI overlay, 2 = + segmentation overlap.
-     * Legacy skip_registration_qc=true forces 0. Defined once and shared by
-     * registration.nf / add_cycle.nf so the QC gate has a single source of truth.
-     */
-    /*
-     * WHY regQcLevelOf IS SCALAR
+     * Effective registration-QC depth: 0 = none, 1 = DAPI overlay, 2 = + segmentation
+     * overlap. skip_registration_qc=true forces 0; null reg_qc means 2.
      *
-     * Nextflow hashes the FREE VARIABLES a process's `script:` block references. A block
-     * that says `ParamUtils.regQcLevel(params)` therefore hashes `params` -- the WHOLE
-     * map, as one opaque entry -- and re-runs whenever ANY parameter anywhere changes.
-     * Measured: changing only `--pyramid_resolutions` (postprocessing) re-ran REGISTER and
-     * cascaded 20 of 28 tasks. `-dump-hashes` showed every individually-named entry
-     * unchanged and only `params=ScriptBinding$ParamsMap@...` differing.
-     *
-     * A `params.reg_qc` access is recorded as its OWN hash entry,
-     * so passing the scalar keeps the process bound to just the parameters it actually reads.
-     *
-     * regQcLevel(Map) stays: workflow/subworkflow code (registration.nf, add_cycle.nf) is
-     * not hashed this way, reads better with `params`, and there is exactly one
-     * implementation behind it -- the scalar form is where the logic lives and the Map
-     * form delegates to it, so the two cannot drift. CALL THE `...Of` FORM FROM A
-     * `script:` BLOCK; either form elsewhere.
-     *
-     * `regQcLevelOf` is named rather than being an overload of `regQcLevel(Map)` because
-     * `regQcLevel(Map)` and a same-arity `regQcLevel(def)` are ambiguous for a NULL
-     * argument -- and null is the expected input here, it is what selects the default.
-     * Groovy would pick the more specific Map candidate and NPE on `params.reg_qc`. A
-     * distinct name removes the dispatch question entirely.
+     * Call regQcLevelOf (scalars) from a `script:` block: a bare `params` there puts
+     * the whole map in the task hash. It is a distinct name, not an overload, because
+     * a null argument would dispatch to the Map form and NPE.
      */
     static int regQcLevelOf(def skipRegistrationQc, def regQc) {
         return skipRegistrationQc ? 0 : (regQc == null ? 2 : (regQc as int))
     }
 
-    /** Map form -- see the note above. Delegates; holds no logic of its own. */
+    /** Map form for workflow code; delegates to regQcLevelOf. */
     static int regQcLevel(Map params) {
         return regQcLevelOf(params.skip_registration_qc, params.reg_qc)
     }
 
     /**
-     * add_cycle runs a FIXED path — new-cycle samplesheet -> preprocess -> register against
-     * the frozen prior reference -> quantify -> export — there is no --start/--stop choice
-     * to make, and 'add_cycle' is not itself a member of STEP_ORDER (it is a mode, not a
-     * step; see the header comment on STEPS). Accepting either flag and silently ignoring it
-     * used to let a run report whatever --stop the caller typed as though it had been
-     * honoured (e.g. --stop registration completing the FULL path through export while
-     * run_summary.json claimed the run stopped after registration) — accept-and-ignore is
-     * the defect, not the label, so this rejects both rather than trying to describe
-     * whatever was ignored.
-     *
-     * --stop defaults to null, so an explicit --stop is exactly `params.stop != null`.
-     * --start defaults to 'preprocessing', so an explicit non-default --start is exactly
-     * `params.start != 'preprocessing'` — a caller who explicitly passes
-     * --start preprocessing is indistinguishable from one who passed neither flag, and
-     * that ambiguity is harmless: 'preprocessing' is also the only correct description of
-     * where add_cycle's own fixed path begins.
+     * add_cycle runs a fixed path, so --start/--stop are refused rather than silently
+     * ignored. An explicit --stop is `stop != null`; an explicit --start is anything
+     * but the default 'preprocessing' (which is where add_cycle starts anyway).
      */
     static void validateAddCycleStepFlags(Map params) {
         if (params.stop != null || params.start != 'preprocessing') {
@@ -287,11 +183,8 @@ class ParamUtils {
     }
 
     /**
-     * --seg_qc_nuclei_dir: reuse another run's reg_qc=2 QC nuclei. Only meaningful at
-     * reg_qc=2 (the QC that reads them), and the directory must exist now -- a typo would
-     * otherwise surface only after registration, when SEG_QC looks for the first slide.
-     * Per-slide presence is checked in subworkflows/local/seg_qc.nf, where the slide names
-     * are known.
+     * --seg_qc_nuclei_dir: reuse another run's reg_qc=2 QC nuclei. Requires reg_qc=2 and
+     * an existing directory; per-slide presence is checked in seg_qc.nf.
      */
     static void validateSegQcNucleiDir(Map params) {
         def dir = params.seg_qc_nuclei_dir
@@ -309,15 +202,7 @@ class ParamUtils {
     /**
      * Cross-parameter rules for --cleanup_level.
      *
-     * The per-value enum is the schema's job (nextflow_schema.json); this is the
-     * layer that knows a level can be individually valid and still contradict
-     * --mode. Runs before any process is instantiated, like every other rule in
-     * this file, so a contradictory invocation costs nothing.
-     *
-     * The level is re-checked here rather than trusted from the schema because
-     * validateCleanup is also reachable from a caller that never went through
-     * nf-schema (a test, or a future entry point), and a silently-unknown level
-     * would then read as 'publish nothing'.
+     * The level is re-checked here too, for callers that bypass nf-schema.
      */
     static void validateCleanup(Map params) {
         def level = params.cleanup_level?.toString()
@@ -328,11 +213,7 @@ class ParamUtils {
                 "'final' publishes only ${Layout.FINAL_KINDS} plus run-level " +
                 "${Layout.SURVIVING_RUN_LEVEL}.")
 
-        // add_cycle must PRODUCE a re-enterable output tree, not merely consume one.
-        // The next cycle reads THIS run's registered/ images and segmentation/ masks,
-        // so at any cleaning level cycle N+1 would fail its own launch validation on
-        // a checkpoint this run silently declined to publish -- discovering the
-        // mistake one whole cycle, and one whole registration, too late.
+        // add_cycle must also produce a re-enterable tree for the next cycle
         if (params.mode == 'add_cycle' && level != 'none')
             throw new IllegalArgumentException(
                 "mode='add_cycle' requires --cleanup_level none. add_cycle reuses the " +
@@ -344,28 +225,19 @@ class ParamUtils {
 
 
     /*
-     * Settings nextflow.config derives from a param as a SCALAR. A scalar freezes at
-     * the line it is written on, and nextflow.config is parsed IN FULL before any `-c`
-     * file is merged -- so a `-c site.config` pin of one of these changes `params.x`
-     * and reaches nothing that reads it. Measured 2026-09-09 (Nextflow 25.04.7): a -c
-     * pin of concurrency=7 / cleanup_work=true / enable_trace=false left queueSize 20,
-     * every maxForks 5, `cleanup` false and the trace enabled, while `params.*` printed
-     * the pinned values. The CLI, a -params-file and a profile all reach them.
-     *
-     * tests/test_frozen_config_params.py DISCOVERS this set by scanning nextflow.config
-     * and asserts it equals this list in both directions, so a new params-derived
-     * scalar in the config fails the suite until it is checked here.
+     * Params nextflow.config turns into scalars while it is parsed, before any `-c` file
+     * is merged, so a `-c` pin changes params.x but not the setting. The CLI,
+     * -params-file and profiles work. tests/test_frozen_config_params.py discovers this
+     * set from the config.
      */
     static final List<String> FROZEN_CONFIG_PARAMS = [
         'cleanup_work', 'enable_trace', 'trace_dir', 'concurrency', 'max_forks', 'queue_size',
     ].asImmutable()
 
     /*
-     * The four per-process maxForks caps in nextflow.config's "Concurrency" block, keyed
-     * by process name. Each is `Math.min(cap, derivedMaxForks)` there; this table lets
-     * validateFrozenConfig recompute what the config SHOULD hold, since conf/*.config
-     * cannot see lib/ classes and the config cannot share a helper.
-     * tests/test_concurrency_params.py asserts the config literals match this table.
+     * Per-process maxForks caps (`Math.min(cap, derivedMaxForks)` in nextflow.config),
+     * restated so validateFrozenConfig can recompute them; config cannot see lib/.
+     * tests/test_concurrency_params.py checks they match.
      */
     static final Map<String, Integer> PER_PROCESS_MAX_FORKS_CAP = [
         REGISTER: 10, TILED_REG_TILE: 20, TILED_COARSE: 20, TILED_STITCH: 10,
@@ -385,21 +257,11 @@ class ParamUtils {
      * Refuse a run whose final params disagree with the scalars nextflow.config froze
      * from them.
      *
-     * `config` is the resolved session config (workflow.session.config). Every
-     * comparison recomputes the expected value from `params` exactly as the config
-     * line does, so the only way they differ is that the param arrived by a route the
-     * config line could not see -- a `-c` file. A silent mismatch here is the worst
-     * kind: `nextflow config` prints the pinned param, the run honours the old scalar,
-     * and for cleanup_work that means deleting (or keeping) work/ against the operator's
-     * stated intent. Refusing at launch costs nothing; a wrong `cleanup` is discovered
-     * at teardown, after the whole run.
+     * `config` is workflow.session.config. Each expected value is recomputed from params
+     * as the config line does, so a mismatch means the param came from a `-c` file.
      *
-     * `commandLine` is workflow.commandLine. Nextflow's own `-with-trace <file>`,
-     * `-with-report <file>` and `-with-timeline <file>` flags legitimately overwrite
-     * that scope's `enabled` and `file` AFTER nextflow.config, so a scope named that
-     * way on the command line is not checked. nf-test passes `-with-trace` on every
-     * run -- measured 2026-09-09: without this exemption 43 of 235 stub tests refused
-     * at launch on `trace.file = .../meta/trace.csv`.
+     * `commandLine` is workflow.commandLine: a scope set by Nextflow's own
+     * -with-trace/-with-report/-with-timeline is exempt (nf-test passes -with-trace).
      */
     static void validateFrozenConfig(Map params, Map config, String commandLine = '') {
         def mismatches = []
@@ -441,24 +303,9 @@ class ParamUtils {
     /**
      * Refuse a run whose pixel size cannot possibly be legal.
      *
-     * `params.pixel_size` owns every micrometre in the pipeline -- GeoJSON centroids and areas,
-     * the published pyramid's PhysicalSize, InstantSeg's rescaling target. It carried a literal
-     * 0.325 default, which is one scanner's value standing in for everyone's: a run on any other
-     * objective produced measurements uniformly wrong by the ratio of the two, with nothing said,
-     * and the symptom surfaced in QuPath several steps and one repository away from the cause.
-     *
-     * The invariant that incident demands -- no scale is ever guessed -- still holds; only WHERE
-     * it is enforced has moved. `nextflow.config` now defaults `pixel_size` to 'auto', which reads
-     * the image's own OME metadata rather than inventing a number, and `PREFLIGHT_SCALE` resolves
-     * that value for every slide before any heavy work and hard-fails the run the moment a slide
-     * carries no usable scale (see bin/utils/pixel_size.py). So this method no longer needs to
-     * refuse an unset value on the operator's behalf -- there is no unset value to reach it,
-     * because the config supplies one. What it still refuses is null: null can only arrive if
-     * someone explicitly passed one on the command line, which can only be a mistake, since it
-     * overrides a working default with an unusable one.
-     *
-     * Cross-parameter/"must be set" layer, not the schema's: nf-schema's `required` fires on an
-     * ABSENT key, and a null here is present-but-null. See the two-layer rule in CLAUDE.md.
+     * The default 'auto' is resolved from OME metadata by PREFLIGHT_SCALE, which fails
+     * on a slide with no scale. This refuses an explicit null/empty value (present but
+     * null, which nf-schema's `required` does not catch) and non-positive numbers.
      */
     static void validatePixelSize(Map params) {
         def raw = params.pixel_size
@@ -481,10 +328,9 @@ class ParamUtils {
     }
 
     /**
-     * STARE's retired cost-tier rows (removed 2026-11-04), kept ONLY so the launch refusal in
-     * checkRetiredParams() can name the values a stale `reg_tiled_mode` used to select. Nothing
-     * resolves a knob from this table: `high` is now the plain nextflow.config default of the
-     * four knobs (pinned to this table's `high` row by tests/test_stare_has_no_tiers.py).
+     * STARE's retired cost tiers, kept only so checkRetiredParams can name the values a
+     * stale `reg_tiled_mode` selected. The `high` row equals the nextflow.config
+     * defaults (tests/test_stare_has_no_tiers.py).
      */
     static final Map<String, Map<String, Integer>> RETIRED_STARE_TIERS = [
         high  : [reg_tiled_tile: 2048, reg_tiled_halo: 256, reg_tiled_out_tile: 1024, reg_tiled_coarse_max_dim: 1024],
@@ -493,19 +339,13 @@ class ParamUtils {
     ]
 
     /**
-     * Answer a RETIRED parameter that still reaches `params` (a command-line flag, a
-     * -params-file or a profile all land there even though nextflow.config no longer declares
-     * it). Today that is only STARE's cost tier, `reg_tiled_mode`.
+     * Handle a retired param that still reaches `params` (today only reg_tiled_mode).
+     * Must run before validateParameters() (validation.ignoreParams lets it through).
+     * Any value but `high` throws with that tier's knob values; `high` returns a
+     * warning for the caller to log. Returns null when absent.
      *
-     * Must run BEFORE validateParameters(): nextflow.config's validation.ignoreParams lists
-     * `reg_tiled_mode` so nf-schema lets it through to here, and this refusal is the one the
-     * user sees. "Seamless" removal means an old `--reg_tiled_mode low` must not silently run
-     * the high values, so anything but `high` THROWS with the row's four knob values; `high`
-     * is exactly what runs anyway, so it only returns a warning for the caller to log (lib/
-     * classes have no `log`). Returns null when the param is absent.
-     *
-     * Reads through `containsKey`/`get` rather than `params.reg_tiled_mode`, so no source line
-     * references the undeclared param as if it were live (tests/check_param_consistency.py).
+     * Reads via containsKey/get so no line references the undeclared param
+     * (tests/check_param_consistency.py).
      */
     static String checkRetiredParams(Map params) {
         if (params == null || !params.containsKey('reg_tiled_mode')) return null
@@ -532,30 +372,12 @@ class ParamUtils {
     }
 
     /**
-     * STARE's one cross-parameter knob rule: COARSE's thumbnail floor (below).
-     *
-     * Neither registration backend has cost tiers any more (VALIS runs valis-wsi 1.2.0 at its
-     * defaults; STARE's reg_tiled_mode tiers were removed 2026-11-04, see checkRetiredParams),
-     * so the per-knob-override-vs-tier check this function used to carry has nothing left to
-     * check and is gone.
-     *
-     * Runs before any process is instantiated (workflows/mirage.nf). This is the
-     * cross-parameter layer -- the per-value enums and types are the schema's job
-     * (nextflow_schema.json), per the two-layer rule in CLAUDE.md.
+     * STARE's cross-parameter knob rule: COARSE's thumbnail floor.
      */
     static void validateStareKnobs(Map params) {
-        // COARSE's thumbnail bound has a FLOOR, and it is not cosmetic. bin/utils/tiled_io.py's
-        // decimation_factor() treats `max_dim <= 0` as "no decimation" and returns factor 1, so
-        // the anchor is handed the FULL-RESOLUTION plane: every one of its ~50 refine
-        // evaluations warps and FFTs that whole plane -- tens of GB and hours of CPU on a
-        // 26k x 26k slide, against a memory request derived from this same value (0 computes
-        // 0 Mpx and asks for the 2 GB floor). A negative value is arithmetically even more
-        // perverse: the closure squares it.
-        //
-        // The schema's `minimum: 0` blocks negatives on the pipeline path; this is the
-        // cross-parameter half that blocks the rest, with a message that says why. 256 px is
-        // the floor because it is the anchor's own sweep resolution -- a refine thumbnail below
-        // it would be coarser than the sweep that seeds it -- and a quarter of the default (1024).
+        // <= 0 disables decimation, handing the anchor the full-resolution plane (~50
+        // warps + FFTs, with a memory request sized from this value). 256 px is the
+        // anchor's own sweep resolution.
         if (params.reg_tiled_coarse_max_dim != null &&
             (params.reg_tiled_coarse_max_dim as int) < 256) {
             throw new IllegalArgumentException(
@@ -571,22 +393,10 @@ class ParamUtils {
     }
 
     /**
-     * Resolve --quantify_compartments / --expanded_quantification / --embed_masks
-     * into ONE immutable snapshot, the same seam --registration_method has
-     * (subworkflows/local/registration.nf: read once, threaded down as an
-     * argument, never re-read). Call this once per top-level entry point
-     * (workflows/mirage.nf) and pass the returned map down to any subworkflow
-     * that takes it as a `take:` argument or used to re-derive these booleans
-     * itself (subworkflows/local/segmentation.nf's two workflows — SEGMENTATION
-     * (`take:`, segmentation.nf:42) and READ_SEGMENTED_CHECKPOINT (`take:`,
-     * segmentation.nf:275) — plus postprocess.nf, add_cycle.nf,
-     * assemble_export.nf). Config
-     * (`conf/modules.config`'s `ext.args`) and module `script:`/`stub:` blocks
-     * (e.g. modules/local/quantify.nf) are explicitly out of scope: config cannot
-     * take arguments or see this class, and a module reading its own param to
-     * build its own flags is this repo's established pattern for both.
-     * tests/test_compartment_mode_routing.py enforces that nothing else reads
-     * the three raw params directly.
+     * Resolve --quantify_compartments / --expanded_quantification / --embed_masks once,
+     * in workflows/mirage.nf, and pass the map down to subworkflows. Config and module
+     * script: blocks may still read the raw params. tests/test_compartment_mode_routing.py
+     * enforces that nothing else does.
      */
     static Map compartmentMode(Map params) {
         return [
@@ -597,21 +407,11 @@ class ParamUtils {
     }
 
     /**
-     * Cross-parameter rules for the compartment-quantification trio, both derived
-     * from `mode` (see compartmentMode above) rather than read raw:
+     * Cross-parameter rules for the compartment trio (from compartmentMode):
      *
-     *   expanded ⇒ compartments      (long-standing: per-compartment Mean/Sum
-     *                                 needs a per-compartment signal to sum)
-     *   embedMasks ⇒ compartments && expanded
-     *                                 (assemble_export.nf's embed_masks gate --
-     *                                 `params.embed_masks && params.quantify_compartments
-     *                                 && params.expanded_quantification` -- decides
-     *                                 whether the pyramid gets a mask series (Image:1).
-     *                                 --embed_masks true with either sibling off used to
-     *                                 exit 0 and silently publish a pyramid with NO mask
-     *                                 series; that run only fails months later, when its
-     *                                 --outdir is handed to a --prior_outdir add_cycle run
-     *                                 and EXTRACT_MASK_SERIES finds no Image:1.)
+     *   expanded ⇒ compartments
+     *   embedMasks ⇒ compartments && expanded   (otherwise no mask series is written,
+     *                                            which add_cycle needs later)
      */
     static void validateCompartmentQuant(Map mode) {
         if (mode.expanded && !mode.compartments) {
@@ -637,16 +437,10 @@ class ParamUtils {
     /**
      * The samplesheet columns `step` requires, from the one STEPS table.
      *
-     * Derived rather than restated: STEPS is the single ordered definition of what a
-     * step IS, and STEP_ORDER, entryColumnForStep and knownArtifactKinds all come
-     * from the same rows.
-     *
      * @param step one of STEP_ORDER
      *
      * Returns the step's requiredColumns list.
-     * @throws IllegalArgumentException naming `step` when it is not in STEPS -- a
-     *         typo surfaces here rather than as an empty requirement set that
-     *         validates everything.
+     * @throws IllegalArgumentException naming `step` when it is not in STEPS.
      */
     static List requiredColumnsForStep(String step) {
         def entry = STEPS.find { it.name == step }
@@ -658,7 +452,7 @@ class ParamUtils {
 
     /**
      * The checkpoint-CSV column to read when `step` is the run's entry point
-     * (--start). Replaces mirage.nf's hand-written entry_column map.
+     * (--start).
      */
     static String entryColumnForStep(String step) {
         def entry = STEPS.find { it.name == step }
@@ -669,11 +463,8 @@ class ParamUtils {
     }
 
     /**
-     * Whether `step` is this run's --start step -- i.e. whether the channel for
-     * `step` must come from INPUT_CHECK.out.samples rather than the previous
-     * step's direct output. Named helper so mirage.nf's routing reads its intent
-     * instead of repeating the raw `params.start == '...'` comparison at every
-     * branch point.
+     * Whether `step` is this run's --start step, i.e. its input comes from
+     * INPUT_CHECK rather than the previous step.
      */
     static boolean isEntryPoint(Map params, String step) {
         return params.start == step

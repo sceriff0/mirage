@@ -36,11 +36,8 @@ def flatten(doc):
     row = {
         "id": doc["id"],
         "QualityScore": doc.get("QualityScore"),
-        # Per-patient downsampling drifts QualityScore (coarser grid = different
-        # metric values); carry both through so the merged report can show it
-        # instead of silently discarding it. Older per-patient JSONs (written
-        # before seg_quality_eval.py started emitting these) lack the keys, so
-        # default to None rather than raising.
+        # Downsampling changes QualityScore, so carry the factor through. Older JSONs
+        # lack these keys; default to None.
         "downsample_factor": doc.get("downsample_factor"),
         "effective_pixel_size_um": doc.get("effective_pixel_size_um"),
     }

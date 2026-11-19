@@ -2,39 +2,15 @@
 ========================================================================================
     RegisteredMatch — pair registered output files back to their slide metas
 ========================================================================================
-    A registration backend takes N slides for a patient and returns N registered files.
-    Nothing in those filenames identifies which slide each one came from: VALIS renames
-    its outputs, and the pipeline deliberately does not parse names to recover identity
-    (that was tried; it broke on any patient id containing an underscore). What DOES
-    survive registration is the OME channel set, which bin/create_channels_manifest.py
-    reads out of each output's OME-XML and writes as filename -> [channel names].
+    VALIS renames its outputs, so filenames do not identify the slide (and parsing
+    them breaks on patient ids with underscores). The OME channel set survives:
+    bin/create_channels_manifest.py writes filename -> [channel names], and a file
+    belongs to the slide whose samplesheet `channels` name the same set.
 
-    So the rule is: a registered file belongs to the slide whose samplesheet `channels`
-    column names the same SET of markers. That is what `signature` computes and what
-    `pair` matches on.
+    Every mismatch throws: a wrong pairing would silently mislabel channels all the
+    way to the GeoJSON. A duplicate file signature surfaces as an "unmatched" throw.
 
-    WHY IT LIVES HERE AND NOT IN THE ADAPTER. It was 84 lines inside a flatMap closure in
-    subworkflows/local/adapters/valis_adapter.nf, which made it untestable in isolation
-    (a subworkflow's closure has no unit-test surface) and invisible to a second backend
-    that needs the same rule. lib/ classes ARE testable, via tests/lib_probe.nf.
-
-    THE FAILURE MODE THIS EXISTS TO PREVENT IS SILENT. Every one of the three throws
-    below replaces a case where the wrong meta could be attached to a registered image
-    and the run would complete successfully with mislabelled channels all the way out to
-    the GeoJSON. There is no "best effort" branch on purpose.
-
-    A THIRD BEHAVIOUR CHANGE FROM THE OLD CLOSURE, besides the two called out above
-    (lower-case-before-sort, and the IllegalStateException message prefixes): a
-    duplicate FILE signature is now fatal. `fileBySignature` is a plain map keyed on
-    signature, so two registered files that happen to carry the same channel set
-    overwrite one another in it -- the old closure built the same kind of map and then
-    paired whatever survived, silently attaching the same meta to two different metas'
-    slots. Here the meta-side duplicate check catches equal META signatures, but a
-    duplicate FILE signature with distinct meta signatures slips past it and is instead
-    caught downstream, when the meta whose file got overwritten finds no file left for
-    its signature and hits the "unmatched" throw below -- fatal, not silent.
-
-    All methods are static; nothing here reads params.
+    Static; reads no params.
 ========================================================================================
 */
 
@@ -43,16 +19,9 @@ class RegisteredMatch {
     /**
      * The signature used for matching: channels lower-cased, sorted, joined with '|'.
      *
-     * toSorted(), NEVER sort(). meta.channels is a SHARED List reference across every
-     * meta derived with `meta + [k: v]` -- Groovy's Map.plus is cloneSimilarMap(left)
-     * followed by putAll(right), i.e. a SHALLOW copy, so the derived map's `channels`
-     * value is the same object as the original's. An in-place sort here would reorder
-     * that list for every meta holding the reference, and channel ORDER is what
-     * --dapi-channel and the pyramid writer index on.
-     *
-     * Lower-case each element BEFORE sorting, so 'CD3' and 'cd3' sort to the same
-     * position. Lower-casing the joined result instead (what the extracted closure did)
-     * makes ['CD3','dapi'] and ['cd3','DAPI'] produce different signatures.
+     * toSorted(), not sort(): `meta + [k: v]` is a shallow copy, so meta.channels is
+     * shared and an in-place sort would reorder channels for every meta. Elements are
+     * lower-cased before sorting so case does not change the order.
      */
     static String signature(List<String> channels) {
         if (channels == null) {
@@ -67,17 +36,10 @@ class RegisteredMatch {
      * `manifest` is the parsed channels-manifest JSON written by
      * bin/create_channels_manifest.py: filename -> [channel names].
      * Returns [[meta, file], ...] in `metas` order.
-     *
-     * Ordered by metas, not by files, so the emitted order is the samplesheet's rather
-     * than a glob's. Both are deterministic; the samplesheet's is the one a reader of
-     * the run can predict.
      */
     static List<List> pair(List<Map> metas, List files, Map<String, List<String>> manifest) {
         if (files.size() != metas.size()) {
-            // Render null-tolerantly: this diagnostic's own job is to explain a count
-            // mismatch, and a meta with channels: null must not make signature() throw
-            // IllegalArgumentException WHILE building that message -- the caller would
-            // then see "channels is null" instead of the count-mismatch it hit first.
+            // Null-tolerant, so building this message cannot throw a different error.
             def sigOrNull = { m -> m.channels == null ? '<null channels>' : signature(m.channels as List) }
             throw new IllegalStateException(
                 "RegisteredMatch: count mismatch - ${metas.size()} slide(s) but " +

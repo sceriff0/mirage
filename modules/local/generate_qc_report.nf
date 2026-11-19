@@ -10,17 +10,14 @@ process GENERATE_QC_REPORT {
     input:
     path(preprocess_qc_pngs, stageAs: 'preprocess_qc/*')
     path(registration_qc_pngs, stageAs: 'registration_qc/*')
-    // The registration method's own TRE estimate (VALIS *_summary.csv / STARE *_tre.json).
-    // Renaming this stageAs directory renames the matching folder inside the published
-    // mirage_qc_data_*/ bundle — an accepted, deliberate change of published output.
+    // The method's own TRE estimate (VALIS *_summary.csv / STARE *_tre.json). This stageAs
+    // name is also the folder name inside the published mirage_qc_data_*/ bundle.
     path(registration_tre_files, stageAs: 'registration_tre/*')
     path(postprocess_qc_pngs, stageAs: 'postprocess_qc/*')
     path(versions_yml)
     path(run_summary_json)
     path(seg_qc_jsons, stageAs: 'seg_qc/*')
-    // Per-cell registration residual CSVs (SEG_QC.out.per_cell). Optional: a run with
-    // --start postprocessing has no REGISTRATION output to source them from, so this
-    // may stage nothing.
+    // Per-cell registration residuals (SEG_QC.out.per_cell); empty under --start postprocessing.
     path(seg_residuals, stageAs: 'seg_residuals/*')
 
     output:

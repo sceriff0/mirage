@@ -375,7 +375,7 @@ ALLOWED_LINES = {
         #   grep -n "params.expanded_quantification ?" conf/modules.config  ->  1254
         # 1254 -> 1261 (2026-11-05): REGISTER's memory comment grew by seven lines when its
         # first attempt became per-mode (reg_valis_mode default 64 GB, hires 128 GB).
-        1261: (
+        660: (
             "ext.args = { params.expanded_quantification ? '--expanded' : "
             "'' } -- conf/*.config closures cannot see lib/*.groovy classes, "
             "so ext.args must read params raw here."

@@ -1,51 +1,14 @@
 # =============================================================================
 # Release (test-gated, tag-driven)
 # =============================================================================
-# ONE COMMIT FLOWS THROUGH THE WHOLE RELEASE. `validate` resolves the ref that
-# will be tagged and PINS IT TO A SHA; every gate job checks out that exact SHA;
-# `bump-and-tag` refuses to tag if the branch moved underneath the gate; and the
-# archive and the images are built from the CREATED TAG, after the bump.
+# One commit flows through the whole release: `validate` pins the ref to a SHA,
+# the gate tests that SHA, `bump-and-tag` refuses to tag if the branch moved,
+# and the archive and images are built from the created tag, after the bump.
 #
-# That was not true before 2026-08-31. The gate did a bare `actions/checkout`
-# (github.ref), `bump-and-tag` checked out `ref: main` and tagged that, and
-# `artifacts`/`publish-images`/`verify-config` all carried `needs: [validate,
-# test]` — NOT `needs: bump-and-tag` — and checked out github.ref. So a
-# workflow_dispatch tested one commit, tagged another, and built the tarball and
-# the ten images from a third, IN PARALLEL WITH the version bump: the shipped
-# `mirage-v1.0.0.tar.gz` carried a nextflow.config still reading the PREVIOUS
-# version, and the images were built from the un-bumped tree.
-#
-# WHAT THE GATE RUNS, AND WHY THIS PARAGRAPH IS SHORT NOW. `test` is an
-# aggregator over `test-suite`, which is a call to
-# `.github/workflows/_test-suite.yml` -- the SAME reusable workflow `ci.yml`'s
-# blocking `all-tests` gate calls. There is one definition of "the tests pass",
-# so CI/release parity is structural: it is what `uses:` says, not what this
-# header says.
-#
-# This header used to say it instead, and it was wrong. The gate was five jobs
-# hand-copied from ci.yml, and before that repair (2026-08-31) it ran 5 of those
-# 13 blocking checks -- the DISK non-skip proof, `pytest -v tests/`,
-# `run_validation_tests.sh` and one `-profile test -stub` run -- while claiming
-# parity, so a release could ship with a broken `lib/` class, a leaking DEEPCELL
-# token, a profile that would not parse or a param/schema mismatch, and be green.
-# Keeping the copy honest then cost a guard test that compared command strings
-# across two files. Phase 5 (2026-09-01) deleted the copy.
-#
-# ONE deliberate narrowing survives, and it is an INPUT rather than a paragraph:
-#   * `python-matrix: '["3.10"]'` -- one Python version, where ci.yml matrixes
-#     3.10 + 3.11. That matrix exists to catch resolver splits between
-#     interpreter versions and runs on every push; a second leg here would re-pay
-#     a ~190 MB torch install to re-test a resolution ci.yml has already
-#     exercised on the same commit.
-# The two narrowings that used to be listed beside it are gone, because they are
-# now the ABSENCE OF A JOB from `_test-suite.yml` rather than a claim about this
-# file: `nf-core` structural lint is not in it -- it ran `|| true`, could never
-# fail, and Phase 7 deleted the job entirely once the measurement showed no
-# released nf-core/tools version can lint this repo (see `.nf-core.yml`) -- and
-# neither are the nf-test REAL and INTEGRATION suites (they live in
-# `.github/workflows/nightly.yml`, whose header records why the real suite is
-# currently red; gating a version tag on an advisory suite would block every
-# release).
+# The gate (`test-suite`) calls `_test-suite.yml`, the same reusable workflow as
+# ci.yml, with one narrowing: `python-matrix: '["3.10"]'` (CI already covers
+# 3.11 on the same commit). The nf-test real/integration suites are advisory
+# (nightly.yml) and do not gate a release.
 #
 # Two entry points:
 #   * workflow_dispatch (input: version) -> validate (pins main's SHA) -> the
@@ -57,13 +20,10 @@
 #     confirms the committed config matches the tag, and publish-images +
 #     artifacts build from the same tag.
 #
-# `artifacts` and `publish-images` therefore need `bump-and-tag`, which is
-# SKIPPED on the release path — and a job whose dependency is skipped is itself
-# skipped. That is why both carry `if: always() && ...` and re-assert
-# validate/test explicitly: `always()` is what lets a SKIPPED bump-and-tag
-# through, and the explicit result checks are what keep a FAILED gate from
-# getting through with it. tests/test_release_workflow_graph.py asserts all of
-# this structurally.
+# `artifacts` and `publish-images` need `bump-and-tag`, which is skipped on the
+# release path, so they use `if: always() && ...` with explicit result checks:
+# `always()` lets a skipped dependency through, the checks stop a failed gate.
+# tests/test_release_workflow_graph.py checks this structure.
 # =============================================================================
 name: Release
 
@@ -89,12 +49,8 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# NO WORKFLOW-LEVEL `env:`. This file used to set NFTEST_VERSION and
-# NXF_PLUGINS_DIR for its five hand-copied gate jobs. Those jobs are now
-# `_test-suite.yml`'s, and `env:` does NOT cross a workflow_call boundary -- a
-# called workflow sees nothing the caller set -- so the values are declared
-# there, where they are read. Nothing remaining in this file runs Nextflow or
-# nf-test; leaving the two names here would be two more copies to drift.
+# No workflow-level `env:`: it does not cross into `_test-suite.yml`, which
+# declares its own.
 
 jobs:
   # ===========================================================================
@@ -112,10 +68,9 @@ jobs:
       # The ref that WILL BE TAGGED: `main` on a dispatch (bump-and-tag tags
       # main), the tag itself on a published release (it already exists).
       gate_ref: ${{ steps.get_version.outputs.gate_ref }}
-      # gate_ref resolved to an immutable SHA. Every gate job checks out THIS,
-      # not gate_ref, so the five jobs cannot test five different trees if the
-      # branch moves mid-run, and bump-and-tag can prove it is tagging what was
-      # tested.
+      # gate_ref resolved to an immutable SHA. The gate checks out this, so a
+      # branch moving mid-run cannot change what is tested, and bump-and-tag
+      # can prove it tags what was tested.
       sha: ${{ steps.pin.outputs.sha }}
     steps:
       - name: Get version
@@ -127,23 +82,15 @@ jobs:
             GATE_REF="$VERSION"
           else
             VERSION="${{ github.event.inputs.version }}"
-            # bump-and-tag below tags main. The gate must therefore test main,
-            # not whatever branch the dispatch was fired from — testing the
-            # dispatch branch and tagging main is the defect this replaces.
+            # bump-and-tag tags main, so the gate tests main, whatever branch
+            # the dispatch came from. A notice, not a failure, tells the
+            # operator their branch is not what gets released.
             GATE_REF="main"
-            # ...which means firing this from a feature branch releases MAIN and
-            # silently ignores the branch you fired from. That is the correct
-            # behaviour, but it is not the obvious one, so say it out loud. A
-            # ::notice:: rather than a hard failure: refusing here would add a new
-            # way for the release path to fail, days before v1.0.0, on a path that
-            # cannot be rehearsed against Actions -- and the run is not wrong, only
-            # the operator's expectation might be.
             if [ "${{ github.ref_name }}" != "main" ]; then
               echo "::notice::Dispatched from '${{ github.ref_name }}', but a release always gates and tags MAIN. Nothing on '${{ github.ref_name }}' is released unless it is already merged to main."
             fi
           fi
-          # One grouped redirect rather than three: shellcheck SC2129, which
-          # actionlint reports as an error in ci.yml's blocking `ruff` job.
+          # One grouped redirect (shellcheck SC2129, enforced by actionlint).
           {
             echo "version=$VERSION"
             echo "version_no_v=${VERSION#v}"
@@ -173,37 +120,14 @@ jobs:
           echo "Release commit: $SHA (${{ steps.get_version.outputs.gate_ref }})"
 
   # ===========================================================================
-  # THE GATE, part 1 - the shared blocking test suite.
+  # The gate, part 1: the shared blocking test suite (`_test-suite.yml`).
   #
-  # This used to be five hand-copied jobs (test-python, test-nextflow,
-  # test-nf-test, test-security, test-ruff), each a duplicate of a job in ci.yml.
-  # The copy is what made the parity claim in this file's header a claim: it had
-  # already diverged once, running 5 of the 13 checks ci.yml blocks on while
-  # saying it ran all of them, and a release could ship a broken `lib/` class, a
-  # leaking DEEPCELL token, an unparseable profile or a param/schema mismatch,
-  # and be green. Since 2026-09-01 (CI redesign Phase 5) both gates call
-  # `.github/workflows/_test-suite.yml`, so parity is what `uses:` says rather
-  # than what a header says.
+  # `ref` is the pinned SHA: a called workflow otherwise checks out the caller's
+  # `github.ref`, and the gate would test a different commit from the one
+  # `bump-and-tag` tags.
   #
-  # `ref` IS THE LOAD-BEARING INPUT. A reusable workflow does its OWN checkout
-  # and sees the CALLER's `github.ref`, not whatever the caller checked out --
-  # the property containers.yml's `workflow_call` block documents after it
-  # built ten container images from the wrong tree. Here the consequence would be
-  # worse: the gate would TEST a commit other than the one `bump-and-tag` tags.
-  # `needs.validate.outputs.sha` is the SHA `validate` pinned once, so the whole
-  # suite runs on one tree and `bump-and-tag` can prove it is tagging what was
-  # tested. Every `actions/checkout` inside the called workflow reads it;
-  # tests/test_release_workflow_graph.py asserts both halves.
-  #
-  # `python-matrix` is the ONE deliberate narrowing that survives, and it is now
-  # an input instead of a paragraph: ci.yml matrixes 3.10 + 3.11 to catch
-  # resolver splits between interpreter versions and runs on every push, so a
-  # second leg here would re-pay a ~190 MB torch install to re-test a resolution
-  # ci.yml has already exercised on the same commit.
-  #
-  # NO `secrets:` BLOCK. The suite's only secret is the Codecov token, and
-  # `upload-coverage: false` means it is not used; `secrets: inherit` would hand
-  # a test suite this workflow's Docker Hub push credentials for nothing.
+  # No `secrets:` block: the only secret is the Codecov token, unused with
+  # `upload-coverage: false`; `inherit` would pass the Docker Hub credentials.
   # ===========================================================================
   test-suite:
     name: Gate - test suite
@@ -217,20 +141,11 @@ jobs:
       contents: read
 
   # ===========================================================================
-  # THE GATE, part 2 - one job everything downstream can depend on.
+  # The gate, part 2 - one job everything downstream can depend on.
   #
-  # It reads ONE result now, not five: `test-suite` is a reusable-workflow call,
-  # and a caller job's result is the called workflow's conclusion, so a failure in
-  # any of its six jobs lands here. The six are still enumerated one by one --
-  # in `_test-suite.yml`'s own `suite-gate` job, which is where they now live.
-  # That enumeration is not optional there and is not duplicated here: a called
-  # workflow whose jobs were ALL SKIPPED concludes `success`, so this line alone
-  # would wave a suite that stopped running straight through.
-  #
-  # `skipped` is NOT a pass here either -- anything that is not a success fails
-  # the release. A gate job that silently stops running must block the release,
-  # not be waved through. Mirrors ci.yml's `all-tests`, which now has exactly the
-  # same shape for the same reason.
+  # `test-suite`'s result is the called workflow's conclusion; its own
+  # `suite-gate` rejects an all-skipped suite. `skipped` is not a pass here
+  # either.
   # ===========================================================================
   test:
     name: Test Gate
@@ -270,10 +185,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Refuse to tag a commit the gate did not test
-        # The gate ran on validate's pinned SHA. If main moved while the gate
-        # was running, tagging HEAD would tag something no job here tested --
-        # the same class of defect as the old `checkout ref: main` under a gate
-        # that checked out github.ref, just narrower. Re-dispatch instead.
+        # If main moved while the gate ran, HEAD is untested. Re-dispatch instead.
         run: |
           TESTED="${{ needs.validate.outputs.sha }}"
           HEAD_SHA="$(git rev-parse HEAD)"
@@ -320,11 +232,9 @@ jobs:
           fi
 
   # ===========================================================================
-  # Verify (release trigger) - tag pre-exists, so just confirm the committed
-  # config matches the tag instead of bumping. Checks out the TAG explicitly:
-  # on this trigger `github.ref` happens to be the tag already, but a bare
-  # checkout states no such requirement and is the same shape as the bug this
-  # workflow's header describes.
+  # Verify (release trigger): the tag pre-exists, so confirm the committed
+  # config matches it. Checks out the tag explicitly rather than rely on
+  # `github.ref`.
   # ===========================================================================
   verify-config:
     name: Verify Config Matches Tag
@@ -352,37 +262,21 @@ jobs:
           echo "Config matches tag."
 
   # ===========================================================================
-  # Job 4 - build & push all container images to Docker Hub (one descriptive tag
-  # per image). Reuses containers.yml via workflow_call -- the SAME reusable workflow
-  # ci.yml calls on a pull request to build the changed images and nightly.yml calls
-  # to build all eleven. This job is the only caller that passes a `version`, and a
-  # non-empty version is exactly what makes containers.yml push (see its resolver).
+  # Job 4 - build & push all container images to Docker Hub via containers.yml.
+  # This is the only caller that passes a `version`, which is what makes
+  # containers.yml push.
   #
-  # `needs: bump-and-tag` and `ref: <tag>` are both load-bearing. The images pin
-  # manifest.version into what modules/local/*.nf pull, so building them from an
-  # un-bumped tree publishes mirage-<component>:1.0.0 built from a tree that
-  # still says the previous version. A reusable workflow does its OWN checkout
-  # and sees the CALLER's github.ref, so the tag has to be passed in explicitly;
-  # containers.yml takes it as its `ref` input.
+  # `needs: bump-and-tag` and `ref: <tag>`: the images must be built from the
+  # version-bumped tree, and a called workflow does not see the caller's checkout.
   #
-  # `needs: verify-config` is the third load-bearing one, and it covers the
-  # `release: published` trigger, where nothing bumps anything: the operator
-  # tagged the tree by hand, so nextflow.config can simply DISAGREE with the tag.
-  # `verify-config` is what catches that, and `artifacts` re-checks it inline
-  # before tarring -- but this job has no steps of its own to check anything in,
-  # and it used to carry no dependency on `verify-config` either. A v1.0.0
-  # release of a tree still saying 0.9.0 therefore went: verify-config RED,
-  # artifacts RED, and ten images tagged 1.0.0 built from the 0.9.0 tree and
-  # PUSHED. `verify-config` only runs on the release trigger, so it is skipped
-  # on a dispatch and the clause has to tolerate that, exactly like bump-and-tag.
+  # `needs: verify-config` covers the release trigger, where a hand-made tag can
+  # disagree with nextflow.config; without it images would push anyway.
   # ===========================================================================
   publish-images:
     name: Publish Images
     needs: [validate, test, bump-and-tag, verify-config]
-    # `always()` is what lets a SKIPPED bump-and-tag (the release: published
-    # path, where the tag already exists) or a SKIPPED verify-config (the
-    # workflow_dispatch path, where bump-and-tag writes the version) through; the
-    # explicit result checks are what stop a FAILED gate coming through with it.
+    # bump-and-tag is skipped on the release path, verify-config on dispatch;
+    # `always()` lets those through, the result checks stop a failed gate.
     if: >-
       always()
       && needs.validate.result == 'success'
@@ -399,11 +293,7 @@ jobs:
     secrets: inherit
 
   # ===========================================================================
-  # Job 5 - build the release tar.gz archive, FROM THE TAG. This is the job the
-  # audit caught: it used to carry `needs: [validate, test]` and a bare
-  # checkout, so `mirage-v1.0.0.tar.gz` was tarred from the un-bumped tree, in
-  # parallel with the bump, and shipped a nextflow.config still reading the
-  # previous version.
+  # Job 5 - build the release tar.gz archive from the tag, after the bump.
   # ===========================================================================
   artifacts:
     name: Create Artifacts
@@ -423,9 +313,8 @@ jobs:
           ref: ${{ needs.validate.outputs.version }}
 
       - name: Assert the archive carries the released version
-        # The tarball's whole failure mode is silent: a wrong nextflow.config
-        # inside a correctly-named .tar.gz. Check it before tarring rather than
-        # discovering it from a user's bug report.
+        # A wrong nextflow.config inside a correctly named tarball is silent;
+        # check before tarring.
         run: |
           VERSION_NO_V="${{ needs.validate.outputs.version_no_v }}"
           CONFIG_VERSION=$(grep -E "version[[:space:]]*=" nextflow.config | head -1 | grep -oP "'\K[^']+")
@@ -440,14 +329,9 @@ jobs:
           VERSION="${{ needs.validate.outputs.version }}"
           ARCHIVE_NAME="mirage-${VERSION}.tar.gz"
 
-          # Write the archive OUTSIDE the tree being archived, then move it back.
-          #
-          # `tar -czf "$ARCHIVE_NAME" .` writes the archive INTO the directory it is
-          # reading, so the directory grows while tar walks it and GNU tar exits 1 with
-          # "tar: .: file changed as we read it". That is not cosmetic: it failed the
-          # v1.0.0 release's Create Artifacts job while every other job passed. tar's
-          # own --exclude cannot help, because the exclusion is evaluated against the
-          # walk, not against the write.
+          # Write the archive outside the tree being archived, then move it back:
+          # writing into the walked directory makes GNU tar exit 1 with
+          # "file changed as we read it".
           tar --exclude='.git' \
               --exclude='.github' \
               --exclude='.nf-test' \

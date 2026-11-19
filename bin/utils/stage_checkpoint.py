@@ -1,23 +1,18 @@
-"""Pre-micro registration checkpoint — the one artifact staged QC cannot do without.
+"""Pre-micro registration checkpoint, needed for staged registration QC.
 
-VALIS composes its stages destructively. ``register_micro`` updates each slide with
-``fwd_dxdy = fwd_dxdy + micro_residual`` (registration.py) and writes the result back onto the
-same attribute, so once micro-registration has run the registrar pickle holds a single field
-that is *rigid + non-rigid + micro* and no longer knows what *rigid + non-rigid* looked like.
-Nothing a reader can do recovers it.
+VALIS's ``register_micro`` adds the micro residual into ``fwd_dxdy`` in place, so after it
+runs the registrar holds only the composed rigid + non-rigid + micro field.
 
-So REGISTER takes a snapshot at the only moment the intermediate exists: after ``register()``
-returns and before ``register_micro()`` is called. At that instant ``slide.M`` is already the
-final rigid transform — ``MicroRigidRegistrar`` runs *inside* ``register()``, before the
-non-rigid stage — which is why only the displacement field has to be saved and the staged
-warps can all share one M.
+REGISTER therefore snapshots each slide's displacement field after ``register()`` and
+before ``register_micro()``. ``slide.M`` is already final at that point
+(``MicroRigidRegistrar`` runs inside ``register()``), so only the field is saved and the
+staged warps share one M.
 
-The snapshot is per-slide, at non-rigid registration resolution (a few thousand pixels a side,
-capped by ``max_non_rigid_registration_dim_px``), not slide resolution. Tens of MB, not tens
-of GB. Reference slides have no field and are recorded as such.
+Fields are at non-rigid registration resolution (capped by
+``max_non_rigid_registration_dim_px``): tens of MB per slide. Reference slides have none
+and are recorded as such.
 
-Writing this must never be able to fail a registration: it is QC input, and QC in this pipeline
-is non-gating. :func:`write_checkpoint` returns a status dict instead of raising.
+QC is non-gating, so :func:`write_checkpoint` returns a status dict instead of raising.
 """
 
 from __future__ import annotations
@@ -88,11 +83,9 @@ def write_checkpoint(registrar, out_dir, micro_registration=True) -> dict:
 def set_micro_registration(out_dir, ran: bool) -> bool:
     """Correct the manifest's ``micro_registration`` flag after the fact.
 
-    The fields have to be captured *before* ``register_micro`` runs, but whether it ran can
-    only be known after — VALIS's micro stage is wrapped in a caught exception in
-    ``bin/register.py`` and continues on failure. If micro did not actually run, the saved
-    field is also the final field, and a QC report claiming a distinct ``micro`` stage would
-    be reporting the same warp twice. Returns whether the manifest was updated.
+    Fields are captured before ``register_micro``, but ``bin/register.py`` continues if
+    the micro stage fails; then the saved field is the final one and QC must not report a
+    separate ``micro`` stage. Returns whether the manifest was updated.
     """
     manifest_f = os.path.join(str(out_dir), MANIFEST_NAME)
     try:

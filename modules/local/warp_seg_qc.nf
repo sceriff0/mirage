@@ -1,33 +1,19 @@
 /*
  * WARP_SEG_QC - staged, fixed-correspondence segmentation-overlap QC (reg_qc = 2)
  *
- * Loads the registration transform (a VALIS registrar pickle, or a STARE transform
- * manifest for the tiled method) and warps the reference and moving native-cell
- * GeoJSONs through each registration stage in turn. Cell-to-cell correspondence is
- * established ONCE at the rigid stage (optimal one-to-one assignment minimising total
- * centroid distance within 1.5 median nuclear radii, solved exactly per connected
- * component — see bin/utils/cell_pairs.py's match_lsa; the older mutual-nearest-centroid
- * rule remains selectable via params.seg_qc_pairing) and then held fixed, so each
- * stage's per-pair IoU and centroid residual describe the same cells and the deltas are
- * pure registration effects. The headline accuracy is a separate `full_transform`
- * record: the same pairing rule applied once in the FINAL stage's frame, so it does not
- * inherit the rigid stage's misses.
+ * Warps the reference and moving native-cell GeoJSONs through each stage of the
+ * registration transform (VALIS registrar pickle or STARE manifest). Cell pairs are
+ * fixed once at the rigid stage (optimal one-to-one assignment within 1.5 median
+ * nuclear radii, bin/utils/cell_pairs.py; params.seg_qc_pairing selects the rule), so
+ * per-stage IoU and centroid residuals describe the same cells. The headline
+ * `full_transform` record re-pairs in the final stage's frame.
  *
- * The pre-micro stage checkpoint from REGISTER is optional but load-bearing on the
- * VALIS path: VALIS composes the micro residual into the same displacement field, so
- * without the checkpoint the 'non_rigid' stage cannot be separated from 'micro' and is
- * not reported (the output records `stages_separable: false` and says why). The tiled
- * method needs no checkpoint at all — its stages are separable by construction — so it
- * always receives `[]` (a null object, not a different input shape).
+ * On VALIS, without REGISTER's pre-micro checkpoint 'non_rigid' cannot be separated
+ * from 'micro' (recorded as `stages_separable: false`). The tiled method needs none
+ * and always receives `[]`.
  *
- * Scoring is per-pair on a local window, so peak memory is one nucleus rather than one
- * slide — this process no longer allocates whole-slide label images.
- *
- * Everything that differs between the two registration backends — container, the
- * method-specific CLI flags, the stage list, the versions.yml rows, and the stub-JSON
- * extras — comes from lib/WarpBackends.groovy, keyed on the `method` input. This is
- * the same shape modules/local/segment.nf already uses for its three segmentation
- * backends via lib/SegBackends.groovy.
+ * Scoring is per pair on a local window, so peak memory is one nucleus. Everything
+ * backend-specific comes from lib/WarpBackends.groovy, keyed on the `method` input.
  */
 process WARP_SEG_QC {
     tag "${meta.patient_id}:${moving_geojson.simpleName}"
@@ -51,20 +37,13 @@ process WARP_SEG_QC {
     def backend = WarpBackends.of(method)
     def args    = task.ext.args ?: ''
     def prefix  = "${meta.patient_id}_${moving_geojson.simpleName}"
-    // Tell the QC the run's micro depth so it can state honestly whether 'rigid' includes
-    // micro-rigid: 0 at reg_valis_mode 'default' (no micro pass), 2 at 'hires' (micro-rigid
-    // inside register(), then register_micro), the same param REGISTER reads. An itemised
-    // params.x read. Unused by the tiled backend's flags closure.
+    // Micro depth, so the QC can say whether 'rigid' includes micro-rigid: 0 at
+    // reg_valis_mode 'default', 2 at 'hires'. Unused by the tiled backend.
     def micro_reg = params.reg_valis_mode == 'hires' ? 2 : 0
     def ctx = [meta: meta, ref_slide: ref_slide, moving_slide: moving_slide,
                stage_checkpoint: stage_checkpoint, micro_reg: micro_reg]
-    // `?: ['']` guards against a future backend whose `flags` closure returns `[]`: with
-    // no fallback, `backend_flags` would be the empty string and the interpolation below
-    // (column 0, right after a line ending in `\`) would land a BLANK line between two
-    // backslash-continued lines, ending the shell command early and letting `${args}`
-    // execute as its own separate command. A single empty-string flag renders as a
-    // harmless whitespace-only continuation line instead. Not reachable today — both
-    // backends emit at least one flag.
+    // `?: ['']`: an empty flag list would leave a blank line after a `\` continuation,
+    // ending the command early and running `${args}` on its own.
     def backend_flags = (backend.flags(ctx) ?: ['']).collect { "        ${it} \\" }.join('\n')
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${moving_geojson}"], "${prefix}.WARP_SEG_QC.size.csv")}
@@ -90,12 +69,8 @@ ${backend_flags}
     def ctx     = [micro_reg: params.reg_valis_mode == 'hires' ? 2 : 0]   // as in script:
     def stages     = backend.stages
     def stage_stub = [n_pairs: 0, n_pairs_scored: 0, iou_n: 0, displacement_px_n: 0]
-    // Built as base + extras + rest (rather than one flat literal) so each backend's
-    // stubExtras land at their ORIGINAL position in the JSON rather than being appended
-    // at the end: Groovy's Map#plus() inserts a right-hand key at the end only if it is
-    // NEW, so the valis backend's micro_reg/rigid_includes_micro_rigid keys land right
-    // after stages_separable (where the pre-merge VALIS stub always put them) and the
-    // tiled backend's empty stubExtras changes nothing.
+    // base + extras + rest keeps each backend's stubExtras right after stages_separable
+    // in the JSON key order.
     def base = [
         patient_id      : meta.patient_id,
         moving          : moving_slide,

@@ -1,19 +1,11 @@
-# The minimum needed to run tests/testdata/generate_complete_testdata.py.
-#
-# Installed by the CI jobs that only generate fixtures (the Nextflow stub, nf-test and
-# security jobs) and never run the Python suite. numpy and tifffile are UNPINNED HERE: both
-# versions come from requirements/constraints.txt, so these jobs and the production images
-# cannot drift.
+# The minimum needed to run tests/testdata/generate_complete_testdata.py, for CI jobs
+# that generate fixtures but do not run the Python suite. numpy and tifffile take their
+# versions from requirements/constraints.txt.
 -c constraints.txt
 
 numpy
 tifffile
 
-# h5py powers the generator's HDF5 slide fixture (section 10 of
-# generate_complete_testdata.py). PINNED HERE DIRECTLY rather than via -c
-# constraints.txt: containers/convert is the only image that installs h5py (removed
-# from containers/regqc's requirements/regqc.txt on 2026-09-02), and
-# requirements/constraints.txt only constrains packages more than one image installs
-# (tests/test_ci_stack_pinned.py::test_every_constrained_package_is_installed_by_more_than_one_image).
-# 3.11.0 matches containers/convert/Dockerfile's own pin.
+# The HDF5 slide fixture. Pinned here, not in constraints.txt, because only
+# containers/convert installs h5py; matches that Dockerfile's pin.
 h5py==3.11.0

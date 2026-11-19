@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Cell quantification for single-channel processing.
+"""Cell quantification for one channel.
 
-Designed for Nextflow pipelines where each channel is processed separately
-and results are merged afterward. Supports both CPU and GPU processing.
+Each channel is quantified separately and the results are merged afterwards.
 """
 
 from __future__ import annotations
@@ -19,10 +18,8 @@ import pandas as pd
 from numpy.typing import NDArray
 from scipy import ndimage
 
-# Add parent directory to path to import lib modules
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
-# Import from lib for DRY principle
 from image_utils import ensure_dir, load_image
 from logger import configure_logging, get_logger
 from measurements import COMPARTMENTS
@@ -36,21 +33,15 @@ __all__ = [
     "run_quantification",
 ]
 
-# Per-compartment quantification: compartment names in the order they are emitted.
-# These become part of the QuPath measurement key "<marker>: <Compartment>: <Stat>".
-# (single source of truth: bin/utils/measurements.py)
+# Compartment names in emitted order; part of the key "<marker>: <Compartment>: <Stat>".
 COMPARTMENT_NAMES = COMPARTMENTS
 
 
 def _safe_mean(sums: NDArray, counts: NDArray) -> NDArray:
     """Element-wise sums / counts, NaN where counts is 0.
 
-    NaN, not 0.0: a compartment with no pixels was not measured, and the mean of nothing is not
-    a number. 0.0 here would be indistinguishable from a compartment that WAS measured and was
-    dark, which downstream reads as a negative call. bin/export_geojson.py already treats NaN as
-    "missing" and omits the measurement rather than writing a bare NaN literal (which is not
-    valid JSON); this makes the producer agree with that policy.
-    Guarded by tests/test_absent_compartment_is_nan.py.
+    NaN, not 0.0: an empty compartment was not measured, and 0.0 would read as a dark,
+    negative cell. export_geojson.py omits NaN measurements.
     """
     out = np.full_like(sums, np.nan, dtype=np.float64)
     return np.divide(sums, counts, out=out, where=counts > 0)
@@ -59,13 +50,8 @@ def _safe_mean(sums: NDArray, counts: NDArray) -> NDArray:
 def _median_per_label_from_sorted(vals_sorted, labs_sorted, valid_labels):
     """Median per label from arrays already sorted by (label, value).
 
-    ``vals_sorted`` and ``labs_sorted`` must be co-ordered by a single sort whose primary
-    key is the label and whose secondary key is the value. The median of a label is then a
-    positional lookup into its contiguous run: the middle element for an odd count, the mean
-    of the two middle elements for an even one -- which is exactly ``np.median``'s definition.
-    A label with no pixels in this compartment yields NaN, matching the ``default=np.nan``
-    the labeled_comprehension calls this replaces passed (see the NaN-vs-0.0 rationale in
-    compute_compartment_intensities, guarded by tests/test_absent_compartment_is_nan.py).
+    Each label's values form one contiguous sorted run, so its median is a positional
+    lookup (same definition as ``np.median``). A label with no pixels yields NaN.
     """
     start = np.searchsorted(labs_sorted, valid_labels, side="left")
     stop = np.searchsorted(labs_sorted, valid_labels, side="right")
@@ -89,33 +75,17 @@ def compute_compartment_intensities(
     channel_name: str,
     expanded: bool = False,
 ) -> pd.DataFrame:
-    """Compute per-cell signal for one channel — Median-first.
+    """Compute per-cell signal for one channel.
 
-    The default per-channel statistic is **Median** and is ALWAYS emitted. With
-    ``expanded=True`` it additionally emits **Mean** and **Sum** (integrated
-    density). This statistic policy is independent of compartments:
+    Median is always emitted; ``expanded=True`` adds Mean and Sum. Compartments are
+    ``Cell``, plus ``Nucleus`` and ``Cytoplasm`` when ``nuclei_mask`` is given.
 
-    - ``nuclei_mask is None``  -> only the whole-cell ``Cell`` compartment.
-    - ``nuclei_mask`` supplied  -> additionally ``Nucleus`` and ``Cytoplasm``.
+    The nuclear region of cell ``C`` is ``(cell_mask == C) & (nuclei_mask > 0)``, keyed
+    by the cell label, so the masks need not share label IDs. Cytoplasm = Cell - Nucleus.
 
-    When a nuclear mask is supplied, the nuclear signal of cell ``C`` is measured
-    over the pixels that belong to cell ``C`` **and** to any nucleus, i.e.
-    ``(cell_mask == C) & (nuclei_mask > 0)`` — keyed by the *cell* label, so no
-    nucleus->cell pairing is required and the masks need not share label IDs.
-    Cytoplasm = ``Cell - Nucleus`` by subtraction (non-negative; the nuclear region
-    is a subset of the cell). Works for any backend exposing both masks.
-
-    Output columns are the *final QuPath measurement keys*, so they flow unchanged
-    through merge_quant_csvs -> export_geojson -> GeoJSON:
-
-    - ``label``
-    - ``<channel>``  (== whole-cell **mean**, kept for backward compatibility and as
-      FlowPath's bare-key fallback — that fast path is hard-wired to whole-cell mean)
-    - ``<channel>: <Compartment>: Median``  (default statistic, always)
-    - with ``expanded=True``, additionally ``: <Compartment>: Mean`` and ``: Sum``
-
-    where ``<Compartment>`` is ``Cell`` (always) plus ``Nucleus``/``Cytoplasm`` when
-    a nuclear mask is supplied.
+    Columns are the final QuPath measurement keys: ``label``, bare ``<channel>``
+    (whole-cell mean; FlowPath's bare-key fallback reads it), and
+    ``<channel>: <Compartment>: <Stat>``.
 
     Parameters
     ----------
@@ -151,11 +121,8 @@ def compute_compartment_intensities(
 
     n = int(cell_mask.max()) + 1
     flat_cell_all = cell_mask.ravel()
-    # Restrict every per-pixel array to cell foreground up front: background pixels are never
-    # read downstream (bin 0 of every bincount below is discarded via `valid_labels != 0`), so
-    # widening the WHOLE plane to float64 and later sorting it was pure waste. `flat_raw` keeps
-    # the source dtype (uint16, written by SPLIT_CHANNELS) -- it feeds the composite-key sort
-    # below, which needs the raw integer values, not the float64 weights.
+    # Foreground only: background is never read. `flat_raw` keeps the source dtype for the
+    # composite-key sort below.
     fg = flat_cell_all != 0
     flat_cell = flat_cell_all[fg]
     flat_raw = channel.ravel()[fg]
@@ -165,17 +132,8 @@ def compute_compartment_intensities(
     cell_sum = np.bincount(flat_cell, weights=flat_val, minlength=n)
     cell_count = np.bincount(flat_cell, minlength=n)
 
-    # The label set comes from the bincount that was needed anyway: its non-zero bins ARE the
-    # labels present, ascending. Output is identical to `np.unique(cell_mask)` -- np.unique
-    # returns ascending distinct values and np.nonzero(counts) returns ascending indices with at
-    # least one pixel -- at one linear pass instead of a comparison sort over every pixel
-    # (1.6e9 on a 40k x 40k slide). The dtype is kept as the mask's so the published `label`
-    # column is unchanged.
-    #
-    # flat_cell/flat_val are foreground-only, so bin 0 of these bincounts (and of the
-    # Nucleus/Cytoplasm ones below) does not accumulate background. Only bin 0 differs, and it is
-    # discarded by `valid_labels != 0` immediately below and read by nothing else.
-    # Guarded by tests/test_no_full_mask_unique.py.
+    # Non-zero bins are the labels present, ascending: same as np.unique(cell_mask) without
+    # sorting every pixel. Bin 0 is dropped; the mask dtype is kept for the `label` column.
     valid_labels = np.nonzero(cell_count)[0]
     valid_labels = valid_labels[valid_labels != 0].astype(cell_mask.dtype, copy=False)
     if len(valid_labels) == 0:
@@ -201,49 +159,16 @@ def compute_compartment_intensities(
     compartments = [c for c in COMPARTMENT_NAMES if c in sums]
 
     out: dict = {"label": valid_labels}
-    # Backward-compatible bare marker column (== whole-cell mean). FlowPath's
-    # bare-key fast path is hard-wired to (WHOLE_CELL, Mean), so this stays mean;
-    # the Median default reaches FlowPath via the structured "<marker>: Cell: Median"
-    # key below plus FlowPath defaulting its statistic selector to Median.
+    # Bare marker column = whole-cell mean; FlowPath's bare-key fast path expects a mean.
     out[channel_name] = _safe_mean(cell_sum, cell_count)[valid_labels]
 
-    # Default statistic: MEDIAN (always). One composite-key sort replaces three
-    # scipy.ndimage.labeled_comprehension calls, each of which was a Python-level callback
-    # invoked once per label per compartment — 180,000 interpreter round-trips for a 60k-cell
-    # slide, repeated per marker. Sorting `label << 16 | value` yields label-major, value-minor
-    # order: each label's pixels land in one contiguous, already-value-sorted run, so its
-    # median is a positional lookup (`_median_per_label_from_sorted`) rather than a callback.
-    # Filtering the sorted arrays by the `nuc_fg` boolean mask preserves the ordering of the
-    # survivors, so Nucleus and Cytoplasm come off the SAME sort instead of needing one each.
-    #
-    # This composite key is lexicographic ONLY while pixel values fit its low 16 bits, so it
-    # requires a uint16 source (what SPLIT_CHANNELS writes). Any other dtype falls back to the
-    # labeled_comprehension path, kept reachable and tested rather than left as dead code --
-    # see tests/test_quantify_median.py::test_non_uint16_fallback_matches_fast_path.
-    #
-    # A label absent from a compartment (e.g. a cell with no nuclear overlap, so an empty
-    # Nucleus/Cytoplasm compartment) yields NaN, deliberately. It used to be 0.0, reproducing
-    # the older `.reindex(valid_labels).fillna(0.0)` path -- but 0.0 makes "this cell has no
-    # nucleus" indistinguishable from "this cell's nucleus was measured and is dark", and
-    # downstream gating reads the second. Nothing can separate them after the fact.
-    # bin/export_geojson.py:78 already states the opposite policy for its own data
-    # ("preserve NaN for cells that had missing raw data") and omits NaN measurements from the
-    # GeoJSON rather than emitting a bare NaN literal, which is not valid JSON. This makes the
-    # producer agree with its consumer.
-    #
-    # `Sum` stays 0.0 further down: the sum over an empty set is zero, which is a real answer.
-    # Guarded by tests/test_absent_compartment_is_nan.py.
+    # Default statistic: MEDIAN, via one sort on `label << 16 | value`. Each label's
+    # pixels form a contiguous, value-sorted run, and masking by `nuc_fg` keeps that
+    # order, so Nucleus and Cytoplasm reuse the same sort. The key needs uint16 values;
+    # other dtypes use labeled_comprehension.
+    # An empty compartment gives a NaN median (not measured); its Sum stays 0.0.
     if flat_raw.dtype == np.uint16:
-        # In-place composition: Build `key` from a single astype and mutate in place
-        # (`<<=`, `|=`) rather than composing naively as `flat_cell.astype(int64) << 16 |
-        # flat_raw.astype(int64)`. The naive form allocates four int64 arrays in sequence,
-        # but numpy's ufunc temporary elision (since 1.13) collapses the two astype calls
-        # onto refcount-1 temporaries, leaving two live arrays at peak — 2.00× of one
-        # int64 array. In-place composition halves that to 1.00× (610.4 MB → 305.2 MB at
-        # 40M foreground pixels). `flat_raw` is uint16, so `key |= flat_raw` promotes
-        # the operand for the operation without materializing a persistent int64 copy;
-        # numpy casts through a small internal buffer instead. See
-        # docs/perf/2026-08-26-rss.md.
+        # Built in place to keep one int64 array live instead of two at peak.
         key = flat_cell.astype(np.int64)
         key <<= 16
         key |= flat_raw
@@ -302,11 +227,7 @@ def quantify_single_channel(
 
     Morphology is computed separately by EXTRACT_CELL_PROPERTIES.
 
-    Delegates to :func:`compute_compartment_intensities`, which is Median-first:
-    the default statistic (Median) is always computed, ``expanded`` adds Mean and
-    Sum, and ``nuclei_mask`` only controls whether the Nucleus/Cytoplasm compartments
-    are added alongside the whole-cell ``Cell`` compartment (so the statistic set is
-    the same with or without a nuclear mask).
+    Delegates to :func:`compute_compartment_intensities`.
 
     Parameters
     ----------
@@ -381,7 +302,6 @@ def run_quantification(
     ValueError
         If mask and channel have incompatible shapes.
     """
-    # Use provided channel name, or extract from filename as fallback
     if channel_name is None:
         channel_name = Path(channel_path).stem.split("_")[-1]
         logger.info(f"Channel name parsed from filename: {channel_name}")
@@ -390,7 +310,6 @@ def run_quantification(
     logger.info(f"Quantifying channel: {channel_name}")
     logger.info("=" * 60)
 
-    # Load segmentation mask
     logger.info(f"Loading mask: {mask_path}")
     try:
         if mask_path.endswith(".npy"):
@@ -406,7 +325,6 @@ def run_quantification(
         logger.error(f"[FAIL] Failed to load mask from {mask_path}: {e}")
         raise ValueError(f"Failed to load mask from {mask_path}: {e}") from e
 
-    # Load channel image
     logger.info(f"Loading channel: {channel_path}")
     try:
         channel_image, _ = load_image(channel_path)
@@ -418,7 +336,6 @@ def run_quantification(
         logger.error(f"[FAIL] Failed to load channel from {channel_path}: {e}")
         raise ValueError(f"Failed to load channel from {channel_path}: {e}") from e
 
-    # Validate shapes match
     if mask.shape != channel_image.squeeze().shape:
         logger.error(
             f"[FAIL] Shape mismatch: mask {mask.shape} vs channel {channel_image.squeeze().shape}"
@@ -428,7 +345,6 @@ def run_quantification(
             f"Ensure the mask and channel images have the same spatial dimensions."
         )
 
-    # Optionally load the nuclear mask for per-compartment quantification
     nuclei_mask = None
     if nuclei_mask_path:
         logger.info(f"Loading nuclei mask: {nuclei_mask_path}")
@@ -449,7 +365,6 @@ def run_quantification(
             f"Per-compartment quantification enabled: Nucleus/Cytoplasm/Cell, {mode}"
         )
 
-    # Quantify
     result_df = quantify_single_channel(
         mask,
         channel_image,
@@ -458,17 +373,12 @@ def run_quantification(
         expanded=expanded,
     )
 
-    # Save
     if not result_df.empty:
         result_df.to_csv(output_path, index=False)
         logger.info(f"[OK] Saved {len(result_df)} cells to {output_path}")
     else:
         logger.warning("[WARN] No results to save")
-        # Empty CSV with the SAME columns a non-empty result would have, so the
-        # downstream per-channel merge stays consistent when a channel's mask
-        # contains no cells. Mirrors compute_compartment_intensities: bare column,
-        # Median per compartment (always), + Mean/Sum when expanded. Compartments =
-        # Cell only without a nuclear mask, else Nucleus/Cytoplasm/Cell.
+        # Same columns as a non-empty result, so the per-channel merge stays consistent.
         comps = list(COMPARTMENT_NAMES) if nuclei_mask is not None else ["Cell"]
         cols = ["label", channel_name]
         cols += [f"{channel_name}: {c}: Median" for c in comps]
@@ -537,22 +447,17 @@ def main():
 
     args = parse_args()
 
-    # Ensure output directory exists
     ensure_dir(args.outdir)
 
-    # Derive effective channel name once for consistency
     effective_channel_name = (
         args.channel_name or Path(args.channel_tiff).stem.split("_")[-1]
     )
 
-    # Determine output path
     if args.output_file:
         output_path = os.path.join(args.outdir, args.output_file)
     else:
         output_path = os.path.join(args.outdir, f"{effective_channel_name}_quant.csv")
 
-    # Run quantification (CPU mode)
-    # Note: GPU mode removed - use GPU container if GPU acceleration needed
     logger.info("Running CPU quantification")
     run_quantification(
         mask_path=args.mask_file,

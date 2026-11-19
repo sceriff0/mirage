@@ -1,53 +1,21 @@
 /*
  * SegBackends - the segmentation backend table.
  *
- * SEGMENT dispatches between three genuinely different segmenters. Before this table
- * existed the choice was re-decided in four places -- a nested `container` ternary, an
- * `if/else if/else` over three near-duplicate script blocks, a per-backend block of flag
- * construction, and again in conf/modules.config -- so adding or retiring a backend meant
- * finding all four and keeping them consistent. Everything that differs between the
- * backends now lives in ONE map, keyed by `params.seg_method`:
+ * Everything that differs between SEGMENT's backends, keyed by `params.seg_method`:
  *
- *   container   the image, an immutable tag. Read by SEGMENT's `container` directive,
- *               which is why this is a lib class and not a local in the script block:
- *               directive closures cannot see script-block variables, but they can see
- *               a class on the classpath.
- *   entrypoint  the bin/ script Nextflow stages onto $PATH (tracked executable).
- *   flags       the invocation arguments that are RESOLVED, not configured: an output
- *               prefix, and the nuclear channel index the backend must be pointed at.
- *               Everything TUNABLE lives in conf/modules.config's `ext.args`, per
- *               CLAUDE.md ("tool arguments go in conf/modules.config via ext.args").
- *   guard       the backend's PRECONDITION, as shell lines. These are three different
- *               checks, not boilerplate, and each is meaningless for the other two
- *               backends -- see the per-backend comments below.
- *   versionTools the backend's own tools, as BARE PYTHON MODULE NAMES -- not rendered
- *               YAML. StarDist reports tensorflow, InstanSeg instanseg/torch,
- *               CellSAM cellSAM/torch. lib/ProcessEnvelope.groovy turns each name into
- *               its probe row and prepends the shared `python:` row, and
- *               modules/local/segment.nf feeds THIS ONE LIST to both
- *               ProcessEnvelope.versions() (script:) and ProcessEnvelope.versionsStub()
- *               (stub:). That is the point of storing names rather than lines: this
- *               table used to hand-write six probe strings of exactly the form
- *               ProcessEnvelope.probe() already renders, and segment.nf's stub: block
- *               -- unable to reuse them, since a stub reports no real versions --
- *               hand-wrote a DIFFERENT set of keys (`seg_method: <name>`). Two disjoint
- *               key sets, and `-stub` (the whole blocking CI gate) can never see a
- *               script: block to compare against. Same key name as
- *               lib/WarpBackends.groovy's `versionTools`, deliberately: both are read by
- *               tests/test_versions_envelope.py's generic `*Backends.of(...)` guard.
+ *   container    the image; read by SEGMENT's `container` directive (directive
+ *                closures can see a lib class but not script-block variables).
+ *   entrypoint   the bin/ script on $PATH (must be tracked executable).
+ *   flags        resolved (not tunable) arguments: output prefix, nuclear channel index.
+ *                Tunables live in conf/modules.config's ext.args.
+ *   guard        the backend's precondition, as shell lines.
+ *   versionTools Python module names; ProcessEnvelope renders them for both script:
+ *                and stub:.
  *
- * `flags`, `guard` take a context map: [meta: task meta, prefix: output prefix,
- * params: THE SLICE OF params THE BACKENDS READ -- see ctxParams below]. Passing a map
- * rather than pre-extracted values is what keeps each backend's parameter knowledge with
- * that backend instead of leaking back into the process body; passing a SLICE rather than
- * the whole params map is what keeps SEGMENT's cache key narrow.
- *
- * SHELL FRAGMENTS ARE RETURNED AS A LIST OF LINES, never as one pre-indented string.
- * The caller joins them with its own indentation, because Nextflow applies
- * `stripIndent()` to the finished script: a fragment carrying its own leading
- * whitespace would either be stripped inconsistently or flatten the whole block.
- * The lines use single/triple-quoted Groovy strings wherever they contain `$`, so
- * shell expansions such as ${DEEPCELL_ACCESS_TOKEN:-} survive to the shell verbatim.
+ * `flags` and `guard` take [meta, prefix, params: ctxParams(params)] so the cache key
+ * stays narrow. Shell fragments are lists of lines, never pre-indented: the caller
+ * indents them because Nextflow stripIndent()s the script. Lines containing `$` use
+ * single-quoted strings so shell expansions reach the shell verbatim.
  */
 class SegBackends {
 
@@ -55,27 +23,11 @@ class SegBackends {
      * The parameters the backends above read off `ctx.params`, and the only ones SEGMENT
      * is allowed to depend on.
      *
-     * WHY A SLICE AND NOT `params`. Nextflow hashes the free variables a process
-     * `script:` block references. modules/local/segment.nf used to build its ctx as
-     * `[..., params: params]`, so the WHOLE params map entered SEGMENT's task hash and
-     * any unrelated parameter change re-ran segmentation and everything downstream of it.
-     * Measured: `--pyramid_resolutions 6` alone (a postprocessing knob) re-ran SEGMENT,
-     * both property extractors, all five QUANTIFY tasks and both exports.
+     * A slice, not `params`: a bare `params` in SEGMENT's script: would put every
+     * parameter in its task hash. Built in segmentation.nf (workflow code is not hashed).
      *
-     * The slice is built HERE, not in the process body, because which parameters a
-     * backend needs is backend knowledge -- the whole point of this class, and what
-     * tests/test_seg_backends.py's "process body is backend-agnostic" check protects.
-     * It is applied in subworkflows/local/segmentation.nf (workflow code is not hashed
-     * this way) and arrives at SEGMENT as an opaque value.
-     *
-     * KEYS ARE STRINGS ON PURPOSE. `params.subMap(...)` never names a parameter as
-     * `params.<name>`, so adding a key here does not create a raw parameter read for
-     * tests/test_nuclear_marker_routing.py to flag -- `nuclear_markers` still reaches
-     * MarkerUtils, which is what that guard is actually about.
-     *
-     * ADDING A NEW PARAMETER READ TO A BACKEND MEANS ADDING ITS KEY HERE. A missing key reads
-     * as null and produces an empty flag with no error, so
-     * tests/test_seg_backends_ctx_params.py checks the two lists agree.
+     * A backend that reads a new param needs its key here; a missing key reads as null
+     * and renders an empty flag (tests/test_seg_backends_ctx_params.py checks).
      */
     static final List<String> CTX_PARAM_KEYS = [
         'nuclear_markers',
@@ -90,11 +42,8 @@ class SegBackends {
 
     private static final Map BACKENDS = [
 
-        // StarDist. Reads ONE channel and is hardcoded to `--dapi-channel 0`, so the
-        // precondition is positional: channel 0 must actually BE the nuclear marker.
-        // CONVERT_IMAGE reorders channels to make that true; this check is the proof
-        // that it happened, and without it a mis-ordered slide is segmented on an
-        // arbitrary marker and silently produces plausible-looking nonsense.
+        // StarDist reads channel 0 (--dapi-channel 0), so channel 0 must be nuclear.
+        // CONVERT_IMAGE reorders channels; the guard checks it did.
         stardist: [
             container : 'bolt3x/mirage-stardist:1.0.0',
             entrypoint: 'segment.py',
@@ -115,23 +64,13 @@ class SegBackends {
                     'echo "Validated: channel 0 is a configured nuclear marker"',
                 ]
             },
-            // `deepcell` used to be here and was a PHANTOM: no image installs it, and
-            // StarDist has nothing to do with DeepCell (the entry looks inherited from a
-            // Mesmer-era table). ProcessEnvelope's probe swallows the ImportError and
-            // writes `deepcell: unknown` into versions.yml, which the QC report renders
-            // verbatim -- a provenance record naming a tool the run never loaded.
-            // tensorflow is real: this backend's image is FROM tensorflow/tensorflow:2.15.0
-            // and stardist 0.9.1 imports it. Guarded by
-            // tests/test_version_tools_are_importable_in_their_image.py.
+            // Must be importable in this image (the probe reports a missing one as 'unknown').
             versionTools: ['tensorflow'],
         ],
 
-        // InstanSeg. Channel-invariant -- it consumes the multichannel image directly,
-        // so there is no nuclear-channel check to make at all. Its precondition is
-        // instead about WRITABILITY: InstanSeg downloads its BioImage.IO model into
-        // INSTANSEG_BIOIMAGEIO_PATH, whose default sits inside site-packages, which is
-        // read-only under Singularity. Redirect it to the configured host path or, when
-        // unconfigured, to the (writable) task work dir, re-downloading per task.
+        // InstanSeg is channel-invariant (no nuclear check). Its model cache defaults to
+        // site-packages, read-only under Singularity, so it is redirected to the configured
+        // path or the task work dir.
         instantseg: [
             container : 'bolt3x/mirage-instanseg:1.0.0',
             entrypoint: 'segment_instantseg.py',
@@ -146,20 +85,12 @@ class SegBackends {
                     'echo "Note: InstanSeg is channel-invariant; no nuclear-channel-0 check is enforced."',
                 ]
             },
-            // `torch` is NOT hoisted into a shared list even though cellsam names it too:
-            // exactly one backend runs per task, so the two entries are never rendered
-            // together, and stardist genuinely does not use torch. A shared list would have
-            // to be subtracted from rather than added to -- the failure mode being a
-            // versions.yml that reports a framework the task never loaded.
             versionTools: ['instanseg', 'torch'],
         ],
 
-        // CellSAM. Segments ONE nuclear channel like StarDist, but is told which one, so
-        // its precondition is existence rather than position: resolve the index from
-        // meta.channels and refuse a negative one, because NumPy would wrap -1 around to
-        // the LAST channel and segment it without complaint. It also downloads weights
-        // when --model-path is unset, which needs DEEPCELL_ACCESS_TOKEN -- warn at the
-        // start of the task rather than let a multi-hour job die on the download.
+        // CellSAM segments the resolved nuclear channel; refuse index -1, which NumPy
+        // would wrap to the last channel. Warn early when weights must be downloaded
+        // without DEEPCELL_ACCESS_TOKEN.
         cellsam: [
             container : 'bolt3x/mirage-cellsam:1.0.0',
             entrypoint: 'segment_cellsam.py',
@@ -201,12 +132,8 @@ class SegBackends {
     /**
      * The backend entry for `method`.
      *
-     * Throws on an unknown name. The old nested ternary treated anything that was not
-     * 'cellsam' or 'instantseg' as StarDist, so a typo (`--seg_method instaseg`) ran a
-     * different segmenter than asked for -- either failing later on StarDist's
-     * channel-0 check with an error that named the wrong problem, or succeeding with
-     * the wrong algorithm. `seg_method` has no schema enum, so this is the only place
-     * the typo can be caught.
+     * Throws on an unknown name: `seg_method` has no schema enum, so this is where a
+     * typo is caught.
      */
     static Map of(String method) {
         def backend = BACKENDS[method]

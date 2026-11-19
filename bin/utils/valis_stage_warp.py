@@ -1,28 +1,18 @@
 """Stage-resolved point warping through a VALIS registrar.
 
-``Slide.warp_geojson`` gives you exactly one answer: the *final* transform. That is a problem
-for QC, because VALIS's final state is a composition that has destroyed its own intermediates —
-``MicroRigidRegistrar`` overwrites ``slide.M`` (micro_rigid_registrar.py) and ``register_micro``
-does ``fwd_dxdy = fwd_dxdy + micro_residual`` in place (registration.py). The pickle therefore
-cannot tell you what the alignment looked like before micro-registration.
+``Slide.warp_geojson`` applies only the final transform, and VALIS overwrites its
+intermediates (``MicroRigidRegistrar`` replaces ``slide.M``; ``register_micro`` adds the
+micro residual into ``fwd_dxdy`` in place).
 
-This module does two things about that:
+1. :func:`slide_warp_params` extracts the parameters ``warp_geojson`` derives, so the warp
+   can be driven with a substituted displacement field (the pre-micro checkpoint saved by
+   ``bin/register.py``).
+2. :func:`warp_points` warps a flat ``(N, 2)`` vertex array in one call instead of VALIS's
+   per-feature loop. Vertices transform independently, so batching is exact.
 
-1. :func:`slide_warp_params` extracts the parameters ``Slide.warp_geojson`` derives, so the
-   same warp can be driven with a **substituted** displacement field — the pre-micro field
-   saved by ``bin/register.py``'s checkpoint — instead of only the slide's current one.
-
-2. :func:`warp_points` applies them to a flat ``(N, 2)`` vertex array in **one** call. VALIS
-   warps a GeoJSON with a per-feature Python loop over shapely geometries; on a whole-slide
-   collection that is millions of iterations per stage, and the staged QC needs three or four
-   stages. Vertices are position-independent under this transform, so batching is exact.
-
-**Deliberate divergence from ``warp_geojson``:** the vertex clip to the aligned frame
-(``warp_tools.clip_xy``) is off by default. VALIS clips so that warped annotations land inside
-the image it is about to write. For a QC metric, clipping flattens every cell that straddles
-the crop boundary onto that boundary — in *both* slides, identically — which inflates their
-IoU toward 1 for reasons that have nothing to do with registration. Pass ``clip=True`` to
-reproduce VALIS's output exactly.
+Unlike ``warp_geojson``, vertices are not clipped to the aligned frame by default: clipping
+flattens boundary cells identically in both slides and inflates their IoU. Pass
+``clip=True`` to reproduce VALIS's output.
 """
 
 from __future__ import annotations

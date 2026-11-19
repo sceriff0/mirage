@@ -1,21 +1,4 @@
-"""Image processing utilities for the MIRAGE pipeline.
-
-This module provides common image processing functions used across
-multiple scripts, following DRY principles.
-
-Examples
---------
->>> from image_utils import normalize_image_dimensions
->>> img = np.random.rand(100, 100, 3)
->>> normalized = normalize_image_dimensions(img)
->>> normalized.shape
-(3, 100, 100)
-
-Notes
------
-This module consolidates image processing code that was previously
-duplicated across multiple bin/ scripts.
-"""
+"""Image loading, saving and axis-normalisation helpers shared by bin/ scripts."""
 
 from __future__ import annotations
 
@@ -38,78 +21,36 @@ __all__ = [
 def normalize_image_dimensions(img: NDArray) -> NDArray:
     """Normalize image to (C, H, W) format.
 
-    This function handles the common case of images that may be in
-    different formats:
+    The channel axis is taken to be the smallest dimension:
     - 2D (H, W) -> (1, H, W)
     - 3D (H, W, C) -> (C, H, W)
-    - 3D (C, H, W) -> (C, H, W) [no change]
+    - 3D (C, H, W), or ambiguous (e.g. square) -> unchanged
 
     Parameters
     ----------
     img : NDArray
-        Input image array.
-        Can be 2D (grayscale) or 3D (multichannel).
+        2D or 3D image.
 
     Returns
     -------
     NDArray
-        Normalized array in (C, H, W) format where C is the number of channels.
+        Array in (C, H, W) order.
 
     Raises
     ------
     ValueError
-        If image has incorrect number of dimensions (not 2D or 3D).
-
-    Notes
-    -----
-    The function detects (H, W, C) vs (C, H, W) format by comparing dimensions:
-    - If shape[0] is smallest, assumes (C, H, W) format - no change
-    - If shape[2] is smallest, assumes (H, W, C) format - transposes to (C, H, W)
-
-    This heuristic works well for typical microscopy images where:
-    - Number of channels (C) is typically 1-10
-    - Height and Width are typically 512-4096+ pixels
-
-    Examples
-    --------
-    Grayscale image:
-    >>> img = np.random.rand(1024, 1024)
-    >>> result = normalize_image_dimensions(img)
-    >>> result.shape
-    (1, 1024, 1024)
-
-    RGB image in (H, W, C) format:
-    >>> img = np.random.rand(1024, 1024, 3)
-    >>> result = normalize_image_dimensions(img)
-    >>> result.shape
-    (3, 1024, 1024)
-
-    Already normalized:
-    >>> img = np.random.rand(3, 1024, 1024)
-    >>> result = normalize_image_dimensions(img)
-    >>> result.shape
-    (3, 1024, 1024)
-
-    See Also
-    --------
-    numpy.transpose : Transpose array dimensions
+        If the image is not 2D or 3D.
     """
     if img.ndim == 2:
-        # Grayscale (H, W) -> (1, H, W)
         return img[np.newaxis, ...]
 
     elif img.ndim == 3:
-        # Detect format by comparing dimensions
-        # Assumption: channels is the smallest dimension
         if img.shape[0] < img.shape[1] and img.shape[0] < img.shape[2]:
-            # Already (C, H, W) format
             return img
         elif img.shape[2] < img.shape[0] and img.shape[2] < img.shape[1]:
-            # (H, W, C) format - transpose to (C, H, W)
             return np.transpose(img, (2, 0, 1))
         else:
-            # Ambiguous - assume (C, H, W) and keep as-is
-            # This handles square images or unusual dimensions
+            # Ambiguous: keep as (C, H, W).
             return img
 
     else:
@@ -119,33 +60,7 @@ def normalize_image_dimensions(img: NDArray) -> NDArray:
 
 
 def ensure_dir(directory: str | Path) -> Path:
-    """Ensure directory exists, creating it if necessary.
-
-    Parameters
-    ----------
-    directory : str or Path
-        Path to directory to create.
-
-    Returns
-    -------
-    Path
-        Path object for the created/existing directory.
-
-    Notes
-    -----
-    Creates parent directories as needed (parents=True) and does not
-    raise an error if directory exists (exist_ok=True).
-
-    Examples
-    --------
-    >>> output_dir = ensure_dir("results/analysis")
-    >>> print(output_dir)
-    PosixPath('results/analysis')
-
-    See Also
-    --------
-    pathlib.Path.mkdir : Underlying method used
-    """
+    """Create ``directory`` (and parents) if missing and return it as a Path."""
     dir_path = Path(directory)
     dir_path.mkdir(parents=True, exist_ok=True)
     return dir_path
@@ -172,7 +87,7 @@ def load_image(
         - 'shape': tuple - Image shape
         - 'dtype': np.dtype - Data type
         - 'ome': str or None - OME-XML metadata if available
-        - 'axes': str or None - Dimension order (e.g., 'CYX')
+        - 'axes': always None (not read)
 
     Raises
     ------
@@ -181,23 +96,6 @@ def load_image(
     ValueError
         If file cannot be read as TIFF.
 
-    Notes
-    -----
-    This function handles both standard TIFF and OME-TIFF formats.
-    Memory-mapped mode is recommended for images >1GB.
-
-    Examples
-    --------
-    >>> img, meta = load_image("sample.tif")
-    >>> print(img.shape, img.dtype)
-    (3, 2048, 2048) uint16
-
-    >>> # Memory-mapped for large files
-    >>> img, meta = load_image("large.tif", memmap=True)
-
-    See Also
-    --------
-    save_tiff : Save image to TIFF format
     """
     image_path = Path(image_path)
 
@@ -255,30 +153,12 @@ def save_tiff(
     Path
         Path object for the saved file.
 
-    Notes
-    -----
-    Automatically creates parent directories if needed.
-    Uses compression by default to save disk space.
-
-    Examples
-    --------
-    >>> mask = np.zeros((2048, 2048), dtype=np.uint16)
-    >>> save_tiff(mask, "output/mask.tif")
-    PosixPath('output/mask.tif')
-
-    >>> # Custom compression
-    >>> save_tiff(image, "output/results.tif", compression='lzw')
-
-    See Also
-    --------
-    load_image : Load TIFF image
     """
     output_path = Path(output_path)
     ensure_dir(output_path.parent)
 
-    # bin/utils/ome_io.py is the only module in bin/ that may call tifffile's writers
-    # (tests/test_ome_io_is_the_only_writer.py). This function keeps its own defaults --
-    # they are its published contract, and ome_io.write_tiff deliberately sets none.
+    # Writes go through ome_io (the only tifffile writer in bin/); the defaults are this
+    # function's, since ome_io.write_tiff sets none.
     return write_tiff(
         output_path, image, compression=compression, bigtiff=bigtiff, **kwargs
     )

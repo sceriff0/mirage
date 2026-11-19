@@ -54,10 +54,9 @@ def main():
         manifest[filename] = names
 
     with open(args.output, "w") as fp:
-        # write(dumps(...)) rather than dump(...): dump writes through many small f.write
-        # calls and is ~5.6x slower. Safe HERE because a channel manifest is a few hundred
-        # bytes; see tests/test_json_write_sizing.py for why the per-cell writers do NOT do
-        # this.
+        # write(dumps(...)) rather than dump(...): dump issues many small writes and is
+        # slower. Fine here because a channel manifest is tiny (see
+        # tests/test_json_write_sizing.py for the per-cell writers).
         fp.write(json.dumps(manifest))
 
     logger.info(f"Channels manifest: {len(manifest)} files")

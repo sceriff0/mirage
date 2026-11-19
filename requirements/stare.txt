@@ -1,12 +1,8 @@
-# STARE registration (registration_method='tiled') — CPU-only, JVM-free, torch-free.
-# COPY'd into containers/stare/Dockerfile, and `-r`-included by requirements/ci.txt so
-# CI runs the same pins the production STARE image does, with no second copy. It was
-# requirements/tiled.txt until the image was renamed (containers/tiled -> containers/stare):
+# STARE registration (registration_method='tiled'): CPU-only, JVM-free, torch-free.
+# COPY'd into containers/stare/Dockerfile and `-r`-included by requirements/ci.txt.
 # tests/test_container_harmonisation.py matches requirements/<image>.txt by name.
 #
-# The versions come from requirements/constraints.txt; the `==` lines below are the
-# harmonised values and MUST equal it (a constraint conflicts with a divergent direct
-# requirement rather than overriding it, so a drift fails the build).
+# The `==` lines below must equal requirements/constraints.txt, or the build fails.
 -c constraints.txt
 
 numpy==1.26.4
@@ -17,12 +13,9 @@ zarr==2.18.3          # lazy region reads for the streaming gigapixel stitch (ti
 numcodecs==0.13.1     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
 imagecodecs==2025.3.30 # zstd/LZW codecs for the stitched OME-TIFF
 
-# THE METHOD ITSELF: STARE, installed from its own repository at a pinned release. This is
-# its ONE pin in mirage: the image (containers/stare) and CI (requirements/ci.txt) both read
-# this file. sceriff0/stare is the method's only source since v1.0.0 (2026-10-01); a STARE
-# change is a new tag there, then this line. The release tarball, not git+, so the slim
-# image needs no git. Its dependencies are the constrained lines above.
+# STARE itself, from github.com/sceriff0/stare at a pinned release. This is its one pin:
+# the image and CI both read this line. A STARE change is a new tag there, then a bump
+# here. The release tarball, not git+, so the image needs no git.
 stare-registration @ https://github.com/sceriff0/stare/archive/refs/tags/v1.3.0.tar.gz
 
-# No torch, no kornia: they served the DISK + LightGlue COARSE front-end retired on
-# 2026-09-27, and containers/stare/smoke.sh asserts torch is not importable in the image.
+# No torch or kornia; containers/stare/smoke.sh asserts torch is not importable.

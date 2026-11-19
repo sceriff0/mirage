@@ -1,33 +1,12 @@
-# =============================================================================
-# actionlint (composite action)
-# =============================================================================
-# Static analysis of every workflow AND every composite action in this
-# repository: unresolvable expressions, wrong `shell:`, bad `needs:` references,
-# retired action runners, and -- via shellcheck -- the shell inside every `run:`.
+# actionlint (composite action): lints every workflow and composite action,
+# including the shell in each `run:` via shellcheck.
 #
-# THE VERSION AND ITS CHECKSUM LIVE HERE ONCE. Two jobs run this check (ci.yml's
-# `ruff` and release.yml's `test-ruff`, which must stay in parity), and a version
-# string written twice is the exact defect Phase 1 spent a whole commit deleting
-# from the pip installs. So the tool is an action, not two copies of a ten-line
-# `run:` block.
+# The version and checksum live here once so both callers stay in step. The
+# tarball comes from the GitHub release and is checked against its published
+# sha256 (no anonymous Docker Hub pull, which can be rate-limited).
 #
-# NOT `docker run rhysd/actionlint`. That was the first implementation and it made
-# an anonymous Docker Hub pull a hard dependency of the BLOCKING gate, on every
-# push, in two workflows -- and GitHub-hosted runners share source IPs for
-# anonymous pulls, so a rate limit reddens the gate for a reason that has nothing
-# to do with the code. The release tarball is fetched from the GitHub release that
-# this repository's CI already depends on being reachable, and is verified against
-# the sha256 published in the release's own actionlint_<version>_checksums.txt.
-#
-# SHELLCHECK IS ASSERTED PRESENT, not assumed. actionlint's shellcheck
-# integration is silently skipped when the binary is absent -- no error, no
-# warning, just fewer findings. Every shell body in these workflows would stop
-# being linted and the run would still be green, which is this repository's
-# signature failure mode. It is preinstalled on the GitHub-hosted Ubuntu runners;
-# the check below is what turns "it disappeared" from silence into a red step.
-# The SC2129 finding in release.yml's `validate` job was found by exactly this
-# integration, so it is not hypothetical coverage.
-# =============================================================================
+# shellcheck is asserted present: actionlint silently skips shell linting
+# without it.
 name: 'actionlint'
 description: 'Lint every GitHub Actions workflow and composite action with a pinned, checksum-verified actionlint.'
 

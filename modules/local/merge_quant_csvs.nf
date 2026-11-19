@@ -1,12 +1,6 @@
 /*
- * MERGE_QUANT_CSVS - Merge per-channel quantification into one table
- *
- * Joins the per-channel marker intensity CSVs (from QUANTIFY) onto the
- * morphology CSV (from EXTRACT_CELL_PROPERTIES) by cell label, validating
- * that no cells are lost or duplicated during the merge.
- *
- * Input: Per-channel intensity CSVs and a morphology CSV
- * Output: Single merged CSV with morphology + per-marker intensities
+ * MERGE_QUANT_CSVS - join per-channel intensity CSVs (QUANTIFY) onto the morphology
+ * CSV (EXTRACT_CELL_PROPERTIES) by cell label; fails if cells are lost or duplicated.
  */
 process MERGE_QUANT_CSVS {
     tag "${meta.patient_id}"
@@ -27,12 +21,8 @@ process MERGE_QUANT_CSVS {
 
     script:
     def args = task.ext.args ?: ''
-    // Which column is the nuclear/fiducial marker decides two things in the merge:
-    // it is the one protected from being overwritten on an add_cycle run, and it
-    // leads the marker block. Both were pinned to the literal 'DAPI'. MarkerUtils
-    // is the one sanctioned reader of params.nuclear_markers -- it normalises the
-    // bare-String and comma-joined shapes that fail SILENTLY when read raw
-    // (tests/test_nuclear_marker_routing.py).
+    // The nuclear marker leads the marker block and is not overwritten on add_cycle.
+    // Read via MarkerUtils, which normalises the String/comma-joined param shapes.
     def nuclear_args = "--nuclear-markers ${MarkerUtils.markerList(params.nuclear_markers).join(' ')}"
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ['*_quant.csv', "${morphology_csv}"], "${meta.patient_id}.MERGE_QUANT_CSVS.size.csv")}

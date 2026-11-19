@@ -1,7 +1,7 @@
 /*
  * EXTRACT_MASK_SERIES - read the second OME series (Image:1) from a
  * mask-carrying pyramid OME-TIFF and emit cell_mask.tif / nuclei_mask.tif.
- * Fast-fails when the pyramid has no mask series (see bin/extract_mask_series.py).
+ * Fails fast when the pyramid has no mask series.
  */
 process EXTRACT_MASK_SERIES {
     tag "${meta.patient_id}"

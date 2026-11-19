@@ -1,11 +1,10 @@
 /*
  * CELL_QC - per-patient "QC: ..." columns (docs/outputs.md, "Per-cell QC")
  *
- * Takes MERGE_QUANT_CSVS's table and republishes it, augmented, as THE
- * quantification/merged_quant.csv every downstream step reads. `rounds` is the per-slide
- * manifest built in POSTPROCESSING (round_id, is_reference, markers, and the file names
- * of that slide's retention/residual CSVs); it is rendered to JSON here so the val input
- * hashes deterministically (the caller sorts it by round_id).
+ * Augments MERGE_QUANT_CSVS's table and publishes it as the
+ * quantification/merged_quant.csv downstream steps read. `rounds` is the per-slide
+ * manifest (round_id, is_reference, markers, retention/residual CSV names), rendered to
+ * JSON here so the val input hashes deterministically (the caller sorts by round_id).
  */
 process CELL_QC {
     tag "${meta.patient_id}"

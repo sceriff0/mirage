@@ -1,43 +1,15 @@
 /*
  * Layout - the pipeline's one description of WHERE A FILE LANDS under --outdir.
  *
- * `conf/modules.config` decides where each process actually publishes. Everything
- * else that needs to KNOW that answer - the checkpoint CSVs that record published
- * paths for a later `--start`, the add_cycle reader that opens a prior run's
- * checkpoints, the validator that asserts they exist, the onComplete resource
- * report - used to restate the rule by hand. Six independent copies, kept in
- * agreement only by eye:
+ * conf/modules.config decides where each process publishes. Everything that needs to
+ * know that answer (checkpoint CSVs, the add_cycle reader, validators, onComplete)
+ * asks this class instead of restating a path template. When the layout changes,
+ * change it in conf/modules.config and here, nowhere else.
  *
- *   1. subworkflows/local/preprocess.nf   "<outdir>/<pid>/preprocessed/<name>"
- *                                          + collectFile storeDir "<outdir>/csv"
- *   2. subworkflows/local/registration.nf "<outdir>/<pid>/registered/<rel>" and the
- *                                          work-hash heuristic that derived <rel>
- *   3. subworkflows/local/postprocess.nf   five "<outdir>/<pid>/<kind>/<name>"
- *                                          templates (geojson x2, quantification,
- *                                          segmentation, pyramid)
- *   4. subworkflows/local/add_cycle.nf     "<prior_outdir>/csv/registered.csv" and
- *                                          "<prior_outdir>/csv/postprocessed.csv"
- *   5. lib/ParamUtils.groovy               the same two relative paths again, as
- *                                          literals in the add_cycle precondition
- *   6. workflows/mirage.nf / main.nf       "<prior_outdir>/csv/postprocessed.csv",
- *                                          "<outdir>/size_logs/...", "<outdir>/qc"
+ * The publishDir blocks are not routed through here (different evaluation context),
+ * so the two must be kept in agreement by hand (tests/test_layout.py checks).
  *
- * All six now come through here. When the published layout changes, change it in
- * conf/modules.config and in this class - and nowhere else. DO NOT re-scatter a
- * path template into a workflow file: the whole point of this class is that the
- * next contributor has something to ask instead of something to re-derive.
- *
- * SCOPE. This class describes the layout; it does not enforce it. The publishDir
- * blocks in conf/modules.config are deliberately NOT routed through here (they run
- * in a different evaluation context and rewriting them would change publish
- * behaviour). So this class must be kept in agreement with them by hand - but that
- * is one agreement to maintain instead of six.
- *
- * All methods are static and take `outdir` as an ARGUMENT; nothing here reads
- * `params`. lib/*.groovy is called from many contexts (workflow closures,
- * onComplete, unit tests) and a static class reaching into `params` is neither
- * testable nor safe. Follows lib/ParamUtils.groovy, which receives params the
- * same way.
+ * Static; takes `outdir` as an argument and never reads params.
  */
 class Layout {
 
@@ -49,10 +21,8 @@ class Layout {
     static final String CSV_DIR = 'csv'
 
     /**
-     * The checkpoint step names. These are the CSV basenames AND the `--start` /
-     * `--stop` vocabulary minus the "-ing" (`preprocessing` writes `preprocessed.csv`),
-     * which is exactly the sort of near-miss that produced the hardcoded literals this
-     * class replaces. Use the constants, never the strings.
+     * The checkpoint step names (CSV basenames): the --start/--stop names minus
+     * "-ing". Use the constants, never the strings.
      */
     static final String PREPROCESSED  = 'preprocessed'
     static final String REGISTERED    = 'registered'
@@ -74,10 +44,8 @@ class Layout {
     }
 
     /**
-     * Thrown when a caller names a step that is not in {@link #CHECKPOINT_STEPS}. Its
-     * own class (rather than a bare {@code IllegalArgumentException}) so a caller can
-     * tell, from the exception type alone, that Layout — not Checkpoint, which throws
-     * the same message text for the same reason — is the one that rejected the name.
+     * Thrown for a step not in {@link #CHECKPOINT_STEPS}; distinct from Checkpoint's
+     * equivalent error.
      */
     static class UnknownStepException extends IllegalArgumentException {
         UnknownStepException(String message) { super(message) }
@@ -121,28 +89,14 @@ class Layout {
      * ------------------------------------------------------------------ */
 
     /**
-     * The closed vocabulary of per-patient publish leaves — every `kind` any caller may
-     * pass to patientDir()/publishedPath(), and every leaf conf/modules.config publishes
-     * a per-patient artifact into.
+     * The closed set of per-patient publish leaves: every `kind` a caller may pass to
+     * patientDir()/publishedPath(). tests/test_layout.py checks it against
+     * conf/modules.config in both directions.
      *
-     * WHY A CLOSED LIST. `kind` was a free-form String. Three of the ~14 kinds in use had
-     * constants (PREPROCESSED, REGISTERED, POSTPROCESSED); the rest were bare literals at
-     * the call site ('geojson', 'quantification', 'segmentation', 'pyramid'), so a typo
-     * produced a checkpoint row naming a directory that does not exist — green run,
-     * unresolvable path. tests/test_layout.py checks this list against
-     * conf/modules.config in BOTH directions: a kind here that the config never publishes
-     * into is dead, and a per-patient publish leaf in the config that is absent here is a
-     * path with no owner.
+     * 'spatialdata' is absent: EXPORT_SPATIALDATA publishes to the patient root and
+     * its .zarr output already carries `spatialdata/`, so there is no kind to ask for.
      *
-     * 'spatialdata' is deliberately NOT here: EXPORT_SPATIALDATA publishes to the bare
-     * patient root (`${params.outdir}/${meta.patient_id}`, no trailing leaf) because its
-     * .zarr output already carries `spatialdata/` from the process's own `pattern:` —
-     * publishing it under a `.../spatialdata` kind directory would double-nest it. The
-     * `<outdir>/<pid>/spatialdata/` directory does exist on disk; what does NOT exist is
-     * a `path:` in conf/modules.config that names 'spatialdata' as a segment, so there is
-     * nothing for a caller to ask Layout for.
-     *
-     * Ordered as the pipeline produces them, not alphabetically.
+     * Ordered as the pipeline produces them.
      */
     static final List<String> PUBLISHED_KINDS = [
         'converted',
@@ -160,17 +114,9 @@ class Layout {
     /**
      * The publish leaves that survive a cleaned run.
      *
-     * At --cleanup_level=final (opt-in; 'none' is the default) only these are published AT ALL — not
-     * published-then-deleted. publishDir uses mode: 'copy', so publishing an
-     * intermediate copies it out of work/ and deleting it afterwards pays that
-     * I/O in full for a file nobody ever reads. Gating the publishDir itself
-     * costs nothing.
-     *
-     * 'spatialdata' is deliberately absent for exactly the reason it is absent
-     * from PUBLISHED_KINDS above: EXPORT_SPATIALDATA publishes to the bare patient
-     * root, so there is no `kind` segment for a caller to ask Layout about. It
-     * survives a cleaned run — its publishDir block carries no cleanup gate, which
-     * tests/test_cleanup_publish_gates.py asserts directly.
+     * At --cleanup_level=final only these are published at all (gating publishDir is
+     * free; publish-then-delete would pay a full copy). SpatialData also survives:
+     * its publishDir has no cleanup gate.
      */
     static final List<String> FINAL_KINDS = [
         'quantification',
@@ -179,20 +125,13 @@ class Layout {
     ].asImmutable()
 
     /**
-     * DERIVED, never restated. A second hand-written list is exactly how the
-     * keep-set map and the analysis identity set both drifted out of agreement
-     * with their sources.
+     * Derived, never restated.
      */
     static final List<String> INTERMEDIATE_KINDS =
         (PUBLISHED_KINDS - FINAL_KINDS).asImmutable()
 
     /**
-     * Run-level directories that survive every level. These are provenance and
-     * reporting rather than image payload: qc/ is the report the run is judged
-     * by, csv/ carries the checkpoint manifests every --start and add_cycle
-     * reads, and size_logs/ feeds the trace aggregation. They sit beside the
-     * per-patient tree rather than under a `kind`, so they are gated
-     * independently of FINAL_KINDS.
+     * Run-level directories (provenance and reporting) that survive every level.
      */
     static final List<String> SURVIVING_RUN_LEVEL = [
         'qc', CSV_DIR, 'size_logs',
@@ -201,12 +140,8 @@ class Layout {
     /**
      * Valid --cleanup_level values, in increasing aggressiveness.
      *
-     * 'none' is an escape hatch, not a convenience. mode='add_cycle' re-enters a
-     * prior run's output tree — it reads the registered slides AND the
-     * segmentation masks — and `--start <step>` does the same for its own step.
-     * Both are structurally impossible at any level that stops publishing
-     * intermediates, which is why ParamUtils refuses the combination at LAUNCH
-     * rather than letting a run discover it halfway through.
+     * mode='add_cycle' and `--start <step>` re-enter a prior run's intermediates, so
+     * they need 'none'; ParamUtils checks this at launch.
      */
     static final List<String> CLEANUP_LEVELS = ['none', 'final'].asImmutable()
 
@@ -221,8 +156,7 @@ class Layout {
     /**
      * `<outdir>/<patient_id>/<kind>` - the per-patient publish root.
      *
-     * `kind` is the leaf conf/modules.config publishes into — one of the closed set in
-     * PUBLISHED_KINDS above (enforced by requireKind() below), not an open-ended list.
+     * `kind` must be one of PUBLISHED_KINDS.
      */
     static String patientDir(def outdir, def patientId, String kind) {
         requireKind(kind)
@@ -253,12 +187,8 @@ class Layout {
      *   EXPORT_GEOJSON    output path("export/cells.geojson"), published bare
      *                     -> <outdir>/<pid>/geojson/export/cells.geojson
      *
-     * So this is NOT an option a caller opts into - a caller that forgets records a
-     * path that does not exist, which is exactly how csv/postprocessed.csv came to
-     * name <pid>/geojson/cells.geojson for two releases. Preserving the producer
-     * subdirectory is the DEFAULT and the only behaviour; there is deliberately no
-     * basename-only variant to pick by mistake. tests/checkpoint_manifest.nf.test
-     * asserts the consequence: no checkpoint row ever names a missing file.
+     * Preserving the producer subdirectory is the only behaviour, so no caller can
+     * record a basename-only path that does not exist.
      */
     static String publishedPath(def outdir, def patientId, String kind, def file) {
         def sub = producerSubdir(file)
@@ -274,42 +204,12 @@ class Layout {
      * READ_SEGMENTED_CHECKPOINT hands to POSTPROCESSING as a plain `file(row.cell_mask)`,
      * or a registered image read back via `--start segmentation`'s INPUT_CHECK.
      *
-     * Applying `publishedPath` unconditionally to such a file mis-records it. Two
-     * failure shapes, both fixed by the same check:
+     * publishedPath would mis-record such a file (double-nesting the kind, or using
+     * this run's outdir). A file whose parent or grandparent is a task directory is a
+     * fresh output and goes through publishedPath; anything else is returned as-is.
      *
-     *   - A flat artifact (no producer subdirectory, e.g. SEGMENT's cell_mask):
-     *     double-nests the kind directory. `producerSubdir` sees a parent named e.g.
-     *     'segmentation' (not a task hash) and treats it as a producer subdirectory
-     *     to preserve, yielding `<outdir>/<pid>/segmentation/segmentation/<name>`
-     *     instead of the already-correct path the file already sits at.
-     *   - An artifact published one level down (e.g. REGISTER's `registered_slides/`):
-     *     the file's immediate parent is a producer-subdirectory NAME in BOTH the
-     *     fresh-this-run case and the already-published case (a prior run's
-     *     `.../registered/registered_slides/<name>` has a parent named
-     *     'registered_slides' too), so a one-level `isTaskDir(path.parent)` check
-     *     cannot tell them apart. It reconstructs the path against the WRONG outdir
-     *     (this run's, not wherever the file actually is) and, when the recorded
-     *     `kind` differs from the file's real one (e.g. a passthrough slide
-     *     published under 'preprocessed/' but asked about as 'registered'), against
-     *     the wrong kind too.
-     *
-     * {@link #isUnderTaskDir} checks the immediate parent AND grandparent, which
-     * covers every producer-subdirectory depth this method is CURRENTLY ASKED
-     * ABOUT (one level: `registered_slides/`, `export/`, `nuclei/` -- see
-     * {@link #publishedPath}'s docblock). It is NOT a claim that one level is the
-     * most this codebase's publishDir blocks ever use -- REGISTER's own
-     * `pattern: "preprocessed/data/*.csv"` (conf/modules.config) is two levels, and
-     * nothing stops a future emit from being deeper still. That two-level emit is
-     * harmless today only because nothing ever hands it to Layout. If one ever did,
-     * a fresh two-level output would fall through `isUnderTaskDir` to the as-is
-     * branch and get recorded VERBATIM AS ITS WORK-DIRECTORY PATH -- silently
-     * wrong, not loudly. Widen this check (or add a depth-aware variant) before
-     * routing a second-level producer subdirectory through `publishedOrAsIs`.
-     *
-     * When neither the parent nor grandparent is a task directory, `file` is
-     * already an absolute published path from wherever it actually lives (this run
-     * or a prior one) and is returned as-is, whole -- reconstructing it against THIS
-     * run's outdir would be wrong precisely because it is not this run's file.
+     * Only one level of producer subdirectory is detected. A deeper fresh output would
+     * be recorded as its work-directory path; widen isUnderTaskDir before routing one here.
      */
     static String publishedOrAsIs(def outdir, def patientId, String kind, def file) {
         def path = resolve(file)
@@ -321,29 +221,10 @@ class Layout {
     }
 
     /**
-     * Where a slide that was NOT registered will be published. A single-slide patient
-     * has nothing to register, so registration.nf branches its reference straight
-     * through (`ch_passthrough`); the tiled backend does the same for every patient's
-     * reference, which defines the frame and is never warped. NOTHING publishes those
-     * into `<pid>/registered/` - no process emitted them - so recording them there
-     * names a file that does not exist. Verified against a stub run: a single-slide
-     * patient's output tree contains no `P001/registered/` directory at all.
-     *
-     * The slide is still published, just by whoever produced it:
-     *
-     *   produced by APPLY_PROFILES this run -> <outdir>/<pid>/preprocessed/<name>
-     *   supplied by a `--start registration` samplesheet -> already an absolute
-     *                                       path to an existing file; record it as is
-     *
-     * WHICH directory depends on whether the correction ran. With
-     * `skip_preprocessing` (the shipped default since 2026-09-10) the slide is
-     * CONVERT_IMAGE's output, published under `<pid>/converted/`; only the BaSiC
-     * branch's APPLY_PROFILES publishes under `<pid>/preprocessed/`. This used to be
-     * pinned to PREPROCESSED, so at the default every single-slide patient's and
-     * every STARE reference's row named a file that does not exist (a real run,
-     * 2026-09-17) -- invisible to tests/checkpoint_manifest.nf.test until it gained
-     * skip_preprocessing=true cases, because conf/test.config pins it false. The
-     * same branch subworkflows/local/preprocess.nf takes for preprocessed.csv.
+     * Where a slide that was not registered is published (a single-slide patient, or
+     * the tiled backend's reference). Nothing publishes it under `<pid>/registered/`;
+     * it stays where its producer put it: `<pid>/converted/` with skip_preprocessing,
+     * else `<pid>/preprocessed/`. A `--start registration` path is recorded as-is.
      */
     static String passthroughPath(def outdir, def patientId, def file, boolean skipPreprocessing) {
         return publishedOrAsIs(outdir, patientId, skipPreprocessing ? 'converted' : PREPROCESSED, file)
@@ -353,16 +234,7 @@ class Layout {
      * The subdirectory a producer emitted `file` into, or '' when it emitted straight
      * into its task directory.
      *
-     * This used to be a LENGTH heuristic ("a Nextflow work dir is a 32-hex-char hash")
-     * living in subworkflows/local/registration.nf, and it was WRONG: Nextflow splits
-     * the hash as `<work>/<2 hex>/<30 hex>`, so a task directory name is 30 characters,
-     * never 32, and the test never once fired. Nobody noticed because on the VALIS path
-     * every registered file really does have a `registered_slides/` parent. The one
-     * case the test existed to catch - a file emitted bare into its task dir - was
-     * silently mis-recorded as `<pid>/registered/<30-hex-hash>/<name>`.
-     * tests/checkpoint_manifest.nf.test found it on its first run.
-     *
-     * It is now a STRUCTURAL test (see isTaskDir), not a length guess.
+     * Uses the structural isTaskDir test, not a hash-length guess.
      */
     static String producerSubdir(def file) {
         def path = resolve(file)
@@ -374,11 +246,8 @@ class Layout {
     /**
      * True when `dir` is a Nextflow task directory: `<workDir>/<2 hex>/<30 hex>`.
      *
-     * Both halves are checked. The name alone would misclassify a genuine output
-     * subdirectory that happened to be hex-shaped; requiring the two-character hex
-     * parent as well makes a false positive essentially impossible. The width is
-     * accepted as 30..32 rather than pinned at 30 so a future Nextflow that widens
-     * the hash keeps working - the two-char parent is the load-bearing half.
+     * Both halves are checked so a hex-named output subdirectory is not mistaken for
+     * one. 30..32 chars tolerates a wider future hash.
      */
     static boolean isTaskDir(def dir) {
         if (dir == null) return false
@@ -389,26 +258,10 @@ class Layout {
     }
 
     /**
-     * True when `dir` IS a task directory, or is a producer subdirectory ONE level
-     * below one (REGISTER's `registered_slides/`, EXPORT_GEOJSON's `export/`,
-     * EXTRACT_NUCLEI_PROPERTIES's `nuclei/` -- every depth {@link #publishedOrAsIs}
-     * is CURRENTLY ASKED ABOUT; see {@link #publishedPath}'s docblock). This is not
-     * the deepest nesting this codebase's publishDir blocks use in general --
-     * REGISTER's `pattern: "preprocessed/data/*.csv"` is two levels -- it is the
-     * deepest that has ever needed to survive THIS check. A future two-level
-     * caller would silently fall through to the as-is branch and get its live
-     * work-directory path recorded as though it were already published; widen this
-     * check first if that ever happens (see {@link #publishedOrAsIs}'s docblock).
-     *
-     * A single-level `isTaskDir(dir)` check cannot tell a FRESH one-level-nested
-     * output from an ALREADY-PUBLISHED path with the same producer-subdirectory
-     * name: `.../registered/registered_slides/<name>` (a prior run's published file)
-     * and `<workDir>/xx/yyyy.../registered_slides/<name>` (this run's live task
-     * output) both have a parent literally named 'registered_slides', which never
-     * matches the hex-hash pattern either way. Checking the grandparent too is what
-     * {@link #publishedOrAsIs} needs to tell "fresh, needs publishedPath" from
-     * "already published elsewhere, use as-is" for a channel that can carry either,
-     * depending on the run's entry point.
+     * True when `dir` is a task directory or one level below one. Checking the
+     * grandparent is what tells a fresh `<work>/xx/<hash>/registered_slides/<name>`
+     * from an already-published `.../registered/registered_slides/<name>`.
+     * Deeper nesting is not detected (see publishedOrAsIs).
      */
     static boolean isUnderTaskDir(def dir) {
         return dir != null && (isTaskDir(dir) || isTaskDir(dir.parent))

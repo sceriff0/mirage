@@ -3,13 +3,9 @@
 Split multichannel TIFF images into individual single-channel TIFF files.
 The nuclear/fiducial channel is only saved from the reference image.
 
-Which channel counts as nuclear comes from ``--nuclear-markers`` (SPLIT_CHANNELS passes
-``params.nuclear_markers``), resolved by the shared ``utils.metadata.is_nuclear`` rule --
-not by a hardcoded ``"DAPI"``. That matters beyond configurability: Nextflow pre-computes
-each patient's ``groupTuple`` size from the SAME rule in ``lib/MarkerUtils.groovy``
-(via ``CsvUtils.countChannelsPerPatient``), so if this script kept a channel Groovy
-expected to be dropped the group would over-fill and a per-patient consumer would run
-twice against one published path.
+The nuclear channel is chosen by ``--nuclear-markers`` through the shared
+``utils.metadata.is_nuclear`` rule. ``lib/MarkerUtils.groovy`` applies the same rule to
+pre-compute each patient's ``groupTuple`` size, so the two must agree.
 
 Usage:
     python split_multichannel.py input.ome.tiff output_folder --is-reference
@@ -22,8 +18,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-
-# Add parent directory to path to import lib modules
 import sys
 from pathlib import Path
 
@@ -48,23 +42,10 @@ logger = get_logger(__name__)
 
 __all__ = ["main"]
 
-#: TIFF tile size (px) for each single-channel output this script writes -- a TIFF LAYOUT
-#: choice, deliberately owned by THIS script rather than imported from
-#: ``convert_image.CONVERT_TIFF_TILE`` (a different constant for a different writer, in a
-#: different container image -- a cross-script import would couple their dependency sets).
-#: tifffile's zarr view of a STRIPED (untiled) TIFF reports ``chunks=(1, H, W)``, one chunk
-#: per whole plane, so every "read just this region" call downstream -- MERGE_AND_PYRAMID
-#: and quantification, both consumers of these single-channel files -- decodes the entire
-#: plane to slice it. Measured on a 6000x6000 uint16 plane: a single 2048^2 region read
-#: peaks at 76.7 MiB striped vs 16.0 MiB tiled. Pinned by
-#: ``tests/test_split_multichannel_lazy_read.py``.
+#: TIFF tile size (px) of each single-channel output. Untiled TIFFs force downstream
+#: region reads (MERGE_AND_PYRAMID, quantification) to decode the whole plane. Not
+#: imported from convert_image.py, which runs in a different container.
 SPLIT_TIFF_TILE = 2048
-
-
-# The streaming negative-clip aggregator used to be defined here, privately. It now
-# lives in bin/utils/validation.py beside the whole-array clip_negative_values it
-# mirrors, because bin/apply_basic_profiles.py needs the same thing for the same
-# reason -- and two copies of a log-contract shim is exactly how the two copies drift.
 
 
 def split_multichannel_tiff(
@@ -79,9 +60,8 @@ def split_multichannel_tiff(
     """
     Split a multichannel TIFF into single-channel TIFFs.
 
-    Which channels are written is decided by ``keep_channels`` when it is supplied,
-    and otherwise by the legacy rule: the nuclear channel is saved only if
-    ``is_reference=True``.
+    ``keep_channels``, when supplied, decides which channels are written; otherwise
+    the nuclear channel is saved only if ``is_reference=True``.
 
     Parameters
     ----------
@@ -94,11 +74,9 @@ def split_multichannel_tiff(
     channel_names : list of str, optional
         Names for each channel. If None, tries to read from OME metadata.
     keep_channels : sequence of str, optional
-        Exact channel names this slide should emit, resolved once per slide by
-        ``CsvUtils.resolveKeptChannelsPerSlide`` and delivered as ``--keep-channels``.
-        When non-empty it fully replaces the ``is_reference`` nuclear drop, so a
-        non-reference slide can keep a nuclear-list marker the reference never carried.
-        Matched case-insensitively against the channel names.
+        Exact channel names this slide should emit (from
+        ``CsvUtils.resolveKeptChannelsPerSlide``), matched case-insensitively. When
+        non-empty it replaces the ``is_reference`` nuclear drop.
     nuclear_markers : sequence of str, optional
         Marker names that identify the nuclear/fiducial channel
         (``params.nuclear_markers``). Defaults to ``DEFAULT_NUCLEAR_MARKERS``.
@@ -108,15 +86,8 @@ def split_multichannel_tiff(
     list of str
         Paths to the saved files.
     """
-    # Read the image lazily and process/write one channel at a time, instead of
-    # tifffile.imread'ing the whole (C, H, W) stack up front. This is a peak-MEMORY
-    # optimization: the write loop below always operated on a single plane, so once a
-    # channel is written its array can be freed instead of sitting alongside every
-    # other channel for the rest of the run. It is NOT a read-size reduction --
-    # clip_negative_values' whole-image stats (below) need every channel's pixels
-    # regardless of whether that channel ends up written, including a nuclear channel
-    # skipped from output, so every channel is still read exactly once, same as the
-    # old single tifffile.imread call decoded every page exactly once.
+    # Read lazily, one channel at a time, to bound peak memory. Every channel is still
+    # read once, because the negative-clip stats cover skipped channels too.
     logger.info(f"Reading: {input_path}")
     logger.info(f"  Is reference: {is_reference}")
 
@@ -125,16 +96,9 @@ def split_multichannel_tiff(
     try:
         raw_shape = lazy_arr.shape
 
-        # (Y, X, C) on disk -- the same smallest-dimension heuristic
-        # normalize_image_dimensions uses. open_lazy always presents the array
-        # channel-FIRST (a 2-D image is promoted to C=1, matching
-        # normalize_image_dimensions' own 2-D branch exactly), so it has no notion of
-        # a channel-last layout on its own. This script's actual producers --
-        # REGISTER's VALIS output and merge_channels_pyramid.py's prior-pyramid output
-        # (data.shape unpacked as (C, H, W) at merge_channels_pyramid.py:357) -- both
-        # write channel-first, so this branch is a defensive fallback this pipeline
-        # does not exercise in production. The original whole-stack read handled it
-        # regardless, so equivalence is preserved for it too via the exact old path.
+        # (Y, X, C) on disk, by the smallest-dimension heuristic. open_lazy assumes
+        # channel-first, so this falls back to a whole-stack read. The pipeline's own
+        # producers write channel-first.
         channel_last = raw_shape[2] < raw_shape[0] and raw_shape[2] < raw_shape[1]
 
         if channel_last:
@@ -164,7 +128,6 @@ def split_multichannel_tiff(
                 channel_data = np.asarray(lazy_arr[i, :, :])
                 return clip_stats.process(channel_data)
 
-        # Get channel names
         if channel_names is None:
             channel_names = extract_channel_names_from_ome(input_path) or None
 
@@ -174,7 +137,6 @@ def split_multichannel_tiff(
         else:
             logger.info(f"  Channel names from metadata: {len(channel_names)} channels")
 
-        # Validate channel count
         if len(channel_names) != n_channels:
             logger.warning(
                 f"  Warning: {len(channel_names)} names vs {n_channels} channels"
@@ -186,15 +148,10 @@ def split_multichannel_tiff(
             else:
                 channel_names = channel_names[:n_channels]
 
-        # Create output directory
         ensure_dir(output_dir)
 
-        # These single-channel TIFFs used to be written with no scale at all -- a bare
-        # imwrite, no resolution tags, no OME header -- so anything that opened one directly
-        # saw 1 px = 1 unit, and MERGE_AND_PYRAMID had nothing to read even in principle.
-        # They now carry the configured scale as standard TIFF resolution tags. Standard
-        # tags rather than an OME header on purpose: an OME header here would be a second,
-        # channel-less source of channel names for extract_channel_names_from_ome to find.
+        # Scale goes in standard TIFF resolution tags, not an OME header: an OME header
+        # would be a second source of channel names for extract_channel_names_from_ome.
         detected = read_ome_pixel_size(input_path)
         warn_on_pixel_size_mismatch(
             detected, pixel_size, source=Path(input_path).name, logger=logger
@@ -202,43 +159,20 @@ def split_multichannel_tiff(
         # CENTIMETER, so resolution is pixels-per-cm: 1e4 µm/cm divided by µm/px.
         resolution = (1e4 / pixel_size, 1e4 / pixel_size)
 
-        # Save each channel (skip the nuclear channel if not reference)
         saved_paths = []
         skipped_count = 0
 
         for i, name in enumerate(channel_names):
-            # Read (and, on the lazy path, clip + fold into the running
-            # negative-value stats) every channel, INCLUDING ones skipped below: the
-            # original whole-image clip_negative_values call ran before any channel
-            # was selected/dropped, so a skipped nuclear channel's pixels still have
-            # to count toward the aggregate stats to match its output exactly.
+            # Read every channel, including skipped ones: they count toward the clip stats.
             channel_data = read_channel(i)
 
-            # The one nuclear-marker rule: case-insensitive SUBSTRING match against the
-            # configured markers, shared with convert_image.py (which already moved this
-            # channel to index 0) and mirrored by lib/MarkerUtils.groovy. An exact match
-            # would miss names like 'DAPI_nuclear'; a hardcoded 'DAPI' would miss a
-            # CELLTOX-configured run and keep a channel Groovy already counted as dropped.
+            # Case-insensitive substring match, mirrored by lib/MarkerUtils.groovy.
             is_nuclear_channel = is_nuclear(name, nuclear_markers)
 
-            # The keep-set, when supplied, IS the decision -- is_reference and
-            # nuclear_markers are not consulted. CsvUtils.resolveKeptChannelsPerSlide
-            # resolves it once per slide at samplesheet read so that each marker name is
-            # emitted exactly once per patient, which is what keeps Nextflow's
-            # pre-computed channels_count equal to BOTH the number of files that arrive
-            # and the number of distinct markers. Deciding here instead would mean a
-            # per-slide process guessing what a sibling slide emitted.
-            #
-            # The fallback below is not dead: dev's add_cycle SPLIT_PRIOR_PYRAMID reads channel names
-            # from OME-XML at runtime and so cannot be handed a precomputed list, and
-            # this script stays runnable by hand.
-            #
-            # NOTE the position: this sits AFTER read_channel(i), exactly where the
-            # nuclear skip already sat, and must stay there. Every channel is read even
-            # when it is dropped, so a skipped channel's pixels still count toward the
-            # streaming negative-clip statistics -- matching the original whole-image
-            # clip_negative_values call. Hoisting the skip above the read to "save work"
-            # would silently change those stats.
+            # The keep-set, when supplied, is the whole decision; it keeps channels_count
+            # equal to the files that arrive. The fallback serves callers without one
+            # (add_cycle's SPLIT_PRIOR_PYRAMID, manual runs). Must stay after
+            # read_channel(i), or the clip stats change.
             if keep_channels:
                 if name.upper() not in {k.upper() for k in keep_channels}:
                     logger.info(f"  Skipping: {name} (not in keep-set)")
@@ -249,10 +183,9 @@ def split_multichannel_tiff(
                 skipped_count += 1
                 continue
 
-            # Clean the channel name for use as filename
             clean_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
 
-            # Detect filename collisions from sanitization (e.g. "CD3-105" and "CD3_105")
+            # Sanitising can collide (e.g. "CD3-105" and "CD3_105").
             candidate_path = os.path.join(output_dir, f"{clean_name}.tiff")
             if os.path.exists(candidate_path):
                 suffix = 2
@@ -268,25 +201,8 @@ def split_multichannel_tiff(
 
             output_path = os.path.join(output_dir, f"{clean_name}.tiff")
 
-            # `maxworkers` is deliberately left at tifffile's default here, unlike the
-            # generator-fed writes in bin/apply_basic_profiles.py and
-            # bin/merge_channels_pyramid.py:826-847. Those pin it because a single write
-            # spans EVERY channel through one generator, so the encode pool's queued
-            # tiles are a term that grows with the channel count -- the exact thing
-            # those rewrites exist to remove. This call is neither: `channel_data` is one
-            # already-resident PLANE, and this `imwrite` -- ONE whole-array call, opening
-            # and closing its own TiffWriter -- runs once per channel with nothing carried
-            # over to the next iteration, so there is no cross-channel accumulation to pin
-            # against. Measured (tracemalloc, isolated from the resident plane) on a
-            # zlib-tiled whole-array write of this shape: the encode-queue overhead is
-            # roughly one plane's worth at 4096^2 and falls to a fraction of a plane at
-            # 8192^2 (bounded by cpu_count() tiles in flight, not by plane size), at both
-            # tifffile 2023.4.12 and 2025.5.10. SPLIT_CHANNELS' memory closure reserves
-            # 32-128 GB from the whole REGISTERED slide's size, not from one channel's
-            # plane, so that bounded overhead sits well inside the existing floor even on
-            # the largest real slide. Pinning would only cost wall clock (serialising the
-            # per-tile compression this call would otherwise parallelise) for no memory
-            # benefit, so it is left unpinned.
+            # maxworkers left at default: one plane per call, so the encode queue does not
+            # grow with channel count (unlike the generator-fed multi-channel writers).
             write_tiff(
                 output_path,
                 channel_data,
@@ -370,8 +286,7 @@ def main():
 
     args = parser.parse_args()
 
-    # 'auto' resolves off this slide's own OME header. Safe at this stage: CONVERT_IMAGE
-    # stamps the scale it resolved onto its output, so the file reaching us carries one.
+    # 'auto' reads this slide's OME header; CONVERT_IMAGE stamped the resolved scale on it.
     args.pixel_size = resolve_pixel_size(
         args.pixel_size, args.input, source=Path(args.input).name
     )

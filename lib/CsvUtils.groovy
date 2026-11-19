@@ -33,12 +33,8 @@ class CsvUtils {
     }
 
     /**
-     * Read a CSV's lines, stripping a UTF-8 byte-order mark from the header if
-     * present. Excel/Windows commonly save CSVs with a leading BOM (U+FEFF),
-     * which otherwise gets glued onto the first header column name
-     * ("<BOM>patient_id"), making every column lookup return -1 — silently
-     * breaking image/channel counting (streaming groupTuple hangs) and input
-     * validation. Stripping it once here protects every reader below.
+     * Read a CSV's lines, stripping a UTF-8 BOM (Excel) that would otherwise be glued
+     * onto the first column name and break every column lookup.
      */
     private static List<String> readCsvLines(String csvPath) {
         def lines = new File(csvPath).readLines()
@@ -74,83 +70,19 @@ class CsvUtils {
     }
 
     /**
-     * Count the channels per patient that actually reach quantification.
+     * patient_id -> the value of `imageColumn` on that patient's registration
+     * reference row. The one place the reference is decided.
      *
-     * This is the size the postprocessing groupKeys are built from (feeds
-     * meta.channels_count via input_check.nf), so it must equal the number of
-     * single-channel TIFFs SPLIT_CHANNELS produces for the patient -- not the number
-     * of channels the samplesheet declares. The two differ because the
-     * emit-set is resolved per slide by resolveKeptChannelsPerSlide, which claims each
-     * marker name exactly once per patient: the reference is walked first, then the
-     * remaining slides in samplesheet order, and a slide keeps only names nothing has
-     * claimed yet. A reference-less sheet declaring `DAPI|KI67|CD20` on one slide still
-     * yields THREE markers; a second slide re-declaring `DAPI` adds nothing. Unioning
-     * declared channels with no reference awareness (what this did before) over-counted,
-     * and an over-counted groupKey never fills.
+     * The row declaring `is_reference=true` wins; otherwise the patient is absent from
+     * the map. No reference is ever invented from row order. A missing reference is
+     * legitimate only for mode='add_cycle' and is reported by validateInputSemantics,
+     * which runs first; this method resolves, it does not validate.
      *
-     * Do NOT point run_summary.json's input manifest at this. The manifest should
-     * report what the samplesheet declared, not what survives the nuclear-channel
-     * drop -- that consumer is countDeclaredChannelsPerPatient below. Feeding the
-     * manifest from THIS function is the exact regression closed in the branch that
-     * added it: for add_cycle it silently reported 2 channels for a declared 3-channel
-     * cycle. One number, one purpose; see that function's doc for the other half.
+     * Resolved at samplesheet read (not from groupTuple arrival order) so the result is
+     * deterministic and reaches csv/preprocessed.csv.
      *
-     * @param csvPath        path to the samplesheet
-     * @param imageColumn    the column holding the image this step consumes; passed
-     *                       straight through to resolveReferenceRows so the reference
-     *                       used for counting is the same row registration will use
-     * @param nuclearMarkers params.nuclear_markers -- required, never defaulted here
-     *
-     * Returns a Map of patient_id -> channel count.
-     */
-    /**
-     * patient_id -> the value of `imageColumn` on the row that IS that patient's
-     * registration reference. THE one place the reference is decided.
-     *
-     * Rules, in order:
-     *   1. the row declaring `is_reference=true` wins;
-     *   2. otherwise the patient is absent from the returned map -- it has no
-     *      reference, which is legitimate for mode='add_cycle' (whose reference is
-     *      the prior run's and never a row in its sheet) and an ERROR anywhere else,
-     *      raised by validateInputSemantics with a better message than this could give.
-     *
-     * THERE IS NO LONGER A RULE THAT INVENTS A REFERENCE. `--allow_auto_reference` used
-     * to promote a patient's first samplesheet row when no row declared itself, and it
-     * is gone: which slide every other slide is warped onto is the single most
-     * consequential choice in a run, and picking it from row order is a guess wearing a
-     * decision's clothes. Two sheets differing only in row order produced two different
-     * alignments, and nothing downstream recorded that the pipeline had chosen. A
-     * missing reference is now an error, always, on every path but add_cycle's.
-     *
-     * WHY THE DECISION STILL LIVES HERE. The promotion rule this method used to own
-     * existed TWICE, resolved from two different orderings of the same data:
-     *
-     *   countChannelsPerPatient (below)  promoted rows[0]  -- samplesheet order
-     *   subworkflows/local/registration.nf  promoted items[0] -- ARRIVAL order
-     *
-     * The second is a `.groupTuple()` result, so it is whichever slide finished
-     * preprocessing first. Two runs of the same data could therefore register against
-     * different references. Worse, the first sizes `channels_count`, which sizes the
-     * streaming groupKey the whole pipeline's fan-in rests on: when the two copies
-     * disagree AND the two slides differ in nuclear-marker content, the group is sized
-     * for a slide that is not the reference. Latent rather than observed today only
-     * because the test data's two slides both carry DAPI.
-     *
-     * Resolving at samplesheet-read time also puts the decision UPSTREAM of the first
-     * checkpoint writer, which is what lets `is_reference=true` reach
-     * `csv/preprocessed.csv`.
-     *
-     * THIS METHOD RESOLVES; IT DOES NOT VALIDATE. "Exactly one reference per patient"
-     * and "no reference is an error unless this is add_cycle" stay in validateInputSemantics,
-     * which runs first and has the better messages. Throwing here would break
-     * add_cycle, whose zero-reference sheet is by design.
-     *
-     * @param imageColumn the column holding the image this step consumes -- the same
-     *                    `entry_column` INPUT_CHECK carries forward, so both callers
-     *                    key the resolution identically. Assumes that value is unique
-     *                    per row within a patient: true for every checkpoint CSV
-     *                    (paths are distinct) and for any sheet not listing one image
-     *                    twice.
+     * @param imageColumn the column holding the image this step consumes (INPUT_CHECK's
+     *                    entry column). Assumed unique per row within a patient.
      */
     static Map<String, String> resolveReferenceRows(String csvPath, String imageColumn) {
         def file = new File(csvPath)
@@ -165,16 +97,14 @@ class CsvUtils {
         def refIdx     = header.findIndexOf { it == 'is_reference' }
         if (patientIdx == -1 || imageIdx == -1) return [:]
 
-        // Rows per patient, IN SAMPLESHEET ORDER -- rule 2 depends on that order, so
-        // this must stay an ordered accumulation.
+        // rows per patient, in samplesheet order
         def rowsByPatient = [:].withDefault { [] }
         lines.drop(1).each { line ->
             def cols = parseCsvLine(line)
             if (cols.size() <= Math.max(patientIdx, imageIdx)) return
             def patientId = cols[patientIdx].trim()
             if (!patientId) return  // ignore blank patient_id cells
-            // Lenient parse, matching countChannelsPerPatient below: validateInputSemantics
-            // has already rejected malformed values with a better message.
+            // lenient: validateInputSemantics already rejected malformed values
             def isRef = refIdx != -1 && refIdx < cols.size() &&
                         cols[refIdx]?.trim()?.toLowerCase() == 'true'
             rowsByPatient[patientId] << [isRef, cols[imageIdx].trim()]
@@ -184,8 +114,7 @@ class CsvUtils {
         rowsByPatient.each { patientId, rows ->
             def declared = rows.find { it[0] }
             if (declared) { resolved[patientId] = declared[1]; return }
-            // else: no reference for this patient -- omitted deliberately (rule 2).
-            // Nothing is promoted in its place; see the note above.
+            // else: no reference; nothing is promoted in its place
         }
         return resolved
     }
@@ -193,11 +122,9 @@ class CsvUtils {
     /**
      * patient_id -> channels of the REFERENCE row, from a checkpoint CSV.
      *
-     * add_cycle's seed for resolveKeptChannelsPerSlide's `preClaimed`: the prior run's
-     * pyramid already contains these markers, so a new cycle re-staining one adds
-     * nothing. Read synchronously rather than from ch_prior_ref, because the keep-set
-     * has to be known while the workflow is being constructed, not when a channel
-     * happens to emit.
+     * add_cycle's `preClaimed` seed for resolveKeptChannelsPerSlide: the prior pyramid
+     * already has these markers. Read synchronously because the keep-set must be known
+     * at workflow construction.
      */
     static Map<String, List<String>> referenceChannelsPerPatient(String csvPath) {
         def file = new File(csvPath)
@@ -227,88 +154,30 @@ class CsvUtils {
     /**
      * Each slide's exact emit-set: patient_id -> (ASSIGNED IDENTITY -> channels).
      *
-     * THE INNER KEY IS Meta.identityFor's OUTPUT for that row -- the SAME identity
-     * Meta.fromSamplesheetRow assigns as meta.id -- not the raw `<imageColumn>` cell.
-     * A basename key (file(...).simpleName) silently weakened "the raw cell is unique
-     * per patient" to "the FILENAME is unique per patient": two rows of one patient
-     * under different directories (a cyclic-IF cohort with one directory per cycle)
-     * then overwrote each other. Keying on the raw cell instead (an earlier fix)
-     * closed that specific collision, but the raw cell is not guaranteed unique
-     * either -- two rows can share an identical cell (a duplicate row) or both leave
-     * it blank -- and either case collided the exact same way: the second pass
-     * silently overwrote the first, sometimes with `[]`, and channels_count summed to
-     * a number smaller than what SPLIT_CHANNELS actually emits. Keying on the
-     * ASSIGNED identity instead inherits identityFor's own collision handling
-     * (disambiguated by rowIndex whenever the stem would otherwise collide), so two
-     * rows can never collapse into one entry regardless of what their raw cells look
-     * like. `stemCounts` is computed once here, from this same samplesheet, via
-     * stemCountsPerPatient -- the identical map Meta.fromSamplesheetRow's caller
-     * (input_check.nf) computes and passes through ctx -- so the key written here and
-     * the key `finish()` looks up by are provably the same function of the same row.
+     * The inner key is Meta.identityFor's output for the row (the meta.id
+     * fromSamplesheetRow assigns), not the raw image cell, which may repeat or be blank
+     * within a patient. stemCounts is computed here from the same sheet as
+     * input_check.nf computes it, so writer and reader keys match.
      *
-     * THE keep-set rule, and the only place it exists. SPLIT_CHANNELS emits exactly what
-     * this returns (via meta.keep_channels); countChannelsPerPatient sizes the
-     * postprocessing groupKeys from it. Before this method the same rule lived in THREE
-     * places -- MarkerUtils.splitOutputChannels, bin/split_multichannel.py, and
-     * SPLIT_CHANNELS' stub block -- and a disagreement between them was a silent
-     * groupTuple miscount rather than a crash.
+     * This is the only definition of the keep-set: SPLIT_CHANNELS emits it (via
+     * meta.keep_channels) and countChannelsPerPatient sums it.
      *
-     * A channel is kept iff its upper-cased name has not already been claimed by an
-     * earlier slide of the same patient, walking REFERENCE FIRST then samplesheet order.
-     * Ordering the reference first is what makes "the reference wins" fall out of the
-     * walk instead of needing a special case.
+     * A channel is kept iff its upper-cased name was not already claimed by an earlier
+     * slide of the patient, walking the reference first, then samplesheet order.
+     * Nuclear-ness plays no part, so each name reaches SPLIT_CHANNELS exactly once and
+     * deterministically, and the emitted-file count equals the distinct-name count.
      *
-     * NUCLEAR-NESS PLAYS NO PART IN THE DROP DECISION, deliberately, and the reason is
-     * DETERMINISM, not a consumer that needs a file count.
+     * Within one sheet only nuclear names still repeat (validateInputSemantics refuses
+     * repeated non-nuclear ones), but `preClaimed` can bring names from a prior run
+     * (add_cycle), which must be deduplicated rather than refused.
      *
-     * Claiming every kept name -- nuclear or not -- makes each marker name reach
-     * SPLIT_CHANNELS exactly once per patient, and the winner is the reference, else the
-     * samplesheet-order-first slide. Two slides sharing a marker used to be deduplicated
-     * by ARRIVAL ORDER at a downstream `.unique()`, the exact scheduling-nondeterminism
-     * add_cycle.nf warns about in its own dedup: which slide's copy reached
-     * merged_quant.csv and the pyramid varied run to run. It also makes channels_count
-     * (countChannelsPerPatient, below) EXACT against what actually arrives, because the
-     * emitted-FILE count and the DISTINCT-NAME count are then the same number and the
-     * sized groupKey is right for either consumer without knowing which it is.
-     *
-     * BE ACCURATE ABOUT WHY, because an earlier version of this comment was not: it said
-     * groupTiffsByPatient "has no `.unique` and needs the FILE count". The FUNCTION has
-     * no `.unique`, but BOTH of its callers dedup on [patient_id, marker] immediately
-     * upstream of it -- subworkflows/local/postprocess.nf's `.unique { ... [patient_id,
-     * marker] }` and subworkflows/local/add_cycle.nf's priority groupTuple on
-     * [pid, marker]. So no live consumer needs the file count today, and the
-     * under-count/ABORT scenario that claim cited is unreachable. The decision stands on
-     * determinism and on one clean invariant; do not restate the unreachable one.
-     *
-     * WITHIN ONE SHEET, THE ONLY DUPLICATES THAT STILL REACH THIS WALK ARE NUCLEAR ONES.
-     * validateInputSemantics (the launch-time samplesheet validator, called once from
-     * workflows/mirage.nf before any process is instantiated) now REFUSES a samplesheet
-     * in which two slides of one patient carry the same NON-NUCLEAR channel, precisely
-     * because the drop above is silent and its winner is decided by row order. So the
-     * "two slides sharing a marker" case this method is built to resolve deterministically
-     * is, for a same-sheet run, the DAPI/CELLTOX case -- the fiducial, repeated on every
-     * slide by design. NOTHING HERE CHANGES BECAUSE OF THAT: the rule stays
-     * nuclear-blind, the walk stays the one definition of the keep-set, and this method
-     * must keep working when it is handed channels the validator never saw -- which is
-     * exactly what `preClaimed` below is (on the `dev` branch, add_cycle seeds it with a
-     * PRIOR RUN's channels, from a different sheet that this sheet's validation never
-     * compared against, so a non-nuclear name can still collide there and must still be
-     * deduplicated deterministically rather than refused).
-     *
-     * `preClaimed` seeds the claimed set per patient. add_cycle passes the prior run's
-     * reference channels, so a re-stained DAPI is dropped as redundant while a genuinely
-     * new nuclear marker survives.
-     *
-     * @param nuclearMarkers validated via MarkerUtils.markerList so a malformed
-     *        params.nuclear_markers still fails loudly here, even though the keep
-     *        decision itself no longer branches on it.
+     * @param nuclearMarkers validated via MarkerUtils.markerList so a malformed value
+     *        still fails here, though the keep rule does not branch on it.
      */
     static Map<String, Map<String, List<String>>> resolveKeptChannelsPerSlide(
             String csvPath, String imageColumn, def nuclearMarkers,
             Map<String, List<String>> preClaimed = [:]) {
 
-        // Validate the parameter shape even though the keep rule does not branch on it: a
-        // malformed params.nuclear_markers must not become silently harmless here.
         MarkerUtils.markerList(nuclearMarkers)
 
         def file = new File(csvPath)
@@ -323,25 +192,13 @@ class CsvUtils {
         def imageIdx    = header.findIndexOf { it == imageColumn }
         if (patientIdx == -1 || channelsIdx == -1 || imageIdx == -1) return [:]
 
-        // WHICH slide is the reference is resolved by resolveReferenceRows, not decided
-        // here -- the same reason countChannelsPerPatient asks it rather than promoting
-        // rows[0] itself.
         def referenceImage = resolveReferenceRows(csvPath, imageColumn)
 
-        // Meta.identityFor's collision input, computed once from THIS SAME sheet --
-        // the identical map input_check.nf computes independently and threads through
-        // ctx.stemCounts for Meta.fromSamplesheetRow. Reading it here (rather than
-        // accepting it as a parameter) is what makes the key written below and the
-        // key `finish()` looks up by provably the same function of the same row,
-        // without widening this method's signature or asking every caller to thread
-        // it through.
+        // same map input_check.nf passes as ctx.stemCounts
         def stemCounts = stemCountsPerPatient(csvPath, imageColumn)
 
-        // Rows per patient, IN SAMPLESHEET ORDER. The walk order below depends on it,
-        // and `idx` (the row's 0-based position within ITS PATIENT, in that same
-        // order) is Meta.identityFor's rowIndex argument -- captured here rather than
-        // via a second pass/rowIndexPerPatient call, so it is trivially the same
-        // order stemCounts was computed against.
+        // Rows per patient in samplesheet order; `idx` (position within the patient) is
+        // identityFor's rowIndex.
         def rowsByPatient = [:].withDefault { [] }
         lines.drop(1).each { line ->
             def cols = parseCsvLine(line)
@@ -358,15 +215,10 @@ class CsvUtils {
 
         def result = [:]
         rowsByPatient.each { patientId, rows ->
-            // resolveReferenceRows returns the RAW cell; partitioning below still
-            // compares raw cells (that is what resolveReferenceRows returns and what
-            // is_reference is decided from), even though the OUTPUT map is no longer
-            // keyed on one.
+            // reference rows are matched on the raw cell
             def refCell = referenceImage[patientId]
-            // Stable partition: reference row(s) first, everything else in declared
-            // order. A patient with no reference at all (add_cycle's by-design
-            // zero-reference sheet) simply walks in samplesheet order, since nothing
-            // matches null.
+            // Stable partition: reference first, then declared order (no reference:
+            // samplesheet order).
             def ordered = rows.findAll { it.raw == refCell } +
                           rows.findAll { it.raw != refCell }
 
@@ -382,12 +234,7 @@ class CsvUtils {
                     claimed << name
                     keep << ch
                 }
-                // Keyed on the ASSIGNED identity, not on the raw cell. Two rows for one
-                // patient can share a raw cell (a duplicate row) or both leave it blank,
-                // and keying on it meant the second pass overwrote the first -- sometimes
-                // with [] -- so channels_count summed to less than what SPLIT_CHANNELS
-                // actually emits and the streaming groupTuple(size:) it sizes either
-                // emitted early with missing members or hung.
+                // keyed on the assigned identity, so duplicate/blank cells cannot collide
                 perSlide[Meta.identityFor(patientId, row.raw, row.idx, [stemCounts: stemCounts])] = keep
             }
             result[patientId] = perSlide
@@ -399,21 +246,14 @@ class CsvUtils {
      * Count the channels that will actually be EMITTED per patient -- the number a
      * `channels_count`-sized `groupKey` must equal.
      *
-     * Derived from resolveKeptChannelsPerSlide, which is the rule SPLIT_CHANNELS
-     * applies, so this method and SPLIT_CHANNELS cannot disagree. Summing the
-     * per-slide keep-lists is exact in both directions at once: the resolver claims
-     * each marker name once per patient, so the sum equals BOTH the number of TIFFs
-     * emitted and the number of distinct names. Every consumer is therefore correct
-     * without having to know which of the two it was handed.
+     * Sums resolveKeptChannelsPerSlide, the rule SPLIT_CHANNELS applies, so the count
+     * equals both the emitted TIFFs and the distinct names.
      *
-     * Do NOT substitute countDeclaredChannelsPerPatient. It has no reference and no
-     * nuclear-marker awareness, so it over-counts a reference-less sheet by the
-     * dropped nuclear channel -- and an over-counted groupKey never fills, so the
-     * run hangs rather than failing.
+     * Do not substitute countDeclaredChannelsPerPatient: it over-counts, and an
+     * over-counted groupKey never fills (the run hangs).
      *
      * Returns an empty map on a missing file, a header-only sheet, or an absent
-     * patient_id / channels / <imageColumn> column: every such guard lives in the
-     * resolver rather than being repeated here.
+     * patient_id / channels / <imageColumn> column.
      *
      * @param csvPath        path to the samplesheet
      * @param imageColumn    the column naming the step's input image
@@ -422,30 +262,6 @@ class CsvUtils {
      * Returns a Map of patient_id -> emitted channel count.
      */
     static Map<String, Integer> countChannelsPerPatient(String csvPath, String imageColumn, def nuclearMarkers) {
-        // Every guard the old body carried inline -- missing file, header-only sheet,
-        // absent patient_id/channels/<imageColumn> column -- now lives in the resolver,
-        // which returns an empty map in each case. Reference resolution likewise: it
-        // asks resolveReferenceRows, so this method and SPLIT_CHANNELS cannot disagree
-        // about which slide is the reference.
-        //
-        // Derived from resolveKeptChannelsPerSlide, which IS the rule SPLIT_CHANNELS
-        // applies (it emits exactly meta.keep_channels). Summing the per-slide list
-        // sizes is safe precisely because that resolver claims each marker name once
-        // per patient: the sum therefore equals BOTH the number of TIFFs emitted and the
-        // number of distinct names, because those are the same number. Every
-        // channels_count-sized groupKey downstream is then correct without its consumer
-        // having to know which of the two it is being handed.
-        //
-        // NOT because some consumer needs the file count: both groupTiffsByPatient
-        // callers dedup on [patient_id, marker] immediately upstream of it
-        // (subworkflows/local/postprocess.nf's `.unique`, subworkflows/local/add_cycle.nf's
-        // priority groupTuple), so the distinct-name count would in fact serve them
-        // today. An earlier version of this comment claimed otherwise -- see
-        // resolveKeptChannelsPerSlide's doc.
-        //
-        // This used to union upper-cased names into a HashSet, which gave the
-        // distinct-name count but NOT the file count -- correct only while no two slides
-        // could emit the same marker.
         def kept = resolveKeptChannelsPerSlide(csvPath, imageColumn, nuclearMarkers)
         return kept.collectEntries { patientId, perSlide ->
             [patientId, (perSlide.values().sum { it.size() } ?: 0)]
@@ -453,19 +269,11 @@ class CsvUtils {
     }
 
     /**
-     * Count the DECLARED channels per patient: the union of the samplesheet's
-     * `channels` column values, patient-wide -- no reference awareness, no
-     * nuclear-marker awareness, no extra arguments. This is deliberately
-     * countChannelsPerPatient's exact pre-Task-3 behaviour, kept alive for a
-     * different consumer: run_summary.json's input manifest
-     * (`manifest.totals.channels` / `manifest.patients[pid].channels`), which should
-     * report what the samplesheet SAID, not what reaches QUANTIFY.
+     * Count the declared channels per patient: the union of the `channels` cells, with
+     * no reference or nuclear awareness. For run_summary.json's input manifest only,
+     * which reports what the samplesheet said.
      *
-     * Do NOT feed this into channels_count / the groupKey size. That reintroduces
-     * the exact bug countChannelsPerPatient's exactness fixed: unioning declared
-     * channels with no reference awareness over-counts a reference-less sheet by its
-     * dropped nuclear channel, and an over-counted groupKey never fills (the run
-     * hangs). See countChannelsPerPatient's doc for that consumer's requirements.
+     * Never use it for channels_count / a groupKey size (see countChannelsPerPatient).
      *
      * @param csvPath path to the samplesheet
      *
@@ -498,19 +306,9 @@ class CsvUtils {
     }
 
     /**
-     * How many rows in each patient share a source-image stem. Meta.identityFor
-     * consults this to decide whether a stem needs disambiguating -- so an id
-     * only changes shape where it would otherwise collide, and every existing
-     * non-colliding output filename is preserved byte-for-byte.
-     *
-     * The stem rule here MUST match Meta.identityFor's exactly -- both key on
-     * "patientId::stem" -- or this map's counts land on a different stem than
-     * identityFor is asking about and every lookup silently misses (n treated
-     * as 1, no disambiguation, the exact collision this exists to catch).
-     * identityFor strips EVERY extension (RULING R2, verified against this
-     * repo's pinned Nextflow: `file('slide.ome.tiff').simpleName == 'slide'`,
-     * not 'slide.ome') -- i.e. from the FIRST '.', not the last -- so this
-     * strips the same way rather than a single-extension `.replaceFirst`.
+     * How many rows in each patient share a source-image stem ("patientId::stem").
+     * Meta.identityFor uses it to suffix only colliding ids. The stem rule must match
+     * identityFor's (stemOf: everything before the first '.').
      *
      * @param csvPath     path to the samplesheet
      * @param imageColumn the column holding this step's entry image
@@ -541,40 +339,14 @@ class CsvUtils {
     }
 
     /**
-     * Each patient's rows' 0-based positions, IN SAMPLESHEET ORDER, grouped by
-     * "patientId::rawImageCell" (the same raw `<imageColumn>` cell
-     * resolveReferenceRows/resolveKeptChannelsPerSlide key on), so a caller
-     * building meta from a `splitCsv` row can look its own index up by content
-     * instead of counting channel arrivals itself.
+     * Each patient's 0-based row positions, in samplesheet order, grouped by
+     * "patientId::rawImageCell", so a caller building meta from a splitCsv row can look
+     * up its own index.
      *
-     * RETURNS A LIST PER KEY, NOT A SCALAR -- "patientId::rawImageCell" is NOT
-     * guaranteed unique. Two rows of one patient can share an identical raw
-     * cell (a duplicate row) or both leave it blank; `validateInputSemantics`
-     * does not reject either. A single scalar per key used to collapse under
-     * that collision (last write wins), so BOTH rows read back the SAME index,
-     * Meta.fromSamplesheetRow assigned them the SAME id, and one of the two
-     * then silently displaced the other in ctx.keepChannelsBySlide (looked up
-     * by that shared id) -- reproducing, one call site up, exactly the
-     * row.raw-keying collapse this same task closes in
-     * resolveKeptChannelsPerSlide.
-     *
-     * THE CALLER MUST CONSUME BY POSITION, NOT BY RE-READING THE VALUE: pop
-     * (remove) the FIRST element of the matching key's list on every row it
-     * processes, never just peek it. input_check.nf does exactly that. This is
-     * safe -- and remains a pure function of the FILE's own row order rather
-     * than of channel/task arrival order, which resume caching cannot depend
-     * on -- PRECISELY BECAUSE `splitCsv()` reading a single path is a
-     * synchronous, single-producer parse that emits in file order
-     * deterministically. It is not the multi-producer, completion-order
-     * dependent case `groupTuple()` is (see this class's callers for why THAT
-     * ordering can't be trusted). Two rows sharing a key are visited in the
-     * same relative order both when this method builds their list here and
-     * when the caller's `.map` consumes it there -- both walks are driven by
-     * the identical, single underlying file read -- so popping front-to-back
-     * reunites each row with its own, file-order-derived index. This still
-     * depends on nothing being inserted between `splitCsv` and that `.map`
-     * that could reorder items (a pre-existing caveat, unchanged by this
-     * method's contract).
+     * A list per key, because the raw cell may repeat (or be blank) within a patient.
+     * The caller must pop the first element per row (input_check.nf does). That is
+     * deterministic because splitCsv of one file emits in file order, unlike
+     * groupTuple; it relies on nothing reordering items between splitCsv and that map.
      *
      * @param csvPath     path to the samplesheet
      * @param imageColumn the column holding this step's entry image
@@ -607,11 +379,8 @@ class CsvUtils {
     }
 
     /**
-     * The stem lib/Meta.groovy's identityFor derives an id from: everything
-     * before the FIRST '.' in the filename. Kept as one private helper so
-     * stemCountsPerPatient can never drift from identityFor's own inline copy
-     * of this rule (Meta stays parameterless-static and cannot call back into
-     * CsvUtils without inverting the module's dependency direction).
+     * Everything before the first '.' in the filename: the same rule as
+     * Meta.identityFor's inline copy (Meta does not depend on CsvUtils).
      */
     private static String stemOf(String rawImage) {
         def name = new File(rawImage.toString()).name
@@ -621,37 +390,15 @@ class CsvUtils {
 
     /**
      * The ctx {@link Meta#fromCheckpointRow} needs (`keepChannelsBySlide` /
-     * `imagesCount` / `channelsCount`), computed ONCE from a checkpoint CSV's OWN
-     * rows -- never from a samplesheet. Every checkpoint reader needs the identical
-     * shape (mirroring INPUT_CHECK's samplesheet-side ctx assembly:
-     * countImagesPerPatient / resolveKeptChannelsPerSlide / countChannelsPerPatient),
-     * so it is written once here rather than re-derived independently by each one.
+     * `imagesCount` / `channelsCount`), computed from a checkpoint CSV's own rows.
      *
-     * WHY THIS ISN'T resolveKeptChannelsPerSlide AGAIN. That resolver keys its
-     * per-slide map on the RAW image cell, because a samplesheet row has no assigned
-     * `id` yet at the point it runs. A checkpoint row already has one -- a real,
-     * assigned identity (RULING R17, lib/Checkpoint.groovy) -- so THIS resolver keys
-     * `keepChannelsBySlide` on `id` directly, matching how `Meta.fromCheckpointRow`
-     * looks its own row up (`finish()`'s `slideKey` argument is `meta.id`). Same
-     * "claim each marker name once per patient, reference row(s) first" algorithm as
-     * resolveKeptChannelsPerSlide, restated against a checkpoint's own columns
-     * instead of a samplesheet's -- the two are independent implementations of one
-     * rule, not one calling the other, because a checkpoint row's `channels` column
-     * is the FULL declared list a writer recorded (`meta.channels.join('|')`), never
-     * a samplesheet cell resolveKeptChannelsPerSlide could re-parse directly.
-     *
-     * A step whose schema does not carry `channels`/`is_reference` (currently only
-     * 'postprocessed') yields an empty keepChannelsBySlide/channelsCount for every
-     * patient rather than throwing: `Meta.fromCheckpointRow` already tolerates that
-     * schema shape (it only requires `is_reference`/`channels` on a row when the
-     * step's OWN schema declares them), so this helper must not be stricter than the
-     * constructor it feeds.
+     * Same claim-once, reference-first rule as resolveKeptChannelsPerSlide, but keyed on
+     * the row's recorded `id`. A schema without channels/is_reference ('postprocessed')
+     * yields empty maps rather than throwing, matching fromCheckpointRow.
      *
      * @param csvPath path to a checkpoint CSV (e.g. csv/segmented.csv)
-     * @param step    the checkpoint step name (lib/Checkpoint.groovy STEPS) -- used
-     *                only to know whether this schema carries channels/is_reference
-     *                at all; the column POSITIONS are still read from the file's own
-     *                header, never assumed from Checkpoint.columns(step)'s order.
+     * @param step    the Checkpoint.STEPS name; only decides whether channels /
+     *                is_reference exist. Positions come from the file's own header.
      */
     static Map metaContextFromCheckpoint(String csvPath, String step) {
         def empty = [keepChannelsBySlide: [:], imagesCount: [:], channelsCount: [:]]
@@ -692,9 +439,7 @@ class CsvUtils {
         def keepChannelsBySlide = [:]
         def channelsCount       = [:]
         rowsByPatient.each { patientId, rows ->
-            // Stable partition: reference row(s) first, everything else in checkpoint
-            // order -- the same rule resolveKeptChannelsPerSlide applies to a
-            // samplesheet's rows.
+            // reference first, then checkpoint order
             def ordered = rows.findAll { it.isRef } + rows.findAll { !it.isRef }
             def claimed = new HashSet<String>()
             def perSlide = [:]
@@ -726,11 +471,8 @@ class CsvUtils {
      * (not a truthy String); `channels` is a non-empty List with no null or blank
      * entry; and at least one channel is a nuclear/fiducial marker.
      *
-     * The nuclear marker may sit at ANY position -- segmentation and the
-     * registration fiducial both locate it by NAME -- and which names qualify comes
-     * from params.nuclear_markers via MarkerUtils, never a hardcoded 'DAPI', which
-     * used to reject an otherwise valid CELLTOX-only samplesheet before the run
-     * could start.
+     * The nuclear marker may be at any position (it is located by name); which names
+     * qualify comes from params.nuclear_markers via MarkerUtils.
      *
      * @param meta           the map to validate
      * @param nuclearMarkers params.nuclear_markers, in any form MarkerUtils accepts
@@ -757,11 +499,6 @@ class CsvUtils {
         if (meta.channels.any { it == null || it.trim().isEmpty() })
             throw new IllegalArgumentException("Empty channel name found for patient ${meta.patient_id}")
 
-        // The nuclear/fiducial marker may appear at ANY position (segmentation and the
-        // registration fiducial locate it by name, not index). Only its presence is
-        // required, and WHICH names qualify comes from params.nuclear_markers via
-        // MarkerUtils — not a hardcoded 'DAPI', which rejected an otherwise valid
-        // CELLTOX-only samplesheet before the run could start.
         if (!MarkerUtils.hasNuclear(meta.channels, nuclearMarkers)) {
             throw new IllegalStateException("No nuclear channel (${MarkerUtils.markerList(nuclearMarkers).join(', ')}) found for patient ${meta.patient_id} (${context}). Found channels: ${meta.channels}")
         }
@@ -784,10 +521,8 @@ class CsvUtils {
     /**
      * Build a validated meta map from one raw samplesheet row.
      *
-     * Splits the `channels` cell on '|' and trims each name, parses `is_reference`
-     * strictly through parseIsReference (so a typo like "yes" is rejected rather
-     * than silently coerced to false and corrupting reference selection), then
-     * hands the result to validateMetadata.
+     * Splits `channels` on '|', parses `is_reference` strictly (parseIsReference), then
+     * runs validateMetadata.
      *
      * @param row            the raw row, keyed by column name
      * @param nuclearMarkers params.nuclear_markers, in any form MarkerUtils accepts
@@ -816,9 +551,7 @@ class CsvUtils {
      * Structural check of a samplesheet: it exists, it is not empty, and its header
      * carries every required column.
      *
-     * Structure only -- the per-row semantic checks are validateInputSemantics's. Run
-     * before anything reads a row, so a missing column is named at launch instead of
-     * surfacing as a null further down.
+     * Structure only; per-row checks are validateInputSemantics's.
      *
      * @param csv           path to the samplesheet
      * @param required_cols the column names the current step needs, from
@@ -850,21 +583,10 @@ class CsvUtils {
     /**
      * Header columns this pipeline does not read, for a run entering at `step`.
      *
-     * REPORTED, NEVER REJECTED, and the distinction is load-bearing. A checkpoint
-     * CSV legitimately carries columns the entry step does not read -- a
-     * csv/registered.csv read by `--start segmentation` has `id` and `pixel_size`
-     * beyond that step's four required columns, and a segmented.csv has five more.
-     * Rejecting an unknown column would break re-entry by construction.
-     *
-     * Accepting them SILENTLY is the other failure, and it is the one that bites:
-     * validateInputCSV asserts the required columns are present and ignores
-     * everything else, so a mistyped `channles` sits unnoticed beside a missing
-     * `channels` and the run dies much later, somewhere else, on a null.
-     *
-     * The known set is the union of the entry step's required columns and EVERY
-     * checkpoint step's columns, derived from ParamUtils.STEPS and
-     * Checkpoint.STEPS rather than restated -- so a new column added to either
-     * table stops being "unknown" without anything here changing.
+     * Reported, never rejected: checkpoint CSVs legitimately carry extra columns, but a
+     * silent typo (`channles`) would otherwise fail much later on a null. Known = the
+     * entry step's required columns plus every checkpoint column (derived from
+     * ParamUtils.STEPS and Checkpoint.STEPS).
      *
      * @return the unknown columns, in header order (empty when there are none)
      */
@@ -877,37 +599,24 @@ class CsvUtils {
     }
 
     /**
-     * Fail-fast semantic validation of the whole samplesheet, run at parse
-     * time (and therefore visible under --dry_run). Complements the per-row
-     * checks that otherwise only fire later during channel construction.
+     * Fail-fast semantic validation of the whole samplesheet at parse time (visible
+     * under --dry_run).
      *
      * Validates, for every data row: is_reference format, channel list /
      * nuclear-marker presence, no channel name repeated within the row's own slide,
      * and existence of the step's image file. Validates, per patient: exactly one
      * reference image (zero allowed only for mode=add_cycle, whose reference is the
-     * prior run's; more than one is always ambiguous), and that no NON-NUCLEAR channel
-     * is carried by two different slides -- see the comment at that check for why a
-     * duplicate has no correct downstream interpretation.
+     * prior run's), and that no non-nuclear channel is carried by two slides.
      *
      * @param csv                  path to the input samplesheet
      * @param step                 pipeline start step (selects the path column)
-     * @param allowNoReference     whether a patient may legitimately declare NO
-     *                             reference. TRUE only for mode=add_cycle. This no
-     *                             longer causes anything to be promoted in its place --
-     *                             it only suppresses the error.
+     * @param allowNoReference     whether a patient may declare no reference (only
+     *                             mode=add_cycle); nothing is promoted in its place.
      * @param nuclearMarkers       params.nuclear_markers — required, never defaulted here
      */
     static void validateInputSemantics(def csv, String step, boolean allowNoReference, def nuclearMarkers,
                                        boolean requireUniqueChannelSets = false) {
 
-        // ParamUtils.STEPS is the single source of truth for "what is a step?"
-        // (name / requiredColumns / entryColumn / qcKinds) -- see its header
-        // comment in lib/ParamUtils.groovy. entryColumnForStep throws on an
-        // unrecognised step rather than the old map literal's silent `null`,
-        // but both call sites below only ever pass a step already validated
-        // by nextflow_schema.json's enum (or the add_cycle branch's hardcoded
-        // 'preprocessing'), so that stricter failure mode is unreachable in
-        // practice and loud instead of silent if it ever is reached.
         def pathColumn = ParamUtils.entryColumnForStep(step)
 
         def lines = readCsvLines(csv)
@@ -922,19 +631,13 @@ class CsvUtils {
 
         def refCounts = [:].withDefault { 0 }
         def rowCounts = [:].withDefault { 0 }
-        // patient -> signature -> [row contexts]. Only consulted when
-        // requireUniqueChannelSets: the caller says whether the registration backend
-        // about to run pairs its outputs by channel set (RegBackends'
-        // pairsOutputsBySignature), which is the only reason two slides of one patient
-        // may not share one. The rule is RegisteredMatch.signature's -- lower-cased,
-        // sorted -- so 'CD8|dapi|CD3' and 'DAPI|CD3|CD8' are the same set here exactly
-        // as they are at pairing time.
+        // patient -> channel-set signature -> rows. Checked only when the backend pairs
+        // outputs by channel set (RegBackends.pairsOutputsBySignature); same signature
+        // rule as RegisteredMatch.
         def sigRows   = [:].withDefault { [:].withDefault { [] } }
 
-        // patient_id -> UPPER-CASED channel name -> the rows that carry it, each as
-        // [name: the name AS WRITTEN, where: 'row N (<path>)']. Filled during the row
-        // walk below and read in the per-patient pass, which is where the cross-slide
-        // duplicate rule lives (a duplicate is a property of a PATIENT, not of a row).
+        // patient_id -> upper-cased channel -> [[name: as written, where: 'row N (<path>)']],
+        // for the per-patient duplicate check below
         def channelOccurrences = [:]
 
         lines.drop(1).eachWithIndex { line, i ->
@@ -951,8 +654,7 @@ class CsvUtils {
             // Per-row format + nuclear-channel validation (throws on problems).
             def parsed = parseMetadata(row, nuclearMarkers, ctx)
 
-            // Image file must exist (resolved against the launch directory for
-            // relative paths). Skipped only if the path column is absent.
+            // image must exist (relative paths resolve against the launch directory)
             if (pathIdx >= 0 && pathIdx < cols.size()) {
                 def p = cols[pathIdx].trim()
                 if (!p)
@@ -961,19 +663,12 @@ class CsvUtils {
                     throw new FileNotFoundException("Input file does not exist: ${p} (patient ${row.patient_id}, ${ctx})")
             }
 
-            // Where this row is, for any message built below: the row number the
-            // author sees in a spreadsheet, plus the image it names when there is one.
+            // spreadsheet row number (+ image) for messages
             def rowPath = (pathIdx >= 0 && pathIdx < cols.size()) ? cols[pathIdx].trim() : null
             def where   = rowPath ? "row ${i + 2} (${rowPath})" : "row ${i + 2}"
 
-            // A channel name may not repeat WITHIN one slide's own list, nuclear or
-            // not: SPLIT_CHANNELS emits one file per name, so a second copy is either a
-            // copy-paste typo or a marker that was never acquired, and every
-            // channels_count derived from the cell disagrees with the files that
-            // arrive. validateMetadata (called through parseMetadata above) checks for
-            // a blank name and for the PRESENCE of a nuclear marker, never for a
-            // repeat, so the rule lives here rather than there -- it is the samplesheet
-            // that is wrong, and this is the samplesheet validator.
+            // No name may repeat within one slide (nuclear included): SPLIT_CHANNELS emits
+            // one file per name, so channels_count would disagree with the files.
             def seenInRow = [:]
             parsed.channels.each { ch ->
                 def key = ch.trim().toUpperCase()
@@ -1012,18 +707,9 @@ class CsvUtils {
 
         rowCounts.each { patientId, _n ->
 
-            // A NON-NUCLEAR channel carried by two slides of one patient is refused
-            // here, at launch, rather than surviving into registration. The reason is
-            // that there is no correct answer downstream: resolveKeptChannelsPerSlide
-            // keeps each marker name exactly ONCE per patient (reference first, then
-            // samplesheet order), so one of the two acquisitions is silently dropped
-            // and which one wins is a property of row order, not of anything the author
-            // can express. A NUCLEAR marker is the deliberate exception: it is the
-            // registration fiducial and is expected on every slide, which is exactly
-            // why the keep-set drops the repeats without complaint.
-            //
-            // Comparison is trimmed and upper-cased, the same normalisation the
-            // keep-set uses, so 'panck' and ' PANCK ' are one channel here too.
+            // A non-nuclear channel on two slides of one patient is refused: the keep-set
+            // would silently keep one, chosen by row order. Nuclear markers (the fiducial)
+            // are expected on every slide. Names compared trimmed and upper-cased.
             (channelOccurrences[patientId] ?: [:]).each { _key, occurrences ->
                 if (occurrences.size() > 1 && !MarkerUtils.isNuclear(occurrences[0].name, nuclearMarkers))
                     throw new IllegalArgumentException("Channel '${occurrences[0].name}' appears on ${occurrences.size()} different slides of patient ${patientId} (${occurrences.collect { it.where }.join('; ')}), and it is not one of the nuclear markers (${MarkerUtils.markerList(nuclearMarkers).join(', ')}). Only a nuclear/fiducial channel may repeat across a patient's slides: every other marker is kept exactly once per patient, so one of these acquisitions would be dropped and which one survives is decided by samplesheet order rather than by you. Rename the channel on one of the slides if they are genuinely different acquisitions (e.g. PANCK_cycle1 / PANCK_cycle2), or add it to --nuclear_markers if it really is a nuclear stain (and if these entries name the same file, the row itself is duplicated: remove one).")

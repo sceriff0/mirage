@@ -47,10 +47,8 @@ def join_one(
     if n == 0:
         return resid, iou, stats
 
-    # cKDTree raises on a non-finite row (a cell whose centroid could not be computed,
-    # e.g. a degenerate mask region). Build the tree on the finite rows only and map
-    # its (compacted) indices back to the original cell positions; a NaN-centroid cell
-    # is simply never a query target and keeps its NaN, same as an unmatched one.
+    # cKDTree raises on non-finite rows, so build it on finite centroids only and map the
+    # indices back; a NaN-centroid cell is never matched and keeps its NaN.
     finite_mask = np.all(np.isfinite(centroids_xy), axis=1)
     finite_idx = np.nonzero(finite_mask)[0]
     if finite_idx.size == 0:
@@ -86,18 +84,13 @@ def join_reg_residuals(
 ) -> Tuple[pd.DataFrame, Dict]:
     """Spatially join per-cell registration residuals onto segmentation labels.
 
-    ``warp_seg_qc`` scores a *separate* StarDist run on each slide's native image
-    (see ``modules/local/seg_qc_geojson.nf``), so its cells share **no label
-    space** with ``cell_mask``. The two do share a coordinate frame though — the
-    residual CSV reports reference centroids in the registered reference frame,
-    which is the frame ``SEGMENT`` ran on — so the join is spatial: each QC pair
-    is assigned to the nearest ``cell_mask`` centroid within ``max_dist_px``.
+    ``warp_seg_qc``'s cells come from a separate segmentation, so they share no label
+    space with ``cell_mask``, only the registered reference frame. Each QC pair is
+    assigned to the nearest ``cell_mask`` centroid within ``max_dist_px``.
 
-    Returns ``(residuals, stats)`` where ``residuals`` is a cells x moving-slides
-    frame of displacement in pixels (NaN where a cell was never matched) and
-    ``stats`` records how well the join went — an unmatched cell means "no QC
-    evidence", NOT "well registered", and conflating those would invert the
-    signal's meaning.
+    Returns ``(residuals, stats)``: a cells x moving-slides frame of displacement in
+    pixels (NaN where unmatched, meaning "no QC evidence", not "well registered") and
+    join statistics.
     """
     out = pd.DataFrame(index=pd.Index(labels, name=INSTANCE_KEY))
     stats: Dict = {"max_dist_px": float(max_dist_px), "slides": {}}

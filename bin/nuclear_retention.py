@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Per-cell nuclear-channel median of ONE registered moving slide (NUCLEAR_RETENTION).
+"""Per-cell nuclear-channel median of one registered moving slide (NUCLEAR_RETENTION).
 
-CELL_QC divides this by the reference's own nuclear median to get per-round nuclear
-retention. The median comes from quantification's own compute_compartment_intensities,
-so "median inside the nucleus" means exactly what `<nuclear>: Nucleus: Median` means in
-merged_quant.csv. Only the nuclear plane is read.
+CELL_QC divides this by the reference's nuclear median to get per-round nuclear
+retention. The median uses quantify's compute_compartment_intensities, so it matches
+`<nuclear>: Nucleus: Median` in merged_quant.csv. Only the nuclear plane is read.
 
-Assumes the moving slide is a re-stained round of the SAME section as the reference
-(cyclic IF); on serial sections the value is meaningless (docs/outputs.md, "Per-cell QC").
+Assumes the moving slide is a re-stained round of the same section (cyclic IF); on
+serial sections the value is meaningless.
 """
 
 from __future__ import annotations
@@ -35,10 +34,9 @@ _NAME = "nuclear"
 def nuclear_channel_index(
     names: List[str], nuclear_markers: List[str]
 ) -> Optional[int]:
-    """Index of the first channel matching one of ``nuclear_markers``, via the shared rule.
+    """Index of the first channel matching one of ``nuclear_markers``.
 
-    Delegates to ``metadata.is_nuclear`` (case-insensitive substring match), so
-    the answer agrees with every other consumer of ``params.nuclear_markers``.
+    Uses ``metadata.is_nuclear`` (case-insensitive substring match), the shared rule.
 
     Parameters
     ----------
@@ -63,14 +61,9 @@ def resolve_channel_names(
 ) -> List[str]:
     """Channel names for ``image_path``, preferring ``channels`` over OME metadata.
 
-    Mirrors ``split_multichannel.split_multichannel_tiff``'s precedence and
-    length-mismatch handling exactly (bin/split_multichannel.py): an explicit
-    ``channels`` list -- the samplesheet's own names, as SPLIT_CHANNELS passes them
-    -- wins over whatever this image's own OME-XML says, so the two processes
-    agree on which plane is nuclear even when the OME names are generic
-    (``Channel_0``, ...). A length mismatch against the image's actual channel
-    count is patched the same way split_multichannel does: padded with generic
-    ``Channel_i`` names when too few, truncated when too many -- never raised.
+    Same precedence as ``split_multichannel.split_multichannel_tiff``, so both agree on
+    which plane is nuclear even when OME names are generic. A length mismatch is padded
+    with ``Channel_i`` names or truncated, never raised.
 
     Parameters
     ----------
@@ -105,10 +98,8 @@ def resolve_channel_names(
 def measure_nuclear(cell_mask, nuclei_mask, plane) -> pd.DataFrame:
     """Per-cell nuclear-channel median, plus the whole-cell median for context.
 
-    Delegates to ``quantify.compute_compartment_intensities`` and keeps only the
-    ``Median`` statistic for the ``Nucleus`` and ``Cell`` compartments, so the
-    values mean exactly what the corresponding ``<nuclear>: <Compartment>:
-    Median`` columns mean in ``merged_quant.csv``.
+    Keeps only the ``Median`` of ``quantify.compute_compartment_intensities`` for the
+    ``Nucleus`` and ``Cell`` compartments, matching ``merged_quant.csv``.
 
     Parameters
     ----------
@@ -165,11 +156,8 @@ def parse_args(argv=None):
 def main(argv=None) -> int:
     """Entry point: write the per-cell nuclear-retention CSV for one slide.
 
-    Reads the nuclear-marker channel named by ``--nuclear-markers`` out of
-    ``--image`` and measures it against ``--mask_file`` (and, if given,
-    ``--nuclei_mask_file``). Writes an empty ``label``-only table instead of
-    failing when no channel matches, so a slide missing the nuclear channel
-    simply gets no retention key downstream.
+    Writes an empty ``label``-only table when no channel matches
+    ``--nuclear-markers``, so that slide gets no retention key downstream.
 
     Parameters
     ----------

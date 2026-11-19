@@ -2,47 +2,25 @@
 ========================================================================================
     TILED (STARE) REGISTRATION ADAPTER
 ========================================================================================
-    Converts the patient-grouped structure into the tiled method's per-moving-slide star:
-    every moving slide registers directly to the fixed reference (which defines the frame),
-    independently and in parallel. Unlike the VALIS adapter there is no batch graph build and
-    no per-slide OME-channel re-matching — each task already carries its slide's meta.
-
-    ONE execution shape, same channel contract as VALIS_ADAPTER: a per-TILE Nextflow fan-out —
-    TILED_COARSE -> TILED_REG_TILE (one task per tile) -> TILED_SOLVE -> TILED_STITCH. It
-    maximises parallelism, and every process' peak memory is a function of a parameter
-    (reg_tiled_coarse_max_dim, tile+halo, out_tile) rather than of the slide's dimensions.
-
-    A second, single-task shape used to sit behind a boolean flag. Both the flag and that process
-    were removed, because it could not hold that bound — it kept both whole slides, an
-    all-channel float32 copy and the full warped output live at once, so its memory scaled with
-    the input and had to be budgeted from file size. Keeping an unbounded alternative behind a
-    flag was shipping a footgun. See CHANGELOG (Unreleased -> Removed).
+    Registers every moving slide of a patient directly to the fixed reference, in parallel,
+    as a per-tile fan-out: TILED_COARSE -> TILED_REG_TILE (one task per tile) -> TILED_SOLVE
+    -> TILED_STITCH. Peak memory of each process depends on a parameter (coarse max dim,
+    tile + halo, out tile), not on slide size.
 
     Input:  ch_grouped_meta - Channel of [patient_id, reference_item, all_items]
 
-    THE ADAPTER CONTRACT (identical in adapters/valis_adapter.nf, and binding on any third
-    adapter). Every registration adapter takes [patient_id, reference_item, all_items]
-    and emits EXACTLY these names:
+    Adapter contract (shared with adapters/valis_adapter.nf; any new adapter must follow it):
 
         registered          [meta, file]                registered slides (+ passthroughs)
-        transform           [patient_id, transform]     ONE transform object per patient
-        transform_by_slide  [meta, transform]           one transform per MOVING slide
+        transform           [patient_id, transform]     one transform object per patient
+        transform_by_slide  [meta, transform]           one transform per moving slide
         stage_checkpoint    [patient_id, dir]           intermediate-stage fields
-        intrinsic_tre       file                        the method's OWN target-registration
-                                                        -error estimate, whatever its format
+        intrinsic_tre       file                        the method's own TRE estimate, in its
+                                                        own format (the reader handles formats)
         size_logs / versions
 
-    `intrinsic_tre` is deliberately NOT named after any one method. Both shipped backends
-    estimate a TRE from their own registration -- VALIS a feature-distance CSV, STARE a
-    *_tre.json -- and the seam used to call the slot `summary` and then re-emit it as
-    `valis_summary`, which pinned one method's name into the artifact vocabulary all the way
-    out to the QC report. Formats are NOT normalised here; that is the reader's job.
-
-    A method that produces no artifact for one of these emits `Channel.empty()` for it --
-    a NULL OBJECT, never a missing emit and never an error. That is what lets
-    REGISTER_PATIENT wire both backends with one short branch, and it is why nothing
-    downstream of that branch has to know which method ran. A future adapter inherits the
-    rule: declare every name; empty the ones your method cannot produce.
+    An emit the method cannot produce is `Channel.empty()`, never missing, so consumers
+    need not know which method ran.
 ========================================================================================
 */
 
@@ -54,12 +32,8 @@ include { TILED_STITCH   } from '../../../modules/local/tiled_stitch'
 // Stable per-moving-slide join key (patient + its channel set).
 def slideKey(meta) { "${meta.patient_id}#${meta.channels.toSorted().join('_')}" }
 
-// The control-point gather (below) must size its groupKey with the real tile count so each
-// slide's group can close as soon as ITS OWN tiles have arrived, instead of waiting for the
-// whole upstream channel to close (every tile of every slide of every patient). Unlike the
-// three existing groupKey call sites in this repo, this one must NOT degrade to a bare,
-// unsized key when the count is missing -- that silently reverts to the full-barrier behaviour
-// this fix removes, with no warning. Fail loudly instead.
+// The control-point gather sizes its groupKey with the tile count so each slide's group closes
+// when its own tiles arrive. A missing count must fail: an unsized key waits for the whole channel.
 def requireTilesCount(meta) {
     if (meta.tiles_count == null) {
         error "TILED_ADAPTER: tiles_count missing from meta for ${slideKey(meta)} -- cannot size the control-point gather"
@@ -67,20 +41,13 @@ def requireTilesCount(meta) {
     meta.tiles_count
 }
 
-// Counts a tile-plan CSV's data rows: total non-blank lines minus the header. Extracted (not
-// left inline in the ch_tile_counts closure below) so the counting logic itself is unit-testable
-// in isolation -- this is the number that ends up sizing the groupKey at the gather, so an
-// off-by-one here either hangs the pipeline (count too high, the group never closes) or
-// truncates the control points TILED_SOLVE fits its mesh from (count too low, the group closes
-// early on a silently mis-registered slide). Neither failure mode looks like a crash, which is
-// exactly why the count itself -- not just the null-check in requireTilesCount -- needs direct
-// coverage.
+// Data rows of a tile-plan CSV (non-blank lines minus the header). This sizes the gather's
+// groupKey: too high hangs the group, too low closes it early on missing control points.
 def countTileRows(csv) {
     csv.readLines().findAll { it.trim() }.size() - 1
 }
 
-// Fails loudly (naming the slide) on an empty tile plan, mirroring requireTilesCount's
-// never-silently-degrade contract for the other half of the count derivation.
+// Fails, naming the slide, on an empty tile plan.
 def requirePositiveTileCount(n, meta) {
     if (n < 1) error "TILED_COARSE emitted no tiles for ${slideKey(meta)} (n=${n})"
     n
@@ -91,10 +58,8 @@ workflow TILED_ADAPTER {
     ch_grouped_meta   // [patient_id, reference_item, all_items]
 
     main:
-    // The reference is the frame — it passes through unregistered. is_passthrough says
-    // so to registration.nf's checkpoint writer: an unwarped reference is published by
-    // whoever produced it, not into <pid>/registered/ where no tiled process writes it.
-    // Map addition, never meta.clone() — see the aliasing note at valis_adapter.nf:82-88.
+    // The reference is the frame and passes through unregistered. is_passthrough tells the
+    // checkpoint writer it is published by its producer, not under <pid>/registered/.
     ch_reference = ch_grouped_meta.map { _pid, ref_item, _items ->
         [ref_item[0] + [is_passthrough: true], ref_item[1]]
     }  // [meta, file]
@@ -108,16 +73,11 @@ workflow TILED_ADAPTER {
 
     TILED_COARSE(ch_moving)
 
-    // Tile count per slide, derived from the tile-plan CSV file itself -- NOT from the
-    // splitCsv rows below: splitCsv streams one item per row, so the closure that sees a
-    // row cannot know how many rows the file has in total. The CSV is tiny (one row per
-    // tile, plus a header), so counting lines is cheap.
+    // Tile count per slide, read from the CSV file itself: a splitCsv row cannot see the total.
     ch_tile_counts = TILED_COARSE.out.tiles
         .map { meta, csv -> tuple(slideKey(meta), requirePositiveTileCount(countTileRows(csv), meta)) }
 
-    // Context per slide: meta (+tiles_count) + reference + moving + M0, keyed for the
-    // per-tile join. Map addition (never meta.clone()) -- see the aliasing note at
-    // valis_adapter.nf:82-88.
+    // Context per slide: meta (+tiles_count) + reference + moving + M0, keyed for the per-tile join.
     ch_ctx = ch_moving
         .map { meta, ref, mov -> tuple(slideKey(meta), meta, ref, mov) }
         .join(TILED_COARSE.out.m0.map { meta, m0 -> tuple(slideKey(meta), m0) }, by: 0)
@@ -133,23 +93,14 @@ workflow TILED_ADAPTER {
 
     TILED_REG_TILE(ch_tile_items)
 
-    // Gather every tile's control point back per slide. groupKey(slideKey, tiles_count)
-    // lets a slide's group close -- and TILED_SOLVE start -- as soon as that slide's own
-    // tiles have all arrived, instead of the bare groupTuple(by: 0) this replaces, which
-    // buffered every key until the WHOLE upstream channel closed (i.e. until every tile of
-    // every slide of every patient had finished). requireTilesCount errors rather than
-    // silently falling back to an unsized key if the count is ever missing.
+    // Gather control points per slide; the sized groupKey lets TILED_SOLVE start as soon as
+    // that slide's tiles are done.
     ch_controls = TILED_REG_TILE.out.control
         .map { meta, c -> tuple(groupKey(slideKey(meta), requireTilesCount(meta)), meta, c) }
         .groupTuple(by: 0)
         .map { _k, metas, controls ->
-            // CANONICAL ORDER -- same defect and same fix as
-            // subworkflows/local/quantify_markers.nf's marker grouping. groupTuple
-            // emits in ARRIVAL order, so both the control list reaching TILED_SOLVE
-            // (hashed positionally, so -resume missed) and `metas[0]` were whichever
-            // TILE finished first. Pair FIRST, then sort the pairs; never
-            // `groupTuple(sort:)`, which orders each list independently and re-pairs
-            // meta with the wrong control file.
+            // groupTuple emits in arrival order; sort the pairs so -resume hashes match.
+            // Not groupTuple(sort:), which sorts each list separately and re-pairs them wrongly.
             def paired = [metas, controls].transpose().toSorted { it[1].name }
             tuple(paired[0][0], paired.collect { it[1] })
         }
@@ -181,19 +132,15 @@ workflow TILED_ADAPTER {
 
     emit:
     registered       = ch_registered
-    // The STARE transform manifest keyed by patient — the same slot VALIS fills with its
-    // registrar pickle. A patient with several moving slides contributes several items here.
+    // STARE manifests keyed by patient (VALIS fills this slot with its registrar pickle);
+    // one item per moving slide.
     transform        = ch_manifest_by_meta.map { meta, m -> tuple(meta.patient_id, m) }
-    // The same manifests keyed by meta. Unlike VALIS, the tiled method DOES have one transform
-    // per moving slide, and the reg_qc=2 seg-QC joins them per slide.
+    // The same manifests keyed by meta, joined per slide by the reg_qc=2 seg-QC.
     transform_by_slide = ch_manifest_by_meta
-    // The tiled method composes no stages destructively, so it needs no pre-micro checkpoint:
-    // the null object the contract above requires.
+    // No pre-micro checkpoint: the tiled method does not compose stages.
     stage_checkpoint = Channel.empty()
     size_logs        = ch_size_logs
     versions         = ch_versions
-    // STARE's intrinsic TRE: *_tre.json from bin/utils/tre_report.py. A DIFFERENT format
-    // from VALIS's CSV, on purpose — the channel vocabulary is unified, the file formats
-    // are not, and teaching the report reader both shapes is a separate change.
+    // STARE's intrinsic TRE: *_tre.json from bin/utils/tre_report.py (VALIS emits a CSV).
     intrinsic_tre    = ch_intrinsic_tre
 }

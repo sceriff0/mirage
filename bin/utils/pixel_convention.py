@@ -1,30 +1,17 @@
 """The one raster pixel-addressing rule.
 
-A raster mask can be addressed two ways, and MIRAGE publishes artifacts in
-both, on purpose:
+MIRAGE publishes artifacts in two conventions:
 
-* **Centre-of-pixel** -- skimage's convention, and the one ``regionprops``
-  reports centroids in. Integer ``(row, col)`` names the *centre* of that
-  pixel, so a pixel spans ``[r - 0.5, r + 0.5] x [c - 0.5, c + 0.5]``.
-* **Corner-of-pixel** -- QuPath's and ImageJ's convention. Integer ``(x, y)``
-  names the pixel's *top-left corner*, so a pixel spans ``[x, x + 1] x
-  [y, y + 1]``.
+* **Centre-of-pixel** (skimage, ``regionprops`` centroids): integer ``(row, col)`` is the
+  pixel's centre, so it spans ``[r - 0.5, r + 0.5] x [c - 0.5, c + 0.5]``.
+* **Corner-of-pixel** (QuPath, ImageJ): integer ``(x, y)`` is the top-left corner, so the
+  pixel spans ``[x, x + 1] x [y, y + 1]``.
 
-The conversion is a half-pixel translation in both axes::
+``corner = centre + CORNER_OFFSET``. Mixing the two in one artifact shifts every point
+half a pixel up-left of its polygon, which skews neighbourhood analyses and can fail a
+point-in-polygon check on small cells.
 
-    corner = centre + CORNER_OFFSET
-
-Half a pixel sounds ignorable and is not. It is a *systematic* shift, not
-noise: mixing the two conventions inside one artifact puts every cell's point
-half a pixel up-and-left of its own polygon, so a neighbourhood analysis run on
-the points disagrees with the same analysis run on the shapes, and a
-point-in-polygon self-test can fail outright for a small or thin cell.
-
-Who works in which convention
------------------------------
-
-The first three rows CONVERT; the last three merely have to know. Getting a
-row wrong is silent in every case.
+The first three rows convert; the last three must know which side they are on.
 
 ===========================================  ============  ==========================
 site                                         convention    consumer
@@ -38,33 +25,16 @@ site                                         convention    consumer
 ``join_flowpath.join_by_centroid``            corner        an internal cohort join
 ===========================================  ============  ==========================
 
-``bin/mask_to_geojson.py`` is the deliberate opt-out and must stay that way.
-Its contours are fed to VALIS's ``Slide.warp_geojson`` for registration QC, and
-VALIS addresses the raster the same way skimage does. Adding the offset there
-would bias every warped QC contour by half a pixel against the transform it is
-being measured with. That is why the rule lives here rather than as a "+0.5
-everywhere" habit: the *choice* per consumer is the interesting part, and not
-every site chooses the same way.
+``bin/mask_to_geojson.py`` must stay centre: its contours go to VALIS's
+``Slide.warp_geojson``, which addresses the raster like skimage. It also feeds
+``join_reg_residuals``, which pairs those centroids with the quantification CSV's raw
+(centre) x/y; adding an offset to one side would bias that join by 0.707 px.
 
-The strongest argument for keeping that opt-out is a pairing that never
-mentions this module: ``export_spatialdata.join_reg_residuals`` matches
-``warp_seg_qc``'s residual centroids -- which trace back to ``mask_to_geojson``
-rings, and so are **centre** -- against ``quant[["x", "y"]]``, which is raw
-regionprops output and so is **centre** too. It reads the quantification CSV
-directly rather than ``obsm["spatial"]``, so it is untouched by the conversion
-above. That join is correct, needs no offset, and would acquire a systematic
-0.707 px bias the day somebody "fixed" ``mask_to_geojson`` for consistency.
+``bin/join_flowpath.py`` matches FlowPath's µm centroids against ``obsm["spatial"]``;
+both are corner, so the inverse is a plain ``/ pixel_size``. Before writing ``- 0.5``,
+check which convention the other side is in.
 
-Nothing converts back. ``bin/join_flowpath.py`` matches FlowPath's micrometre
-centroids against the store's ``obsm["spatial"]``; both are corner, so its
-inverse is a plain ``/ pixel_size``. It used to subtract 0.5 -- correct only
-while ``obsm["spatial"]`` was still centre, and a constant 0.707 px bias the
-moment that was normalised. If you find yourself writing ``- 0.5``, check which
-convention the OTHER side is in first.
-
-Import convention: flat (``from pixel_convention import ...``) by scripts that
-``sys.path.insert(0, .../bin/utils)`` first, matching ``measurements.py``,
-``pixel_size.py`` and ``image_utils.py``.
+Imported flat (``from pixel_convention import ...``) after ``bin/utils`` is on sys.path.
 """
 
 from __future__ import annotations

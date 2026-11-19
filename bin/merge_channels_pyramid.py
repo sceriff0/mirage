@@ -24,22 +24,9 @@ from pixel_size import resolve_pixel_size
 from tiled_io import open_lazy
 from validation import StreamingWrappedValues
 
-# WHY THESE TWO IMPORTS ARE UNGUARDED, having replaced a `try: ... except ImportError:`
-# fallback that stubbed `detect_wrapped_values` out to `return False, 0, 0.0`.
-#
-# `bin/utils/validation.py` IS importable in this script's container. It was checked
-# rather than assumed: containers/merge/Dockerfile installs numpy (1.26.4), and
-# validation.py imports nothing else but the standard library, so the only way the old
-# fallback could fire is if bin/utils were missing entirely -- in which case the `logger`
-# import two lines up would already have failed, unguarded. What the fallback actually
-# bought was a silent path in which the wrapped-value check never ran and said nothing,
-# on the pipeline's most expensive artifact. Every other bin/ script that reads from
-# bin/utils (apply_basic_profiles.py, tiled_stitch.py, split_multichannel.py) imports it
-# unconditionally; this one now matches them.
-#
-# `tiled_io.open_lazy` imports zarr internally, so the module-level `HAS_ZARR` probe that
-# used to gate `_read_channel_file`'s zarr branch is gone with that function. The lazy read
-# is no longer an optimisation this script can decline -- it is how the pyramid is built.
+# Unguarded imports: bin/utils/validation.py needs only numpy and the stdlib, so a
+# fallback would only hide a skipped wrapped-value check. tiled_io.open_lazy needs
+# zarr, which the lazy pyramid build requires.
 
 os.environ["NUMBA_DISABLE_JIT"] = "0"
 os.environ["NUMBA_CACHE_DIR"] = tempfile.gettempdir() + "/numba_cache"
@@ -53,9 +40,8 @@ __all__ = ["main"]
 def log(msg):
     """Emit one INFO line through this module's logger.
 
-    A one-argument shim kept because the pyramid writer's progress reporting is
-    dense and threaded through deeply nested loops; it takes a preformatted
-    string rather than a %-format so call sites stay one line.
+    Takes a preformatted string so the dense progress-reporting call sites stay one
+    line.
     """
     logger.info(msg)
 
@@ -84,8 +70,8 @@ MARKER_COLORS = {
 
 def generate_channel_color(name: str, index: int) -> Tuple[int, int, int]:
     """Generate a color for a channel based on name or index."""
-    # Check predefined colors first (exact match, case-insensitive) — avoids
-    # substring collisions like "CD4" matching "CD45", or "CD1" matching "CD14".
+    # Predefined colors first (exact match, case-insensitive), so "CD4" does not
+    # match "CD45".
     name_upper = name.upper()
     for key, rgb in MARKER_COLORS.items():
         if key.upper() == name_upper:
@@ -99,9 +85,8 @@ def generate_channel_color(name: str, index: int) -> Tuple[int, int, int]:
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
-#: The integer dtypes `downsample_image` routes through a float32 intermediate before
-#: rounding back. Named once because `_downsample_plane_f32` and both branches of
-#: `downsample_image` have to agree about the set.
+#: Integer dtypes `downsample_image` routes through a float32 intermediate before
+#: rounding back; shared by `_downsample_plane_f32` and `downsample_image`.
 _ROUNDED_DTYPES = (
     np.uint8,
     np.uint16,
@@ -115,24 +100,15 @@ _ROUNDED_DTYPES = (
 def _downsample_plane_f32(plane_f32: np.ndarray, factor: int, out_dtype) -> np.ndarray:
     """Downsample ONE already-float32 plane by `factor`, returning it in `out_dtype`.
 
-    A WHOLE PLANE, never a band or a tile, and that is a correctness constraint rather
-    than a convenience. `cv2.INTER_AREA`'s effective vertical ratio is `h / (h // factor)`,
-    which equals `factor` only when `factor` divides `h`; when it does not, the resample
-    support crosses whatever band boundary you pick and no decomposition into bands
-    reproduces the whole-image answer. Measured on uint16 at factor 2, whole image against
-    256-row bands: exact at h=1024 and h=1000, **max difference 29642 counts** at h=1023,
-    and wrong again at 999 and 30001. An odd-dimensioned slide is ordinary. So this
-    function is the reason the pyramid is derived per channel from whole planes while only
-    the WRITE is tiled -- see `_level_tiles`.
+    Must be a whole plane, never a band or tile: `cv2.INTER_AREA`'s vertical ratio is
+    `h / (h // factor)`, so when `factor` does not divide `h` the resample support
+    crosses any band boundary and banded results differ from the whole-plane answer.
+    That is why levels are derived per channel from whole planes and only the write is
+    tiled (see `_level_tiles`).
 
-    Taking float32 in, rather than the source plane, is what lets the caller build the
-    float32 buffer band by band and never hold the storage-dtype plane beside it.
-
-    This is exactly the arithmetic `downsample_image`'s integer branch performs; that
-    function calls this one, so the streaming path and the whole-array path cannot drift.
-    cv2 is imported here rather than at module scope for the same reason it is there: the
-    only caller that tolerates its absence is `downsample_image`, whose own `import cv2`
-    fails first and falls back to block averaging.
+    Takes float32 so the caller can fill the float32 buffer band by band. This is the
+    arithmetic of `downsample_image`'s integer branch, which calls this function. cv2 is
+    imported locally; `downsample_image` falls back to block averaging without it.
     """
     import cv2
 
@@ -189,7 +165,7 @@ def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
         if image.dtype in [np.float32, np.float64]:
             return reshaped.mean(axis=(1, 3)).astype(image.dtype)
         else:
-            # Fix: Round before converting to integer dtype to avoid truncation artifacts
+            # Round before converting to integer dtype to avoid truncation artifacts
             return np.round(reshaped.mean(axis=(1, 3))).astype(image.dtype)
     elif image.ndim == 3:
         c, h, w = image.shape
@@ -198,7 +174,7 @@ def downsample_image(image: np.ndarray, factor: int) -> np.ndarray:
         for i in range(c):
             trimmed = image[i, : new_h * factor, : new_w * factor]
             reshaped = trimmed.reshape(new_h, factor, new_w, factor)
-            # Fix: Round before converting to integer dtype to avoid truncation artifacts
+            # Round before converting to integer dtype to avoid truncation artifacts
             if image.dtype in [np.float32, np.float64]:
                 result[i] = reshaped.mean(axis=(1, 3)).astype(image.dtype)
             else:
@@ -232,41 +208,24 @@ def calculate_pyramid_levels(
 
 
 def to_uint16(data):
-    """The one float->uint16 rule for this pipeline: clip to range, ROUND, then cast.
+    """The one float->uint16 rule for this pipeline: clip to range, round, then cast.
 
-    `.astype()` truncates toward zero, so casting without rounding applies a systematic
-    downward bias of up to one count to every non-integral pixel -- mean -0.5 LSB, one-sided,
-    on intensity data that later becomes a measured per-cell statistic. It never averages out.
-
-    Rounding is `np.round` (half-to-even) to match the convention
-    `bin/apply_basic_profiles.py`'s `_to_storage_dtype` states and explains (it inherited the
-    rule, verbatim, from the deleted `bin/preprocess.py`, which stated it first); a different
-    tie rule here would be a second convention, not a fix. Integer input is returned untouched
-    so this is safe to call unconditionally.
-
-    Clipping stays ahead of the round for a reason: 65535.6 rounds to 65536, which wraps to 0
-    in uint16. Guarded by tests/test_dtype_rounding_contract.py.
+    `.astype()` truncates toward zero, a one-sided bias of mean -0.5 LSB. Rounding is
+    `np.round` (half-to-even), the same convention as `bin/apply_basic_profiles.py`'s
+    `_to_storage_dtype`. Integer input is returned untouched. Clipping comes before
+    rounding because 65535.6 rounds to 65536, which wraps to 0 in uint16
+    (tests/test_dtype_rounding_contract.py).
     """
     if not np.issubdtype(data.dtype, np.floating):
         return data
     return np.round(np.clip(data, 0, 65535)).astype(np.uint16)
 
 
-#: Byte budget for one streamed source row band. Peak for the base pass is one band plus
-#: one write tile, and expressing the budget in BYTES rather than in rows is what keeps
-#: that independent of slide width -- a fixed row count on a 40000px-wide slide is ten
-#: times the same band on a 4000px one. `bin/utils/tiled_io.py` sizes its decimated reads
-#: the same way and for the same reason.
-#:
-#: This script owns the constant. It is deliberately NOT imported from convert_image.py or
-#: split_multichannel.py and NOT hoisted into bin/utils/: those scripts run in different
-#: container images, and a cross-script import would couple their dependency sets. Same
-#: reason `to_uint16` is written out here rather than imported.
-#:
-#: 64 MiB is `tiled_io.DEFAULT_BAND_BYTES`' value, arrived at independently and kept the
-#: same: a band only has to hold enough rows to cut one row of write tiles out of, and at
-#: the shipped 512px tile on a 40000px-wide slide one tile row is 41 MB. A larger budget
-#: would buy nothing and would sit in the memory formula as a constant adder.
+#: Byte budget for one streamed source row band. Peak for the base pass is one band
+#: plus one write tile; a byte budget keeps that independent of slide width.
+#: Owned here rather than imported, because the other scripts that stream bands run
+#: in different container images. Same value as `tiled_io.DEFAULT_BAND_BYTES`; one
+#: 512px tile row of a 40000px-wide slide is 41 MB.
 READ_BAND_BYTES = 64 * 1024 * 1024
 
 
@@ -285,21 +244,14 @@ def _band_rows(width: int, itemsize: int, align: int = 1) -> int:
 
 
 class _ChannelValidator:
-    """The per-channel checkpoint `_load_channel_stack` ran on a resident plane, folded
-    over row bands and emitting THE SAME lines, once, after the channel's last band.
+    """Per-channel validation folded over row bands, logged once after the last band.
 
-    Deliberately NOT `validation.StreamingNegativeClip`, even though the shape is identical.
-    That class reproduces `clip_negative_values`'/`detect_negative_values`' log lines; this
-    script's are different ones -- four-space-indented, naming the channel file, and with
-    the min rather than a count. Reusing it would keep the pixels and change the log, which
-    is the one thing this rewrite is not allowed to do. The wrapped-value half DOES come
-    from validation.py (`StreamingWrappedValues`), because there the aggregate, the
-    threshold and the emitted line are all the shared function's.
+    Not `validation.StreamingNegativeClip`: this script's log lines differ (indented,
+    naming the channel file, reporting the min). The wrapped-value half uses
+    validation.py's `StreamingWrappedValues`.
 
-    The clip itself is applied to every band unconditionally by the source, not only when
-    the whole channel turns out to have negatives: `np.clip(x, 0, None)` is a no-op on
-    already-non-negative data, so the pixels are identical either way, while the DECISION
-    to log cannot be taken until the last band has been seen.
+    The clip is applied to every band by the source; `np.clip(x, 0, None)` is a no-op on
+    non-negative data, while the decision to log waits for the last band.
     """
 
     def __init__(self, name: str, dtype):
@@ -307,9 +259,8 @@ class _ChannelValidator:
         dt = np.dtype(dtype)
         self._min_before = None
         self._min_after = None
-        # `_load_channel_stack`'s branch was `elif dtype == np.uint16`, on the dtype scanned
-        # from the file -- so the wrapped-value check ran on uint16 channels only, and only
-        # when the channel had no negatives at all.
+        # The wrapped-value check runs on uint16 channels only, and only when the channel
+        # had no negatives.
         self._wrapped = StreamingWrappedValues(dt) if dt == np.uint16 else None
 
     def observe(self, raw: np.ndarray, clipped: np.ndarray) -> None:
@@ -335,8 +286,8 @@ class _ChannelValidator:
             )
             log(f"    Clipped to 0. New min={self._min_after}")
         elif self._wrapped is not None:
-            # Percentages against the WHOLE channel, not against a band: the count and the
-            # size are summed across bands and divided once, inside finalize().
+            # Percentages against the whole channel: counts and sizes are summed across bands
+            # and divided once, in finalize().
             has_wrapped, wrap_count, wrap_pct = self._wrapped.finalize()
             if has_wrapped:
                 log(
@@ -345,25 +296,19 @@ class _ChannelValidator:
 
 
 class _BandSource:
-    """A (C, H, W) pixel source that hands out row bands already in the STORAGE dtype.
+    """A (C, H, W) pixel source that hands out row bands already in the storage dtype.
 
-    Subclasses supply `read_band`; everything the pyramid needs is built from it. The point
-    of the seam is that `write_pyramidal_ome_tiff_from_source` never learns whether the
-    pixels came from files or from a resident array, so the in-memory API kept for callers
-    and tests and the gigapixel file path share one writer.
+    Subclasses supply `read_band`. The writer does not know whether pixels come from
+    files or a resident array, so both entry points share one writer.
     """
 
     #: (C, H, W)
     shape: Tuple[int, int, int] = (0, 0, 0)
     #: dtype the pyramid is written in -- what `read_band` returns.
     dtype = np.dtype(np.uint16)
-    #: itemsize of the SOURCE pixels, which is what a band read actually materialises.
-    #: Distinct from `dtype.itemsize` because a float32 source is stored as uint16: budgeting
-    #: the band by the output's 2 bytes/px would let a float channel's read be twice the
-    #: intended size before the cast even happens. (The float path is still under-counted --
-    #: `read_band` transiently holds the raw float32, a clipped float32 copy and the uint16
-    #: result, ~10 bytes/px against a 4 byte/px budget -- but under-counting by 2.5x beats
-    #: under-counting by 5x, and the band is a constant in the memory formula either way.)
+    #: itemsize of the SOURCE pixels, which is what a band read materialises. Differs
+    #: from `dtype.itemsize` when a float32 source is stored as uint16. (The float path
+    #: still under-counts: `read_band` briefly holds ~10 bytes/px.)
     src_itemsize = 2
 
     def read_band(self, c: int, y0: int, y1: int, validator=None) -> np.ndarray:
@@ -375,9 +320,8 @@ class _BandSource:
     def plane_float32(self, c: int) -> np.ndarray:
         """Channel `c` as ONE float32 plane, assembled band by band.
 
-        Never materialises the storage-dtype plane beside the float32 one: each band is
-        cast on assignment into the preallocated buffer, which is elementwise-identical to
-        `plane.astype(np.float32)` and costs 4 bytes per pixel instead of 6.
+        Each band is cast on assignment into the preallocated buffer, so the storage-dtype
+        plane is never held beside the float32 one.
         """
         _, h, w = self.shape
         buf = np.empty((h, w), dtype=np.float32)
@@ -391,15 +335,11 @@ class _BandSource:
     def level_chain(self, c: int, scale: int, n_levels: int):
         """Every pyramid level of channel `c`, as ``[level 1, level 2, ...]``.
 
-        Iterated halving, not one cumulative resize: the whole-array implementation fed
-        each level's output back in as the next level's input, rounding to the storage
-        dtype in between (`current_data = downsampled`), and a single resize by
-        ``scale**k`` is a different computation from k resizes by ``scale`` with a round
-        between each. It would also not be pixel-identical, which is the constraint.
+        Iterated halving with a round to the storage dtype between levels, not one
+        cumulative resize by ``scale**k``; the two are different computations.
 
-        The base plane is transient: it exists as one float32 buffer for the duration of
-        the first resize and is dropped. What the caller keeps is the chain, which is
-        about a third of ONE plane -- not of the stack.
+        The base plane is transient (one float32 buffer for the first resize); the chain
+        the caller keeps is about a third of one plane.
         """
         planes = [_downsample_plane_f32(self.plane_float32(c), scale, self.dtype)]
         for _ in range(n_levels - 1):
@@ -412,18 +352,10 @@ class _BandSource:
 class _ArraySource(_BandSource):
     """A resident (C, H, W) array behind the band interface.
 
-    The defensive float->uint16 cast the whole-array writer used to do up front, over the
-    entire stack, now happens one band at a time. `to_uint16` is elementwise, so the pixels
-    are identical.
-
-    IT DOES NOT CLIP NEGATIVES, and that asymmetry with `_ChannelFileSource` is deliberate.
-    The negative clip belongs to `_load_channel_stack` -- the PIPELINE's read of the channel
-    files -- and never ran in `write_pyramidal_ome_tiff`, which only ever cast float input.
-    Clipping here would silently change what this entry point does with signed-integer data:
-    an int16 stack with a -100 pixel used to round-trip -100, and a clip turns it into 0. A
-    first draft of this class did exactly that, uncovered.
-    `tests/test_merge_pyramid_streaming.py::test_the_array_entry_point_does_not_clip_signed_input`
-    pins the round-trip. Float input is still clipped, by `to_uint16`, exactly as before.
+    Float input is cast to uint16 one band at a time with `to_uint16`. Negative values
+    are not clipped, unlike `_ChannelFileSource`: signed-integer input round-trips
+    unchanged (tests/test_merge_pyramid_streaming.py::
+    test_the_array_entry_point_does_not_clip_signed_input).
     """
 
     def __init__(self, data: np.ndarray):
@@ -446,24 +378,16 @@ class _ArraySource(_BandSource):
 class _ChannelFileSource(_BandSource):
     """The single-channel TIFFs SPLIT_CHANNELS wrote, read one row band at a time.
 
-    Replaces `_read_channel_file`, which opened a tifffile zarr store and then immediately
-    called `np.asarray` on the whole of it -- so the open bought nothing and the docstring's
-    "via zarr when available" described a laziness that was not there. `open_lazy` is the
-    repository's one region-readable view (bin/utils/tiled_io.py) and is what
-    tiled_stitch.py and apply_basic_profiles.py read through. Region reads against these
-    files are genuinely cheap now that SPLIT_CHANNELS writes them tiled.
-
-    One handle is kept open across the bands of a single channel and closed when another
-    channel is selected: `open_lazy` rebuilds the store on every call by design, so reopening
-    per band would pay for the file's directory on every read.
+    Reads through `open_lazy` (bin/utils/tiled_io.py). One handle stays open across the
+    bands of a channel and is closed when another channel is selected, because
+    `open_lazy` rebuilds the store on every call.
     """
 
     def __init__(self, channel_files, height: int, width: int, dtype):
         self.channel_files = [str(p) for p in channel_files]
         self.shape = (len(self.channel_files), int(height), int(width))
         src_dtype = np.dtype(dtype)
-        # uint16 when the input is float, so nothing downstream pays for a bulk cast --
-        # the same choice `_load_channel_stack` made when it allocated the output stack.
+        # uint16 when the input is float, so nothing downstream pays for a bulk cast.
         self._need_cast = src_dtype in (np.dtype(np.float32), np.dtype(np.float64))
         self._signed = not np.issubdtype(src_dtype, np.unsignedinteger)
         self.dtype = np.dtype(np.uint16) if self._need_cast else src_dtype
@@ -519,13 +443,9 @@ class _ArrayMaskSource(_BandSource):
 class _MaskFileSource(_BandSource):
     """The cell and nuclei mask TIFFs, read one row band at a time.
 
-    Streaming the mask series is worth doing even though it carries no pyramid: it is a
-    full slide-sized uint32 stack, 8 bytes per pixel against the intensity series' 2, so on
-    a 40000x30000 slide the resident version was 9.6 GB -- larger than everything else this
-    process holds put together. Nothing about the written bytes changes, because
-    `astype(np.uint32)` is elementwise and the write is tiled either way. No pyramid is
-    built here for the reason the whole-array version already documented: mean-downsampling
-    would corrupt categorical label IDs.
+    The mask stack is uint32, 8 bytes per pixel for the pair, so holding it resident
+    would dominate this process's memory. No pyramid is built: mean-downsampling would
+    corrupt categorical label IDs.
     """
 
     dtype = np.dtype(np.uint32)
@@ -543,10 +463,8 @@ class _MaskFileSource(_BandSource):
             return
         self.release()
         arr, _dtype, close = open_lazy(self._paths[c])
-        # The whole-array version squeezed the mask and then compared its shape against the
-        # intensity plane's, so a multi-plane mask file failed loudly. `_open_mask_source`
-        # only sees the first page's Y/X, so the plane count is checked here instead --
-        # without this, plane 0 would be embedded silently.
+        # `_open_mask_source` sees only the first page's Y/X, so the plane count is
+        # checked here; otherwise a multi-plane mask would embed plane 0 silently.
         if arr.shape[0] != 1:
             close()
             raise ValueError(
@@ -573,15 +491,12 @@ class _MaskFileSource(_BandSource):
 def _plane_tiles(source: _BandSource, tile: int, validators=None):
     """Yield a (C, H, W) source as full-resolution tiles in tifffile's order.
 
-    tifffile's order is (channel, tile row, tile column) and every tile is handed over at
-    the full `tile` x `tile` size with the slide's edge zero-padded, exactly as
-    bin/apply_basic_profiles.py and bin/tiled_stitch.py do. A FRESH buffer per tile is not
-    an oversight: the writer consumes the generator lazily, so a reused buffer would be
-    overwritten before it had been encoded.
+    Order is (channel, tile row, tile column); each tile is the full `tile` x `tile` size
+    with the slide edge zero-padded. A fresh buffer per tile, because the writer
+    consumes lazily and a reused buffer would be overwritten before encoding.
 
-    Bands are read at whole-tile-row granularity so a tile is never assembled from two
-    reads, and each band is dropped before the next is fetched -- peak here is one band
-    plus one tile, independent of the channel count and of the slide's height.
+    Bands are read in whole tile rows and dropped before the next, so peak is one band
+    plus one tile.
     """
     c_n, h, w = source.shape
     band_rows = _band_rows(w, source.src_itemsize, tile)
@@ -600,12 +515,9 @@ def _plane_tiles(source: _BandSource, tile: int, validators=None):
                     out[:th, :tw] = band[y0 - band_y0 : y0 - band_y0 + th, x0 : x0 + tw]
                     yield out
             del band
-        # NOTHING that must happen may go after the last `yield`: tifffile stops calling
-        # next() as soon as it has taken the final tile it needs, so a generator's tail
-        # never runs for the LAST channel. `validator.finalize()` lived here at first and
-        # a one-channel run printed no validation line at all -- silently, because the
-        # pixels were fine. The validators are finalized by the caller, after `write`
-        # returns; `source.release()` is likewise re-run by `merge_channels`' finally.
+        # Nothing that must happen may go after the last `yield`: tifffile stops calling
+        # next() once it has the final tile, so the tail never runs for the last channel.
+        # The caller finalizes validators after `write` returns.
         source.release()
         gc.collect()
 
@@ -613,33 +525,15 @@ def _plane_tiles(source: _BandSource, tile: int, validators=None):
 class _PyramidLevels:
     """Derives every pyramid level once, per channel, and serves them in tifffile's order.
 
-    THE ORDERING CONSTRAINT, WHICH IS WHAT MAKES THIS A CLASS AND NOT A LOOP. tifffile
-    fills the reserved SubIFDs one level at a time: all channels of level 1, then all
-    channels of level 2, and so on. Deriving level k from level k-1 -- which is what the
-    whole-array version did, and what pixel-identity requires -- therefore means level k-1
-    must still exist when level k is built, across a channel loop that has run to the end
-    in between.
+    tifffile fills the SubIFDs one level at a time (all channels of level 1, then level
+    2, ...), while level k must be derived from level k-1 of the same channel. So level
+    1's pass reads each base plane, derives that channel's whole chain (`level_chain`),
+    hands level 1 to the writer, and keeps levels 2..K.
 
-    WHAT IS HELD, AND WHY IT IS THIS AND NOT SOMETHING CHEAPER OR DEARER. Level 1's pass
-    reads each channel's base plane once and derives that channel's WHOLE chain
-    (`level_chain`), keeps levels 2..K, and hands level 1 straight to the writer. So:
-
-      * level 1 itself is never accumulated across channels -- it is the biggest level, a
-        quarter of the base, and it is transient here;
-      * what IS accumulated is levels 2 and deeper, which sum to `H*W/6` bytes per channel,
-        one twelfth of a base plane. On an 8-channel 40000x30000 uint16 slide that is
-        1.6 GB against the 19 GB stack the old code allocated before writing anything;
-      * each level is dropped (`drop`) as soon as it has been written, so the peak is the
-        moment level 1's pass ends, not the end of the run.
-
-    Two designs were measured and rejected. Accumulating EVERY level (the obvious form)
-    holds `base/3` -- 6.4 GB on that slide, four times this. Holding nothing at all and
-    re-deriving level k from a fresh read of the base makes the peak genuinely independent
-    of the channel count, but re-reads every channel's source file once per level: measured
-    on a 4-channel 8193x8193 slide, 28 whole-plane decodes instead of 4, and 18.4 s against
-    5.9 s for the whole-array version -- a 3.4x slowdown on a process that already has 6.5 h
-    tasks in production. This form reads each source plane twice (once for the base, once
-    here) and costs 1.4x.
+    Levels 2 and deeper sum to about `H*W/6` bytes per channel and are dropped (`drop`)
+    as soon as written. Keeping every level would hold about `base/3`; re-reading the
+    base for each level would make peak independent of channel count but re-decode every
+    plane once per level, which is much slower.
     """
 
     def __init__(self, source: _BandSource, scale: int, n_sublevels: int):
@@ -670,7 +564,7 @@ class _PyramidLevels:
                     out[:th, :tw] = plane[y0 : y0 + th, x0 : x0 + tw]
                     yield out
             del plane
-            # Nothing load-bearing after the last `yield` -- see the note in `_plane_tiles`.
+            # Nothing that must run goes after the last `yield` (see `_plane_tiles`).
             self._source.release()
             gc.collect()
 
@@ -700,26 +594,17 @@ def write_pyramidal_ome_tiff_from_source(
 ):
     """Write the pyramidal OME-TIFF without ever holding the slide.
 
-    The IFD structure Bio-Formats/QuPath expects is unchanged -- base resolution as one
-    page per channel, pyramid levels in the reserved SubIFDs, an optional second OME image
-    for the masks. What changed is that every one of those writes is fed from a generator
-    of tiles instead of from a resident array:
+    Structure as Bio-Formats/QuPath expect: base resolution as one page per channel,
+    pyramid levels in the reserved SubIFDs, and an optional second OME image for the
+    masks. Every write is fed from a tile generator:
 
-      * the BASE comes straight from the source's row bands, so no (C, H, W) array exists
-        at any point;
-      * each LEVEL is derived per channel from a whole plane (mandatory -- see
+      * the base comes straight from the source's row bands;
+      * each level is derived per channel from a whole plane (see
         `_downsample_plane_f32`) and tiled only on the way out;
-      * the MASK series streams the two mask files the same way.
+      * the mask series streams the two mask files the same way.
 
-    Peak is therefore one float32 plane plus that plane's level chain -- constant in slide
-    size, but NOT constant in channel count: levels 2..K of each channel's chain are
-    stashed until they are written (`_PyramidLevels`, below), which sums to `H*W/6` bytes
-    per channel, one twelfth of a base plane. Measured slope: 0.69 MB/channel, down from
-    10.1 MB/channel before this rewrite -- a deliberate trade against the 3.4x wall-clock
-    cost of re-deriving every level from a fresh read instead (see `_PyramidLevels`' own
-    docstring for the two rejected alternatives and their numbers). Verified byte-for-byte
-    against the whole-array writer: same file size, same tags, same OME-XML but for
-    tifffile's random per-file UUID.
+    Peak is one float32 plane plus its level chain, plus levels 2..K of each channel
+    until written (`_PyramidLevels`), so it grows slightly with channel count.
 
     Parameters are the same as `write_pyramidal_ome_tiff`, except that `source` and
     `mask_source` replace the `data` and `mask_stack` arrays, and `validators` carries the
@@ -741,9 +626,7 @@ def write_pyramidal_ome_tiff_from_source(
     for i, (h, w) in enumerate(levels):
         log(f"  Level {i}: {w} x {h}")
 
-    # bin/utils/ome_io.py builds it. This was the third of four independent copies of
-    # the same six keys; the fourth, a hand-written <OME ...> XML template in this same
-    # file, turned out to have no callers at all and is deleted.
+    # bin/utils/ome_io.py builds the OME metadata.
     metadata = ome_metadata(channel_names, (physical_size_x, physical_size_y))
 
     # Common write options
@@ -752,27 +635,10 @@ def write_pyramidal_ome_tiff_from_source(
         compression=compression,
         photometric="minisblack",
         resolutionunit="CENTIMETER",
-        # ONE COMPRESSOR THREAD, PINNED. tifffile defaults `maxworkers` to the machine's
-        # CPU count for a compressed tiled write and dispatches encoded tiles through a
-        # thread pool, so the pool runs ahead of the writer and the queued tiles become an
-        # unbounded term in the peak -- one that scales with the CHANNEL COUNT, which is
-        # exactly the property this rewrite exists to remove. Measured end to end on a
-        # 1024^2 slide with 4 pyramid levels, peak in units of one plane:
-        #
-        #                       C=2    C=8    C=12   C=16
-        #   tifffile 2023.4.12  8.24   4.78   5.10   5.41   (default maxworkers)
-        #   tifffile 2025.5.10  7.44   9.41  13.54  17.54   (default maxworkers)
-        #
-        # The container pins 2025.5.10 (containers/merge/Dockerfile), where the slope is
-        # about ONE PLANE PER CHANNEL. `maxworkers=1` removes it at both versions.
-        #
-        # It costs nothing worth having. This process reserves `cpus = 2`, and tifffile
-        # reads `os.cpu_count()` rather than the cgroup, so on a 64-core node it was
-        # spinning up 64 compressor threads against a 2-CPU reservation. Measured on a
-        # 4-channel 8193^2 slide at 2025.5.10: default 661.5 MB / 5.9 s, maxworkers=2
-        # 641.6 MB / 5.6 s, maxworkers=1 477.1 MB / 6.3 s -- the wall clock is within noise
-        # and only 1 is deterministic. Written bytes are unaffected; the byte-for-byte
-        # identity test in tests/test_merge_pyramid_streaming.py passes at both versions.
+        # One compressor thread. tifffile defaults `maxworkers` to os.cpu_count() (not the
+        # cgroup) for a compressed tiled write, and its encoded-tile queue then grows peak
+        # memory with channel count. maxworkers=1 keeps it flat; wall clock is about the
+        # same at this process's 2 CPUs, and written bytes are unchanged.
         maxworkers=1,
     )
     if compressionargs:
@@ -792,11 +658,9 @@ def write_pyramidal_ome_tiff_from_source(
             **options,
         )
 
-        # The per-channel validation aggregates, emitted here rather than from the tail of
-        # `_plane_tiles`' per-channel loop. tifffile stops pulling from the generator once
-        # it has the last tile it needs, so anything after the final `yield` never runs --
-        # measured, a one-channel run emitted no validation line at all while writing a
-        # perfectly correct pyramid. One line per channel, in channel order, still.
+        # Per-channel validation lines are emitted here, not from the tail of
+        # `_plane_tiles`, whose code after the final `yield` never runs for the last
+        # channel. One line per channel, in channel order.
         for validator in validators or ():
             validator.finalize()
 
@@ -817,9 +681,8 @@ def write_pyramidal_ome_tiff_from_source(
                 ),
                 **options,
             )
-            # Freed here rather than in the generator, whose tail does not run for the
-            # last channel; holding a written level would make the peak the SUM of the
-            # levels instead of the deepest live pair.
+            # Freed here, not in the generator (whose tail does not run for the last
+            # channel), so peak stays at the deepest live pair of levels.
             pyramid.drop(level_idx)
 
         # Optional second series: segmentation masks (cell + nuclei), uint32,
@@ -868,11 +731,9 @@ def write_pyramidal_ome_tiff(
     """
     Write a pyramidal OME-TIFF with proper QuPath-compatible structure, from arrays.
 
-    The whole-array entry point, kept because callers and tests that already hold a small
-    stack should not have to build a source object. It wraps the arrays in `_ArraySource` /
-    `_ArrayMaskSource` and defers to `write_pyramidal_ome_tiff_from_source`, which is where
-    the structure and the ordering are decided; the pipeline itself goes through the file
-    source and never materialises `data`.
+    Entry point for callers and tests that already hold a small stack. Wraps the arrays
+    in `_ArraySource` / `_ArrayMaskSource` and defers to
+    `write_pyramidal_ome_tiff_from_source`; the pipeline uses the file source.
 
     Parameters
     ----------
@@ -1020,20 +881,17 @@ def _scan_channel_metadata(input_dir: str):
 
 
 def _channel_source(channel_files, height, width, dtype):
-    """Pass 2's replacement: a lazy view over the channel files, not a loaded stack.
+    """Pass 2: a lazy view over the channel files, not a loaded stack.
 
-    `_load_channel_stack` used to allocate `(C, H, W)` here and fill it channel by channel
-    -- ~19 GB on an 8-channel 40000x30000 uint16 slide, before the writer had allocated
-    anything. Nothing is read by this call; the pixels arrive one row band at a time while
-    the pyramid is written.
+    Nothing is read here; pixels arrive one row band at a time while the pyramid is
+    written.
     """
     log("-" * 50)
     log("Pass 2/3: Streaming channels into the pyramidal OME-TIFF...")
 
     source = _ChannelFileSource(channel_files, height, width, dtype)
-    # One validator per channel, folded during the base pass and emitted, once per channel,
-    # after that channel's last band -- the same lines `_load_channel_stack` emitted after
-    # its last whole-array read, with the percentages computed against the same denominator.
+    # One validator per channel, folded during the base pass and emitted once per
+    # channel after its last band.
     validators = [_ChannelValidator(Path(f).stem, dtype) for f in source.channel_files]
     return source, validators
 
@@ -1042,9 +900,8 @@ def _open_mask_source(height, width, masks_dir):
     """Open the optional cell/nuclei mask pair that becomes a second OME series.
 
     Read only when masks_dir contains both expected files; a single full-resolution uint32
-    series, never pyramided/downsampled. Nothing is loaded here either -- the shapes are
-    taken from the TIFF headers so the mismatch check still fails fast, and the pixels are
-    streamed band by band by `_MaskFileSource`.
+    series, never pyramided. Shapes come from the TIFF headers so a mismatch fails fast;
+    pixels are streamed by `_MaskFileSource`.
     """
     if not masks_dir:
         return None, None
@@ -1136,13 +993,9 @@ def _validate_written_pyramid(tmp_path, num_output_channels, channel_names, mask
     and is readable, including the optional mask series.
     """
     # Validate: check the file has the right number of channels and is readable.
-    # Reads only the first tile per channel (~KB each), not full pages.
-    # NOTE: use tif.series[0] (the intensity series) rather than raw tif.pages,
-    # since an optional mask series (Image:1) adds its own top-level pages that
-    # must not be counted against the intensity channel total.
-    #
-    # `mask_shape` is the expected (2, H, W), not the mask array: the masks are streamed
-    # now, so there is no array left to compare against by the time this runs.
+    # Reads only the first tile per channel. Use tif.series[0] (the intensity series),
+    # not tif.pages, since an optional mask series (Image:1) adds its own pages.
+    # `mask_shape` is the expected (2, H, W); the masks were streamed, not held.
     log("Validating written file...")
     with tifffile.TiffFile(tmp_path) as tif:
         base_pages = list(tif.series[0].pages)
@@ -1299,7 +1152,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--physical-size-x",
         # str, not float: may be the literal 'auto', resolved against the first channel
-        # TIFF in --input-dir. No default -- see nextflow.config's pixel_size note.
+        # TIFF in --input-dir. No default: see nextflow.config's pixel_size note.
         type=str,
         default=None,
         help="Pixel size in X (micrometres), or 'auto' to read it from the input",
@@ -1307,7 +1160,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--physical-size-y",
         # str, not float: may be the literal 'auto', resolved against the first channel
-        # TIFF in --input-dir. No default -- see nextflow.config's pixel_size note.
+        # TIFF in --input-dir. No default: see nextflow.config's pixel_size note.
         type=str,
         default=None,
         help="Pixel size in Y (micrometres), or 'auto' to read it from the input",
@@ -1340,9 +1193,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Run merge and pyramid CLI."""
     configure_logging()
-    # The old `zarr available: {HAS_ZARR}` line is gone with the probe behind it. It
-    # reported whether an OPTIONAL fast path was open; the lazy read is mandatory now, so
-    # a missing zarr is an ImportError at the first read rather than a line in the log.
+    # zarr is required for the lazy read; a missing zarr fails at the first read.
     args = parse_args()
 
     # 'auto' reads the scale off the first single-channel TIFF SPLIT_CHANNELS wrote;

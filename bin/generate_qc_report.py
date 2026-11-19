@@ -117,10 +117,8 @@ def _img_to_b64(path):
 
 def parse_csv_table(csv_path):
     """
-    Parse a generic CSV into (headers, rows) where each row is a list of
-    strings in header order. Used for the Valis preprocessed_summary.csv
-    (rTRE, D, n_matches, etc.); kept generic (columns are whatever the CSV
-    declares) so any future summary CSV can reuse it unchanged.
+    Parse a generic CSV into (headers, rows), each row a list of strings in header
+    order. Used for the VALIS summary CSVs (rTRE, D, n_matches, ...).
     """
     with open(csv_path, newline="") as fh:
         reader = csv.DictReader(fh)
@@ -294,17 +292,11 @@ def section(title, body_html):
 def _html_table(headers, rows, extra_body_html=""):
     """
     Build a complete ``<table>`` (with ``<thead>``/``<tbody>``), escaping
-    every header and every cell value via ``html.escape``.
+    every header and cell value via ``html.escape``.
 
-    Centralizes the table-render logic that used to be duplicated across the
-    registration-QC Valis rTRE table and the STARE tiled-TRE table, and
-    ensures neither can inject raw CSV/JSON-derived HTML into the report.
-
-    `extra_body_html`: optional pre-rendered ``<tr>...</tr>`` HTML appended
-    after the normal rows — for full-width/``colspan`` rows (e.g. a
-    per-file parse-error notice) that don't fit the uniform one-cell-per-
-    header row shape every other row uses. The caller is responsible for
-    escaping any dynamic values it interpolates into this HTML itself.
+    `extra_body_html`: optional pre-rendered ``<tr>...</tr>`` HTML appended after
+    the normal rows, for full-width/``colspan`` rows such as a parse-error notice.
+    The caller must escape any dynamic values in it.
     """
     thead = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
     body = "".join(
@@ -316,13 +308,9 @@ def _html_table(headers, rows, extra_body_html=""):
 
 
 # ── inline SVG plotting ─────────────────────────────────────────────────────────
-# Hand-rolled and stdlib-only, following this file's existing
-# `_tiled_tre_heatmap_svg()` precedent. bin/generate_resource_report.py hand-rolls
-# its own SVG for the same reason, and the two deliberately do NOT share a module:
-# that script runs on the head node OUTSIDE every container, this one runs inside
-# bolt3x/mirage-preprocess, so a shared bin/utils module would have to be staged
-# into both and would couple two independently released surfaces. Sixty duplicated
-# lines are cheaper than that.
+# Hand-rolled and stdlib-only. bin/generate_resource_report.py has its own copy
+# because it runs on the head node outside every container, while this script
+# runs inside the preprocess image.
 
 SVG_W = 380  # plot box width, px
 SVG_H = 170  # plot box height, px
@@ -335,13 +323,9 @@ SVG_PAD_B = 32  # bottom gutter: x-axis labels
 def _finite(values):
     """Keep only real, finite numbers from ``values``.
 
-    ``bool`` is excluded on purpose: it is an ``int`` subclass, so a stray
-    ``True`` in a metrics dict would otherwise be plotted as 1.0. NaN AND
-    ``±inf`` are both dropped -- ``json.loads`` accepts a literal
-    ``Infinity``, and a zero-denominator QC metric can produce one, so this
-    is a realistic input, not a hypothetical one. An unfiltered inf would
-    become ``lo``/``hi`` in ``_bin_counts``, making its span (and then
-    ``int(span)``) NaN.
+    ``bool`` is excluded (an ``int`` subclass, so ``True`` would plot as 1.0). NaN and
+    ``±inf`` are dropped: ``json.loads`` accepts ``Infinity`` and a zero-denominator
+    metric can produce one, which would break ``_bin_counts``' span.
     """
     out = []
     for v in values:
@@ -356,9 +340,8 @@ def _finite(values):
 def _percentile(values, q):
     """Nearest-rank percentile (``q`` in 0..100) of the finite part of ``values``.
 
-    Nearest-rank rather than interpolated: every number this plots is an error
-    measured in pixels or µm, and an interpolated p90 invents a value no tile and
-    no cell ever had. ``None`` when nothing is finite.
+    Nearest-rank, so the reported value is one that was actually measured. ``None``
+    when nothing is finite.
     """
     vals = sorted(_finite(values))
     if not vals:
@@ -370,14 +353,9 @@ def _percentile(values, q):
 def _bin_counts(values, bins):
     """Bin the finite part of ``values`` into ``bins`` equal-width buckets.
 
-    Returns ``(counts, lo, hi)``, or ``([], 0.0, 0.0)`` when there is nothing to
-    bin. Three edge cases are handled here rather than in every caller: the maximum
-    value lands in the LAST bin (``int((hi - lo) / span * bins)`` is ``bins``,
-    one past the end); an all-identical input widens to ``lo + 1.0`` so the
-    single bar has a width to be drawn in instead of dividing by zero; and a span
-    that overflows to ``inf`` (both ``lo``/``hi`` finite but far enough apart)
-    makes the normalized position ``nan`` -- that also lands in the last bin
-    rather than raising out of ``int()``.
+    Returns ``(counts, lo, hi)``, or ``([], 0.0, 0.0)`` when there is nothing to bin.
+    The maximum lands in the last bin; an all-identical input widens to ``lo + 1.0``;
+    a span that overflows to ``inf`` also lands in the last bin instead of raising.
     """
     vals = _finite(values)
     if not vals or bins < 1:
@@ -397,14 +375,11 @@ def _bin_counts(values, bins):
 def _histogram_svg(values, *, title, x_label, bins=20, rules=()):
     """One binned distribution as an inline ``<svg>`` bar chart.
 
-    ``rules`` is an iterable of ``(value, label)`` drawn as dashed vertical
-    markers carrying ``class="rule"`` — the p50/p90 lines the error-distribution
-    view adds. A rule whose value is missing or outside the data range is
-    skipped, never crashed on: these plots render whatever a partially-failed run
-    produced.
+    ``rules`` is an iterable of ``(value, label)`` drawn as dashed vertical markers
+    with ``class="rule"`` (the p50/p90 lines). A rule that is missing or outside the
+    data range is skipped.
 
-    Returns the shared ``empty-notice`` paragraph when nothing is finite, so
-    every caller gets the same "no data" affordance without repeating the check.
+    Returns the shared ``empty-notice`` paragraph when nothing is finite.
     """
     counts, lo, hi = _bin_counts(values, bins)
     if not counts:
@@ -475,11 +450,8 @@ def _histogram_svg(values, *, title, x_label, bins=20, rules=()):
 def _error_distribution_svg(values, *, title, bins=20):
     """A stage's error distribution: the histogram plus its p50 and p90 markers.
 
-    A registration-error distribution is read by its TAIL — the median says the
-    run was fine, the p90 says where it was not — so both percentiles are drawn
-    on the plot rather than left to be eyeballed off the bars. Units belong in
-    ``title`` (px for per-tile TRE, µm for cell displacement); the x-axis is
-    labelled ``error`` because one function serves both.
+    Units belong in ``title`` (px for per-tile TRE, µm for cell displacement); the
+    x-axis is labelled ``error`` because one function serves both.
     """
     rules = [
         (v, lbl)
@@ -527,8 +499,8 @@ def registration_qc_section(reg_dir, valis_dir, seg_qc_dir=None):
     )
     parts.append(img_grid(pngs))
 
-    # Registration-accuracy summaries. The method decides the format: VALIS emits rTRE CSVs, the
-    # tiled ('STARE') method emits its own intrinsic-TRE JSON (_tre.json) — both land here.
+    # Registration-accuracy summaries: VALIS emits rTRE CSVs, the tiled (STARE)
+    # method emits an intrinsic-TRE JSON (_tre.json).
     valis_csvs = list_files(valis_dir, "*.csv")
     tiled_tre_jsons = list_files(valis_dir, "*_tre.json")
     if valis_csvs:
@@ -560,7 +532,7 @@ def registration_qc_section(reg_dir, valis_dir, seg_qc_dir=None):
             '<p class="empty-notice" style="margin-top:12px;">No registration-accuracy summary found.</p>'
         )
 
-    # Warp-segmentation QC metrics (previously dropped)
+    # Warp-segmentation QC metrics
     seg_qc_jsons = list_files(seg_qc_dir, "*.json") if seg_qc_dir else []
     if seg_qc_jsons:
         parts.append(
@@ -579,38 +551,20 @@ def postprocess_qc_section(postprocess_dir):
     return section("Postprocessing QC", img_grid(pngs, wide=True))
 
 
-# Canonical stage order for the warp-seg QC plots. WARP_SEG_QC writes `stage_order`
-# into its JSON, but a directory holding several slides can hold several orders and
-# a report is diffed across runs — so the order is fixed here and anything
-# unrecognised is appended, sorted, rather than dropped. `refined` is the tiled
-# (STARE) backend's terminal stage (bin/utils/tiled_stage_warp.py's STAGES =
-# native, rigid, refined -- it never emits non_rigid/micro), placed last as the
-# tiled analogue of VALIS's `micro`: the final measured stage.
+# Canonical stage order for the warp-seg QC plots, fixed so reports diff cleanly
+# across runs; unrecognised stages are appended, sorted. `refined` is STARE's final
+# stage, placed last as the analogue of VALIS's `micro`.
 SEG_QC_STAGE_ORDER = ("native", "rigid", "non_rigid", "micro", "refined")
 
 
 def _seg_qc_stage_plots(seg_qc_dir):
     """Per-stage cell-displacement distribution across every slide's WARP_SEG_QC JSON.
 
-    This replaced a per-file flattened metric table (spec Phase 4). The JSON carries
-    per-stage SUMMARY statistics, not raw per-cell values, so the distribution here
-    is across SLIDES: one point per slide per stage, the ``displacement_um_p50``
-    (px fallback) read through ``_read_seg_cell_disp`` — the same reader
-    ``reconcile_rows`` uses, so the plot and the reconciliation scatter cannot
-    disagree about a number. On a one-slide run this is a single bar whose ``n=1``
-    says so; the per-slide records are copied verbatim into the report's
-    ``seg_qc/`` data folder, which is where a single slide's numbers belong.
-
-    Units are never mixed within one distribution. STARE (tiled) runs are the
-    COMMON case for px, not an edge case (see ``_read_seg_cell_disp``), so a
-    directory holding both a calibrated (µm) and an uncalibrated (px) slide for
-    the same stage is split into up to two plots, one per unit actually present,
-    each titled with its own unit rather than a hardcoded one.
-
-    The caption also reports the matched-cell count (``matching.n_pairs``, via
-    ``_read_seg_qc_match_counts``) across slides, min and median: a p50 measured
-    over 12 matched cells is a different claim from one measured over 40 000, and
-    the histogram alone cannot tell the two apart.
+    The JSON carries per-stage summary statistics, so the distribution is across
+    slides: one ``displacement_um_p50`` (px fallback) per slide per stage, read through
+    ``_read_seg_cell_disp`` as ``reconcile_rows`` does. Units are never mixed: a stage
+    with both µm and px slides is split into one plot per unit. The caption reports the
+    matched-cell count (min and median of ``matching.n_pairs``) across slides.
     """
     per_slide = _read_seg_cell_disp(seg_qc_dir)
     if not per_slide:
@@ -665,11 +619,9 @@ def _seg_qc_stage_plots(seg_qc_dir):
 
 
 # ── STARE tiled-registration intrinsic TRE ──────────────────────────────────────
-# The tiled ('STARE') method emits its own intrinsic Target Registration Error per slide
-# (_tre.json), the way VALIS emits rTRE: coarse (rigid) feature-fit TRE, a per-tile spatial
-# heatmap VALIS does not have, and — in the default path — the post-refinement residual (its
-# analogue of VALIS's non-rigid error). Rendered here alongside the other registration-accuracy
-# tables so both methods surface a comparable number.
+# The tiled (STARE) method's per-slide intrinsic TRE (_tre.json): coarse rigid TRE,
+# a per-tile heatmap, and the post-refinement residual. Rendered alongside VALIS's
+# rTRE tables.
 def _fmt_px(v):
     return f"{v:.2f}" if isinstance(v, (int, float)) else "n/a"
 
@@ -684,8 +636,8 @@ def parse_tiled_tre_json(path):
         return b.get(key) if isinstance(b, dict) else None
 
     tiles = data.get("tiles", []) or []
-    # Prefer the counts the solver wrote; fall back to counting the heatmap so a _tre.json
-    # from before those keys existed still reports sensibly (missing `accepted` = accepted).
+    # Prefer the counts the solver wrote; otherwise count the heatmap (a missing
+    # `accepted` means accepted).
     n_rejected = data.get("n_rejected")
     if n_rejected is None:
         n_rejected = sum(1 for t in tiles if not t.get("accepted", True))
@@ -722,9 +674,8 @@ def _tiled_tre_heatmap_svg(info, cell=14):
     def kept(t):
         return bool(t.get("accepted", True))
 
-    # Scale over ACCEPTED tiles only. A rejected tile's value is an artefact of correlating
-    # against background — one of them at 131.5px would otherwise set vmax and squash every
-    # real tile into the green end, hiding the misalignment the heatmap exists to show.
+    # Scale over accepted tiles only: a rejected tile's value is an artefact of
+    # correlating against background and would otherwise set vmax.
     vmax = max((val(t) for t in tiles if kept(t)), default=0.0) or 1.0
     nx = max(t["ix"] for t in tiles) + 1
     ny = max(t["iy"] for t in tiles) + 1
@@ -759,18 +710,10 @@ def _tiled_tre_heatmap_svg(info, cell=14):
 def _tiled_tre_plots(tre_jsons):
     """Per-slide STARE intrinsic TRE: headline caption, per-stage distributions, heatmap.
 
-    This replaced a per-slide summary TABLE (spec Phase 4). The numbers that table
-    carried — coarse TRE, rigid and final percentiles, whether the mesh was
-    refined, accepted/total tiles — are kept in the caption line above each
-    slide's plots: dropping a table is not licence to drop the numbers, and the
-    accepted/total ratio in particular is the reason a clean-looking distribution
-    can still describe a slide a third of which was never measured.
-
-    The distributions are built from ACCEPTED tiles only, the same rule
-    bin/utils/tre_report.py applies to its percentiles — a rejected tile's
-    ``tre_rigid`` is an artefact of correlating against background. The heatmap
-    below them still shows every tile, accepted or not, because *where* points
-    were dropped is exactly what it is for.
+    The caption carries coarse TRE, rigid and final percentiles, whether the mesh was
+    refined, and accepted/total tiles. Distributions use accepted tiles only, as
+    bin/utils/tre_report.py does; the heatmap shows every tile so rejected regions
+    are visible.
     """
     parts, errors = [], []
     for jp in sorted(tre_jsons):
@@ -824,16 +767,13 @@ def _tiled_tre_plots(tre_jsons):
 
 
 # ── (C) feature-TRE vs cell-displacement reconciliation ─────────────────────────
-# VALIS scores registration on its own SuperPoint/SuperGlue keypoints — a self-referential,
-# optimistic feature-TRE — while WARP_SEG_QC scores it on independently segmented cells. Lining
-# the two up per stage exposes the failure mode neither catches alone: features declaring a slide
-# aligned while the cells say otherwise. A stage counts as divergent when the two disagree by more
-# than this factor; below it they are treated as corroborating.
+# VALIS's feature-TRE is measured on its own keypoints and is optimistic; WARP_SEG_QC
+# measures independently segmented cells. A stage is divergent when the two differ
+# by more than this factor.
 RECONCILE_DIVERGENCE_RATIO = 3.0
 
-# Each stage's feature-TRE comes from a specific VALIS summary column, because register_micro()
-# composes the micro residual into the same field and rewrites non_rigid_D in place: only the
-# pre-micro summary still isolates the non-rigid stage. (col, which_summary).
+# Feature-TRE source per stage, as (col, which_summary). register_micro() rewrites
+# non_rigid_D in place, so only the pre-micro summary isolates the non-rigid stage.
 _RECONCILE_TRE_SOURCE = {
     "rigid": ("rigid_D", "final"),
     "non_rigid": ("non_rigid_D", "premicro"),
@@ -852,17 +792,13 @@ def _to_float(v):
 def _read_intrinsic_tre(tre_dir):
     """slide -> {'final': {col: val}, 'premicro': {col: val}} of intrinsic TRE, either method's shape.
 
-    VALIS emits per-patient ``*_summary[.csv]`` rows (and a ``_premicro`` variant) keyed by the
-    ``from``/``filename`` column: read unchanged into ``final``/``premicro``.
+    VALIS emits per-patient ``*_summary[.csv]`` rows (and a ``_premicro`` variant) keyed by
+    the ``from``/``filename`` column, read into ``final``/``premicro``.
 
-    STARE (tiled) emits one per-slide ``*_tre.json``, keyed by its ``moving`` field. Per
-    ``bin/utils/tre_report.py``'s module docstring, ``coarse_tre_px`` is the rigid-stage TRE
-    ("directly comparable to VALIS's rigid error") and ``residual_after_px`` is the
-    post-registration number ("the analogue of VALIS's non-rigid error"); its p50 is used so it
-    lines up with the seg-QC side's ``displacement_*_p50``. STARE has no separate pre-micro stage,
-    so both values land in ``final`` — the existing non-rigid fallback in ``reconcile_rows``
-    (final's ``non_rigid_D`` when no premicro summary exists) already covers it. Both formats
-    write into the same slide dict so a directory containing both is a merge, not a shadow.
+    STARE emits one ``*_tre.json`` per slide, keyed by ``moving``: ``coarse_tre_px`` is the
+    rigid-stage TRE and the p50 of ``residual_after_px`` the non-rigid analogue. STARE has
+    no pre-micro stage, so both land in ``final``. A directory holding both formats is
+    merged into the same slide dict.
     """
     out = {}
     for csv_path in list_files(tre_dir, "*.csv"):
@@ -898,14 +834,9 @@ def _read_intrinsic_tre(tre_dir):
 def _read_seg_cell_disp(seg_qc_dir):
     """slide -> {stage: (displacement_p50, unit)} from the WARP_SEG_QC JSONs.
 
-    ``unit`` is ``"um"`` when the JSON's own micron column (``displacement_um_p50``)
-    is present, else ``"px"`` when it falls back to ``displacement_px_p50``. STARE
-    (tiled) runs are the COMMON case for px, not an edge case:
-    ``modules/local/warp_seg_qc.nf`` passes no pixel size on that path,
-    ``bin/warp_seg_qc.py`` forwards ``None``, and ``bin/utils/cell_pairs.py`` only
-    emits ``displacement_um_*`` when a pixel size was given. Callers must never
-    average a px value into a µm distribution (or vice versa) — carrying the unit
-    alongside the value is what lets them group by it instead of assuming one.
+    ``unit`` is ``"um"`` when ``displacement_um_p50`` is present, else ``"px"`` from
+    ``displacement_px_p50``. px is common on STARE runs, where no pixel size is passed.
+    Callers must group by unit and never average px with µm.
     """
     out = {}
     for jp in list_files(seg_qc_dir, "*.json"):
@@ -937,12 +868,9 @@ def _read_seg_cell_disp(seg_qc_dir):
 def _read_seg_qc_match_counts(seg_qc_dir):
     """slide -> matching.n_pairs from each WARP_SEG_QC JSON, when the block is present.
 
-    ``n_pairs`` is how many cells the fixed cell-pairing actually matched (see
-    docs/registration_qc.md's ``matching`` block). A displacement p50 computed
-    over 12 matched cells is a different claim from one computed over 40 000 --
-    read separately from ``_read_seg_cell_disp`` so a caption can say which one a
-    run was, without folding a non-stage key into the per-stage metrics dict that
-    drives stage discovery.
+    ``n_pairs`` is how many cells the pairing matched (docs/registration_qc.md). Read
+    separately from ``_read_seg_cell_disp`` so it does not enter the per-stage metrics
+    that drive stage discovery.
     """
     out = {}
     for jp in list_files(seg_qc_dir, "*.json"):
@@ -978,17 +906,12 @@ def reconcile_rows(tre_dir, seg_qc_dir):
         for stage in ("rigid", "non_rigid", "micro"):
             col, which = _RECONCILE_TRE_SOURCE[stage]
             feature = slide_tre.get(which, {}).get(col)
-            # non_rigid_D is overwritten in place by register_micro(), so only the pre-micro
-            # summary isolates the non-rigid TRE. But when no pre-micro summary exists
-            # (micro_reg < 2 -> register_micro never ran), the final summary still IS the
-            # pre-micro non-rigid value: fall back to it. Without this the non_rigid row is
-            # permanently n/a at the shipped default (micro_reg=0), defeating the whole
-            # reconciliation for the configuration that actually runs.
+            # register_micro() overwrites non_rigid_D, so the pre-micro summary isolates the
+            # non-rigid TRE. With no pre-micro summary (register_micro never ran, the default)
+            # the final summary holds the non-rigid value: fall back to it.
             if feature is None and stage == "non_rigid" and which == "premicro":
                 feature = slide_tre.get("final", {}).get(col)
-            # _read_seg_cell_disp now carries the unit alongside the value (fix round 1,
-            # Important 1); this reconciliation only ever compared the numbers, so unpack
-            # and keep going -- the unit itself is not reconcile_rows' concern.
+            # The unit is not needed here; only the values are compared.
             disp_entry = cell.get(slide, {}).get(stage)
             disp = disp_entry[0] if disp_entry is not None else None
             divergent = None
@@ -1014,19 +937,11 @@ SCATTER_H = 360
 def _reconciliation_scatter_svg(points, ratio_band):
     """Feature-TRE (x) against cell displacement (y), log-log, with the divergence band.
 
-    ``points`` is ``[(feature_tre, cell_disp, label), ...]``, one entry per
-    slide-stage. ``reconcile_rows`` calls a row divergent when the larger of the
-    two numbers exceeds ``ratio_band`` times the smaller — a symmetric rule, so
-    the region it accepts is exactly the strip between ``y = x·r`` and
-    ``y = x/r``. On log axes those are two straight lines parallel to the
-    identity, which is why the band can be DRAWN instead of recomputed per point:
-    a reader sees which slide-stage is out and by how far, rather than a column
-    of ticks and crosses.
-
-    Log axes because the quantity being judged is a ratio, and because the stages
-    span two orders of magnitude (rigid ≈ 6 µm, micro ≈ 0.8 µm) on one plot. The
-    cost is that a non-positive or missing coordinate cannot be placed at all;
-    those are counted in the caption rather than disappearing.
+    ``points`` is ``[(feature_tre, cell_disp, label), ...]``, one per slide-stage.
+    ``reconcile_rows`` calls a row divergent when the larger value exceeds
+    ``ratio_band`` times the smaller, so the accepted region is the strip between
+    ``y = x·r`` and ``y = x/r``: two straight lines on log axes. Non-positive or missing
+    coordinates cannot be placed and are counted in the caption.
     """
     usable = []
     dropped = 0
@@ -1062,8 +977,7 @@ def _reconciliation_scatter_svg(points, ratio_band):
         f'style="border:1px solid #eee;">',
         '<clipPath id="reconcile-clip">'
         f'<rect x="{pad_l}" y="{pad_t}" width="{pw}" height="{ph}"/></clipPath>',
-        # NOT an f-string: ruff's F541 (pyflakes, in this repo's `select`) rejects
-        # an f-prefix with no placeholder, and this line has none.
+        # Not an f-string: ruff F541 rejects an f-prefix with no placeholder.
         '<g clip-path="url(#reconcile-clip)">',
         # the shaded agreement strip, then its two edges
         f'<polygon points="{sx(lo):.1f},{sy(lo + d):.1f} {sx(hi):.1f},{sy(hi + d):.1f} '
@@ -1158,25 +1072,14 @@ def reconciliation_section(tre_dir, seg_qc_dir):
 def _read_residual_column(csv_path):
     """Stream a ``*_reg_residuals.csv`` into ``(values, stage_label, n_rows)``.
 
-    bin/warp_seg_qc.py's write_per_cell_csv writes one row per matched cell pair,
-    uncapped — a real slide is 10^4-10^6 rows — with columns
-    ``moving,ref_x,ref_y,residual_px,stage``. ``csv.DictReader`` still builds one
-    dict per row internally, but nothing from it survives past that iteration
-    except the numeric residual, so what this function RETAINS is a list of
-    floats, not a list of per-row dicts. ``n_rows`` counts EVERY data row,
-    including one whose residual could not be parsed OR was non-finite (``inf``/
-    ``nan`` — ``_to_float`` only drops NaN, not infinity), so the plot's n and
-    the "(N unparseable)" count in ``seg_residuals_section`` stay consistent with
-    each other: a value this function keeps is a value ``_finite`` will plot.
+    Rows are ``moving,ref_x,ref_y,residual_px,stage``, one per matched cell pair (up to
+    ~10^6). Only the finite residual floats are kept. ``n_rows`` counts every data row,
+    including unparseable or non-finite residuals, so it matches the "(N unparseable)"
+    count in ``seg_residuals_section``.
     """
     values, stages, n_rows = [], [], 0
     with open(csv_path, newline="") as fh:
-        # No islice/limit here, deliberately: the histogram needs every row.
-        # The function this replaced sliced the head and counted the tail, and
-        # the slice had to be itertools.islice -- zip(reader, range(limit))
-        # pulls one item it never yields, so the tail count came out one short
-        # (measured 399 999 on a 400 000-row file). Nothing here can make that
-        # mistake because nothing here has a limit.
+        # No row limit: the histogram needs every row.
         for row in csv.DictReader(fh):
             n_rows += 1
             v = _to_float(row.get("residual_px"))
@@ -1191,11 +1094,7 @@ def _read_residual_column(csv_path):
 def seg_residuals_section(seg_residuals_dir):
     """Per-cell registration residuals as one error distribution per slide CSV.
 
-    This replaced a 500-row head-of-CSV table (spec Phase 4). Five hundred rows out
-    of a possible million answered no question a reader had; the distribution of all
-    of them, with p50 and p90 marked, answers the one they did. The CSVs themselves
-    are published unchanged into the report's ``seg_residuals/`` data folder and are
-    joined onto cell labels by the SpatialData export, so nothing is lost.
+    The CSVs are also copied unchanged into the report's ``seg_residuals/`` data folder.
     """
     csvs = list_files(seg_residuals_dir, "*.csv")
     if not csvs:

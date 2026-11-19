@@ -24,8 +24,7 @@ def _relabel_contiguous(mask):
     Metric values are label-agnostic, so this remap is safe.
     """
     uniq = np.unique(mask)
-    # int32 (labels are small positive ints, far below 2^31) halves the transient
-    # RAM of these full-WSI-sized label arrays vs int64; values are identical.
+    # int32 halves the transient RAM of full-WSI label arrays vs int64.
     lut = np.zeros(int(uniq.max()) + 1, dtype=np.int32)
     pos = uniq[uniq != 0]
     lut[pos] = np.arange(1, len(pos) + 1, dtype=np.int32)
@@ -71,20 +70,8 @@ def _downsample(channels, cell, nuc, factor):
 def _read_image_cyx(path):
     """Return (channels (C,Y,X), pixel_um) via tifffile. ``pixel_um`` is always None.
 
-    tifffile ONLY -- deliberately no aicsimageio/bioio. The single thing a richer reader
-    added here was the physical pixel size read from OME metadata, and that value is always
-    overridden: modules/local/seg_quality_eval.nf always renders ``--pixel-size-um`` (from
-    ``cse_pixel_size_um``, else ``params.pixel_size``, which ships as 0.325), and main()
-    prefers the CLI value over anything read from the file. So the dependency supplied a
-    number nothing consumes.
-
-    It also could not be installed alongside the harmonised tifffile: the OME-TIFF reader
-    plugin caps tifffile below 2025.5.10, which is what
-    tests/test_container_harmonisation.py harmonises on, so pinning both is a pip
-    ResolutionImpossible and containers/segeval would not build.
-
-    Returning None rather than a guess is the honest answer, and main() turns it into an
-    error naming the missing flag -- see the caller.
+    No OME reader: the pipeline always passes ``--pixel-size-um``, and aicsimageio/bioio
+    cannot be installed alongside the harmonised tifffile pin.
     """
     arr = np.asarray(tifffile.imread(path))
     if arr.ndim == 2:
@@ -124,9 +111,7 @@ def main():
     )
 
     channels, px_meta = _read_image_cyx(a.image)  # (C,Y,X)
-    # .squeeze() drops a leading singleton axis: some label TIFFs are written
-    # as (1,Y,X) rather than (Y,X), which would otherwise break the `y, x =
-    # shape` unpack in _downsample_factor. A legitimate (Y,X) mask is a no-op.
+    # .squeeze(): some label TIFFs are written as (1,Y,X).
     cell = tifffile.imread(a.cell_mask).astype(np.int32).squeeze()
     nuc = tifffile.imread(a.nuclei_mask).astype(np.int32).squeeze()
 
@@ -135,18 +120,14 @@ def main():
     elif px_meta:
         px = py = px_meta
     else:
-        # NOT "missing from image metadata": _read_image_cyx no longer reads metadata at all,
-        # so blaming the file would send a standalone caller looking for a problem in their
-        # image. The flag is the only source now.
+        # The flag is the only source; the image's metadata is not read.
         raise SystemExit(
             "No pixel size: pass --pixel-size-um. This tool does not read pixel size from "
             "image metadata (the pipeline always supplies it from cse_pixel_size_um / "
             "params.pixel_size)."
         )
 
-    # Downsample before scoring: full-WSI label masks otherwise blow CSE's
-    # memory/time budget. Binning by `factor` means each pixel now spans
-    # `factor`x more microns per axis, so scale the pixel size to match.
+    # Full-WSI masks otherwise blow CSE's memory/time budget; scale pixel size to match.
     factor = (
         a.downsample
         if a.downsample > 1
@@ -160,8 +141,7 @@ def main():
     )
 
     img_data = channels[np.newaxis, :, np.newaxis, :, :]  # (1,C,1,Y,X)
-    # img["img"]=None forces CSE's metadata-free thresholding path, matching the
-    # golden equivalence fixture exactly.
+    # img["img"]=None forces CSE's metadata-free thresholding path (matches the fixture).
     img = {"name": a.id, "img": None, "data": img_data}
 
     # Relabel AFTER downsampling: subsampling can drop tiny cells and leave gaps
