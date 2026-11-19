@@ -8,9 +8,9 @@ reference, segmentation mask, and old-marker quantification.
 !!! danger "Every cycle must run at `--cleanup_level none`, including the first"
     `add_cycle` re-enters the prior run's output tree: it reads `csv/registered.csv`,
     `csv/postprocessed.csv` and the per-patient `registered/` and `segmentation/`
-    artifacts. The **default** `--cleanup_level=final` publishes none of those, so a
-    cycle-1 run left at the default cannot be extended at all — and the only remedy
-    is to re-run cycle 1.
+    artifacts. `--cleanup_level=final` publishes none of those, so a cycle-1 run at
+    `final` cannot be extended at all — and the only remedy is to re-run cycle 1.
+    The default, `none`, is what you want.
 
     This applies to the add_cycle runs themselves too, because each one is the next
     one's `--prior_outdir`. The pipeline **refuses `--mode add_cycle` at launch** at
@@ -32,7 +32,7 @@ doing any work — see [Fast-fail behavior](#fast-fail-behavior).
 ## Run
 
 !!! note "Sizing"
-    Every command on this page assumes a `site.config` — see [Make a site config](installation.md#size-your-run).
+    Every command on this page assumes a `site.config` — see [Make a site config](hpc.md#size-your-run).
 
 ```bash
 nextflow run . -profile <profile> \
@@ -140,9 +140,8 @@ table and pyramid are rebuilt over ALL cycles seen so far -- so the newest
 the first via `REGISTER_PATIENT`'s `CHECKPOINT_WRITER` call, the second via
 `POSTPROCESSED_CHECKPOINT`.
 Neither costs a recomputation -- add_cycle already produces every artifact those
-manifests name, and until 2026-08-25 it simply had no writer for the second, so
-cycle 3 failed launch validation with *"required checkpoint
-'csv/postprocessed.csv' not found under --prior_outdir"*.
+manifests name. Without the second, the next cycle would fail launch validation with
+*"required checkpoint 'csv/postprocessed.csv' not found under --prior_outdir"*.
 
 One column is worth knowing about: `postprocessed.csv`'s `cell_mask` names the
 masks `EXTRACT_MASK_SERIES` re-read out of the prior pyramid's `Image:1` series
@@ -165,14 +164,12 @@ embeds the segmentation masks in the output pyramid OME-TIFF:
   cannot open as a normal multi-channel image.
 - When `embed_masks=false` (with `quantify_compartments`/`expanded_quantification`
   set however you like), `MERGE_AND_PYRAMID` produces a plain intensity-only
-  pyramid — this is unchanged from behavior before mask embedding existed.
+  pyramid.
 - `embed_masks=true` REQUIRES both `quantify_compartments=true` and
-  `expanded_quantification=true` — `ParamUtils.validateCompartmentQuant` now
+  `expanded_quantification=true` — `ParamUtils.validateCompartmentQuant`
   rejects `embed_masks=true` with either sibling off at launch, rather than
-  silently falling back to a plain pyramid. (Before this check existed, that
-  combination exited `0` with no mask series, discovered only later when the
-  pyramid was handed to `mode=add_cycle` as `--prior_outdir` — see "Fast-fail
-  behavior" below.)
+  silently falling back to a plain pyramid that a later `mode=add_cycle` run
+  could not use.
 
 Cell objects are always delivered separately via `cells.geojson`; the embedded
 mask series is an additional, optional way to carry the raw label masks —
@@ -183,7 +180,7 @@ mask series is an additional, optional way to carry the raw label masks —
 pyramid's embedded mask series via `EXTRACT_MASK_SERIES`
 (`bin/extract_mask_series.py`), rather than recomputing segmentation. If the
 prior run's pyramid has fewer than two OME series (i.e. the prior run used
-`embed_masks=false`, the only way to reach that state now that
+`embed_masks=false`, the only way to reach that state, since
 `ParamUtils.validateCompartmentQuant` rejects `embed_masks=true` with either
 `quantify_compartments` or `expanded_quantification` off at launch — see "Mask
 pyramid" above), extraction fails immediately with a clear error identifying

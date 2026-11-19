@@ -72,7 +72,7 @@ How to read it:
 | Supplementary Note 2, resource requests and retries | [Resources](resources.md) |
 | Methods, image conversion and illumination correction | [Illumination correction](basic_illumination.md), [Format validation](validation/format_validation.md) |
 | Methods, segmentation; Supplementary Note 4 | [Parameters → Segmentation](parameters.md#segmentation) |
-| Methods, quantification and export; Supplementary Table 4 | [Inputs & outputs](outputs.md), [SpatialData & FlowPath](spatialdata.md) |
+| Methods, quantification and export; Supplementary Table 4 | [Outputs](outputs.md), [SpatialData & FlowPath](spatialdata.md) |
 | The scores a run reports about its own registration | [Checking registration](registration_qc.md) |
 | Registration benchmark, Fig. 3 and Supplementary Table 2 | the `benchmarks/regbench/` harness on the [`benchmarking` branch](https://github.com/sceriff0/mirage/tree/benchmarking) |
 

@@ -42,10 +42,9 @@ by a blue band:
 
 Perfect alignment is yellow (red + green); misalignment shows red/green
 fringing. **Fringing that shrinks from the left panel to the right one is the
-correction registration applied.** The single "after" composite this used to
-render showed what registration *produced* and gave a reader nothing to compare
-it against — an unregistered pair and a perfectly registered one both look
-plausible on their own.
+correction registration applied.** A single "after" composite would give a reader
+nothing to compare against — an unregistered pair and a perfectly registered one
+both look plausible on their own.
 
 **Both panels are drawn on the reference canvas, origin-aligned, reconciling
 differing dimensions by pad-or-crop — never by rescaling.** Rescaling the native
@@ -83,7 +82,7 @@ wide.
 The native image costs nothing extra to obtain: it is the stream that entered
 registration (`REGISTER_PATIENT.out.images_multi` on the linear path,
 `PREPROCESSING.out.preprocessed` under `--mode add_cycle`), joined back in on
-`meta.id`. It does cost memory — the process now holds three full-resolution
+`meta.id`. It does cost memory — the process holds three full-resolution
 planes instead of two — which is why its request is tiered on the combined size
 of all three inputs (see [Resources](resources.md#registration-qc)).
 

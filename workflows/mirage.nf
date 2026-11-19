@@ -61,7 +61,7 @@ workflow MIRAGE {
                  "directory is emptied after a successful run, so the NEXT -resume will " +
                  "find nothing cached and re-run every task. Set cleanup_work to false in " +
                  "a -params-file or a profile (Nextflow 26 rejects a boolean value on the " +
-                 "command line) for the iterate-with--resume loop docs/usage.md describes."
+                 "command line) for the iterate-with--resume loop docs/resuming.md describes."
     }
 
     // --start past preprocessing at a cleaning level: this run reads the prior tree fine,

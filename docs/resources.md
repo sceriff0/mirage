@@ -28,8 +28,7 @@ inert and misleading; those have been removed. What remains is three cases:
 **These three counts cover `modules/local/*.nf` only**, because that is what
 `tests/test_resource_label_coverage.py` scans and the counts are checked against
 that scan — raising one to include a process outside `modules/local/` makes the
-build fail (verified: bumping case 3 to `7` fails with `claims [15, 6, 7] … give
-[15, 6, 6]`). One process is therefore outside all three numbers: **`BASICPY`**,
+build fail. One process is therefore outside all three numbers: **`BASICPY`**,
 in `modules/nf-core/basicpy/`, which is a **case-3 partial override** — upstream's
 `label 'process_single'` with `memory` raised to `32 GB × attempt` by its
 `withName:` block. Nothing guards that sentence, so check it by hand if you edit
@@ -123,9 +122,7 @@ cohort (VALIS 1.2.0, 4 CPUs): `default` median 31.6 GB, max 51.4 → 64 GB; `hir
 detector and matcher, no micro-registration), or at `reg_valis_mode hires` its high-resolution
 example (`MicroRigidRegistrar`, then `register_micro` at 0.25 × the smallest slide's longest
 side), with a fixed 10 GB Bio-Formats JVM heap at every
-attempt (`reg_jvm_heap_gb` overrides it). The old `tma` profile and its keypoint cap, CPU bound
-and heap pin were settings of the tuned VALIS 1.0.0 configuration and went with it (git tag
-`archive/valis-mirage-tuned`).
+attempt (`reg_jvm_heap_gb` overrides it).
 
 `REGISTER` also carries a per-process `maxForks` cap of 10 (in `nextflow.config`'s
 concurrency block, after the profiles) and its own error strategy — see
@@ -136,9 +133,7 @@ concurrency block, after the profiles) and its own error strategy — see
 The default backend (`registration_method = 'tiled'`). Small everywhere: the tiled backend is JVM-free and tile-streamed, so every step needs a few GB
 at most even for large slides. `TILED_COARSE`'s anchor is an FFT NCC rotation sweep (ORB
 fallback) on a thumbnail bounded by `reg_tiled_coarse_max_dim`: 0.25–0.43 GB peak RSS measured
-for the whole stage at 512–2048 px, so the row below asks 2 GB at the 1024 px default. (From
-v1.0.0 until 2026-09-27 it was a DISK U-Net that asked 48 GB at the then-default `high` tier;
-STARE has had no tiers since 2026-11-04.)
+for the whole stage at 512–2048 px, so the row below asks 2 GB at the 1024 px default.
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner | `maxForks` |
 |---|---|---|---|---|---|
@@ -163,10 +158,7 @@ comment that derives it; the two closures are near-identical and that duplicatio
 is forced — Nextflow 26's strict config parser rejects a function declaration in
 a config file, so there is no legal way to share a helper between them.
 
-`MERGE_AND_PYRAMID` joined that list when it stopped holding the slide. It used
-to ask for a flat 200 or 300 GB on a tier over the summed channel files, because
-it allocated the whole `(C, H, W)` stack before writing anything. It now streams
-the base resolution from a generator of tiles, so its request is built from **one
+`MERGE_AND_PYRAMID` does not hold the slide: it streams the base resolution from a generator of tiles, so its request is built from **one
 decoded plane** — estimated as 4× the largest single channel file, since a
 config closure cannot know the compression ratio — plus the pyramid levels that
 must stay resident while `tifffile` fills the SubIFDs one level at a time. That
@@ -198,7 +190,7 @@ are what `tests/test_resource_label_coverage.py` checks for all five of these
 param-derived rows.
 
 The memory of the STARE tile and resampling tasks is bounded by a window, not by
-the slide. Measured peak RSS on uint16 slides (macOS arm64, 2026-09-27):
+the slide. Measured peak RSS on uint16 slides (macOS arm64):
 `TILED_REG_TILE` 1.27 GB at the default stride of 64 px (a 2432² px read window;
 1.65 GB at stride 128, 2.17 GB at 256) and `TILED_STITCH` 1.42 GB at the 1024 px
 default output tile — each set by a parameter (`reg_tiled_tile` +
@@ -206,15 +198,9 @@ default output tile — each set by a parameter (`reg_tiled_tile` +
 dimensions. `TILED_SOLVE` is the exception: it holds one displacement vector per
 lattice node plus lattice-sized working arrays, so its memory grows with slide
 area — 0.19–1.20 GB per round pair on the paper's eight-case cohort, which is why
-it asks a fixed 2 GB (raised from 1 GB after cohort-sized solves passed only on
-the retry). `TILED_COARSE` is bounded by a parameter too, by `reg_tiled_coarse_max_dim`, and is
+it asks a fixed 2 GB. `TILED_COARSE` is bounded by a parameter too, by `reg_tiled_coarse_max_dim`, and is
 small again: its FFT NCC rotation-sweep anchor measured 0.25 GB at 512 px,
-0.43 GB at 1024 and 0.40 GB at 2048 on a 16384² tiled OME-TIFF pair
-(2026-09-27). The DISK U-Net it replaced needed `GB ≈ 1.1 + 7.3 × Mpx`
-(~32 GB at the old 2048 px `high` tier). A single-task `TILED_REGISTER` alternative used to exist behind a flag; it had
-no such bound (both whole slides, an all-channel float32 copy and the full warped output
-live at once, budgeted from file size), so it was removed rather than kept as an unbounded
-opt-out.
+0.43 GB at 1024 and 0.40 GB at 2048 on a 16384² tiled OME-TIFF pair.
 
 ### Registration QC
 
@@ -235,10 +221,9 @@ tier is what tracks that. An input read but not summed here is a silent
 under-request, which is why `tests/test_registration_qc_wiring.py` fails when
 the closure omits one of the process's `path()` inputs.
 
-`WARP_SEG_QC` uses a *doubling* ramp rather than a linear one. Its historical
-exit-140 kills came from rasterizing both slides' polygons onto a whole-slide
-label grid; the staged design scores each pair inside its own bounding box, so
-peak RAM is now one nucleus regardless of slide size. 32 GB is generous, and the
+`WARP_SEG_QC` uses a *doubling* ramp rather than a linear one. It scores each
+nucleus pair inside its own bounding box, so peak RAM is one nucleus regardless of
+slide size. 32 GB is generous, and the
 ramp exists only for pathological inputs. Runtime, not memory, is the binding
 constraint.
 
@@ -353,43 +338,20 @@ launch. Supply them from a `site.config` (`-c site.config`, copied from
     `conf/ieo.config`, is gitignored and never ships. The row above shows those
     same numbers only as an example of what a large-partition `site.config`
     looks like; make your own from `conf/site.config.template` — see
-    [Installation → Make a site config](installation.md#size-your-run).
+    [Make a site config](hpc.md#size-your-run).
 
-!!! note "`-profile slurm` no longer freezes the ceiling"
+!!! note "Why `-c site.config` reaches the ceiling"
     The top-level `process.resourceLimits` in `nextflow.config` is a **closure**,
     so it is evaluated at task-submission time — after the whole profile stack has
     merged, and after a `-c` file has been layered. That is what makes
     `-c site.config` work: the closure reads `params.max_*` back lazily.
 
-    The `slurm` profile sets **no** `resourceLimits` of its own (see the comment in
-    its block in `nextflow.config`), so `-profile slurm,singularity -c site.config`
-    is clamped by the site's ceiling like every other route, and
-    `tests/test_frozen_config_params.py` forbids a plain-map `resourceLimits` in any
-    config file. What follows is the record of the defect that rule closes (measured
-    2026-09-09), kept so the plain map is not reintroduced.
-
-    The `slurm` profile used to assign `resourceLimits` as a
-    **plain map**, evaluated eagerly while
-    `nextflow.config` is parsed — before any `-c` file exists. Measured with a
-    `site.config` that actually sets a ceiling (`max_cpus = 64`,
-    `max_memory = '300.GB'`), so the comparison is not against two `null`s:
-
-    ```text
-    $ nextflow -c site.config config . -profile slurm | grep resourceLimits
-       resourceLimits = [cpus:null, memory:null, time:'240.h']
-
-    $ nextflow -c site.config config . | grep resourceLimits
-       resourceLimits = { [ cpus: params.max_cpus, memory: params.max_memory, time: params.max_time ] }
-    ```
-
-    Without `-profile slurm`, `resourceLimits` prints as the **closure literal**
-    (`nextflow config` shows source, not the value it resolves to at
-    submission time) — it reads `site.config`'s `64`/`300.GB` lazily, later, when
-    a task actually submits. *With* the old plain map, the ceiling was frozen at
-    whatever `params.max_*` were when the profile was parsed — `null`/`null`,
-    because that runs before `-c site.config` is layered — and the `64`/`300.GB`
-    from `site.config` never reached it, silently. The fix was to delete the
-    profile's map and leave the top-level closure as the only `resourceLimits`.
+    The `slurm` profile sets **no** `resourceLimits` of its own, so
+    `-profile slurm,singularity -c site.config` is clamped by the site's ceiling
+    like every other route. A plain-map `resourceLimits` in a profile would be
+    evaluated while `nextflow.config` is parsed — before any `-c` file exists — and
+    freeze the ceiling at `null`; `tests/test_frozen_config_params.py` forbids one
+    in any config file.
 
 ---
 
@@ -421,7 +383,7 @@ VALIS tile-read failures and JVM out-of-heap conditions surface as a plain
 exit 1, which the default strategy would treat as fatal. `REGISTER` therefore
 retries on `[1, 104, 134, 135, 137, 139, 140, 143]`.
 
-### QC processes — gating since 2026-08-25
+### QC processes
 
 `GENERATE_PREPROCESS_QC`, `GENERATE_REGISTRATION_QC`,
 `GENERATE_POSTPROCESSING_QC`, `GENERATE_QC_REPORT`, `SEG_QC_SEGMENT`,
@@ -432,51 +394,24 @@ a signal kill up to `maxRetries`, then **`finish`**.
 errorStrategy = { task.exitStatus in ((130..145) + 104) && task.attempt <= 3 ? 'retry' : 'finish' }
 ```
 
-`130..145` is the whole "killed by a signal" range, not a hand-picked subset —
-an earlier enumerated set threw away the retry budget on any signal it had
-missed. `'finish'` rather than `'terminate'` so in-flight tasks drain and the run
+`130..145` is the whole "killed by a signal" range, not a hand-picked subset.
+`'finish'` rather than `'terminate'` so in-flight tasks drain and the run
 reports every failure at once rather than only the first.
 
-!!! danger "This policy was reversed — the closure above used to end in `'ignore'`"
+!!! note "Why a failed QC task fails the run"
     QC outputs are aggregated with `collect()` / `collectFile()` / `combine()` /
     `join()`, none of which require a fixed item count, so a missing QC output is
-    simply absent and never deadlocks the DAG. That property of the *wiring* is
-    what made an `'ignore'` fallback look free, and it was not: a genuine OOM or
-    walltime kill was swallowed after the retry budget, and forcing `WARP_SEG_QC`
-    to `exit 1` produced **shell exit 0, a full-looking output tree, and zero
-    `*_seg_qc.json`**.
+    simply absent and never deadlocks the DAG. An `'ignore'` fallback would
+    therefore swallow a genuine OOM or walltime kill and still leave a
+    full-looking output tree with an exit code of 0. With `'finish'`, a broken QC
+    task fails the run, and a green run implies a complete QC tree.
 
-    On the default path that is closed: a broken QC task now fails the run, and a
-    green run implies a complete QC tree. **Two opt-in processes keep the old
-    policy on purpose** — `SEG_QUALITY_EVAL` and `MERGE_SEG_EVAL` carry
-    `retry-then-drop` (`{ task.attempt <= 3 ? 'retry' : 'ignore' }`), because
-    losing a QualityScore degrades QC and nothing else. When either drops,
-    `main.nf`'s `onComplete` warns via `workflow.stats.ignoredCount` rather than
-    leaving it to be inferred from an absent column.
-
----
-
-## GPU
-
-`SEGMENT` requests a GPU when `seg_gpu = true` (the default), and so does
-`SEG_QC_SEGMENT` — it is the same process under an alias, and Nextflow matches
-`withName: 'SEGMENT'` against an alias' original name. `SEG_QC_GEOJSON` does not:
-it only traces contours, which is pure CPU.
-
-| Engine | What is added |
-|---|---|
-| SLURM | `clusterOptions` composes `--gres=gpu:${params.gpu_type}` (default `1`, i.e. any one GPU; set a typed string in your site config) with the `slurm` profile's `--account`/`--qos`, inlined per-block since a `withName:` assignment replaces rather than merges with the profile's own `clusterOptions` — see `conf/modules.config`'s `SEGMENT` block |
-| Docker | `containerOptions = --gpus all` |
-| Singularity | `containerOptions = --nv` |
-
-Match `--gpu_type` to your cluster's GRES string (`sinfo -o "%G"`). Without
-`--nv`, Singularity does not bind the host NVIDIA driver stack and
-`torch.cuda.is_available()` is `False` even when SLURM has granted the GPU —
-CellSAM then silently falls back to CPU, which turns a WSI run into a multi-day
-job.
-
-Set `seg_gpu = false` to force CPU; the `--gres` request and the container flags
-are both dropped.
+    **Two opt-in processes drop on purpose** — `SEG_QUALITY_EVAL` and
+    `MERGE_SEG_EVAL` carry `retry-then-drop`
+    (`{ task.attempt <= 3 ? 'retry' : 'ignore' }`), because losing a QualityScore
+    degrades QC and nothing else. When either drops, `main.nf`'s `onComplete`
+    warns via `workflow.stats.ignoredCount` rather than leaving it to be inferred
+    from an absent column.
 
 ---
 
@@ -503,8 +438,8 @@ profile all reach it.
 !!! warning "A `-c site.config` pin of these does NOT arrive — and the run says so"
     `queueSize` and `maxForks` are scalars evaluated while `nextflow.config` is parsed,
     which is before any `-c` file is merged. So `params { concurrency = 20 }` in a
-    `site.config` changes the param and reaches nothing that reads it (measured
-    2026-09-09; the same holds for `cleanup_work`, `enable_trace` and `trace_dir`).
+    `site.config` changes the param and reaches nothing that reads it (the same
+    holds for `cleanup_work`, `enable_trace` and `trace_dir`).
     Rather than ignore the pin, the pipeline refuses the run at launch
     (`ParamUtils.validateFrozenConfig`) and names the route. Pass these six with
     `-params-file` or on the command line, never in a `-c` file.
@@ -513,9 +448,7 @@ profile all reach it.
 many tasks of any ONE process run at once; `queue_size` caps how many run at once across
 the WHOLE pipeline. At the shipped defaults `max_forks` (5) is far below `queue_size`
 (20), so **`max_forks` is what binds** and raising `queue_size` alone changes nothing —
-raise `max_forks` (or `concurrency`), or raise both. (This is the opposite way round from
-the earlier 100/20 defaults, where `queue_size` was the binding one — corrected together
-with the two in-tree comments that had claimed `max_forks` still defaulted to 100.)
+raise `max_forks` (or `concurrency`), or raise both.
 
 Because every per-process override is `Math.min(its own cap, the resolved max_forks)`, a
 resolved `max_forks` of 5 clamps ALL of them: the `REGISTER` / `TILED_STITCH` 10 and the
@@ -530,7 +463,7 @@ overrode the profile's value): `REGISTER`, `TILED_STITCH` at `10`; `TILED_COARSE
 flight at once. Each is written `Math.min(<its own limit>, the resolved max_forks)`, so
 **lowering** `--max_forks` (or `--concurrency`) really does throttle every module, while
 **raising** it never lifts one of these past the limit its own block sets for its own
-reasons. Measured on the test profile: at the default, `REGISTER` runs at 10 and
+reasons. On the test profile: at the default, `REGISTER` runs at 10 and
 everything else at 5; at `--max_forks 4` every process runs at 4; at `--max_forks 50`,
 `REGISTER` stays at 10.
 
@@ -546,9 +479,8 @@ depends on it:
 
 * A `params.x` reference evaluated **before** the params block exists does not read `null`.
   Nextflow resolves it to an empty `ConfigObject` — a Map. Inside a closure that is
-  harmless, because closures run at task-submission time, which is why every
-  `memory = { ... }` closure worked even when the includes sat at the top. Evaluated
-  eagerly it is not: `params.x as int` on a Map throws *"Cannot coerce a map to class
+  harmless, because closures run at task-submission time. Evaluated eagerly it is
+  not: `params.x as int` on a Map throws *"Cannot coerce a map to class
   java.lang.Integer"* and the entire config fails to parse.
 * Inside an `executor { }` scope it is worse than an error. `queueSize = params.queue_size`
   parsed from an early-included file is read as the opening of a **nested scope named
@@ -558,10 +490,8 @@ depends on it:
   directive**: Nextflow compares it against `0` in `TaskProcessor`'s constructor, so a
   closure throws *"Cannot compare ... Closure ... and java.lang.Integer with value '0'"*.
 
-Relative order is otherwise unchanged — both files are still included before the `executor`
-and `process` blocks, so those still take precedence. Verified by diffing `nextflow config`
-for the `test`, `test_full` and `local` profiles across the move: the only content
-difference is the two new parameters. Guarded by `tests/test_concurrency_params.py`.
+Both files are included before the `executor` and `process` blocks, so those take
+precedence. Guarded by `tests/test_concurrency_params.py`.
 
 ---
 
@@ -571,7 +501,7 @@ Every process pins a fixed image tag — never `:latest`. The `bolt3x/mirage-*` 
 NAMES (one Docker Hub repository per image, e.g. `bolt3x/mirage-preprocess`,
 `bolt3x/mirage-stare`) are content-descriptive; the TAG on each is an immutable
 SemVer version (`1.0.0`), tied to `manifest.version` — see
-[Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional).
+[Running on a cluster → Pre-pulling container images](hpc.md#pre-pulling-container-images).
 
 | Image | Processes |
 |---|---|
@@ -644,14 +574,13 @@ WARN  No resource report was generated: no trace at /path/to/launch/.trace/trace
 `trace_dir` is resolved against the **launch directory**, which is what Nextflow
 itself resolves `trace.file` against — so a relative `trace_dir` means the same
 place to the report as it does to the engine, whatever directory the pipeline
-was launched from. Before that fix the handler resolved it against the JVM's
-working directory instead, and when the two differed the report was generated
-from nothing and announced as a success.
+was launched from.
 
 ---
 
 ## See also
 
 - :material-tune: **Every parameter** — [Parameters](parameters.md)
-- :material-file-tree: **Every input and output** — [Inputs & outputs](outputs.md)
-- :material-console: **Cluster invocations** — [Usage → Running on HPC](usage.md#running-on-hpc)
+- :material-file-tree: **Every output** — [Outputs](outputs.md)
+- :material-console: **Cluster invocations** — [Running on a cluster](hpc.md)
+- :material-expansion-card: **GPU requests** — [GPU or no GPU](gpu.md)

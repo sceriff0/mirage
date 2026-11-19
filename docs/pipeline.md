@@ -51,7 +51,7 @@ downstream grouping **streams** — patient B preprocesses while patient A
 registers — instead of waiting for the whole cohort.
 
 Full column contract, including the different columns each `--start` requires:
-[Inputs & outputs → The samplesheet](outputs.md#the-samplesheet).
+[The samplesheet](samplesheet.md).
 
 ---
 
@@ -110,7 +110,7 @@ Chips give real defaults. Every process runs in a pinned container and emits
           fiducial skip once; <b>APPLY_PROFILES</b> does the division/subtraction and reassembles
           the slide. The nuclear/fiducial channels are left uncorrected by default: they drive both
           registration and segmentation, so correcting them changes what each consumes.
-          <b>skip_preprocessing</b> (the default since 1.0.0's final round) turns the correction off
+          <b>skip_preprocessing</b> (on by default) turns the correction off
           entirely — conversion still runs, so
           the step still emits one image per slide and the checkpoint still has a row per slide,
           pointing at <code>converted/</code> instead.</div>
@@ -226,9 +226,9 @@ Chips give real defaults. Every process runs in a pinned container and emits
     They read different inputs, build the whole-cell mask differently, and have
     different prerequisites — StarDist (the default) and InstanSeg run on an unconfigured
     clone, CellSAM needs gated weights, and `seg_expand_distance` is ignored when InstanSeg
-    is selected. Side-by-side
-    comparison and the 17 backend-specific parameters:
-    [Parameters → Choosing a backend](parameters.md#choosing-a-backend).
+    is selected. Side-by-side comparison:
+    [Choosing methods](choosing_methods.md#segmentation-stardist-instanseg-or-cellsam);
+    the backend-specific parameters: [Parameters → Segmentation](parameters.md#segmentation).
 
 !!! note "The adapter seam"
     `VALIS_ADAPTER` and `TILED_ADAPTER` present the *same* interface — same input
@@ -271,7 +271,7 @@ and Vitessce without conversion.
 </div>
 
 Complete tree, filenames and the measurement-key contract:
-[Inputs & outputs](outputs.md).
+[Outputs](outputs.md).
 
 ---
 
@@ -281,7 +281,7 @@ Fold a new imaging cycle into a completed patient run, reusing prior assets.
 Bypasses the step gate; `--start` / `--stop` are rejected in this mode.
 
 ```bash
-nextflow run . --mode add_cycle --cleanup_level none --prior_outdir results/ --input new_cycle.csv --outdir results_cycle2 -c site.config
+nextflow run . --mode add_cycle --registration_method valis --prior_outdir results/ --input new_cycle.csv --outdir results_cycle2 -c site.config
 ```
 
 | Stage | What happens | Reused? |
@@ -312,9 +312,9 @@ dropped): [Resources](resources.md).
 ## See also
 
 - :material-tune: **Every parameter with its default** — [Parameters](parameters.md)
-- :material-file-tree: **Every input and output path** — [Inputs & outputs](outputs.md)
+- :material-file-tree: **Every output path** — [Outputs](outputs.md)
 - :material-server: **Every resource request** — [Resources](resources.md)
-- :material-console: **Command recipes** — [Usage](usage.md)
+- :material-console: **Command recipes** — [Command line](usage.md)
 - :material-image-outline: **Schematic 2 · registration** —
   [figure](figures/registration-schematic.html){ target=_blank }
 - :material-image-outline: **Schematic 3 · quality control** —
