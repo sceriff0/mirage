@@ -86,8 +86,8 @@ per-channel term is cheaper than the I/O needed to eliminate it.
 > lazy reader in the repository (this path, `bin/tiled_stitch.py` included) is a bug and
 > not a style choice.
 >
-> **One known degradation this does not size for.** A `--prior_outdir` or `add_cycle`
-> tree written with untiled slides hands these processes an untiled slide, and the
+> **One known degradation this does not size for.** A run re-entered with `--start` from
+> a tree written with untiled slides hands these processes an untiled slide, and the
 > plane-decode cost above returns for that input. That is covered by the exit-137 retry
 > ramp (`conf/base.config`), not by a term in either formula — sizing every normal run for
 > such an input would keep its request permanently inflated.

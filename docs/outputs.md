@@ -65,9 +65,8 @@ Everything else in the full tree below — `converted/`, `preprocessed/`,
 `publishDir` is `mode: 'copy'`, so publish-then-delete would pay a full copy out
 of `work/` for a file nobody reads.
 
-`--cleanup_level none`, the default, publishes the complete tree below. Keep it whenever the output will be re-entered: `--start
-<step>`, or as the `--prior_outdir` of a `--mode add_cycle` run (which is refused
-at launch at any other level). Details: [Output cleanup](parameters.md#output-cleanup).
+`--cleanup_level none`, the default, publishes the complete tree below. Keep it whenever the output will be re-entered by `--start
+<step>`. Details: [Output cleanup](parameters.md#output-cleanup).
 
 ### The published tree (`--cleanup_level none`)
 
@@ -100,7 +99,6 @@ results/                              # = --outdir
 │   │   ├── contours.json
 │   │   └── nuclei/                   # morphology.csv, contours.json — EXTRACT_NUCLEI_PROPERTIES
 │   ├── split_channels/               # <MARKER>.tiff, one per marker — SPLIT_CHANNELS
-│   │   └── prior/                    # add_cycle only: prior pyramid re-split
 │   ├── quantify/                     # <id>_quant.csv, per-marker, pre-merge — QUANTIFY
 │   │                                 # <id>_nuclear_retention.csv, per moving slide
 │   │                                 #   — NUCLEAR_RETENTION (intermediate; gated same as QUANTIFY)
@@ -452,9 +450,7 @@ mistake for a real reading.
   key: the same per-cell ratio `raw(c, r)` *before* the round-median
   normalisation, so a globally dimmer round — progressive tissue loss, or
   exposure/staining drift, which it cannot tell apart — stays visible; its
-  per-round median is the round-level retention gauge. It is NaN for an
-  `add_cycle` prior round, whose raw ratio is not in the table it is carried over
-  from.
+  per-round median is the round-level retention gauge.
 - **`quantification/<patient_id>_rounds.json`** — the round manifest: one entry
   per slide (`round_id`, `is_reference`, `markers` — its kept non-nuclear
   markers, sorted alphabetically). Maps a round key's marker list back to the

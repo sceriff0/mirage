@@ -11,7 +11,7 @@ sets, its own reader and its own writer, and is judged with the transform it est
 moved by its own code in its own direction. Every departure from that is listed per run in
 `run.json: info.implementation.benchmark_side`. The full design, every number's definition
 and every caveat are in
-[`benchmarks/regbench/README.md`](https://github.com/sceriff0/mirage/blob/main/benchmarks/regbench/README.md);
+[`benchmarks/regbench/README.md`](https://github.com/sceriff0/mirage/blob/benchmarking/benchmarks/regbench/README.md);
 this page is the overview.
 
 !!! note "What has run"

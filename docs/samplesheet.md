@@ -99,4 +99,3 @@ yet — the page marks all five "kit-validated: pending" rather than omitting th
 | StarDist model dir | `--segmentation_model_dir` | Optional. Download cache for the default Hugging Face model (`DSUnit/stardist`, pinned commit), or the folder of your own model. A model already there is used without network access. |
 | InstanSeg cache | `--instanseg_model_dir` | Writable BioImage.IO cache; exported as `INSTANSEG_BIOIMAGEIO_PATH`. |
 | CellSAM weights | `--cellsam_model_path` | Pre-downloaded weights. If unset, weights auto-download and need `DEEPCELL_ACCESS_TOKEN` in the launch environment. |
-| Prior run | `--prior_outdir` | `add_cycle` only — the `--outdir` of a completed run. See [Incremental cycles](add_cycle.md). |
