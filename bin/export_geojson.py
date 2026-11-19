@@ -38,20 +38,10 @@ from pixel_size import resolve_pixel_size  # noqa: E402
 
 logger = get_logger(__name__)
 
-# Columns that are morphological / metadata, not marker intensities
-# (single source of truth: bin/utils/measurements.py). Two derived names from
-# the SAME import, for two different uses:
-#   - _MORPHOLOGY_COL_ORDER keeps the tuple's producer order, captured before the
-#     rebind below. build_measurements() below spreads it into field_cols, and
-#     Python randomises string-hash order per process -- iterating a *set* there
-#     would make field_cols order, dict insertion order, and (if anything ever
-#     iterates a row instead of using row.get()) key order all vary run to run.
-#     Nothing currently reads that order except positionally-fixed row.get()
-#     calls, so this is inert today, but a GeoJSON export is a byte-exact
-#     external contract (qupath-extension-flowpath) and should not depend on
-#     hash-order luck.
-#   - MORPHOLOGY_COLS is then rebound to a set, unchanged from before, for the
-#     O(1) membership tests this module does in a loop.
+# Morphology/metadata columns (owner: bin/utils/measurements.py), in two forms:
+# _MORPHOLOGY_COL_ORDER keeps the producer order so field order never depends on
+# per-process string hashing (GeoJSON is a byte-exact contract with FlowPath);
+# MORPHOLOGY_COLS becomes a set for fast membership tests.
 _MORPHOLOGY_COL_ORDER = tuple(MORPHOLOGY_COLS)
 MORPHOLOGY_COLS = set(MORPHOLOGY_COLS)
 
@@ -112,26 +102,13 @@ def compute_zscores(df: pd.DataFrame, marker_cols: List[str]) -> pd.DataFrame:
 def _iter_rows_positional(df: pd.DataFrame, marker_cols: List[str], qc_cols=()):
     """Yield ``(idx, x_px, y_px, row)`` for every row of ``df``, without ``iterrows()``.
 
-    ``iterrows()`` materialises one pandas Series per row -- 500k of them on a
-    whole-slide image, on the process with a 32 GB reservation. The columns
-    ``build_measurements`` can read -- ``MORPHOLOGY_COLS`` plus ``marker_cols`` -- are
-    instead pulled to a numpy array **once**, up front, and indexed positionally per row
-    (the same seam ``extract_cell_properties._label_bboxes`` established for bboxes; see
-    ``tests/test_no_full_mask_unique.py``). Deriving the column set from
-    ``MORPHOLOGY_COLS`` rather than restating it here keeps this in sync with
-    ``build_measurements`` automatically -- a second hand-copied list is exactly the
-    kind of drift ``bin/utils/measurements.py`` was written to prevent.
+    ``iterrows()`` builds one pandas Series per row, which is costly on a whole slide.
+    The columns ``build_measurements`` reads (``MORPHOLOGY_COLS`` plus ``marker_cols``) are
+    pulled to a numpy array once and indexed positionally per row.
 
-    ``row`` is a plain ``dict`` of ``{column: value}`` for whichever columns are
-    actually present in ``df`` -- a column absent from ``df`` is simply absent from
-    every ``row``, so ``row.get(col)`` still returns ``None`` exactly as
-    ``Series.get(col)`` did. That is a deliberate difference from a positional numpy
-    lookup, which would raise ``KeyError``/``IndexError`` on a missing column instead.
-
-    ``idx`` is ``df``'s own index value for that row (``df.index.to_numpy()``), not a
-    freshly-counted position -- callers fall back to it (``row.get("label", idx)``) and
-    a caller upstream may have already dropped rows (e.g. ``drop_duplicates``), leaving
-    a non-contiguous index that a plain position counter would not reproduce.
+    ``row`` is a plain ``dict`` of the columns present in ``df``, so ``row.get(col)``
+    returns ``None`` for an absent column, as ``Series.get`` does. ``idx`` is ``df``'s own
+    index value (it may be non-contiguous after ``drop_duplicates``), not a position.
     """
     field_cols = [*_MORPHOLOGY_COL_ORDER, *marker_cols, *qc_cols]
     idx_arr = df.index.to_numpy()
@@ -159,26 +136,15 @@ def build_measurements(
     markers, ``QC: ...`` columns (in ``qc_cols`` order), then ``MORPH: ...``
     morphology fields.
 
-    ``row`` only needs ``.get(key)`` / ``.get(key, default)`` -- a ``pd.Series`` (the
-    original per-row shape from ``iterrows()``) and a plain ``dict`` (what
-    ``_iter_rows_positional`` now hands in) are both accepted with identical
-    behaviour, including that a key absent from either returns ``None``/the given
-    default rather than raising.
+    ``row`` only needs ``.get(key)`` / ``.get(key, default)``, so a ``pd.Series`` and a
+    plain ``dict`` are both accepted.
     """
     measurements = []
 
-    # Segmentation identity, emitted first. `label` ties this cell to its contour (the
-    # lookup export_geojson() does ten lines below) and to every row of cells_data.csv,
-    # and it was the one column the CSV kept and the GeoJSON dropped: MORPHOLOGY_COLS
-    # excludes it from marker_cols, so nothing else in this function emits it.
-    #
-    # Joining CSV row i to feature i cannot stand in for it. A cell with a NaN centroid
-    # stays in the CSV and never becomes a feature (the `skipped` counter in
-    # export_geojson()), so the two orderings diverge the moment one row is skipped --
-    # silently, and not detectably from the published artefacts alone.
-    #
-    # Safe on the QuPath side: FlowPath's MORPHOLOGY_PREFIXES filters "label" out of the
-    # marker panel, so it does not appear as a gateable channel.
+    # Segmentation identity, emitted first. `label` ties the feature to its contour and
+    # to its cells_data.csv row; row order cannot stand in for it, because rows with a
+    # NaN centroid are skipped as features but kept in the CSV. FlowPath filters
+    # "label" out of the marker panel.
     label = row.get("label")
     if pd.notna(label):
         measurements.append({"name": "label", "value": int(label)})
@@ -293,9 +259,8 @@ def export_geojson(
 
     color_int = rgb_to_qupath_color(*CELL_COLOR_RGB)
 
-    # A generator, not a list: _stream_collection writes each feature as it is produced, so a
-    # slide's worth of features never coexists in memory. `skipped` is a one-element list
-    # because the count is read after the generator has been consumed.
+    # A generator, so features are written as produced and never all held in memory.
+    # `skipped` is a one-element list because it is read after the generator is consumed.
     skipped = [0]
 
     def _iter_features():
@@ -304,9 +269,8 @@ def export_geojson(
                 skipped[0] += 1
                 continue
 
-            # regionprops centroids are centre-of-pixel; the contours this Point
-            # falls back from are corner-of-pixel. Convert, so the Point fallback
-            # and the Polygon land in the same place
+            # regionprops centroids are centre-of-pixel and contours are corner-of-pixel;
+            # convert so the Point fallback lands where the Polygon would
             # (bin/utils/pixel_convention.py).
             x_px_corner = centre_to_corner(float(x_px))
             y_px_corner = centre_to_corner(float(y_px))
@@ -340,17 +304,10 @@ def export_geojson(
 def _stream_collection(features, output_path: str) -> int:
     """Write an iterable of features as a GeoJSON FeatureCollection, one at a time.
 
-    Returns the number written. Nothing accumulates: the caller can hand this a generator and
-    the whole document never exists in memory. Measured at 1.94x faster and -1004 MB peak RSS
-    on the pipeline's largest artifact, vs. building the full feature list and a single
-    `json.dump` (pre-dates this branch; not part of the 2026-08-26 measurement pass in
-    `docs/perf/2026-08-26-rss.md`).
-
-    The literals below reproduce `json.dump`'s default formatting exactly -- `", "` between
-    array items, `": "` after a key -- so the file is BYTE-IDENTICAL to the single-dump version
-    it replaces, including the empty collection. QuPath would not care about the whitespace, but
-    byte-identity means this change cannot be the cause of any downstream difference.
-    Guarded by tests/test_geojson_streaming_write.py.
+    Returns the number written. Pass a generator and the document never exists in
+    memory. The literals reproduce ``json.dump``'s default separators (``", "`` and
+    ``": "``), so the output is byte-identical to a single ``json.dump``, including the
+    empty collection (tests/test_geojson_streaming_write.py).
     """
     n = 0
     with open(output_path, "w") as f:
@@ -395,10 +352,7 @@ def export_combined_geojson(
 
     cells_combined: List[Dict] = []
     n_with_nucleus = 0
-    # This counter used to be incremented as `skipped[0] += 1` against a plain `int`
-    # (`skipped = 0`), which raised `TypeError: 'int' object is not subscriptable` on
-    # the first row with a NaN x/y centroid -- an expected input this function is meant
-    # to handle (see compute_zscores' NaN-preservation comment above), not an edge case.
+    # Counts rows with a NaN x/y centroid, which are skipped (an expected input).
     skipped = 0
 
     for idx, x_px, y_px, row in _iter_rows_positional(df, marker_cols, qc_cols):
@@ -438,12 +392,9 @@ def export_combined_geojson(
     combined_path = str(out / f"{prefix}.geojson")
     _write_collection(cells_combined, combined_path)
 
-    # Whole-cell-only companion: same cells and the SAME measurements, but WITHOUT
-    # the nucleusGeometry polygon. Dropping the second polygon roughly halves the
-    # geometry, so it imports much faster in QuPath; compartment gating still works
-    # in FlowPath (which reads the measurement keys, not the nucleus polygon). Import
-    # whichever you need — <prefix>.geojson for the nucleus outline / cell-vs-nucleus
-    # toggle, <prefix>_wholecell.geojson for a fast, lean import.
+    # Whole-cell-only companion: same cells and measurements without the
+    # nucleusGeometry polygon, so it imports faster in QuPath. FlowPath gating reads
+    # the measurement keys, so it still works on this file.
     wholecell = [
         {k: v for k, v in feat.items() if k != "nucleusGeometry"}
         for feat in cells_combined
@@ -496,10 +447,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pixel_size",
-        # str, not float: the run-level value may be the literal 'auto'. Unlike every
-        # other consumer, EXPORT_GEOJSON stages no image -- it works from a
-        # quantification CSV and contour JSON -- so there is nothing here to read a
-        # scale off, and 'auto' is refused rather than silently substituted.
+        # str, not float: the run-level value may be 'auto', which is refused here
+        # because this process stages no image to read a scale from.
         type=str,
         default=None,
         help="Pixel size in micrometres (a number; 'auto' is not supported here)",
@@ -517,10 +466,7 @@ def main() -> int:
     configure_logging(level=logging.INFO)
     args = parse_args()
 
-    # No image is staged for this process, so there is nothing to read a scale off:
-    # resolve_pixel_size raises on 'auto' here rather than substituting a guess. A
-    # number is required. Until this call existed, the argparse default silently made
-    # every µm measurement below 0.325 regardless of what the run configured.
+    # No image is staged, so resolve_pixel_size refuses 'auto'; a number is required.
     args.pixel_size = resolve_pixel_size(args.pixel_size, None, source="EXPORT_GEOJSON")
 
     ensure_dir(args.output_dir)
@@ -576,7 +522,7 @@ def main() -> int:
         )
         num_exported = counts[args.output_prefix]
     else:
-        # Whole-cell-only export (legacy behaviour).
+        # Whole-cell-only export.
         num_exported = export_geojson(
             df=cell_df,
             output_path=output_geojson,
@@ -588,9 +534,8 @@ def main() -> int:
     # Save CSV with both raw and z-score columns
     output_csv = str(Path(args.output_dir) / f"{args.output_prefix}_data.csv")
     logger.info(f"Saving CSV: {output_csv}")
-    # No defensive copy: to_csv only reads, and cell_df_with_z is the widest frame in the
-    # pipeline (every marker, raw AND z-scored, one row per cell), so copying it doubled the
-    # peak at the very end of the run for nothing.
+    # No defensive copy: to_csv only reads, and this is the widest frame in the
+    # pipeline.
     cell_df_with_z.to_csv(output_csv, index=False)
 
     # Summary

@@ -45,7 +45,11 @@ STARE_KNOBS = (
 
 # What each TILED_* config closure must read, by (process, closure).
 CLOSURE_READS = {
-    ("TILED_REG_TILE", "memory"): ("reg_tiled_tile", "reg_tiled_halo", "reg_tiled_stride"),
+    ("TILED_REG_TILE", "memory"): (
+        "reg_tiled_tile",
+        "reg_tiled_halo",
+        "reg_tiled_stride",
+    ),
     ("TILED_COARSE", "memory"): ("reg_tiled_coarse_max_dim",),
     ("TILED_STITCH", "memory"): ("reg_tiled_out_tile",),
     ("TILED_SOLVE", "ext.args"): ("reg_tiled_halo", "reg_tiled_max_disp"),
@@ -84,7 +88,9 @@ def _schema_registration() -> dict:
 def _closure(process: str, key: str) -> str:
     """The comment-stripped (strings kept) body of `key = { ... }` in `process`'s block."""
     blocks = [b for b in with_name_blocks() if process in b.names]
-    assert len(blocks) == 1, f"expected one withName block for {process}, found {len(blocks)}"
+    assert len(blocks) == 1, (
+        f"expected one withName block for {process}, found {len(blocks)}"
+    )
     raw, clean = blocks[0].raw_body, blocks[0].body
     m = re.search(rf"(?m)^\s*{re.escape(key)}\s*=\s*\{{", clean)
     assert m, f"{process}: no `{key} = {{ ... }}` closure"
@@ -97,7 +103,9 @@ def test_parsers_actually_parse():
     rows = retired_stare_tiers()
     assert set(rows) == set(TIERS)
     for mode, row in rows.items():
-        assert set(row) == set(STARE_KNOBS), f"RETIRED_STARE_TIERS['{mode}'] parsed {row}"
+        assert set(row) == set(STARE_KNOBS), (
+            f"RETIRED_STARE_TIERS['{mode}'] parsed {row}"
+        )
     for (process, key), reads in CLOSURE_READS.items():
         assert _closure(process, key).strip(), f"{process}.{key} parsed empty"
 
@@ -112,8 +120,12 @@ def test_stare_knob_defaults_are_the_former_high_row(param):
         "change of every default run, not part of the tier removal."
     )
     entry = _schema_registration()[param]
-    assert entry.get("type") == "integer", f"schema {param} must be a plain integer, not nullable"
-    assert entry.get("default") == want, f"schema {param}.default={entry.get('default')} != {want}"
+    assert entry.get("type") == "integer", (
+        f"schema {param} must be a plain integer, not nullable"
+    )
+    assert entry.get("default") == want, (
+        f"schema {param}.default={entry.get('default')} != {want}"
+    )
 
 
 def test_reg_tiled_mode_is_gone_but_reaches_the_refusal():
@@ -128,8 +140,13 @@ def test_reg_tiled_mode_is_gone_but_reaches_the_refusal():
         "not nf-schema's 'unrecognised parameter', answers a stale value"
     )
     mirage = strip_comments((REPO_ROOT / "workflows" / "mirage.nf").read_text())
-    check, validate = mirage.find("checkRetiredParams(params)"), mirage.find("validateParameters()")
-    assert 0 <= check < validate, "checkRetiredParams must run before validateParameters()"
+    check, validate = (
+        mirage.find("checkRetiredParams(params)"),
+        mirage.find("validateParameters()"),
+    )
+    assert 0 <= check < validate, (
+        "checkRetiredParams must run before validateParameters()"
+    )
 
 
 def test_no_tier_machinery_is_left():
@@ -155,9 +172,13 @@ def test_tiled_config_closures_read_the_plain_params(process, key):
     """The STARE memory formulas (and SOLVE's range gate) read each knob straight from
     params: no inlined tier table, no null fallback that would silently pick a tier value."""
     body = _closure(process, key)
-    assert not re.search(r"\bdef\s+_p\b|\b_row\b", body), f"{process}.{key} inlines a tier table"
+    assert not re.search(r"\bdef\s+_p\b|\b_row\b", body), (
+        f"{process}.{key} inlines a tier table"
+    )
     for param in CLOSURE_READS[(process, key)]:
-        assert f"params.{param}" in body, f"{process}.{key} does not read params.{param}"
+        assert f"params.{param}" in body, (
+            f"{process}.{key} does not read params.{param}"
+        )
     for param in STARE_KNOBS:
         assert not re.search(rf"params\.{param}\s*!=\s*null", body), (
             f"{process}.{key} null-tests params.{param}: it has a plain default now, so a "
@@ -177,7 +198,9 @@ def test_tiled_modules_read_the_plain_params(process):
 
 def test_the_refusal_names_each_retired_rows_values():
     body = re.search(
-        r"static String checkRetiredParams\(Map params\)\s*\{(.*?)\n    \}", PARAM_UTILS, re.S
+        r"static String checkRetiredParams\(Map params\)\s*\{(.*?)\n    \}",
+        PARAM_UTILS,
+        re.S,
     )
     assert body, "ParamUtils.checkRetiredParams is missing"
     assert "RETIRED_STARE_TIERS[mode]" in body.group(1)

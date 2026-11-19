@@ -4,36 +4,27 @@
 Takes one or more per-patient ``.zarr`` stores written by ``EXPORT_SPATIALDATA``
 and the matching FlowPath ``PhenotypeCsvExporter`` CSVs, and produces a single
 analysis-ready cohort dataset carrying marker intensities, morphology, pipeline
-QC, **per-marker positivity**, and **phenotype** calls.
+QC, per-marker positivity, and phenotype calls.
 
 Outputs (any combination):
 
-* ``--out-h5ad``   one concatenated AnnData across every patient — the "full dataset"
+* ``--out-h5ad``   one concatenated AnnData across every patient
 * ``--out-table``  the same thing flattened to CSV/Parquet, one row per cell
 * ``--update-zarr`` writes the phenotype columns back into each source store
 
 Joining
 -------
 Cells are matched on the segmentation ``label`` when FlowPath exports it, and
-otherwise on **centroid position**. They are never matched positionally.
-
-FlowPath's ``cell_id`` is the row index into a QuPath ``Collection<PathObject>``
-whose ordering is not guaranteed, so aligning on it silently shifts phenotype
-assignments the moment a cell is deleted, a quality filter drops rows, or QuPath
-returns detections in a different order — which produces plausible-looking wrong
-biology rather than an error. The centroid fallback is safe because FlowPath
-exports ``centroid_x``/``centroid_y`` in micrometres, taken from the
-``Centroid X µm`` measurement MIRAGE itself wrote, so the mapping back to pixels
-is exact: ``x_px = x_um / pixel_size``. Both sides of that comparison are
-corner-of-pixel and converted by the same rule
-(``bin/utils/pixel_convention.py``), so nothing is left to correct here.
+otherwise on centroid position; never positionally. FlowPath's ``cell_id`` indexes
+a QuPath collection whose order is not guaranteed. The centroid fallback is exact:
+FlowPath's micrometre centroids come from the ``Centroid X µm`` measurement MIRAGE
+wrote, and both sides are corner-of-pixel (``bin/utils/pixel_convention.py``).
 
 Positivity
 ----------
 FlowPath's ``<column>_sign`` is three-state: ``"+"``, not-``"+"``, or blank when
-no gate anywhere in the tree touched that column. Only gated columns are carried
-into ``obsm['positivity']``, so an absent column means "never gated" — a boolean
-cast over every marker would merge that with "negative".
+no gate touched that column. Only gated columns go into ``obsm['positivity']``, so
+an absent column means "never gated", not "negative".
 """
 
 from __future__ import annotations
@@ -65,9 +56,8 @@ ZSCORE_SUFFIX = "_zscore"
 def gated_sign_columns(df: pd.DataFrame) -> List[str]:
     """``*_sign`` columns that at least one cell was actually gated on.
 
-    A column of entirely blank signs means no gate in the tree touched it; keeping
-    it would assert "all negative" where the truth is "never measured against a
-    threshold".
+    An all-blank column means no gate touched it; keeping it would read as
+    "all negative".
     """
     out = []
     for c in df.columns:
@@ -146,22 +136,11 @@ def join_by_centroid(
 ) -> Tuple[np.ndarray, Dict]:
     """Mutual-nearest centroid join, used when FlowPath exported no ``label``.
 
-    Both sides are corner-of-pixel, so the inverse is a plain division and is
-    exact. FlowPath's micrometre centroids come from the ``Centroid X µm``
-    measurement ``export_geojson`` wrote, which converts; ``centroids_px`` is
-    the store's ``obsm['spatial']``, which ``build_table`` converts by the same
-    rule (``bin/utils/pixel_convention.py``).
+    Both sides are corner-of-pixel (``bin/utils/pixel_convention.py``), so the
+    conversion is a plain division; do not add a half-pixel correction.
 
-    Do NOT reintroduce a half-pixel correction here. One used to live in this
-    function, correct only while ``obsm['spatial']`` was still raw
-    centre-of-pixel regionprops output; once the store was normalised to corner
-    it became a constant 0.707 px bias on every cell -- 7% of the default
-    ``--centroid-join-max-px`` budget spent on nothing, narrowing the margin
-    between a true match and its neighbour.
-
-    Matching is **mutual** nearest-neighbour: a FlowPath cell and a table cell
-    must each be the other's closest, which prevents one dense cluster from
-    absorbing several rows.
+    Matching is mutual nearest-neighbour: each cell must be the other's closest, so
+    one dense cluster cannot absorb several rows.
     """
     from scipy.spatial import cKDTree
 
@@ -330,9 +309,8 @@ def _process_one(zarr_path: str, csv_path: str, args) -> Tuple[object, Dict]:
 def pair_inputs(zarrs: List[str], csvs: List[str]) -> List[Tuple[str, str]]:
     """Pair stores with CSVs by patient stem, falling back to positional order.
 
-    Stem pairing is preferred because a mis-paired patient is the one failure mode
-    the label join cannot catch on its own (it would simply match nothing, and the
-    min-match-fraction guard would fire — but a clear pairing error is friendlier).
+    Stem pairing gives a clear error for a mis-paired patient, which the label join
+    would only report as a low match fraction.
     """
     if len(zarrs) == 1 and len(csvs) == 1:
         return [(zarrs[0], csvs[0])]

@@ -5,26 +5,13 @@ CellSAM (https://github.com/vanvalenlab/cellSAM) is a SAM-based foundation
 model for cell segmentation. ``cellsam_pipeline`` returns a *single* instance
 label map; it does not separately predict nuclei vs whole-cell.
 
-This backend is wired to behave like the StarDist backend (``segment.py``):
-- it segments the nuclear (DAPI) channel only -- CellSAM is NOT channel
-  invariant (it expects <=3 channels ordered ``(blank, nuclear, whole-cell)``),
-  so we place DAPI in the nuclear slot and leave the whole-cell slot empty;
-- CellSAM's instance map is treated as the ``nuclei`` mask, and the
-  whole-cell ``cell`` mask is derived by expanding the nuclei labels with
-  ``skimage.segmentation.expand_labels`` (``--expand-distance``), exactly as
-  StarDist does. This keeps the two backends behaviourally aligned.
+Behaves like the StarDist backend (``segment.py``): DAPI goes in the nuclear slot of
+CellSAM's ``(blank, nuclear, whole-cell)`` input, the instance map is the nuclei mask,
+and the cell mask is the nuclei expanded by ``--expand-distance``.
 
-Drop-in I/O contract with ``segment.py`` and ``segment_instantseg.py``:
-- writes ``{prefix}_nuclei_mask.tif`` and ``{prefix}_cell_mask.tif`` as
-  uint32 instance labels (compression='zlib')
-- emits ``versions.yml`` (cellSAM + torch + python) -- written by the module
-- emits ``{prefix}.SEGMENT.size.csv`` (input-size trace row) -- written by
-  the module
-
-DAPI extraction AND tiled label expansion are both shared with the StarDist backend
-via ``bin/utils/segment_io.py``, a module with no ML dependencies of its own --
-importing it here does NOT pull in ``segment.py``'s ``stardist``/``tensorflow``,
-which stay absent from the CellSAM container.
+Writes ``{prefix}_nuclei_mask.tif`` and ``{prefix}_cell_mask.tif`` (uint32, zlib), the
+same contract as ``segment.py`` and ``segment_instantseg.py``. ``segment_io`` has no ML
+dependencies, so importing it does not pull in stardist/tensorflow.
 """
 
 from __future__ import annotations
@@ -36,7 +23,6 @@ import time
 from pathlib import Path
 from typing import Tuple
 
-# Add parent directory to path to import lib modules
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
 import numpy as np
@@ -48,23 +34,16 @@ from segment_io import expand_labels_tiled, extract_dapi_channel
 
 logger = get_logger(__name__)
 
-#: TIFF tile size (px) for the nuclei/cell mask writes below -- a TIFF LAYOUT choice, not a
-#: processing tile size. See ``bin/convert_image.py:35-49`` for why an untiled write forces
-#: every downstream region read to decode the whole plane. Deliberately half of
-#: CONVERT_TIFF_TILE/WRITE_TILE's 2048, not copied from it: measured directly on the mask's
-#: own read pattern (many small windowed per-cell/per-region reads, not whole-plane decodes)
-#: -- see docs/perf/2026-08-26-rss.md's tiled-vs-striped table.
+#: TIFF tile size (px) of the mask files, a layout choice, not a processing tile. Smaller
+#: than the image writers' 2048 because masks are read in many small windows.
 MASK_TIFF_TILE = 1024
 
 
 def _build_cellsam_input(dapi_image: NDArray) -> NDArray:
     """Lay out the nuclear channel as CellSAM's ``(H, W, 3)`` input.
 
-    CellSAM expects multiplexed data ordered ``(blank, nuclear, whole-cell)``
-    with the whole-cell slot optional. We place DAPI in the nuclear slot and
-    leave blank + whole-cell as zeros (nuclear-only segmentation). This matches
-    CellSAM's training layout for fluorescence-nuclear data better than passing
-    a bare 2D grayscale array (which CellSAM may treat as brightfield).
+    DAPI goes in the nuclear slot, the other two are zeros. A bare 2D array may be
+    treated as brightfield.
     """
     blank = np.zeros_like(dapi_image)
     whole_cell = np.zeros_like(dapi_image)
@@ -103,9 +82,8 @@ def run_cellsam(
         Distance (px) to expand CellSAM nuclei labels into the whole-cell mask
         (StarDist-style). Default 10.
     use_gpu
-        Whether GPU is requested. ``cellsam_pipeline`` selects the device
-        internally; this flag is informational and warned about if CUDA is
-        unavailable.
+        Whether GPU is requested. ``cellsam_pipeline`` selects the device itself; this
+        raises if CUDA is unavailable.
     use_wsi
         Enable CellSAM's native whole-slide tiling (recommended for large
         registered images).
@@ -139,11 +117,8 @@ def run_cellsam(
     # Defer heavy imports until after argparse/help works without GPU stacks.
     from cellSAM import cellsam_pipeline  # type: ignore
 
-    # CUDA probe. cellsam_pipeline has NO device argument -- it auto-selects via
-    # `device = 'cuda' if torch.cuda.is_available() else 'cpu'`. So if GPU is
-    # requested but CUDA is not visible inside the container, the entire WSI
-    # would silently run on CPU (multi-day runs). Fail loudly instead: a hard
-    # error in seconds beats a 4-day CPU crawl that nobody notices.
+    # cellsam_pipeline has no device argument and falls back to CPU silently, which
+    # takes days on a WSI; fail fast instead.
     if use_gpu:
         import torch
 
@@ -158,16 +133,13 @@ def run_cellsam(
             )
         logger.info(f"  CUDA available: {torch.cuda.get_device_name(0)}")
 
-    # 1. Extract DAPI channel and build CellSAM's (H, W, 3) input.
     dapi_image, _metadata = extract_dapi_channel(
         image_path, dapi_channel_index, logger=logger
     )
     cellsam_input = _build_cellsam_input(dapi_image)
     del dapi_image
 
-    # 2. Run cellsam_pipeline -> single instance label map (the nuclei mask).
-    # use_wsi enables CellSAM's native tiling so peak memory is bounded by
-    # block_size rather than full image dimensions; required for WSI inputs.
+    # use_wsi tiles internally so peak memory scales with block_size; needed for WSIs.
     logger.info("Running cellsam_pipeline...")
     seg_start = time.time()
     nuclei_labels = cellsam_pipeline(
@@ -181,10 +153,8 @@ def run_cellsam(
     logger.info(f"  Segmentation time: {time.time() - seg_start:.2f}s")
     del cellsam_input
 
-    # CellSAM returns a 2D uint32 instance map (0=background). Ensure uint32.
     nuclei_mask = np.asarray(nuclei_labels).astype(np.uint32, copy=False)
 
-    # 3. Derive whole-cell mask by expanding nuclei labels (StarDist-style).
     logger.info(
         f"Expanding nuclei labels to create cell mask (distance={expand_distance}px)..."
     )
@@ -197,7 +167,6 @@ def run_cellsam(
     logger.info(f"  Nuclei detected: {n_nuclei}")
     logger.info(f"  Cells (after expansion): {n_cells}")
 
-    # 4. Save outputs (mirror segment.py naming).
     basename = prefix if prefix else Path(image_path).stem
     nuclei_mask_path = Path(output_dir) / f"{basename}_nuclei_mask.tif"
     cell_mask_path = Path(output_dir) / f"{basename}_cell_mask.tif"
@@ -205,10 +174,7 @@ def run_cellsam(
     logger.info("")
     logger.info("Saving segmentation masks...")
     logger.info(f"  Nuclei mask: {nuclei_mask_path.name}")
-    # bigtiff for the same reason tiled_stitch.py:118 and extract_mask_series.py give:
-    # a 40000x40000 uint32 label mask is 6.4 GB before compression, and classic TIFF's
-    # 32-bit offsets overflow past 4 GB. Compression usually keeps it under -- usually is
-    # not a contract. Guarded by tests/test_slide_io_seam.py.
+    # bigtiff: a 40k x 40k uint32 mask is 6.4 GB raw, past classic TIFF's 4 GB offsets.
     write_tiff(
         nuclei_mask_path,
         nuclei_mask,

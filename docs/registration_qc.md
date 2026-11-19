@@ -5,20 +5,22 @@ stage actually improved the alignment, and by how much?**
 
 It does that by segmenting each slide's native image, establishing cell-to-cell
 correspondence **once**, and then re-measuring those same cell pairs after each stage of the
-VALIS transform.
+transform: `native`, `rigid` and `refined` for STARE (`registration_method = tiled`, the
+default), and the VALIS stages described below for `registration_method = valis`
+(`lib/WarpBackends.groovy`). The stage-by-stage sections of this page describe the VALIS backend.
 
 The chain is three processes — `SEG_QC_SEGMENT` → `SEG_QC_GEOJSON` → `WARP_SEG_QC`.
 `SEG_QC_SEGMENT` is `SEGMENT` under an alias, so the QC segments with **the run's own
-segmenter** (`--seg_method`, default `instantseg`) rather than with a second, fixed one.
+segmenter** (`--seg_method`, default `stardist`) rather than with a second, fixed one.
 
 !!! abstract "See it as a figure"
-    This ladder is panel **f** of **Supplementary Figure S2** —
+    This ladder is panel **f** of **Schematic 2** —
     [registration](figures/registration-schematic.html){ target=_blank } — and panel **e** of
-    **Supplementary Figure S3** —
+    **Schematic 3** —
     [quality control](figures/qc-schematic.html){ target=_blank }, which places it in the
     pipeline-wide QC architecture.
 
-    **Supplementary Figure S6** — [accuracy measures](figures/accuracy-schematic.html){ target=_blank } —
+    **Schematic 6** — [accuracy measures](figures/accuracy-schematic.html){ target=_blank } —
     places this chain against the pipeline's two other accuracy numbers and says which of
     them can be read as independent evidence.
 
@@ -40,10 +42,9 @@ by a blue band:
 
 Perfect alignment is yellow (red + green); misalignment shows red/green
 fringing. **Fringing that shrinks from the left panel to the right one is the
-correction registration applied.** The single "after" composite this used to
-render showed what registration *produced* and gave a reader nothing to compare
-it against — an unregistered pair and a perfectly registered one both look
-plausible on their own.
+correction registration applied.** A single "after" composite would give a reader
+nothing to compare against — an unregistered pair and a perfectly registered one
+both look plausible on their own.
 
 **Both panels are drawn on the reference canvas, origin-aligned, reconciling
 differing dimensions by pad-or-crop — never by rescaling.** Rescaling the native
@@ -80,7 +81,7 @@ wide.
 
 The native image costs nothing extra to obtain: it is the stream that entered
 registration (`REGISTER_PATIENT.out.images_multi`), joined back in on
-`meta.id`. It does cost memory — the process now holds three full-resolution
+`meta.id`. It does cost memory — the process holds three full-resolution
 planes instead of two — which is why its request is tiered on the combined size
 of all three inputs (see [Resources](resources.md#registration-qc)).
 

@@ -16,13 +16,10 @@ include { CHECKPOINT_WRITER       } from './checkpoint_writer'
     SUBWORKFLOW: PREPROCESSING
 ========================================================================================
     Description:
-        Converts images to standardized OME-TIFF (with the nuclear/fiducial channel
-        in channel 0) and applies BaSiC illumination correction through nf-core's
-        BASICPY module -- three processes, not one: TILE_FOR_BASIC (slide -> multi-site
-        tile stack), BASICPY (profiles only), APPLY_PROFILES (the arithmetic the module
-        leaves to ASHLAR upstream, plus reassembly). The correction is skipped entirely
-        when params.skip_preprocessing is set; conversion is not, because everything
-        downstream assumes the standardised layout.
+        Converts images to standardized OME-TIFF (nuclear/fiducial channel first) and
+        applies BaSiC illumination correction: TILE_FOR_BASIC (slide -> tile stack),
+        BASICPY (profiles only), APPLY_PROFILES (apply + reassemble).
+        params.skip_preprocessing skips the correction, never the conversion.
 
     Input:
         ch_input: Channel of [meta, file] tuples where meta contains:
@@ -51,61 +48,26 @@ workflow PREPROCESSING {
             // Read output channels from file (the nuclear/fiducial channel is first)
             def output_channels = channels_file.text.trim().split(',').toList()
 
-            // Update meta with output channel order. This is safe from the
-            // aliasing hazard described in valis_adapter.nf:82-88 not because
-            // `+` avoids aliasing -- it doesn't; Map.plus() is
-            // cloneSimilarMap(left).putAll(right), operationally identical to
-            // clone() -- but because `channels` is rebound here to a
-            // brand-new List (output_channels, freshly built by
-            // .split(',').toList()) rather than to the original
-            // meta.channels reference.
+            // Update meta with the output channel order (a new List, not shared).
             def updated_meta = meta + [channels: output_channels]
             [updated_meta, ome_file]
         }
 
-    // Preprocess each file (BaSiC correction), unless it is switched off entirely.
-    //
-    // CONVERT_IMAGE always runs: it is what standardises the input to OME-TIFF and
-    // moves the nuclear/fiducial channel to index 0, which every downstream step
-    // assumes. `skip_preprocessing` turns off the BaSiC CORRECTION only, so the step
-    // still emits one image per input and the checkpoint still has a row per slide --
-    // the row just points at the converted image instead of a corrected one.
-    //
-    // This is a branch and not an `ext.when` because the checkpoint must name the
-    // directory the file was ACTUALLY published into. APPLY_PROFILES publishes to
-    // <pid>/preprocessed/, CONVERT_IMAGE to <pid>/converted/. Recording the
-    // preprocessed path for a run that never ran the correction would name a directory
-    // that does not exist on disk -- the same defect Layout.passthroughPath documents
-    // for unregistered slides, and one tests/checkpoint_manifest.nf.test fails on.
+    // BaSiC correction, unless skip_preprocessing. A branch, not ext.when, so the checkpoint
+    // names where the file was actually published (<pid>/converted/ vs <pid>/preprocessed/).
     if (params.skip_preprocessing) {
         ch_preprocessed_with_meta = ch_for_preprocess
     } else {
-        // Illumination correction is three processes, not one, because nf-core's BASICPY
-        // computes PROFILES ONLY (mcmicro applies them downstream inside ASHLAR, which
-        // mirage does not have) and refuses a single-sited image -- which every stitched
-        // mirage slide is. TILE_FOR_BASIC writes the pseudo-FOV grid onto the Z axis so
-        // the module sees one site per tile; APPLY_PROFILES does the arithmetic the
-        // module leaves out and reassembles the slide.
+        // nf-core's BASICPY computes profiles only and refuses a single-site image, so
+        // TILE_FOR_BASIC puts a tile grid on the Z axis and APPLY_PROFILES applies them.
         TILE_FOR_BASIC ( ch_for_preprocess )
 
-        // `meta.id` is added HERE and nowhere else. The vendored module tags its task with
-        // it and names its outputs from it (`ext.prefix ?: "${meta.id}"`), and mirage's
-        // meta map has no `id`. It lives only for the duration of BASICPY -- the map that
-        // continues downstream is TILE_FOR_BASIC's, untouched -- so no downstream consumer
-        // sees a key the rest of the linear path does not have.
+        // The vendored module names outputs from meta.id; it is set for BASICPY's input only.
         BASICPY (
             TILE_FOR_BASIC.out.tiles.map { meta, tiles -> [ meta + [id: tiles.simpleName], tiles ] }
         )
 
-        // Joined on a STRING key, deliberately, NOT on the meta map. The left side carries
-        // TILE_FOR_BASIC's meta (no `id`); the right side carries BASICPY's meta, which
-        // gained an `id` two lines up (line 96) for that process alone. A join on the meta
-        // map itself would therefore never match -- the two maps differ by that one key --
-        // so the join has to go around it. `<patient>/<tile basename>` reconstructs the
-        // same string on both sides (`meta.patient_id` is common to both; `json.simpleName`
-        // on the left and `meta.id` on the right both resolve to the tile-stack basename),
-        // which is unique per slide because TILE_FOR_BASIC names its outputs after the
-        // converted image and BASICPY names its profiles after the tile stack it was given.
+        // Join on "<patient>/<tile basename>", not on meta: BASICPY's meta has the extra id.
         ch_apply = TILE_FOR_BASIC.out.sidecar
             .map { meta, image, json -> [ "${meta.patient_id}/${json.simpleName}", meta, image, json ] }
             .join(
@@ -122,21 +84,14 @@ workflow PREPROCESSING {
         GENERATE_PREPROCESS_QC ( ch_preprocessed_with_meta )
     }
 
-    // Generate checkpoint CSV for restart from preprocessing step.
-    // The row is built HERE; whether/where/how it is written is CHECKPOINT_WRITER's.
+    // Checkpoint rows for a restart after preprocessing (written by CHECKPOINT_WRITER).
     ch_checkpoint_rows = ch_preprocessed_with_meta
         .map { meta, image_file ->
             [
                 patient_id        : meta.patient_id,
-                // RULING R17: carried forward from meta, never re-derived from
-                // preprocessed_image's basename below -- see lib/Checkpoint.groovy.
+                // From meta, never re-derived from the image basename.
                 id                : meta.id,
-                // Both kinds are spelled out as LITERAL arguments rather than resolved
-                // through a variable: tests/test_layout.py statically scans for
-                // `Layout.publishedPath(params.*, <pid>, <kind>)` and pins that
-                // 'preprocessed' is still among the kinds this pipeline asks for. A
-                // variable here is invisible to that scan, so the guard would silently
-                // stop covering the checkpoint that a `--start registration` run reads.
+                // Kinds stay literal arguments: tests/test_layout.py scans for them.
                 preprocessed_image: params.skip_preprocessing
                     ? Layout.publishedPath(params.outdir, meta.patient_id, 'converted', image_file)
                     : Layout.publishedPath(params.outdir, meta.patient_id, Layout.PREPROCESSED, image_file),
@@ -149,20 +104,15 @@ workflow PREPROCESSING {
     CHECKPOINT_WRITER(Layout.PREPROCESSED, ch_checkpoint_rows)
     ch_checkpoint_csv = CHECKPOINT_WRITER.out.csv
 
-    // Collect size logs from all processes
     ch_size_logs = Channel.empty()
         .mix(CONVERT_IMAGE.out.size_log)
 
-    // Collect versions from all processes
     ch_versions = Channel.empty()
         .mix(CONVERT_IMAGE.out.versions.first())
 
     if (!params.skip_preprocessing) {
-        // BASICPY is absent from both mixes on purpose. It emits no size log (it is
-        // vendored unmodified and upstream writes none) and its version emit is a
-        // hardcoded `val("1.2.0")` on a versions TOPIC channel, not a versions.yml file,
-        // so mirage's file-based aggregation cannot collect it. See
-        // modules/nf-core/basicpy/MIRAGE-NOTES.md.
+        // BASICPY (vendored) emits no size log and its version is a topic value, not a
+        // versions.yml; see modules/nf-core/basicpy/MIRAGE-NOTES.md.
         ch_size_logs = ch_size_logs
             .mix(TILE_FOR_BASIC.out.size_log)
             .mix(APPLY_PROFILES.out.size_log)

@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Cell segmentation using StarDist on DAPI channel from multichannel images.
+"""Cell segmentation using StarDist on the DAPI channel of a multichannel image.
 
-Simplified segmentation pipeline:
-- Loads multichannel OME-TIFF (from registration output)
-- Extracts DAPI channel (first channel)
-- Normalizes using CSBDeep normalize
-- Segments using StarDist whole-image processing
+Loads the registered OME-TIFF, extracts the DAPI channel, normalises it with CSBDeep,
+segments nuclei with StarDist and expands them into whole-cell masks.
 """
 
 from __future__ import annotations
@@ -14,8 +11,6 @@ import argparse
 import logging
 import os
 import re
-
-# Add parent directory to path to import lib modules
 import sys
 import time
 import urllib.request
@@ -36,21 +31,15 @@ from stardist.models import StarDist2D
 
 logger = get_logger(__name__)
 
-#: TIFF tile size (px) for the nuclei/cell mask writes below -- a TIFF LAYOUT choice, not a
-#: processing tile size. See ``bin/convert_image.py:35-49`` for why an untiled write forces
-#: every downstream region read to decode the whole plane. Deliberately half of
-#: CONVERT_TIFF_TILE/WRITE_TILE's 2048, not copied from it: measured directly on the mask's
-#: own read pattern (many small windowed per-cell/per-region reads, not whole-plane decodes)
-#: -- see docs/perf/2026-08-26-rss.md's tiled-vs-striped table.
+#: TIFF tile size (px) of the mask files, a layout choice, not a processing tile. Smaller
+#: than the image writers' 2048 because masks are read in many small windows.
 MASK_TIFF_TILE = 1024
 
-#: A Hugging Face model reference: ``hf://<owner>/<repo>@<40-hex commit>``. The commit is
-#: REQUIRED: a branch name like ``main`` moves, and a segmentation run whose weights can
-#: change under it is not reproducible. The commit pins every file of the snapshot.
+#: A Hugging Face model reference: ``hf://<owner>/<repo>@<40-hex commit>``. A commit is
+#: required because a branch name can move and change the weights.
 HF_PREFIX = "hf://"
 HF_SPEC = re.compile(r"^hf://(?P<repo>[\w.-]+/[\w.-]+)@(?P<rev>[0-9a-f]{40})$")
-#: The three files a StarDist2D model folder needs (weights_last.h5 and the logs are not
-#: read by StarDist2D(None, name, basedir) and are not downloaded).
+#: The files StarDist2D(None, name, basedir) reads from a model folder.
 HF_FILES = ("config.json", "thresholds.json", "weights_best.h5")
 
 __all__ = [
@@ -90,9 +79,7 @@ def normalize_dapi(
     logger.info("Normalizing DAPI channel...")
     logger.info(f"  Percentiles: [{pmin}, {pmax}]")
 
-    # CSBDeep normalize clips to percentiles and scales to [0, 1].
-    # It internally converts to float32 via x.astype(float32, copy=True),
-    # so pre-converting here would just create a redundant full-image copy.
+    # normalize() already copies to float32; converting first would add a second copy.
     normalized = normalize(dapi_image, pmin, pmax, axis=(0, 1))
 
     logger.info(f"  Normalized range: [{normalized.min():.4f}, {normalized.max():.4f}]")
@@ -110,8 +97,7 @@ def resolve_hf_model(spec: str, cache_dir: Optional[str] = None) -> Tuple[str, s
         ``hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df``.
     cache_dir : str, optional
         Where the folder is kept. A folder already there is used WITHOUT any network
-        access, which is how an air-gapped site runs: pre-download it into
-        ``segmentation_model_dir``. Default: ``./stardist_models`` in the task directory.
+        access (for air-gapped sites). Default: ``./stardist_models`` in the task directory.
 
     Returns
     -------
@@ -133,7 +119,7 @@ def resolve_hf_model(spec: str, cache_dir: Optional[str] = None) -> Tuple[str, s
     if all((folder / f).exists() for f in HF_FILES):
         logger.info(f"  Hugging Face model {repo}@{rev[:12]} found in cache: {folder}")
         return str(basedir), name
-    # HF_ENDPOINT is the Hub's own variable for a mirror; honour it like huggingface_hub does.
+    # HF_ENDPOINT selects a Hub mirror, as in huggingface_hub.
     endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
     folder.mkdir(parents=True, exist_ok=True)
     for fname in HF_FILES:
@@ -196,10 +182,7 @@ def load_stardist_model(
     logger.info(f"  Model directory: {model_dir}")
     logger.info(f"  GPU enabled: {use_gpu}")
 
-    # StarDist ships built-in pretrained models that are downloaded/cached on
-    # first use. We fall back to these when no usable custom model directory is
-    # given, so the pipeline runs out of the box (and CI/real tests don't need a
-    # multi-MB trained model shipped in the repo).
+    # Built-in pretrained models, downloaded on first use; used when no custom model dir.
     BUILTIN_MODELS = {
         "2D_versatile_fluo",
         "2D_versatile_he",
@@ -208,8 +191,7 @@ def load_stardist_model(
     }
 
     if model_name.startswith(HF_PREFIX):
-        # Shipped default: a pinned Hugging Face snapshot, downloaded once into
-        # model_dir (or the task directory) and then loaded as a custom model.
+        # A pinned Hugging Face snapshot, downloaded once and loaded as a custom model.
         model_dir, model_name = resolve_hf_model(model_name, model_dir)
         logger.info(f"  Resolved to local model folder: {Path(model_dir) / model_name}")
 
@@ -217,14 +199,12 @@ def load_stardist_model(
     model_path = (Path(model_dir) / model_name) if have_model_dir else None
 
     if have_model_dir and model_path.exists():
-        # Custom model on disk (production path).
         config_file = model_path / "config.json"
         logger.info(f"  Loading custom model from: {model_path}")
         if not config_file.exists():
             raise FileNotFoundError(f"Config file not found: {config_file}")
         model = StarDist2D(None, name=model_name, basedir=model_dir)
     elif model_name in BUILTIN_MODELS:
-        # No usable custom dir — load a StarDist built-in pretrained model.
         logger.info(
             f"  No custom model directory; loading built-in pretrained model: {model_name}"
         )
@@ -288,9 +268,7 @@ def segment_nuclei(
 
     start_time = time.time()
 
-    # Predict nuclei instances using StarDist. prob_thresh=None uses the model's
-    # built-in default; a lower value detects fainter/smaller nuclei (used by the
-    # test profile so the built-in model picks up small synthetic nuclei).
+    # prob_thresh=None uses the model default; lower finds fainter/smaller nuclei.
     if prob_thresh is not None:
         logger.info(f"  Probability threshold: {prob_thresh}")
     nuclei_labels, _ = model.predict_instances(
@@ -303,14 +281,12 @@ def segment_nuclei(
 
     logger.info("  ✓ Nuclei detection complete")
 
-    # Free normalized DAPI to reduce memory pressure before expansion
     logger.info("  Freeing normalized DAPI from memory...")
     del normalized_dapi
     import gc
 
     gc.collect()
 
-    # Expand nuclei labels to create whole-cell masks (tiled for memory efficiency)
     logger.info("  Expanding nuclei labels to create cell masks...")
     cell_labels = expand_labels_tiled(nuclei_labels, distance=expand_distance)
 
@@ -324,7 +300,6 @@ def segment_nuclei(
     logger.info(f"  Cells (after expansion): {n_cells}")
     logger.info(f"  Segmentation time: {elapsed:.2f}s")
 
-    # Ensure uint32 for large label counts
     return nuclei_labels.astype(np.uint32), cell_labels.astype(np.uint32)
 
 
@@ -381,22 +356,17 @@ def run_segmentation(
     logger.info(f"Output directory: {output_dir}")
     logger.info("")
 
-    # Create output directory
     ensure_dir(output_dir)
 
-    # 1. Extract DAPI channel from multichannel image
     dapi_image, metadata = extract_dapi_channel(
         image_path, dapi_channel_index, logger=logger
     )
 
-    # 2. Normalize using CSBDeep
     normalized_dapi = normalize_dapi(dapi_image, pmin=pmin, pmax=pmax)
     del dapi_image  # Free uint16 original — only normalized float32 needed from here
 
-    # 3. Load StarDist model
     model = load_stardist_model(model_dir, model_name, use_gpu=use_gpu)
 
-    # 4. Segment nuclei and create cell masks
     nuclei_mask, cell_mask = segment_nuclei(
         normalized_dapi,
         model,
@@ -406,7 +376,6 @@ def run_segmentation(
     )
     del normalized_dapi, model  # Free float32 image + TF weights before save phase
 
-    # 5. Save outputs
     basename = Path(image_path).stem
     nuclei_mask_path = Path(output_dir) / f"{basename}_nuclei_mask.tif"
     cell_mask_path = Path(output_dir) / f"{basename}_cell_mask.tif"
@@ -414,10 +383,7 @@ def run_segmentation(
     logger.info("")
     logger.info("Saving segmentation masks...")
     logger.info(f"  Nuclei mask: {nuclei_mask_path.name}")
-    # bigtiff for the same reason tiled_stitch.py:118 and extract_mask_series.py give:
-    # a 40000x40000 uint32 label mask is 6.4 GB before compression, and classic TIFF's
-    # 32-bit offsets overflow past 4 GB. Compression usually keeps it under -- usually is
-    # not a contract. Guarded by tests/test_slide_io_seam.py.
+    # bigtiff: a 40k x 40k uint32 mask is 6.4 GB raw, past classic TIFF's 4 GB offsets.
     write_tiff(
         nuclei_mask_path,
         nuclei_mask,
@@ -452,7 +418,6 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    # Required arguments
     parser.add_argument(
         "--image",
         type=str,
@@ -479,7 +444,6 @@ def parse_args():
         'or a pinned Hugging Face snapshot "hf://<owner>/<repo>@<commit>"',
     )
 
-    # Optional arguments
     parser.add_argument(
         "--output-dir",
         type=str,

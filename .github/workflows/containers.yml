@@ -1,69 +1,24 @@
 # =============================================================================
 # Containers (build, smoke-test, publish) — reusable workflow
 # =============================================================================
-# Builds every Docker image vendored under containers/<name>/ and, when a version is
-# supplied, pushes it to its OWN Docker Hub repository as bolt3x/mirage-<component>:<version>.
+# Builds every image under containers/<name>/ and, when a version is given,
+# pushes it to its own Docker Hub repository as bolt3x/mirage-<component>:<version>.
 #
-# THIS FILE WAS `build-images.yml` UNTIL 2026-09-01 (CI redesign, Phase 6). It absorbed
-# that workflow whole -- the `setup` version resolver, the preflight, the images.json
-# matrix and the push -- and gained the two things that were missing, which are the
-# reason for the rename:
-#
-#   1. NOTHING BUILT AN IMAGE ON A PULL REQUEST. `build-images.yml` triggered on
-#      `push` to main and on dispatch only, so a Dockerfile could stop building and
-#      the PR that broke it stayed green; the failure surfaced on main, or worse, on
-#      the release path. `ci.yml` now calls this workflow with `scope: changed` on
-#      every push and pull request, and builds only the images whose build context
-#      actually changed.
-#   2. NOTHING DETECTED AN IMAGE THAT STOPPED BUILDING FOR A REASON OUTSIDE THE REPO.
-#      An upstream apt repo, a PyPI yank, a git host that deletes a repository --
-#      containers/regqc carried a `pip install git+.../cudipy.git` for months after
-#      that repository ceased to exist, and NOTHING could have noticed, because
-#      nothing built the image unless someone edited it. `nightly.yml` now calls this
-#      workflow with the full static matrix, build-only.
-#
-# WHAT "SMOKE TEST" MEANS HERE, AND WHY IT IS NOT GENERIC. Each image carries
-# `containers/<dir>/smoke.sh`, which imports exactly the third-party modules that
-# image's own bin/ scripts import at run time. The Dockerfile RUNs it as a build step
-# and the `build` job below runs the SAME script against the built image with
-# `docker run`. One definition, two places -- rather than a generic
-# `python -c "import numpy"` that would pass for an image whose actual stack is broken.
+# Smoke test: each image's containers/<dir>/smoke.sh imports the modules that
+# image's bin/ scripts use. The Dockerfile runs it at build time and the `build`
+# job runs it again via `docker run` against the finished image.
 #
 # Triggers:
 #   * workflow_call  -> ci.yml (scope: changed, no version -> build only + smoke)
 #                       nightly.yml (scope: all, no version -> build only)
 #                       release.yml (scope: all, version -> build AND PUSH)
-#   * workflow_dispatch -> build + push, version supplied by the operator. The manual
-#                       path, and the one that validates an image (e.g. :segeval)
-#                       BEFORE a version is tagged.
+#   * workflow_dispatch -> build + push, version supplied by the operator
+#                       (e.g. to validate an image before a version is tagged).
 #
-# THE `push:` TRIGGER IS GONE, deliberately. `build-images.yml` carried
-# `push: branches:[main], paths:[containers/**, requirements/**, <itself>]` for
-# build-only validation. `ci.yml` runs on push to main and dev AND on pull requests,
-# and calls this workflow, so keeping the direct trigger would build every changed
-# image TWICE on a push to main -- once through ci.yml and once directly -- while
-# still validating nothing on a PR. The coverage moved forward, not away.
-#
-# THERE IS DELIBERATELY NO `release: [published]` TRIGGER. This workflow used to carry
-# one, so a published release started TWO publishing runs: this one directly, and
-# release.yml's `publish-images` job via workflow_call. Only the second is gated --
-# `publish-images` has `needs: [validate, test, bump-and-tag, verify-config]` -- so the
-# direct run pushed eleven images to Docker Hub even when the release test gate was RED,
-# contradicting release.yml's own header claim that nothing downstream happens unless
-# `test` passes. Publishing on a release now flows through release.yml alone, behind
-# that gate. If you re-add the trigger, give the version resolver below an explicit
-# `release` branch with it (a `release` trigger carries no inputs, so it would otherwise
-# resolve to a build-only ci-<sha>), and understand that you are restoring the ungated
-# push along with it.
-#
-# ONE REPOSITORY PER IMAGE. The previous layout put all ten images in a single repository
-# and used the tag to say WHICH image it was, so the tag namespace did two jobs at once --
-# component names next to real versions (v2.3, v2.4) next to long-dead images -- and Docker
-# Hub's per-repository tag ordering and vulnerability scanning were meaningless.
-#
-# The version reaches the tag. It previously did not: `version` was a required
-# workflow_dispatch input, was resolved into an output, and was then never used, so every
-# publish overwrote one mutable name and there was no prior image to roll back to.
+# No `push:` trigger (ci.yml already calls this on push) and no
+# `release: [published]` trigger: publishing on a release goes through
+# release.yml, behind its test gate. A `release` trigger carries no inputs, so
+# re-adding one would also need its own branch in the version resolver.
 #
 # Auth: docker/login-action -> Docker Hub using DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
 #       repository secrets (Settings -> Secrets and variables -> Actions).
@@ -93,23 +48,16 @@ on:
   workflow_call:
     inputs:
       version:
-        # EMPTY IS THE BUILD-ONLY CASE, and it is how the caller says "do not publish".
-        # See the resolver in `resolve` below: it separates the triggers on `inputs`
-        # alone and never on github.event_name, which inside a called workflow is the
-        # CALLER's event and can never be 'workflow_call'.
+        # Empty means build only. The resolver keys on `inputs`, never on
+        # github.event_name (inside a called workflow that is the caller's event).
         description: 'Image version to publish. EMPTY (the default) means build only, never push.'
         required: false
         default: ''
         type: string
       ref:
-        # A reusable workflow does its own checkout and sees the CALLER's
-        # github.ref, NOT whatever the caller checked out. release.yml passes the
-        # release TAG here so the images are built from the tagged, version-bumped
-        # tree. Without it, a workflow_dispatch release built ten images from the
-        # dispatch branch's un-bumped tree while `bump-and-tag` was still running --
-        # so mirage-<component>:1.0.0 was built from a tree still saying the previous
-        # version. Empty (the default, and every non-workflow_call trigger) means
-        # actions/checkout's own default ref, i.e. unchanged behaviour.
+        # A called workflow checks out the caller's github.ref, not what the
+        # caller checked out. release.yml passes the release tag so images build
+        # from the version-bumped tree. Empty means checkout's default ref.
         description: 'Git ref (tag/branch/SHA) to build the images from. Empty = the default ref.'
         required: false
         default: ''
@@ -131,10 +79,9 @@ on:
 permissions:
   contents: read
 
-# Serialize per caller-workflow and ref; do NOT cancel — an interrupted run can leave a
-# half-pushed image set on Docker Hub. `github.workflow` inside a called workflow is the
-# CALLER's workflow name, so a CI-driven build and a release-driven publish of the same
-# ref do not queue behind each other.
+# Serialize per caller workflow and ref; never cancel, or a run can leave a
+# half-pushed image set. `github.workflow` here is the caller's name, so CI and
+# release runs of the same ref do not queue behind each other.
 concurrency:
   group: containers-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -148,13 +95,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # Resolve the version/tag, whether we should push, and WHICH images to build.
   # ---------------------------------------------------------------------------
-  # THIS JOB NEVER SKIPS, and that is what keeps the caller's gate honest. `build`
-  # below carries `if: matrix != '[]'` because a matrix with an empty `include:` is a
-  # hard failure in GitHub Actions, not a no-op -- so on a PR that touched no build
-  # context, `build` legitimately skips. A caller reads this workflow's CONCLUSION,
-  # and a workflow whose jobs ALL skipped concludes `success`; because `resolve`
-  # always runs, "nothing to build" and "the whole workflow was skipped" are not the
-  # same result. See _test-suite.yml's `suite-gate` header for the same hazard.
+  # This job never skips. `build` skips on an empty matrix (an empty `include:`
+  # is a hard failure), and a workflow whose jobs all skipped concludes
+  # `success`; `resolve` running keeps the caller's result meaningful.
   resolve:
     name: Resolve build parameters
     runs-on: ubuntu-latest
@@ -169,26 +112,11 @@ jobs:
       - name: Resolve version and push flag
         id: resolve
         run: |
-          # Determine the version string from whichever trigger fired -- WITHOUT
-          # looking at github.event_name, which cannot tell them apart here.
-          #
-          # Inside a called workflow the event payload is the CALLER's ("the event
-          # payload in the called workflow is the same event payload from the calling
-          # workflow" -- GitHub's own docs), so github.event_name is NEVER
-          # "workflow_call": when release.yml's `publish-images` calls this on a
-          # published release it is "release". This resolver used to branch on
-          # event_name == "workflow_call", so on the one path that matters the elif
-          # could not match, execution fell through to the push-trigger default, and a
-          # release produced a fully green "Publish Images" job with PUSH="false" and
-          # ZERO images on Docker Hub -- while modules/local/*.nf pull
-          # bolt3x/mirage-<component>:<manifest.version> by name and every process then
-          # failed to pull. Guarded by tests/test_release_workflow_graph.py.
-          #
-          # `inputs` separates every entry point on its own and needs no event name:
-          # workflow_dispatch declares a REQUIRED `version` (the inputs context is
-          # populated for a manually triggered workflow as well as a reusable one),
-          # and ci.yml/nightly.yml call this workflow without one -- so an empty
-          # inputs.version is exactly the build-only case.
+          # Resolve on `inputs` alone, never github.event_name: inside a called
+          # workflow the event is the caller's (e.g. "release"), never
+          # "workflow_call". workflow_dispatch requires `version`; ci.yml and
+          # nightly.yml pass none, so empty means build only.
+          # (tests/test_release_workflow_graph.py)
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
             PUSH="true"
@@ -196,19 +124,12 @@ jobs:
             VERSION="ci-${GITHUB_SHA::7}"
             PUSH="false"
           fi
-          # Strip a leading "v". GitHub release tags are conventionally v1.0.0 while
-          # nextflow.config's manifest.version -- which is what modules/local/*.nf pin in the
-          # image reference -- is 1.0.0. Without this the release path publishes
-          # mirage-convert:v1.0.0 and every process then fails to pull mirage-convert:1.0.0.
+          # Strip a leading "v": modules/local/*.nf pull :<manifest.version>,
+          # e.g. 1.0.0, not v1.0.0.
           VERSION="${VERSION#v}"
 
-          # SMOKE-TEST THE BUILT IMAGE only on the changed-only path. `docker run`
-          # needs `load: true` on the build, which exports the whole image into the
-          # runner's docker daemon a second time; on the full 11-image matrix that is
-          # tens of gigabytes of runner disk for images the Dockerfile has already run
-          # the same script inside. On a PR the matrix is normally one or two images,
-          # and running it there is what proves the image can be STARTED, not merely
-          # built.
+          # Smoke-test only on the changed-only path: `load: true` copies each
+          # image into the runner's daemon, too much disk for the full matrix.
           if [ "${{ inputs.scope }}" = "changed" ]; then SMOKE="true"; else SMOKE="false"; fi
 
           {
@@ -218,10 +139,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Resolved version=$VERSION push=$PUSH smoke=$SMOKE scope=${{ inputs.scope }} (event=${{ github.event_name }})"
 
-      # Fail once, here, rather than eleven times in parallel with an error that names neither
-      # the missing secret nor the fix. This path went unexercised for months: the login step
-      # in `build` is guarded by `push == 'true'`, and every push-to-main run is build-only, so
-      # a green Build Images run never demonstrated that publishing could work at all.
+      # Fail once, naming the missing secret, rather than in every matrix leg.
       - name: Preflight registry credentials
         if: steps.resolve.outputs.push == 'true'
         env:
@@ -248,38 +166,22 @@ jobs:
         with:
           # Empty on every trigger but workflow_call -> actions/checkout's default.
           ref: ${{ inputs.ref }}
-          # Full history: the changed-only path diffs against a base commit, and a
-          # shallow clone makes that diff either wrong or an error. The tree is ~10 MB.
+          # Full history: the changed-only path diffs against a base commit.
           fetch-depth: 0
 
-      # The per-image path filter is GENERATED from the same sources the build
-      # itself reads -- containers/images.json and each Dockerfile's own `COPY
-      # requirements/...` and `COPY packages/...` lines -- so it cannot disagree with them. A hand-written
-      # filter block is a third copy of the image list, and the second copy
-      # (an inline matrix) is the one tests/test_container_build_matrix.py already
-      # exists to forbid.
-      #
-      # `requirements/**` is NOT a blanket fan-out to all eleven. containers/convert
-      # and containers/spatialdata take no constraints file at all (both are documented
-      # exceptions), so a change to requirements/constraints.txt must not rebuild them,
-      # and a change to requirements/lint.txt -- which no image installs -- must rebuild
-      # nothing. The COPY scan gets that exactly right; a glob cannot.
+      # The per-image path filter is generated from containers/images.json and
+      # each Dockerfile's `COPY requirements/...` and `COPY packages/...` lines,
+      # so it cannot disagree with the build. A requirements/ change rebuilds only
+      # the images that COPY that file.
       - name: Generate the per-image path filter
         id: filters
         if: inputs.scope == 'changed'
         run: |
           {
             echo 'yaml<<PATHS_FILTER_EOF'
-            # `any` is the non-vacuity probe, not a build target. It must be EXACTLY the
-            # union of the per-image globs below -- never a superset such as
-            # 'containers/**' or 'requirements/**'. With a superset, a change that no
-            # image installs (containers/README.md, requirements/lint.txt) makes `any`
-            # true while every per-image filter is false, and the matrix step then
-            # reports "the generator has lost an image" for a docs edit. Measured
-            # 2026-09-13 on dev (CI run 34758861254): the add_cycle restore touched
-            # containers/README.md and the job went red with no image affected.
-            # dorny/paths-filter unions the per-commit changes of a push, so a file
-            # touched and restored within one push still counts.
+            # `any` is the non-vacuity probe. It must be exactly the union of the
+            # per-image globs, never a superset like 'containers/**': otherwise a
+            # change no image uses (containers/README.md) trips the check below.
             nl=$'\n'
             per_image_globs=""
             for dir in $(jq -r '.[].dir' containers/images.json); do
@@ -288,8 +190,7 @@ jobs:
               while read -r req; do
                 per_image_globs="${per_image_globs}${nl}${req}"
               done < <(grep -oE 'requirements/[A-Za-z0-9._-]+\.txt' "containers/${dir}/Dockerfile" | sort -u)
-              # And every first-party packages/ directory it COPYs (none since STARE moved to
-              # github.com/sceriff0/stare), emitted below per image as 'packages/<pkg>/**'.
+              # And every first-party packages/ directory it COPYs (none today).
               while read -r pkg; do
                 per_image_globs="${per_image_globs}${nl}${pkg}/**"
               done < <(grep -oE '^COPY packages/[A-Za-z0-9._-]+' "containers/${dir}/Dockerfile" | sed 's/^COPY //' | sort -u)
@@ -308,10 +209,7 @@ jobs:
               grep -oE 'requirements/[A-Za-z0-9._-]+\.txt' "containers/${dir}/Dockerfile" \
                 | sort -u \
                 | while read -r req; do echo "  - '${req}'"; done
-              # Every first-party package directory it COPYs and pip-installs
-              # (none today; STARE is pinned from github.com/sceriff0/stare). Same
-              # rule as the requirements files: the image reads it, so a change to
-              # it must rebuild the image, and only that image.
+              # And every first-party packages/ directory it COPYs (none today).
               grep -oE '^COPY packages/[A-Za-z0-9._-]+' "containers/${dir}/Dockerfile" \
                 | sed 's/^COPY //' \
                 | sort -u \
@@ -323,19 +221,14 @@ jobs:
       - name: Detect which build contexts changed
         id: changed
         if: inputs.scope == 'changed'
-        # Pinned to the v3 major. The change detection itself is the part that must not
-        # be hand-rolled: on a pull_request it reads the changed-file list from the
-        # GitHub API, on a push it diffs against `github.event.before`, and it handles
-        # a force-push and a new branch. A hand-written `git diff` that gets any of
-        # those wrong produces an EMPTY set, builds nothing, and reports green -- which
-        # is the "a count of zero passes" failure this redesign exists to remove.
+        # Not hand-rolled: paths-filter handles PRs, pushes, force-pushes and new
+        # branches; a wrong `git diff` would build nothing and pass.
         uses: dorny/paths-filter@v3
         with:
           filters: ${{ steps.filters.outputs.yaml }}
 
-      # The image list lives in ONE place (containers/images.json) so the matrix, the
-      # `only` filter and the changed-only filter cannot disagree. Selecting a subset is
-      # filtering that list, never maintaining a second copy of it.
+      # The image list lives only in containers/images.json; every subset is a
+      # filter over it.
       - name: Resolve the build matrix
         id: matrix
         env:
@@ -349,11 +242,8 @@ jobs:
             MATRIX=$(jq -c --argjson want "$CHANGED" \
               'map(select(.dir as $d | $want | index($d)))' containers/images.json)
             COUNT=$(echo "$MATRIX" | jq 'length')
-            # NON-VACUITY. `any` matched a path that can select an image, so at least
-            # one per-image filter must have matched too. If none did, the generated
-            # filter has lost an image -- a state in which this whole job reports
-            # success having built nothing, which is exactly the failure mode it was
-            # added to close.
+            # Non-vacuity: if `any` matched, some per-image filter must have too;
+            # otherwise the generated filter has lost an image.
             if [ "$ANY_TOUCHED" = "true" ] && [ "$COUNT" -eq 0 ]; then
               echo "::error::containers/, requirements/ or this workflow changed, but the" \
                    "generated per-image filter selected NO image. The filter generator has" \
@@ -366,8 +256,7 @@ jobs:
             MATRIX=$(jq -c '.' containers/images.json)
             echo "Building every image."
           else
-            # Fail loudly on a name that matches nothing: a typo'd --only would
-            # otherwise produce an empty matrix, a green run, and no image.
+            # Fail on a name that matches nothing, rather than build nothing.
             MATRIX=$(jq -c --arg only "${{ inputs.only }}" \
               '($only | split(",") | map(gsub("^\\s+|\\s+$";""))) as $want
                | map(select(.dir as $d | $want | index($d)))' containers/images.json)
@@ -389,39 +278,26 @@ jobs:
   build:
     name: Build mirage-${{ matrix.dir }}
     needs: resolve
-    # A `strategy.matrix.include` that evaluates to `[]` is a HARD FAILURE in GitHub
-    # Actions, not an empty fan-out -- so the changed-only path needs this guard.
-    # A skip here is not a hole in the caller's gate: `resolve` always runs, so the
-    # workflow's conclusion is a real conclusion rather than the "every job skipped
-    # concludes success" case. See the note on `resolve` above.
+    # An empty `include:` is a hard failure, so skip instead; see `resolve`.
     if: needs.resolve.outputs.matrix != '[]'
     runs-on: ubuntu-latest
-    # Per-matrix-entry image build + push. The GPU/segmentation contexts are large
-    # and a cold cache builds them from scratch, so this is generous — but it still
-    # bounds the job well under GitHub's 360-minute default. release.yml calls this
-    # workflow via `uses:`, which cannot carry its own timeout-minutes, so THIS is
-    # where the release image build gets bounded.
+    # Generous for cold GPU image builds. This also bounds release.yml's image
+    # build, since a `uses:` job cannot set timeout-minutes.
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        # From containers/images.json via the resolve job, so the `only` filter, the
-        # changed-only filter and the full list are the same list -- and
-        # tests/test_container_build_matrix.py fails if an inline copy reappears here,
-        # because a second copy drifts. The directory name IS the component name, so
-        # the build context, the Docker Hub repository (mirage-<dir>) and the reference
-        # in modules/local/*.nf all say the same word;
-        # tests/test_container_image_naming.py asserts that agreement.
-        # VALIS is here as `valis`: upstream's cdgatenbee/valis-wsi:1.2.0, digest-pinned,
-        # with only the fixes that let a user who is not root run it (containers/valis).
+        # From containers/images.json via `resolve`; no inline copy
+        # (tests/test_container_build_matrix.py). The dir name is the component
+        # name in the repository (mirage-<dir>) and in modules/local/*.nf
+        # (tests/test_container_image_naming.py).
         include: ${{ fromJson(needs.resolve.outputs.matrix) }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Same ref the resolve job resolved the matrix from, so the build context
-          # and the image list can never come from two different commits.
+          # Same ref `resolve` read the matrix from.
           ref: ${{ inputs.ref }}
 
       - name: Set up Docker Buildx
@@ -438,61 +314,32 @@ jobs:
       - name: Build and push mirage-${{ matrix.dir }}
         uses: docker/build-push-action@v6
         with:
-          # REPOSITORY ROOT, not containers/<dir>. Every Dockerfile now COPYs its pins
-          # from requirements/ -- the same files .github/workflows/*.yml install -- and
-          # its own containers/<dir>/smoke.sh, so the version strings and the import
-          # check each exist once instead of twice. A per-directory context cannot
-          # reach outside itself, so the context had to widen for the pins to be shared.
-          # .dockerignore keeps what is actually sent small.
+          # Repository root, so Dockerfiles can COPY requirements/ (shared with
+          # CI). .dockerignore keeps the context small.
           context: .
           file: containers/${{ matrix.dir }}/Dockerfile
           # Pin to linux/amd64 — the pipeline runs on amd64 HPC nodes.
           platforms: linux/amd64
-          # OCI provenance, consumed by the ARG/LABEL pair at the end of every Dockerfile.
-          # Without these a published image cannot be traced back to the commit that built
-          # it -- the tag says which VERSION, never which TREE.
+          # OCI provenance for the ARG/LABEL pair at the end of every Dockerfile.
           build-args: |
             VCS_REF=${{ github.sha }}
             IMAGE_VERSION=${{ needs.resolve.outputs.version }}
           push: ${{ needs.resolve.outputs.push == 'true' }}
-          # `load: true` is what makes the smoke step below possible: it exports the
-          # built image into the runner's docker daemon so `docker run` can reach it.
-          # Single-platform only, which is fine -- `platforms:` above is already one.
-          # Off on the publish and nightly paths; see the SMOKE note in `resolve`.
+          # `load: true` lets the smoke step `docker run` the image; off on the
+          # publish and nightly paths (see `resolve`).
           load: ${{ needs.resolve.outputs.smoke == 'true' }}
-          # `push: false` still runs the COMPLETE build graph -- BuildKit does not skip
-          # stages because nothing is pushed -- so a vanished apt repo, a yanked wheel
-          # or a deleted git dependency fails here, which is the entire point of the
-          # PR and nightly builds.
-          #
-          # THE ONE TAG THE MODULES PULL. `:latest` is deliberately absent -- nothing in
-          # the pipeline references it. (This comment used to promise "plus a moving
-          # major-line tag for humans"; there has only ever been one tag here.)
+          # `push: false` still runs the full build, so upstream breakage fails here.
+          # One tag, the one the modules pull; no `:latest`.
           tags: ${{ env.IMAGE_NAMESPACE }}/mirage-${{ matrix.dir }}:${{ needs.resolve.outputs.version }}
-          # Per-image GitHub Actions layer cache. THE `scope=` IS LOAD-BEARING,
-          # not decoration: without it all eleven images share one cache scope
-          # and evict each other against the repository-wide 10 GB budget, so
-          # every build is effectively cold. It is the buildx equivalent of rule
-          # 2 in `.github/actions/setup-nextflow/action.yml`, where the three
-          # caching rules for this repository are written out. `mode=max` belongs
-          # on `cache-to` only -- it is what tells buildx to export intermediate
-          # layers, and it is meaningless on `cache-from`.
-          #
-          # If layer thrashing is ever observed, the migration is to
-          # `type=registry,ref=<image>:buildcache,mode=max`, which is not subject
-          # to the Actions cache budget. No source settles a threshold for that,
-          # so migrate reactively rather than pre-emptively.
+          # Per-image cache scope: without `scope=` the images evict each other
+          # from the 10 GB Actions cache. `mode=max` belongs on `cache-to` only.
           cache-from: type=gha,scope=${{ matrix.dir }}
           cache-to: type=gha,scope=${{ matrix.dir }},mode=max
 
       - name: Smoke test mirage-${{ matrix.dir }}
         if: needs.resolve.outputs.smoke == 'true'
-        # THE SAME SCRIPT THE DOCKERFILE ALREADY RAN, against the finished image.
-        # That is not redundant: the Dockerfile runs it on an intermediate layer, and
-        # this runs it through `docker run`, which is what the cluster does -- so a
-        # broken ENTRYPOINT, a $HOME the image cannot write, or a CMD that swallows
-        # the command shows up here and nowhere else. It is deliberately NOT a generic
-        # `python -c "import numpy"`: see containers/<dir>/smoke.sh's own header.
+        # Same script the Dockerfile ran, now via `docker run` as the cluster
+        # does: catches a broken ENTRYPOINT, unwritable $HOME or bad CMD.
         run: |
           docker run --rm \
             "${IMAGE_NAMESPACE}/mirage-${{ matrix.dir }}:${{ needs.resolve.outputs.version }}" \

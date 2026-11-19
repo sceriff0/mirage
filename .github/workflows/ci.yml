@@ -1,63 +1,15 @@
 # =============================================================================
 # CI (the blocking gate)
 # =============================================================================
-# EVERY JOB IN THIS FILE IS IN THE `all-tests` GATE. No exceptions, as of
-# 2026-09-01 (CI redesign, Phase 7). A run's conclusion is the WORST conclusion of
-# any job in it, gate membership or not, so a non-required job that fails still
-# paints the commit, the badge and the PR checks list red. This workflow used to
-# carry two such jobs -- `nf-test-real` and `nf-test-integration` -- and on every
-# push to main or dev it reported `failure` while the gate itself was green.
-# Training people to ignore red is the failure mode the redesign exists to remove,
-# so both moved to `.github/workflows/nightly.yml`, which carries the record of WHY
-# the real suite is red rather than letting the next person re-derive it.
+# Every job in this file is in the `all-tests` gate, so a green run means a
+# green gate. Advisory suites belong in nightly.yml, never here behind a missing
+# `needs:` entry or `continue-on-error` (tests/test_release_workflow_graph.py).
 #
-# THE LAST EXCEPTION, `lint`, WAS DELETED IN PHASE 7 rather than repaired, and the
-# measurement is worth keeping because it is the opposite of what the redesign
-# expected. The job ran `nf-core lint --dir . || true`, which cannot fail. The
-# question was which nf-core/tools version lints this repository; the answer,
-# measured against a clean cache on 2026-09-01, is NONE:
+# The blocking suites live in `_test-suite.yml`, which this file and release.yml
+# both call, so the two gates cannot drift apart.
 #
-#   2.14.1 (the version .nf-core.yml itself declares)  ValueError: not enough
-#   3.0.2                                              values to unpack
-#   3.2.1                                              (expected 2, got 1)
-#   3.4.1 (what the `nf-core<3.5` pin resolves to)     -- identical, every version
-#   4.1.0
-#
-# All five die in nf_core/utils.py on
-# `self.pipeline_prefix, self.pipeline_name = manifest.name.split("/")`: MIRAGE's
-# `manifest.name` is `mirage`, and every released version of the tool requires
-# `<org>/<name>`. Forced past that with a prefixed name, 3.4.1 then needs
-# `pre-commit` on PATH, WRITES a `modules.json` into the working tree, and aborts
-# CRITICAL on a schema disagreement (`'50000000' is not of type 'integer', 'null'`).
-# So the job had never linted anything, and making it lint would mean changing the
-# pipeline's identity for a linter whose conventions .nf-core.yml already opts out
-# of six families of. `.nf-core.yml` keeps the finding next to the config.
-#
-# So: a green run of this workflow means a green gate. Keep it that way -- an
-# advisory job belongs in nightly.yml, not here with a missing `needs:` entry, and
-# never behind `continue-on-error`. tests/test_release_workflow_graph.py asserts
-# both halves.
-#
-# -----------------------------------------------------------------------------
-# THE TEST SUITE LIVES IN `_test-suite.yml`, AND SO DOES THE RELEASE GATE'S
-# -----------------------------------------------------------------------------
-# As of 2026-09-01 (Phase 5) the five blocking suites -- python-tests,
-# nextflow-stub, nf-test-stub, security-tests, ruff -- are NOT written here. They
-# are one reusable workflow, `.github/workflows/_test-suite.yml`, which this file
-# and `release.yml` both call.
-#
-# That is the fix for a specific defect, not a tidy-up. release.yml used to hold
-# a hand-maintained copy of these five jobs, and the copy had diverged: the
-# release gate ran 5 of the 13 checks this file blocks on while its header
-# claimed parity. The copy was repaired in 2026-08-31 and then kept honest by a
-# 693-line guard test that compared command strings across the two files. There
-# is now one file, so the comparison has nothing to compare and the guard is
-# smaller: what it asserts instead is that both gates reach the same reusable
-# workflow, which is a fact about `needs:` and `uses:` rather than about prose.
-#
-# `_test-suite.yml`'s header records what the check names become and which two
-# names to require if branch protection is ever turned on (there is none today --
-# measured, see that header).
+# There is no nf-core lint job: no released nf-core/tools version lints this
+# repo (`manifest.name` has no `<org>/`); see .nf-core.yml.
 # =============================================================================
 name: CI
 
@@ -108,35 +60,20 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# NO WORKFLOW-LEVEL `env:`. This file used to set `NFTEST_VERSION` (for the nf-test
-# jobs, gone to nightly.yml in Phase 4) and `NXF_PLUGINS_DIR` (for the `lint` job,
-# deleted in Phase 7, and the only thing left here that invoked Nextflow). Nothing
-# written in this file now runs Nextflow, nf-test or Python at all: every job is a
-# `uses:` of a reusable workflow, plus the gate. `env:` does NOT cross a
-# workflow_call boundary, so `_test-suite.yml` declares its own copy of
-# NXF_PLUGINS_DIR where it is actually read; leaving a second one here would be a
-# copy that drifts, in the file where nothing reads it.
+# No workflow-level `env:`: every job here is a reusable-workflow call, and
+# `env:` does not cross a workflow_call boundary.
 
 jobs:
   # ============================================================================
   # The blocking test suite (reusable workflow)
   # ============================================================================
-  # Five jobs on five runners: python-tests (matrixed 3.10 + 3.11),
-  # nextflow-stub (matrixed 25.04.0 + latest-everything), nf-test-stub,
-  # security-tests, ruff. See `.github/workflows/_test-suite.yml`.
+  # See `.github/workflows/_test-suite.yml` for the jobs.
   #
-  # `ref: ${{ github.sha }}` IS LOAD-BEARING, not decoration. A called workflow
-  # does its own checkout and sees the CALLER's `github.ref`, not whatever the
-  # caller checked out -- the property containers.yml's `workflow_call` block
-  # documents at length after it built ten container images from the wrong tree.
-  # Passing the SHA pins this run to one commit: on a pull_request `github.sha`
-  # is the merge commit the run is about, and on a push it is the pushed commit.
-  # release.yml passes the SHA `validate` pinned, for the same reason.
+  # `ref: ${{ github.sha }}` is required: a called workflow checks out the
+  # caller's `github.ref`, not what the caller checked out, so the commit is
+  # pinned here (on a PR, the merge commit).
   #
-  # `secrets:` names ONE secret rather than `inherit`. The suite needs the
-  # Codecov token and nothing else; `inherit` would hand a test suite every
-  # secret its caller holds, which for release.yml is the Docker Hub push
-  # credentials.
+  # `secrets:` names only the Codecov token rather than `inherit`.
   test-suite:
     name: Test suite
     uses: ./.github/workflows/_test-suite.yml
@@ -150,40 +87,19 @@ jobs:
   # ============================================================================
   # Container images — build only what this change touched, and prove it runs
   # ============================================================================
-  # ADDED 2026-09-01 (CI redesign, Phase 6). Until then NOTHING built a container
-  # image on a pull request: `build-images.yml` triggered on a push to main and on
-  # a manual dispatch only. So a Dockerfile could stop building and the PR that
-  # broke it was green; the failure surfaced on main, or on the release path, where
-  # it costs a half-published image set. containers/regqc carried a
-  # `pip install git+https://github.com/sceriff0/cudipy.git` for months after that
-  # repository ceased to exist, and nothing in CI could have noticed.
+  # `scope: changed` builds only images whose build context (or a requirements
+  # file their Dockerfile COPYs) changed; an untouched PR gets an empty matrix.
   #
-  # `scope: changed` is what makes this affordable: `containers.yml` diffs the
-  # change against its base and builds only the images whose build context (or a
-  # requirements file their Dockerfile actually COPYs) moved. A PR that touches no
-  # image resolves to an empty matrix and its `build` job legitimately skips.
-  #
-  # IT IS IN THE `all-tests` GATE, and that is a deliberate departure from the
-  # redesign spec, which said not to make the build a required check because an
-  # empty matrix hard-fails and the gate would have to tolerate a skip. It does not
-  # have to here: what the gate depends on is THIS job -- the caller -- which has no
-  # `if:` and never skips. The skip happens one level down, on `containers.yml`'s
-  # matrix job, and a called workflow's conclusion is `success` when a job inside it
-  # skips. So `all-tests` keeps "anything that is not a success fails", and a
-  # Dockerfile that stops building blocks the merge instead of being noticed later.
-  # (`containers.yml`'s own `resolve` job never skips, which is what stops the
-  # "every job skipped concludes success" hazard `_test-suite.yml`'s `suite-gate`
-  # exists for.)
+  # This caller job has no `if:` and never skips; a skipped matrix job inside
+  # the called workflow still concludes `success`, so the gate can require it.
   containers:
     name: Container images
     uses: ./.github/workflows/containers.yml
     with:
-      # Same reason as `test-suite` above: a called workflow does its own checkout
-      # against the CALLER's github.ref, so the commit has to be handed over.
+      # Pin the commit, as for `test-suite` above.
       ref: ${{ github.sha }}
       scope: changed
-      # No `version:` -- an empty version is how a caller says "build, never push".
-      # containers.yml's resolver reads that, not github.event_name.
+      # No `version:`: an empty version means build, never push.
     permissions:
       contents: read
 
@@ -192,42 +108,15 @@ jobs:
   # ============================================================================
   all-tests:
     name: All Tests
-    # NOTHING IN THIS FILE IS OUTSIDE THIS LIST any more. The one job that was --
-    # `lint`, which ran `nf-core lint --dir . || true` and therefore could not fail
-    # -- was deleted in Phase 7 rather than repaired; this file's header carries the
-    # version-by-version measurement that settled it.
-    #
-    # The five blocking suites
-    # this list used to name one by one -- python-tests, nextflow-stub,
-    # nf-test-stub, security-tests, ruff -- are now the five jobs of
-    # `_test-suite.yml`, and `test-suite` below is the one job whose result
-    # reports all of them. That is not a loosening: `_test-suite.yml`'s own
-    # `suite-gate` job enumerates the five and fails on anything that is not a
-    # success, because a called workflow whose jobs were all skipped concludes
-    # `success` and this line alone would wave that through.
-    #
-    # nightly.yml holds the two advisory suites (`nf-test-real`,
-    # `nf-test-integration`); when the real suite goes green it comes back into
-    # the shared suite, not into this list directly.
-    #
-    # `containers` joined the list in Phase 6. It is the CALLER job, which has no
-    # `if:` and therefore never skips, so requiring `success` from it does not
-    # depend on whether there was anything to build -- see that job's header.
+    # `test-suite` reports all of `_test-suite.yml`; its own `suite-gate`
+    # rejects an all-skipped suite, which would otherwise conclude `success`.
     needs: [test-suite, containers]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     steps:
       - name: Check all jobs passed
-        # `skipped` is NOT a pass. Every branch here used to read
-        # `!= "success" && != "skipped"`, which was harmless only because
-        # nothing in the needs list can skip today -- the moment anyone adds a
-        # `paths:` or `if:` filter to a needed job, this gate goes decorative
-        # for it and reports green having verified nothing. A needed job that
-        # stops running must block the merge, not be waved through.
-        # Guarded by tests/test_release_workflow_graph.py, which scans EVERY
-        # workflow -- it read release.yml's copy of this gate only, so this one
-        # could be (and was) reverted with the whole suite still green.
+        # `skipped` is not a pass: a needed job that stops running must block.
         run: |
           if [ "${{ needs.test-suite.result }}" != "success" ]; then
             echo "The shared test suite did not pass (result: ${{ needs.test-suite.result }})"

@@ -1,17 +1,4 @@
-"""Progress reporting utilities for long-running operations.
-
-This module provides structured progress tracking with ETA estimation
-for multi-step registration operations.
-
-Examples
---------
->>> tracker = ProgressTracker(total_steps=10, operation_name="Slide Warping")
->>> tracker.start()
->>> for i, slide in enumerate(slides):
-...     process_slide(slide)
-...     tracker.step_complete(slide.name)
->>> tracker.finish()
-"""
+"""Progress and phase timing printed to stdout for long multi-step operations."""
 
 from __future__ import annotations
 
@@ -31,9 +18,6 @@ __all__ = [
 @dataclass
 class ProgressTracker:
     """Track progress of multi-step operations with ETA estimation.
-
-    Provides formatted progress output with elapsed time tracking
-    and remaining time estimation based on average step duration.
 
     Attributes
     ----------
@@ -79,13 +63,11 @@ class ProgressTracker:
         self.current_step += 1
         now = time.time()
 
-        # Calculate step duration
         if self._last_step_time is not None:
             step_duration = now - self._last_step_time
             self.step_times.append(step_duration)
         self._last_step_time = now
 
-        # Calculate progress
         progress_pct = (self.current_step / self.total_steps) * 100
         eta = self._estimate_remaining()
 
@@ -146,9 +128,6 @@ class ProgressTracker:
 class PhaseReporter:
     """Report progress through distinct registration phases.
 
-    Provides clear phase markers with timing information for
-    the main stages of registration.
-
     Attributes
     ----------
     PHASES : list of tuple
@@ -177,19 +156,14 @@ class PhaseReporter:
     def enter_phase(self, phase_name: str) -> None:
         """Enter a new registration phase.
 
-        Logs the phase exit timing for the previous phase and
-        announces the new phase.
-
         Parameters
         ----------
         phase_name : str
             ID of the phase to enter (e.g., 'init', 'rigid', 'warp')
         """
-        # Exit current phase if any
         if self.current_phase:
             self._exit_current()
 
-        # Get display name
         phase_desc = dict(self.PHASES).get(phase_name, phase_name.title())
 
         self.current_phase = phase_name

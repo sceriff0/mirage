@@ -1,12 +1,13 @@
-# Inputs & outputs
+# Outputs
 
-<p class="standfirst">Everything the pipeline reads and everything it writes: the samplesheet contract
-per entry point, the checkpoint CSVs that make each step resumable, the complete published tree, and
-the measurement-key grammar that the QuPath/FlowPath side depends on.</p>
+<p class="standfirst">Everything a run writes: the tables you will analyse, the complete published
+tree, what a run records about itself, and the measurement-key grammar that the QuPath/FlowPath side
+depends on.</p>
+
+What a run reads is on [The samplesheet](samplesheet.md); the checkpoint CSVs are on
+[Checkpoints & resuming](resuming.md).
 
 !!! abstract "Canonical sources"
-    - **Samplesheet columns per step** — `lib/ParamUtils.groovy` (`STEPS`)
-    - **Checkpoint CSV headers** — `lib/Checkpoint.groovy` (`STEPS`)
     - **Published paths** — `lib/Layout.groovy` + the `publishDir` blocks in `conf/modules.config`
     - **Measurement keys** — `bin/utils/measurements.py`
 
@@ -18,104 +19,30 @@ the measurement-key grammar that the QuPath/FlowPath side depends on.</p>
 
 ---
 
-## Inputs
-
-### `--input` — the samplesheet { #the-samplesheet }
-
-One CSV. Each row is one image. The required columns depend on `--start`,
-because each step's entry point is the previous step's checkpoint.
-
-| `--start` | Required columns | Image column read |
-|---|---|---|
-| `preprocessing` *(default)* | `patient_id`, `path_to_file`, `is_reference`, `channels` | `path_to_file` |
-| `registration` | `patient_id`, `preprocessed_image`, `is_reference`, `channels` | `preprocessed_image` |
-| `segmentation` | `patient_id`, `registered_image`, `is_reference`, `channels` | `registered_image` |
-| `postprocessing` | `patient_id`, `registered_image`, `is_reference`, `channels`, `cell_mask`, `nuclei_mask` | `registered_image` |
-
-Because the checkpoint CSV a step writes carries exactly the columns the next
-step requires, resuming is a matter of pointing `--input` at the right
-checkpoint — see [Checkpoints](#checkpoints).
-
-#### Column semantics
-
-| Column | Type | Meaning |
-|---|---|---|
-| `patient_id` | string | Grouping key. All rows sharing it are registered into one coordinate space and produce one output tree. |
-| `path_to_file` | path | The image. Any Bio-Formats-readable format (ND2, CZI, LIF, NDPI, TIFF, HDF5, OME-TIFF). |
-| `is_reference` | `true` / `false` | Exactly **one** `true` per patient — the registration reference and the slide that gets segmented. A patient with no `true` is a **hard error at launch**, at every entry point. There is no auto-promotion: which slide the others are warped onto is not a choice the pipeline makes on your behalf. |
-| `channels` | `\|`-separated | Marker names in channel order, e.g. `DAPI\|PanCK\|CD45`. **Declared metadata, never parsed from the filename.** The count must match the image's channel count. |
-
-!!! warning "The nuclear channel is resolved by name, not position"
-    `nuclear_markers` (default `['DAPI', 'CELLTOX']`) is an **ordered preference
-    list**. `CONVERT_IMAGE` finds the first of those markers present in the
-    row's `channels` and moves it to index 0. That one channel then drives
-    **both** cell segmentation and the registration fiducial. If no listed
-    marker is present the run fails fast at validation — single-channel images
-    excepted. Matching is case-insensitive **substring**, so `DAPI_nuclear`
-    counts as nuclear.
-
-Validation runs before any task is submitted (and is exercised by `--dry_run`):
-per-row format, per-patient reference counts, channel-count agreement, and file
-existence.
-
-### Other inputs
-
-| Input | Parameter | Notes |
-|---|---|---|
-| StarDist model dir | `--segmentation_model_dir` | Optional. Download cache for the default Hugging Face model (`DSUnit/stardist`, pinned commit), or the folder of your own model. A model already there is used without network access. |
-| InstanSeg cache | `--instanseg_model_dir` | Writable BioImage.IO cache; exported as `INSTANSEG_BIOIMAGEIO_PATH`. |
-| CellSAM weights | `--cellsam_model_path` | Pre-downloaded weights. If unset, weights auto-download and need `DEEPCELL_ACCESS_TOKEN` in the launch environment. |
-
----
-
-## Checkpoints
-
-!!! warning "Checkpoints are written only at `--cleanup_level=none`"
-    `none` is the default (since 2026-09-10). `--cleanup_level=final` does not
-    publish the artifacts a checkpoint names — so no checkpoint CSV is written at
-    all, and `<outdir>/csv/` holds a `README.txt` saying so. A manifest whose rows
-    pointed at files that were never published would be worse than no manifest:
-    `--start` opens exactly what it names.
-
-    Do not pass `final` on a run you intend to resume from. See
-    [Output cleanup](parameters.md#output-cleanup).
-
-Each step ends by writing one CSV under `<outdir>/csv/`. These are the
-resume points, and their headers are a published contract
-(`lib/Checkpoint.groovy`).
-
-| File | Written after | Columns |
-|---|---|---|
-| `csv/preprocessed.csv` | preprocessing | `patient_id`, `preprocessed_image`, `is_reference`, `channels` |
-| `csv/registered.csv` | registration | `patient_id`, `registered_image`, `is_reference`, `channels` |
-| `csv/segmented.csv` | segmentation | `patient_id`, `registered_image`, `is_reference`, `channels`, `cell_mask`, `nuclei_mask`, `contours`, `nucleus_contours` |
-| `csv/postprocessed.csv` | postprocessing | `patient_id`, `cell_csv`, `cell_geojson`, `merged_csv`, `cell_mask`, `pyramid` |
-
-```bash
-# run preprocessing only …
-nextflow run . --input samplesheet.csv --outdir results --stop preprocessing -c site.config
-
-# … then pick up from its checkpoint later
-nextflow run . --input results/csv/preprocessed.csv --outdir results --start registration -c site.config
-```
-
-!!! note "The schema is fixed across parameter settings"
-    `nucleus_contours` is empty when `quantify_compartments = false` (the
-    extractor does not run), but the **column is still present**. Readers test
-    for an empty value, never for a missing column — one header serves every
-    run.
-
----
-
-## Outputs
+## The tables you will analyse
 
 Two locations: per-patient results under `<outdir>/<patient_id>/`, and run-level
 aggregates at the `<outdir>` root.
 
+| File | What it is |
+|---|---|
+| `quantification/merged_quant.csv` | One row per cell; morphology joined in. Per marker: a bare column (whole-cell mean, kept for FlowPath's fast path) plus `<MARKER>: <Compartment>: <Statistic>` keys. **Median is always emitted**; `--expanded_quantification` adds Mean and Sum; `--quantify_compartments` adds the Nucleus and Cytoplasm compartments alongside Cell. |
+| `geojson/export/cells.geojson` | One QuPath feature per cell: whole-cell polygon + measurement array (centroid µm, marker intensities, morphology). Carries `nucleusGeometry` in compartment mode. |
+| `geojson/export/cells_wholecell.geojson` | The same detections without nucleus geometry — lighter and faster to import. Compartment mode only. |
+| `geojson/export/cells_data.csv` | The cell table with per-marker **z-scores** added. |
+| `segmentation/*_cell_mask.tif` | Whole-cell instance labels (uint32); each non-zero value is one cell. |
+
+These open directly in QuPath, napari, and OMERO, and feed
+[FlowPath](https://flowpath.readthedocs.io/) for interactive gating. The exact
+key grammar is a cross-repository contract — see
+[The measurement-key contract](#the-measurement-key-contract).
+
+
 ### What a default run publishes
 
 `--cleanup_level` decides how much of the tree below is written. The default,
-`final`, publishes only what the run was asked to produce:
+`none`, publishes the complete tree shown in the next
+section. The opt-in `final` publishes only what the run was asked to produce:
 
 ```text
 results/                              # = --outdir, at --cleanup_level=final
@@ -138,8 +65,7 @@ Everything else in the full tree below — `converted/`, `preprocessed/`,
 `publishDir` is `mode: 'copy'`, so publish-then-delete would pay a full copy out
 of `work/` for a file nobody reads.
 
-`--cleanup_level none` publishes the complete tree below, byte-for-byte as the
-pipeline always did. Use it whenever the output will be re-entered with `--start
+`--cleanup_level none`, the default, publishes the complete tree below. Keep it whenever the output will be re-entered by `--start
 <step>`. Details: [Output cleanup](parameters.md#output-cleanup).
 
 ### The published tree (`--cleanup_level none`)
@@ -220,14 +146,13 @@ results/                              # = --outdir
     A process that writes into a named subdirectory of its task directory and
     publishes with a `pattern:` naming that subdirectory gets the subdirectory
     carried into the published path. `Layout.publishedPath` reproduces that
-    faithfully rather than flattening it — a checkpoint row that named
-    `<pid>/geojson/cells.geojson` instead of `<pid>/geojson/export/cells.geojson`
-    pointed at a file that does not exist for two releases.
+    faithfully rather than flattening it, so a checkpoint row always names the
+    real file (`<pid>/geojson/export/cells.geojson`).
 
     The same rule is why the three QC renderers land under a *second* `qc/`:
     each declares `path("qc/*.png")` and publishes with `pattern: "qc/*.png"`,
     so the real path is `<pid>/qc/preprocess/qc/*.png`, not
-    `<pid>/qc/preprocess/*.png`. The tree above used to show the flattened form.
+    `<pid>/qc/preprocess/*.png`.
     `WARP_SEG_QC` and `SEG_QC_GEOJSON` declare flat patterns and are unaffected.
 
 !!! warning "`registered/transform/*_registrar.pickle` is a Python pickle"
@@ -263,7 +188,7 @@ Written to `--trace_dir` (default `.trace`, **independent of `--outdir`**) when
     <div class="p">pyramid/pyramid.ome.tiff</div>
     <div class="role">primary · image</div>
     <ul>
-      <li>8 levels, scale 2, zstd</li>
+      <li>512 px tiles, up to 8 levels, scale 2, zstd</li>
       <li>Channel names preserved</li>
       <li>Optional uint32 mask series (<code>embed_masks</code>)</li>
     </ul>
@@ -289,6 +214,14 @@ Written to `--trace_dir` (default `.trace`, **independent of `--outdir`**) when
   </div>
 </div>
 
+`geojson/export/` holds three files (`bin/export_geojson.py`):
+
+| File | Content |
+|---|---|
+| `cells.geojson` | QuPath-native detections: each whole-cell polygon (simplified at `simplify_tolerance`, default 1.0 px; coordinates to `geojson_coord_precision`, default 2 decimals) with its measurements, and the nuclear polygon as `nucleusGeometry` |
+| `cells_wholecell.geojson` | The same cells without `nucleusGeometry`, for faster loading |
+| `cells_data.csv` | One row per cell: the raw values plus a `<column>_zscore` for each marker column, computed column-wise across all cells of the patient |
+
 ---
 
 ## Provenance: what a run records about itself
@@ -303,7 +236,7 @@ end of the run.
     python: 3.10.14
     container: bolt3x/mirage-convert:1.0.0
     tifffile: 2024.12.12
-    bioio: 1.1.0
+    bioio: 3.5.0
     h5py: 3.11.0
 ```
 
@@ -313,7 +246,7 @@ the image that *actually ran* — not just the one a config file names. Every
 Dockerfile identifies the exact base bytes a result came from (a first-party
 `bolt3x/mirage-*` image is itself tag-pinned rather than digest-pinned until a
 release publishes it — see
-[Installation → Pre-pulling container images](installation.md#pre-pulling-container-images-optional)).
+[Running on a cluster → Pre-pulling container images](hpc.md#pre-pulling-container-images)).
 In a stub run every value reads `stub`, which is how a stubbed tree is told
 apart from a real one.
 
@@ -385,9 +318,9 @@ written in every mode — FlowPath's bare-key fast path is hard-wired to
     absence — but it means a consumer must treat "absent" as a state rather than
     reading a number. A language whose subscript raises (Python) needs `.get()`;
     one that returns null (Java, as `qupath-extension-flowpath` does) already
-    handles it, and the effect there is on DISTRIBUTIONS instead — percentiles
-    and z-scores exclude the missing cells, where the artificial `0.0`s used to
-    sit in the low tail.
+    handles it, and the effect there is on distributions instead — percentiles
+    and z-scores exclude the missing cells rather than counting artificial `0.0`s
+    in the low tail.
 
     The same applies to the morphology keys (`MORPH: Eccentricity`, `MORPH: Perimeter µm`,
     `MORPH: Solidity`, `MORPH: Convex Area µm²`, `MORPH: Major/Minor Axis Length µm`,
@@ -395,13 +328,11 @@ written in every mode — FlowPath's bare-key fast path is hard-wired to
     [Per-cell QC](#per-cell-qc): **NaN there means "no evidence", never "good"**, and is
     omitted from the GeoJSON exactly like a NaN marker.
 
-    This changed with the 2026-08-24 merge; see the
-    [CHANGELOG's Migration section](https://github.com/sceriff0/mirage/blob/main/CHANGELOG.md#migration--read-before-comparing-any-output-across-this-release).
-
 Cytoplasm is computed as `Cell − Nucleus` by subtraction, per cell. A cell with
-no nuclear overlap yields an empty Nucleus/Cytoplasm compartment, which is
-emitted as `0.0` rather than dropped — so the row count is identical across
-every compartment.
+no nuclear overlap has a **missing** (`NaN`) Nucleus value and a Cytoplasm value
+equal to its whole-cell value; a compartment with no pixels is `NaN`, never `0.0`
+(`bin/quantify.py`, guarded by `tests/test_absent_compartment_is_nan.py`). The
+row is kept either way, so the row count is identical across every compartment.
 
 ### Non-marker columns
 
@@ -560,6 +491,8 @@ mistake for a real reading.
 ## See also
 
 - :material-tune: **Every parameter** — [Parameters](parameters.md)
+- :material-table: **What a run reads** — [The samplesheet](samplesheet.md)
+- :material-restart: **The checkpoint CSVs** — [Checkpoints & resuming](resuming.md)
 - :material-server: **Every resource request** — [Resources](resources.md)
 - :material-database: **The `.zarr` layout in detail** — [SpatialData & FlowPath](spatialdata.md)
 - :material-chart-scatter-plot: **`*_seg_qc.json` schema** — [Registration QC](registration_qc.md)

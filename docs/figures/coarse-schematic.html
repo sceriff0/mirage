@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MIRAGE Supplementary Figure S5 — Coarse alignment</title>
+<title>MIRAGE Schematic 5 — Coarse alignment</title>
 <style>
   /* ======================================================================
-     MIRAGE supplementary figures — shared design base (S1 · S2 · S3 · S4 · S5 · S6)
+     MIRAGE method schematics — shared design base (1–6)
      ----------------------------------------------------------------------
      DUPLICATED ON PURPOSE, not extracted to a shared file. Each figure in
      this set has to survive being detached from the repository — attached to
@@ -89,7 +89,7 @@
   .tag-def{font-family:var(--mono);font-size:.53rem;background:var(--ink);color:#fff;padding:1px 4px;font-weight:700;white-space:nowrap;}
   .tag-alt{font-family:var(--mono);font-size:.53rem;background:var(--sub);color:var(--ink-2);border:1px solid var(--rule);padding:1px 4px;white-space:nowrap;}
 
-  /* parameter tables (td.v in S1/S3, td.val in S2 — same scale) */
+  /* parameter tables (td.v in 1/3, td.val in 2 — same scale) */
   table.pr{border-collapse:collapse;width:100%;font-size:.78rem;}
   table.pr td{padding:3.5px 4px;border-bottom:1px solid var(--rule-2);vertical-align:top;}
   table.pr tr:last-child td{border-bottom:none;}
@@ -264,150 +264,151 @@
 <div class="sheet">
 
   <div class="masthead">
-    <div class="kick">Supplementary Figure S5 · coarse alignment</div>
-    <h1>STARE's coarse anchor: a learned DISK + LightGlue matcher estimates one global pose per moving slide, and its residual — not its speed — is what the per-tile step depends on</h1>
+    <div class="kick">Schematic 5 · coarse alignment</div>
+    <h1>STARE's coarse anchor: a rotation sweep of the normalised cross-correlation estimates one global pose per moving slide, and its residual — not its speed — is what the per-tile step depends on</h1>
   </div>
-  <nav class="figset" aria-label="Supplementary figure set">
-    <a href="pipeline-schematic.html">S1 · pipeline</a>
-    <a href="registration-schematic.html">S2 · registration</a>
-    <a href="qc-schematic.html">S3 · quality control</a>
-    <a href="zarr-schematic.html">S4 · lazy reads</a>
-    <span class="self">S5 · coarse alignment</span>
-    <a href="accuracy-schematic.html">S6 · accuracy measures</a>
+  <nav class="figset" aria-label="Schematic set">
+    <a href="pipeline-schematic.html">1 · pipeline</a>
+    <a href="registration-schematic.html">2 · registration</a>
+    <a href="qc-schematic.html">3 · quality control</a>
+    <a href="zarr-schematic.html">4 · lazy reads</a>
+    <span class="self">5 · coarse alignment</span>
+    <a href="accuracy-schematic.html">6 · accuracy measures</a>
   </nav>
   <p class="standfirst">The STARE (tiled) registration backend's first step — <code>TILED_COARSE</code> — estimates a
-    single whole-slide affine <code>M0</code> on a downsampled thumbnail before the per-tile step refines the small
-    residual left over. For v1.0.0 the front-end that produces that estimate changed from three classical,
-    non-learned feature matchers to one learned matcher, DISK + LightGlue, run CPU-only inside the same task. This
-    figure grounds why that swap happened, what the code kept unchanged underneath it, why the memory curve now has a
-    different shape, and what is — and is not — verified about the replacement.</p>
+    single whole-slide rigid transform <code>M0</code> on a downsampled thumbnail before the per-tile step refines the
+    residual left over (the anchor stage of manuscript Fig.&nbsp;2a). The front-end that produces that estimate is a
+    rotation sweep of the normalised cross-correlation (NCC), with a keypoint + RANSAC fit kept only as a fallback; it
+    replaced a learned DISK + LightGlue matcher on 2026-09-27. This
+    figure grounds why that swap happened, what the code kept underneath it, why the memory request fell, and what
+    is — and is not — verified about the anchor.</p>
 
   <!-- a — THE NAIVE EXPECTATION -->
   <section class="panel">
     <span class="plabel">a</span>
     <div class="panel-head"><h2>The naive expectation — a cheap thumbnail step, any detector would do</h2>
       <p>Coarse alignment looks like it only has to be fast: a whole-slide anchor computed on a small thumbnail,
-        refined later. What it actually has to deliver is a residual narrow enough to land inside the window the
-        per-tile step reads — that requirement, not runtime, is what selects the matcher.</p></div>
+        refined later. What it actually has to deliver is a residual narrow enough to land inside the range the
+        per-tile step can recover — that requirement, not runtime, is what selects the method.</p></div>
     <div class="rail">
       <div class="r"><div class="t">COARSE delivers</div><div class="v">M0 + residual (px)</div>
-        <div class="d">One 3×3 affine mapping moving → reference pixels, plus a residual TRE —
-          <code>estimate_rigid</code>'s return value.</div></div>
-      <div class="r"><div class="t">the constraint</div><div class="v">residual &lt; halo</div>
-        <div class="d">The per-tile step reads a tile core expanded by <code>reg_tiled_halo</code> px and clamped to
-          the image — the capture radius the anchor's residual must land inside. Default 256 px (STARE has one
-          default configuration; the cost tiers were removed).</div></div>
+        <div class="d">One 3×3 rigid matrix (rotation + translation) mapping moving → reference pixels, plus a
+          residual estimate — <code>estimate_rigid</code>'s return value.</div></div>
+      <div class="r"><div class="t">the constraint</div><div class="v">residual &lt; capture range</div>
+        <div class="d">After the anchor, the per-tile step recovers a displacement of up to about two strides per
+          axis — ±128 px (~±42 µm at 0.325 µm/px) at the default <code>reg_tiled_stride</code> of 64.
+          <code>reg_tiled_halo</code> (default 256 px) is the threshold this stage warns at and the default of the
+          solve's range gate; it is not what a tile reads.</div></div>
       <div class="r"><div class="t">what enforces it</div><div class="v">nothing</div>
-        <div class="d"><code>TILED_COARSE</code> logs a warning once the residual reaches the halo, but nothing
-          downstream checks it and no task fails on it — a slide can mis-register silently and the run still exits
-          0.</div></div>
+        <div class="d"><code>TILED_COARSE</code> logs a warning once the residual reaches the halo, and flags an
+          anchor it could not verify, but nothing downstream checks either and no task fails on it — a slide can
+          mis-register silently and the run still exits 0.</div></div>
     </div>
     <div class="callout" style="margin-top:12px"><b>Why this is a correctness requirement, not a speed one.</b> A
-      faster, worse matcher does not merely take a different amount of time — it produces a wider residual, and once
-      that residual reaches the halo the per-tile step is measuring a shift to the wrong structure while the pipeline
-      keeps running. The matcher is chosen for what it can find inside that budget, not for how quickly it runs.</div>
+      worse anchor does not merely take a different amount of time — it leaves a wider residual, and once
+      that residual exceeds what the tile step recovers the per-tile step is measuring a shift to the wrong structure
+      while the pipeline keeps running. The anchor is chosen for robustness, not for how quickly it runs.</div>
   </section>
 
   <!-- b — WHY THE FRONT-END CHANGED -->
   <section class="panel">
     <span class="plabel">b</span>
     <div class="panel-head"><h2>Why the front-end changed, and what did not</h2>
-      <p>Three non-learned, classical feature-matching front-ends preceded this one, plus a selector parameter
-        choosing among all four. All four were <b>deleted outright</b> for v1.0.0 — not kept behind a flag — because
-        a dispatch table with one live value is dead config and the deleted three were not the method being
-        replicated. The numerically load-bearing fit underneath every one of them was never touched.</p>
+      <p>A learned matcher (DISK + LightGlue) preceded this one, and three classical front-ends behind a selector
+        parameter preceded that. The learned matcher was <b>retired</b> on 2026-09-27 and removed from the
+        image — not kept behind a flag. The deterministic match-to-transform fit and the full-resolution lift
+        underneath were kept.</p>
     </div>
     <div class="grid2">
       <div class="branch" style="margin-top:0">
         <div class="bh">changed — the front-end</div>
-        <div class="opt"><div class="oh"><span>the matcher</span><span class="tag">deleted &amp; replaced</span></div>
-          <div class="ox">What produces point correspondences between the two thumbnails. The module's own docstring
-            now reads "Learned feature matching (DISK + LightGlue) handles the inter-cycle rotation/translation" —
-            it used to name a different, classical technique in the same sentence.</div></div>
+        <div class="opt"><div class="oh"><span>the anchor</span><span class="tag">retired &amp; replaced</span></div>
+          <div class="ox">What estimates the rotation and translation between the two thumbnails. The module's own
+            docstring says its only job is to be robust: "a precise-but-fragile matcher is the wrong tool, and this
+            module does not use one". At 256 px the sweep matches tissue <i>shape</i>, which survives nuclei
+            turnover, tissue loss and a gamma change.</div></div>
       </div>
       <div class="branch" style="margin-top:0">
-        <div class="bh">unchanged — the fit</div>
-        <div class="opt"><div class="oh"><span>estimate_transform_from_matches</span><span class="tag-def">untouched</span></div>
-          <div class="ox">RANSAC + model fit over whatever correspondences the front-end hands it, plus
-            <code>scale_transform_to_full_res</code>, the thumbnail-to-full-resolution lift. Same function, same
-            signature, before and after the swap.</div></div>
+        <div class="bh">kept — the fit</div>
+        <div class="opt"><div class="oh"><span>estimate_transform_from_matches</span><span class="tag-def">kept</span></div>
+          <div class="ox">RANSAC + model fit over point correspondences — now the core of the keypoint fallback
+            only — plus <code>scale_transform_to_full_res</code>, the thumbnail-to-full-resolution lift.</div></div>
       </div>
     </div>
-    <div class="callout" style="margin-top:12px"><b>Why cross-cycle thumbnails are hard to match, regardless of
-      matcher.</b> Reference and moving planes come from different imaging cycles with different exposures: two views
-      of the same tissue can arrive at wildly different dynamic ranges and match each other far worse than they
-      should, with no error raised. That is a <i>correspondence</i> problem — what a matcher can find in the two
-      images — never a geometry problem in how the fit is solved from what it finds. The front-end swap targets
-      exactly the half of the step that owns correspondences; it could not have targeted the other half, because the
-      other half was never where the difficulty was.</div>
+    <div class="callout" style="margin-top:12px"><b>Why tissue shape and not point correspondences.</b> Reference
+      and moving planes come from different imaging rounds: nuclei turn over, tissue is lost and exposure differs, so
+      two views of the same tissue can match each other far worse than they should, with no error raised. On the
+      change's own hard synthetic pairs (80% nuclei turnover, 25% tissue loss, gamma 0.6, five rotations) the sweep
+      recovered <b>10 of 10</b>, where DISK + LightGlue recovered 2 of 10 on the same 512 px pairs
+      (CHANGELOG.md).</div>
   </section>
 
   <!-- c — THE MECHANISM -->
   <section class="panel">
     <span class="plabel">c</span>
     <div class="panel-head"><h2>The mechanism — from two raw planes to one lifted transform</h2>
-      <p>Six steps, run once per moving slide. The tensor shapes are the part the code makes hardest to hold in one
-        pass, so they are spelled out at every stage.</p></div>
+      <p>Six steps, run once per moving slide (manuscript Methods, "STARE"; Supplementary Note&nbsp;3.2).</p></div>
     <div class="stack">
-      <div class="stg"><div class="sn"><span class="num">1</span>normalize_intensity</div>
-        <div class="sx">Raw decimated plane, <code>H×W</code> float32 counts (0–65535) → rescaled to <b>[0, 1]</b>
-          over a <b>p1–p99.9</b> percentile window (<code>_NORM_PCT</code>) — the range DISK was trained on, and a
-          correctness fix for the cross-cycle exposure mismatch in panel&nbsp;b, not only a domain-range one.</div></div>
-      <div class="stg"><div class="sn"><span class="num">2</span>reshape for DISK</div>
-        <div class="sx">Normalised plane → a <b>1×3×H×W</b> float32 tensor, the single channel repeated across three
-          (<code>_to_disk_tensor</code>). Reference and moving are each converted independently.</div></div>
-      <div class="stg"><div class="sn"><span class="num">3</span>DISK.from_pretrained("depth")</div>
-        <div class="sx">Two forward passes, one per plane. Internally padded to a multiple of 16
-          (<code>pad_if_not_divisible=True</code> — its U-Net downsamples by 16 and raises on a thumbnail whose
-          dimensions are not multiples of it), up to <b>2048</b> keypoints per plane (<code>n_keypoints</code>, the
-          module default — <code>bin/tiled_coarse.py</code> never overrides it). Each call returns keypoints
-          (<code>N×2</code>) and descriptors, on CPU only.</div></div>
-      <div class="stg"><div class="sn"><span class="num">4</span>LightGlue("disk")</div>
-        <div class="sx">Both keypoint/descriptor sets in → an <code>M×2</code> match-index array out, column 0
-          indexing the reference set and column 1 the moving set.</div></div>
-      <div class="stg"><div class="sn"><span class="num">5</span>RANSAC euclidean fit</div>
-        <div class="sx"><code>estimate_transform_from_matches(src, dst)</code> — default model <b>euclidean</b>
-          (rotation + translation, 3 DOF), <b>1000</b> trials, <b>3&nbsp;px</b> inlier threshold → a 3×3 matrix
-          <code>M0</code> in <i>thumbnail</i> pixels, plus <code>(residual_px, n_inliers)</code>.</div></div>
+      <div class="stg"><div class="sn"><span class="num">1</span>normalize_intensity + mask</div>
+        <div class="sx">Raw decimated plane → rescaled to <b>[0, 1]</b>
+          over a <b>p1–p99.9</b> percentile window (<code>_NORM_PCT</code>), blurred with a Gaussian of σ = 1 px and
+          set to zero outside an Otsu tissue mask — a correctness fix for the cross-round exposure mismatch in
+          panel&nbsp;b, and what keeps background out of the correlation.</div></div>
+      <div class="stg"><div class="sn"><span class="num">2</span>rotation sweep at 256 px</div>
+        <div class="sx">Both planes reduced to a longest side of <b>256 px</b>; the moving one is rotated over
+          360° in <b>3°</b> steps and every angle is scored by the peak of the normalised cross-correlation. At
+          this size the sweep scores the tissue outline rather than individual nuclei.</div></div>
+      <div class="stg"><div class="sn"><span class="num">3</span>refine on the full thumbnail</div>
+        <div class="sx">The two best distinct angles are refined on the full thumbnail (longest side ≤
+          <code>reg_tiled_coarse_max_dim</code>, <b>1024 px</b>) over ±3° in 1° steps and then ±0.75° in 0.25°
+          steps; the translation is placed to sub-pixel precision by tenfold-upsampled cross-correlation.</div></div>
+      <div class="stg"><div class="sn"><span class="num">4</span>acceptance gates</div>
+        <div class="sx"><code>M0</code> is accepted when its correlation peak is at least <b>0.3</b> and at least
+          <b>1.15×</b> that of the runner-up.</div></div>
+      <div class="stg"><div class="sn"><span class="num">5</span>fallback, then full-resolution patches</div>
+        <div class="sx">Otherwise <code>estimate_transform_from_matches(src, dst)</code> fits a <b>euclidean</b>
+          transform (rotation + translation, 3 DOF) to keypoint matches by RANSAC, accepted with at least
+          <b>30</b> inliers. If neither passes, the candidates are compared on up to eight 1024 px nuclear patches
+          read at full resolution: one confirmed by at least three patches is used, otherwise the best candidate is
+          kept and <b>flagged unverified</b>.</div></div>
       <div class="stg"><div class="sn"><span class="num">6</span>lift to full resolution</div>
         <div class="sx"><code>scale_transform_to_full_res</code> multiplies the translation column by the decimation
-          factor (rotation is scale-invariant and passes through unchanged); the residual is scaled by the same
-          factor. Both COARSE outputs — <code>M0</code> and the reported <code>coarse_tre</code> — are full-resolution
-          numbers from this point on.</div></div>
+          factor (rotation is scale-invariant and passes through unchanged). Both COARSE outputs — <code>M0</code>
+          and the reported <code>coarse_tre</code> — are full-resolution numbers from this point on; for the sweep
+          <code>coarse_tre</code> is the search grid's quantisation bound and <code>n_inliers</code> is 0.</div></div>
     </div>
   </section>
 
   <!-- d — THE MEMORY SHAPE -->
   <section class="panel">
     <span class="plabel">d</span>
-    <div class="panel-head"><h2>The memory shape — a U-Net's activations, not a corner detector's</h2>
-      <p>DISK is a U-Net: its activation memory scales with thumbnail <b>area</b>, not with keypoint count or with
-        the slide's own dimensions. That single fact reshaped a resource request and moved a tier column.</p></div>
+    <div class="panel-head"><h2>The memory shape — a few thumbnail-sized canvases, not a U-Net's activations</h2>
+      <p>The anchor holds a few FFT canvases of the thumbnail, so its memory is small and is set by
+        <code>reg_tiled_coarse_max_dim</code>, never by the slide's own dimensions. That is what let the request
+        fall from 48 GB to 2 GB.</p></div>
     <div class="grid2">
       <div class="branch" style="margin-top:0">
-        <div class="bh">activation memory, per call</div>
-        <div class="opt"><div class="oh"><span>DISK forward pass</span><span class="tag-alt">scales with area</span></div>
-          <div class="ox"><b>GB ≈ 1.1 + 7.3 × Mpx</b> — measured on the pinned stack (3.03 GB at 512 px, 8.78 GB at
-            1024 px thumbnails). At the shipped <code>high</code> tier (2048 px → 4.19 Mpx) that is ≈31.7 GB;
-            <code>TILED_COARSE</code>'s memory closure applies 1.5× headroom on top to reach the <b>48&nbsp;GB</b> it
-            actually requests.</div></div>
+        <div class="bh">measured peak, whole stage</div>
+        <div class="opt"><div class="oh"><span>NCC sweep + refine</span><span class="tag-def">under 0.5 GB</span></div>
+          <div class="ox"><b>0.25 GB</b> with a 512 px thumbnail, <b>0.43 GB</b> at 1024 px and 0.40 GB at 2048 px —
+            interpreter, imports, banded reads and the anchor together.
+            <code>TILED_COARSE</code>'s memory closure asks <code>2 × (0.5 + 0.1 × Mpx)</code> GB floored at
+            2 GB — <b>2&nbsp;GB</b> at the 1024 px default — times <code>task.attempt</code>.</div></div>
       </div>
       <div class="branch" style="margin-top:0">
-        <div class="bh">model weights, cached once</div>
-        <div class="opt"><div class="oh"><span>_DISK_MODELS</span><span class="tag">built once per process</span></div>
-          <div class="ox">A module-level dict keyed on device, holding both DISK and LightGlue after the first call
-            — because building both models dominates a single call, not because repeat inference is slow. It matters
-            for the in-process oracle and the test suite; a fresh <code>TILED_COARSE</code> task pays that cost
-            exactly once.</div></div>
+        <div class="bh">what it replaced</div>
+        <div class="opt"><div class="oh"><span>DISK + LightGlue</span><span class="tag">retired 2026-09-27</span></div>
+          <div class="ox">A U-Net whose activation memory scaled with thumbnail <i>area</i>
+            (<code>GB ≈ 1.1 + 7.3 × Mpx</code>, about 32 GB at 2048 px), for which this stage asked 48 GB. torch
+            and kornia are no longer in the STARE image, and its smoke test asserts that torch is not
+            importable.</div></div>
       </div>
     </div>
-    <div class="callout" style="margin-top:12px"><b>Why <code>reg_tiled_coarse_max_dim</code> is now a memory knob,
-      not just a time knob.</b> Raising the thumbnail bound is no longer a free accuracy trade: the shipped
-      <code>high</code> tier is <b>2048</b> px, not the 4096 an earlier iteration shipped — the whole tier column
-      moved down one step for v1.0.0 because of this same area-scaling formula. A <b>256&nbsp;px floor</b> is
-      enforced at launch, before any task starts: below it, the decimator treats the bound as "no decimation" and
-      would hand DISK the full-resolution plane — a guaranteed OOM now that the matcher is a U-Net rather than a
-      cheap corner detector.</div>
+    <div class="callout" style="margin-top:12px"><b>What <code>reg_tiled_coarse_max_dim</code> buys now.</b> It is the
+      <i>refinement</i> resolution — the sweep always runs at 256 px — and its cost is CPU time, not memory.
+      A <b>256&nbsp;px floor</b> is
+      enforced at launch, before any task starts: anything below it — 0 included, which used to mean "no
+      decimation", i.e. the full-resolution plane — aborts the run.</div>
   </section>
 
   <!-- e — THE KNOBS -->
@@ -420,10 +421,10 @@
         refused at launch unless it is <code>high</code>).</p></div>
     <div class="tbl-scroll"><table class="pr">
       <tr><td class="k">reg_tiled_coarse_max_dim</td><td class="val">1024</td>
-        <td class="d">M0 thumbnail longest side (px) — the knob from panel&nbsp;d. 256 px floor enforced
+        <td class="d">anchor refinement thumbnail, longest side (px) — the knob from panel&nbsp;d. 256 px floor enforced
           at launch.</td></tr>
       <tr><td class="k">reg_tiled_halo</td><td class="val">256</td>
-        <td class="d">tile read halo = the capture radius from panel&nbsp;a (px).</td></tr>
+        <td class="d">anchor warning threshold + range-gate default (px), panel&nbsp;a — not a tile read margin.</td></tr>
     </table></div>
   </section>
 
@@ -431,50 +432,53 @@
   <section class="panel">
     <span class="plabel">f</span>
     <div class="panel-head"><h2>Honest limits</h2>
-      <p>Three things this front-end swap does not have behind it, stated plainly rather than left for a reviewer to
+      <p>Three things this anchor does not have behind it, stated plainly rather than left for a reviewer to
         discover.</p></div>
-    <div class="warnbox"><span class="wl">1 — no head-to-head measurement</span> No accuracy comparison between the
-      three deleted classical front-ends and the learned one is recorded anywhere in this tree. The change's own
-      record states a methodological reason — the classical alternatives were not the front-end being replicated —
-      not a measured one. The only tests exercising the learned front-end directly recover a pure synthetic pixel
-      shift injected into a random blob image; there is no real-slide accuracy test for it, classical or learned.</div>
-    <div class="warnbox" style="margin-top:10px"><span class="wl">2 — no CPU fallback</span> If torch or the learned
-      matcher's library fail to import, the front-end raises a <code>RuntimeError</code> naming the missing
-      dependency and the pinned versions to install — there is no classical detector left to fall back to. A
-      deployment node missing the pinned stack fails the task outright rather than degrading.</div>
+    <div class="warnbox"><span class="wl">1 — no head-to-head measurement on tissue</span>
+      The change's record compares the sweep with the learned matcher on ten hard <i>synthetic</i> pairs only. On
+      tissue the manuscript scores the anchor as a stage of STARE, not against another anchor: rigid alignment by
+      <code>M0</code> alone gave a median matched-pair nuclear Dice of 0.57 on the 64 cohort round pairs, against 0.84
+      after the tile stage (manuscript Supplementary Table&nbsp;2).</div>
+    <div class="warnbox" style="margin-top:10px"><span class="wl">2 — an unverified anchor does not fail the run</span>
+      When neither the correlation gates, the keypoint fallback nor the full-resolution patches confirm a
+      candidate, the best one is used, flagged (<code>coarse_trusted</code> false in the M0 JSON) and warned about.
+      The slide can then come out mis-registered with exit 0, so that flag and the registration QC are the only
+      signal.</div>
     <div class="warnbox" style="margin-top:10px"><span class="wl">3 — the residual is an estimate, not a per-pixel
-      guarantee</span> Both <code>M0</code> and its residual are computed on the thumbnail and then <i>lifted</i> to
-      full resolution by a single multiplicative scale — they are never re-measured at full resolution. The reported
-      residual is therefore an estimate of the global pose error, not a guarantee about any individual full-resolution
+      guarantee</span> <code>M0</code> is computed on the thumbnail and then <i>lifted</i> to
+      full resolution by a single multiplicative scale; it is re-examined at full resolution only when the gates
+      fail. For the sweep the reported residual is the search grid's quantisation bound, not a measured error. It is
+      an estimate of the global pose error, not a guarantee about any individual full-resolution
       pixel.</div>
   </section>
 
   <p class="caption">
-    <b>Supplementary Figure S5. The STARE coarse front-end.</b>
-    <b>(a)</b> <code>TILED_COARSE</code> estimates one global affine per moving slide on a shared thumbnail; the
-    per-tile step that follows can only recover a residual that lands inside its read halo, and nothing downstream
-    checks that it did — a wide residual mis-registers a slide while the run still exits 0. <b>(b)</b> Three earlier,
-    classical feature-matching front-ends and their selector parameter were deleted outright and replaced by a single
-    learned matcher (DISK + LightGlue) for v1.0.0; the RANSAC fit and the thumbnail-to-full-resolution lift underneath
-    every front-end, past and present, were never touched — what changed was only how correspondences are found
-    between two cross-cycle thumbnails. <b>(c)</b> Six steps carry a plane from raw counts to a lifted transform:
-    percentile normalisation, a batched tensor reshape, two DISK forward passes (padded internally to a multiple of
-    16, up to 2048 keypoints each, CPU-only), a LightGlue match, a RANSAC euclidean fit, and a full-resolution lift.
-    <b>(d)</b> Because the matcher is a U-Net, its activation memory scales with thumbnail <i>area</i>
-    (GB ≈ 1.1 + 7.3 × Mpx) rather than staying near-flat the way a classical corner detector's did — the resource
-    request this step asks for, and the tier this pipeline ships at, both moved to respect that curve. <b>(e)</b> The
-    two knobs governing this step's cost and accuracy carry plain defaults in <code>nextflow.config</code>
+    <b>Schematic 5. The STARE coarse front-end.</b>
+    <b>(a)</b> <code>TILED_COARSE</code> estimates one global rigid transform per moving slide on a shared thumbnail; the
+    per-tile step that follows can only recover a residual of about two strides per axis, and nothing downstream
+    checks that it did — a wide residual mis-registers a slide while the run still exits 0. <b>(b)</b> A learned
+    matcher (DISK + LightGlue) was retired on 2026-09-27 and replaced by a rotation sweep of the normalised
+    cross-correlation of the tissue outline; the match-to-transform RANSAC fit, now used only by the keypoint
+    fallback, and the thumbnail-to-full-resolution lift were kept. <b>(c)</b> Six steps carry a plane from raw
+    counts to a lifted transform: percentile normalisation with a tissue mask, a 256 px rotation sweep in 3° steps,
+    refinement of the two best angles on the 1024 px thumbnail, acceptance gates on the correlation peak (0.3) and
+    its ratio to the runner-up (1.15), a keypoint + RANSAC fallback with full-resolution patch verification, and a
+    full-resolution lift.
+    <b>(d)</b> The anchor holds a few thumbnail-sized canvases, so the whole stage peaks below 0.5 GB and requests
+    2 GB, where the U-Net it replaced asked 48 GB. <b>(e)</b> The
+    two knobs governing this step carry plain defaults in <code>nextflow.config</code>
     and are set directly (the cost tiers were removed).
-    <b>(f)</b> The replacement is unmeasured head-to-head against what it replaced, has no fallback if its learned
-    stack is unavailable, and reports a residual that is an estimate lifted from a thumbnail, not a full-resolution
-    guarantee. This figure is the long form of Supplementary Figure <b>S2</b>'s panel on the STARE backend, which it
-    must not contradict; Supplementary Figure <b>S1</b> places registration in the whole workflow.
-    <span class="footnote">All algorithm details and parameter defaults are read verbatim from the pipeline source
-    (<code>bin/utils/coarse_align.py</code>, <code>bin/tiled_coarse.py</code>,
-    <code>bin/utils/tile_grid.py</code>, <code>bin/utils/tiled_io.py</code>,
+    <b>(f)</b> The anchor has no tissue accuracy comparison against another anchor, continues with a flagged,
+    unverified anchor rather than failing, and reports a residual that is an estimate lifted from a thumbnail, not a
+    full-resolution guarantee. This figure is the long form of Schematic <b>2</b>'s panel on the STARE backend, which it
+    must not contradict; Schematic <b>1</b> places registration in the whole workflow.
+    <span class="footnote">Algorithm details and parameter defaults are read from the manuscript (Methods, "STARE";
+    Supplementary Note&nbsp;3.2; Supplementary Table&nbsp;1), the pipeline source
+    (<code>bin/utils/coarse_align.py</code> and <code>bin/tiled_coarse.py</code>, shims over the pinned
+    <code>stare-registration</code> 1.3.0 package; <code>bin/utils/tile_grid.py</code>, <code>bin/utils/tiled_io.py</code>,
     <code>lib/ParamUtils.groovy</code>, <code>conf/modules.config</code>, <code>nextflow.config</code>,
-    <code>containers/tiled/Dockerfile</code>, <code>requirements/torch-cpu.txt</code>,
-    <code>requirements/kornia.txt</code>, <code>tests/test_coarse_frontend.py</code> and CHANGELOG.md).</span>
+    <code>containers/stare/Dockerfile</code>, <code>requirements/stare.txt</code>,
+    <code>tests/test_coarse_align.py</code>) and CHANGELOG.md.</span>
   </p>
 </div>
 </body>

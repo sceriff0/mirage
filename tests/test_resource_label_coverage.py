@@ -843,7 +843,9 @@ def _param_selected_mismatch(m: re.Match, expr: str, cell: str) -> str | None:
     every = {v for values in branches.values() for v in values}
     extra = sorted(set(documented) - every)
     if extra:
-        return f"states {extra} GB, which neither branch of `{expr}` takes on any attempt"
+        return (
+            f"states {extra} GB, which neither branch of `{expr}` takes on any attempt"
+        )
     for label, values in branches.items():
         if values[0] not in documented:
             return f"never states the {label} branch's attempt-1 value {values[0]} GB"
@@ -1222,11 +1224,13 @@ def test_memory_cell_mismatch_compares_pairs_not_pooled_numbers():
     both = "`64 GB` (64 -> 512); at `reg_valis_mode hires` `128 GB` (128 -> 1024)"
     assert memory_cell_mismatch(selected, both) is None
     assert "attempt-1" in (
-        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` from 256 GB") or ""
+        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` from 256 GB")
+        or ""
     )
     assert "selects" in (memory_cell_mismatch(selected, "`64 GB`, `128 GB`") or "")
     assert "neither branch" in (
-        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` `96 GB`") or ""
+        memory_cell_mismatch(selected, "`64 GB`; at `reg_valis_mode hires` `96 GB`")
+        or ""
     )
 
     # Anything that is none of the known shapes must refuse loudly rather

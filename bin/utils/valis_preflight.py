@@ -1,62 +1,35 @@
-"""Close VALIS 1.0.0-1.2.0's pyramid-level -1 defect without modifying the VALIS image.
+"""Work around VALIS 1.0.0-1.2.0's pyramid-level -1 defect without changing the VALIS image.
 
-VALIS-free on purpose: this runs (and is tested) where ``valis`` is not installed.
-``bin/register.py`` hands it ``slide_io.BioFormatsSlideReader`` to patch.
+Imports no ``valis``, so it is testable without it. ``bin/register.py`` hands it
+``slide_io.BioFormatsSlideReader`` to patch.
 
-THE DEFECT THIS CLOSES -- reproduced 2026-09-08 with VALIS's own geometry code
-on the dimensions from a failed TMA run (see tests/test_valis_preflight.py's docstring
-for the full chain). ``Valis.prep_images_for_large_non_rigid_registration`` chooses the
-pyramid level to read for each slide as::
+``Valis.prep_images_for_large_non_rigid_registration`` picks the pyramid level per slide::
 
     closest_img_levels = np.where(np.max(slide_dimensions_wh, axis=1) < np.max(src_img_shape_rc))[0]
     closest_img_level = closest_img_levels[0] - 1        # registration.py:3480-3482 (1.0.0)
                                                           # same at main (1.2.0):3952-3954
 
-When even level 0 -- full resolution -- is smaller than the source dimension the
-non-rigid stage needs, that is ``-1``. ``slide2vips(-1)`` sizes the tile grid from
-``slide_dimensions[-1]`` (Python's negative index: the SMALLEST level, silently) and
-every tile thread calls Bio-Formats ``setResolution(-1)``, which throws
-``IllegalArgumentException`` (``loci.formats.FormatReader``: ``no < 0 ||
-no >= getResolutionCount()``). ``get_tiles_parallel`` swallows it (``print(e); pass``),
-leaves ``tile`` unbound, and ``UnboundLocalError: local variable 'tile' referenced
-before assignment`` reaches ``Valis.register()``'s catch-all, which prints it as a
-``UserWarning``, kills the JVM and returns ``(None, None, None)``. Nothing raises.
+When even level 0 is smaller than the source size the non-rigid stage needs, that is
+``-1``. Bio-Formats ``setResolution(-1)`` then throws in every tile thread,
+``get_tiles_parallel`` swallows it, and ``Valis.register()`` ends with a ``UserWarning``
+and ``(None, None, None)`` instead of an error (see tests/test_valis_preflight.py).
 
-VALIS's own clamp does not prevent it. When some slide is smaller than
-``max_non_rigid_registration_dim_px`` it lowers that value to the smallest slide's
-largest dimension -- and then computes the source dimension it needs as
-``processed_max * s`` where ``s`` scales the REFERENCE's processed frame (or, with
-``create_masks=True``, the tissue-mask bounding box, which is smaller) up to the
-clamped value. The smallest slide therefore always comes out short: by one pixel from
-the ceil with no mask (2721 vs 2720), by a lot with one (4096 vs 2720 for a mask
-covering 60 % of the frame). The clamp firing is a deterministic predictor of the
-crash, and it fires exactly when some slide's level-0 largest dimension is below the
-requested size. ``<=`` also covers the equal case, which the ceil makes fail.
+It is not predictable from slide size alone: VALIS clamps the non-rigid size to the
+smallest slide and then scales it up by the reference frame or tissue-mask extent, so
+the smallest slide always comes out short, and larger slides can too depending on the
+tissue mask.
 
-Slides larger than the requested size fail too, through the mask term: the needed source
-dimension is roughly ``max_non_rigid_dim / (tissue-mask extent)``, so it depends on image
-CONTENT and no size check can predict it. Measured 2026-09-22: a TMA patient at 1024 px
-(``-profile tma``) passed the old size preflight on every slide and still died here, the
-micro-rigid ROIs showing a tissue box a small part of the frame.
+The fix is upstream's ``max(closest_img_levels[0] - 1, 0)``, applied at the reader
+(``clamp_negative_levels``): a negative level reaches Bio-Formats as 0. Only calls that
+would have crashed change. VALIS then upsamples level 0 to the requested size. The image
+processor also receives the level but reads through the reader only when ``image is
+None`` (``preprocessing.py:115``), so the reader is the one place it matters.
 
-THE FIX is upstream's one line, ``max(closest_img_levels[0] - 1, 0)``, applied at the
-reader instead (``clamp_negative_levels``): a negative level reaches Bio-Formats as 0.
-That is safe by construction -- ``setResolution()`` rejects every negative level, so the
-only calls the clamp changes are calls that would have crashed -- and it is the same
-value upstream's fix would pick. VALIS's next line, ``resize_img(vips_level_img,
-src_img_shape_rc)``, upsamples level 0 to the size it asked for, so the non-rigid stage
-runs, on no more detail than full resolution holds. The level also reaches the image
-processor (``processor_cls(..., level=closest_img_level)``), but that processor is handed
-the already-read image and only reads through the reader when ``image is None``
-(``preprocessing.py:115``), so the reader is the one place the level matters.
+Only ``BioFormatsSlideReader`` is patched; other readers index ``slide_dimensions[-1]``
+and silently read the smallest level, and changing that would change runs that complete.
 
-Only ``BioFormatsSlideReader`` is patched: it is the reader that crashes. Other readers
-index ``slide_dimensions[-1]`` in Python and silently read the smallest level instead;
-changing that would change runs that currently complete, which is a separate decision.
-
-``slides_too_small_for_non_rigid`` stays as a NOTICE: those slides now register, but
-their non-rigid stage runs on upsampled full-resolution pixels, which an operator
-choosing ``--max-non-rigid-dim`` should know.
+``slides_too_small_for_non_rigid`` is reported as a notice: those slides register, but
+their non-rigid stage runs on upsampled full-resolution pixels.
 """
 
 from __future__ import annotations

@@ -1,17 +1,11 @@
-# GENERATE_REGISTRATION_QC — COPY'd into containers/regqc/Dockerfile.
+# GENERATE_REGISTRATION_QC, COPY'd into containers/regqc/Dockerfile.
 #
-# opencv-python (NOT -headless) because this image has the display libs; CI installs the
-# headless build of the SAME release and names this file as its authority. See
-# requirements/constraints.txt's "deliberately not constrained here" block.
+# opencv-python (not -headless) because this image has the display libs; CI installs the
+# headless build of the same release.
 -c constraints.txt
 
-# scipy is pinned HERE rather than in the Dockerfile's core `pip install`, and the move is
-# the point of this file's history. It used to sit in an EARLY Dockerfile layer at 1.15.3
-# while the LAST pip step -- this file -- installed BaSiCPy, which caps scipy<1.13 and
-# silently downgraded it. tests/test_container_harmonisation.py's _installed() reads
-# Dockerfile tokens first, so the guard read 1.15.3 and passed while the published
-# bolt3x/mirage-regqc:1.0.0 image shipped something under 1.13. Naming scipy in the last
-# pip step means the number the guard reads and the number pip installs are the same line.
+# scipy is pinned here, in the last pip step, so the version the harmonisation test reads
+# is the version pip actually ends up installing.
 scipy==1.15.3
 
 opencv-python==4.10.0.82
@@ -20,21 +14,5 @@ imagecodecs==2025.3.30
 zarr==2.18.3
 numcodecs==0.13.1
 
-# THE REMOVALS, and the rule behind them: an install nothing imports is the same defect as
-# a bin/utils module nothing imports, one layer down (tests/test_no_dead_bin_modules.py
-# exists for the latter, tests/test_no_uninstalled_or_unimported_packages.py for this).
-# This image runs ONE script, bin/generate_registration_qc.py, whose whole third-party
-# import set is {cv2, numpy, skimage, tifffile, zarr}.
-#
-#   BaSiCPy==1.2.0   removed 2026-09-01 — illumination correction runs in nf-core's BASICPY
-#                    module, in labsyspharm's own container. Its scipy<1.13 cap was the
-#                    whole reason this image would not build.
-#   dipy==1.9.0      removed 2026-09-01 — no import, no mention, anywhere in the repo.
-#   dask             removed 2026-09-02 — it was named here because it "arrives transitively
-#                    (nd2 -> resource-backed-dask-array -> dask)", which nd2's removal ends.
-#   h5py             removed 2026-09-02 — bin/convert_image.py imports it; that runs in
-#                    containers/convert, not here.
-#   nd2, nd2reader   removed 2026-09-02 — nothing in bin/ imports either. Reading .nd2 is
-#                    containers/convert's job, through bioio-nd2.
-#   matplotlib       removed 2026-09-02 — bin/utils/qc.py draws with cv2, not pyplot.
-#   pandas           removed 2026-09-02 — unimported on this path.
+# Only what bin/generate_registration_qc.py imports: {cv2, numpy, skimage, tifffile, zarr}.
+# An unimported install is a defect (tests/test_no_uninstalled_or_unimported_packages.py).

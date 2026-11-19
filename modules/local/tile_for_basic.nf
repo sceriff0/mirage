@@ -1,25 +1,14 @@
 /*
  * TILE_FOR_BASIC - write a stitched slide as a multi-SITE OME-TIFF
  *
- * nf-core's BASICPY module refuses a single-sited image by design: its entrypoint builds
- * the field-of-view axis as `istack.stack(I=('M','T','Z'))` and raises
- * "The image is single sited. Was it saved in the correct way?" when `len(I) < 2`. A
- * mirage slide is one stitched plane per channel, so SizeM = SizeT = SizeZ = 1 and it is
- * refused.
+ * nf-core's BASICPY refuses a single-sited image ("The image is single sited"), and a
+ * mirage slide is one stitched plane per channel. This writes the non-overlapping FOV grid
+ * (params.preproc_tile_size) onto the Z axis so the module sees one site per tile. Axes are
+ * CZYX because the module fits one profile per channel.
  *
- * This process writes mirage's existing non-overlapping FOV grid (params.preproc_tile_size,
- * the same grid the in-process BaSiC path fitted on) onto the Z axis, so the module sees
- * one site per tile. Axes are CZYX, not ZCYX, because the module iterates CHANNELS and
- * fits one profile per channel.
- *
- * It also decides the nuclear/fiducial skip ONCE and records it in a JSON sidecar, so
- * APPLY_PROFILES reads the answer rather than re-deriving it.
- *
- * Input:  standardised OME-TIFF (C, Y, X) with channel metadata
- * Output: <name>_tiles.ome.tif (CZYX tile stack) + <name>_tiles.json (positions sidecar),
- *         and the input slide passed through so APPLY_PROFILES gets all three together
- *         without a meta-keyed join (two slides of one patient can share an identical
- *         meta map, which would mis-pair).
+ * The nuclear-channel skip is decided here and recorded in the JSON sidecar for
+ * APPLY_PROFILES. The input slide is passed through so APPLY_PROFILES needs no meta-keyed
+ * join (two slides of one patient can share an identical meta map).
  */
 process TILE_FOR_BASIC {
     tag "${meta.patient_id}"
@@ -41,11 +30,7 @@ process TILE_FOR_BASIC {
     script:
     def args = task.ext.args ?: ''
     def skip_nuclear_flag = params.preproc_skip_nuclear ? '--skip_nuclear' : ''
-    // Same spelling, same reason, as PREPROCESS and SPLIT_CHANNELS: MarkerUtils.markerList
-    // is the one sanctioned reader of params.nuclear_markers -- it normalises the bare-String
-    // form Nextflow produces for `--nuclear_markers CELLTOX` and the one-element comma-joined
-    // form a params file can produce, both of which fail SILENTLY if read raw
-    // (tests/test_nuclear_marker_routing.py).
+    // Via MarkerUtils, which normalises the String/comma-joined param shapes.
     def nuclear_args = "--nuclear-markers ${MarkerUtils.markerList(params.nuclear_markers).join(' ')}"
     def channels = meta.channels.join(' ')
     """

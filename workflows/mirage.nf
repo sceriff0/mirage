@@ -2,9 +2,8 @@
 ================================================================================
     MIRAGE WSI Processing Pipeline — Main Workflow
 ================================================================================
-    This file has ONE job: validate the launch parameters and route the run to
-    the right subworkflow. Anything that shapes a channel, assembles a
-    subworkflow's inputs, or aggregates its outputs belongs to that subworkflow:
+    Validates the launch parameters and routes the run to the right subworkflow.
+    Channel shaping and aggregation belong to the subworkflows:
 
       samplesheet -> sample channel        subworkflows/local/input_check.nf
       prior-run asset reconstruction       subworkflows/local/add_cycle.nf
@@ -21,20 +20,9 @@ include { SEGMENTATION; READ_SEGMENTED_CHECKPOINT } from '../subworkflows/local/
 include { POSTPROCESSING      } from '../subworkflows/local/postprocess'
 include { FINAL_QC            } from '../subworkflows/local/final_qc'
 
-// Unknown columns are ACCEPTED -- a checkpoint CSV legitimately carries columns
-// the entry step does not read -- but never silently: a mistyped 'channles'
-// beside a missing 'channels' otherwise surfaces much later, as a null,
-// somewhere else. CsvUtils.unknownColumns derives the known set from
-// ParamUtils.STEPS + Checkpoint.STEPS, so a legitimate checkpoint header warns
-// about nothing.
-//
-// ONE implementation, called from BOTH the add_cycle branch (step is always the
-// literal 'preprocessing' there -- add_cycle has no --start/--stop choice) and
-// the linear start/stop path (step is params.start) below, rather than two
-// copies of the same log.warn. Defined at SCRIPT level, not inside workflow
-// MIRAGE{} or in lib/: `log` is unbound inside lib/*.groovy and inside
-// conf/*.config (see CLAUDE.md), but resolves in a workflow script -- which is
-// why this lives here, where both call sites can see it, and nowhere else.
+// Unknown columns are accepted (checkpoint CSVs carry extra columns) but warned about,
+// so a typo is not silently read as null. Script-level so `log` resolves; shared by
+// the add_cycle and linear paths.
 def warnUnknownColumns(String csv, String step) {
     def unknown_columns = CsvUtils.unknownColumns(csv, step)
     if (unknown_columns)
@@ -46,61 +34,37 @@ workflow MIRAGE {
 
     /* -------------------- PARAMETER VALIDATION -------------------- */
 
-    // Types, enums and ranges come from nextflow_schema.json (nf-schema). This
-    // covers every parameter in one place, including the ones the hand-rolled
-    // Groovy never checked, and it rejects a -params-file that delivers a
-    // boolean as the STRING "false" instead of silently treating it as true.
-    // Cross-parameter and filesystem rules that no JSON Schema can express
-    // (--stop ordering, samplesheet semantics, add_cycle prerequisites) stay
-    // below in Groovy.
-    //
-    // A RETIRED param first (STARE's reg_tiled_mode, removed 2026-11-04): it is in
-    // validation.ignoreParams so nf-schema passes it, and this refusal -- naming the retired
-    // row's four knob values -- is what the user sees. 'high' is a no-op and only warns.
+    // Types, enums and ranges come from nextflow_schema.json (nf-schema); cross-parameter
+    // and filesystem rules follow in Groovy. Retired params are checked first: they pass
+    // nf-schema via validation.ignoreParams so this gives the specific message.
     def retiredWarning = ParamUtils.checkRetiredParams(params)
     if (retiredWarning) log.warn(retiredWarning)
     validateParameters()
 
     ParamUtils.validateOutdir(params.outdir)
-    // STARE's COARSE thumbnail floor (neither backend has cost tiers). Cross-parameter,
-    // so it belongs here rather than in the schema; runs before any process is instantiated.
+    // Cross-parameter checks, all before any process is instantiated.
     ParamUtils.validatePixelSize(params)
     ParamUtils.validateStareKnobs(params)
-    // --cleanup_level against --mode. add_cycle must PRODUCE a re-enterable tree, so a
-    // cleaning level is refused outright rather than discovered by the next cycle.
+    // add_cycle must produce a re-enterable tree, so a cleaning level is refused.
     ParamUtils.validateCleanup(params)
-    // --seg_qc_nuclei_dir: reg_qc=2 only, and an existing directory, before any process runs.
+    // --seg_qc_nuclei_dir: reg_qc=2 only, and an existing directory.
     ParamUtils.validateSegQcNucleiDir(params)
-    // Settings nextflow.config derives from params as SCALARS (cleanup, trace.*,
-    // executor.queueSize, process.maxForks) froze when that file was parsed -- before
-    // any `-c` file was merged. Refuse a run whose final params disagree with them,
-    // naming the route, rather than let a site.config pin be silently ignored. The
-    // command line is passed so Nextflow's own -with-trace/-report/-timeline overrides
-    // (nf-test passes -with-trace on every run) are not mistaken for a frozen scalar.
+    // Refuse a run whose params disagree with the scalars nextflow.config froze before
+    // `-c` files were merged. The command line exempts Nextflow's own -with-trace etc.
     ParamUtils.validateFrozenConfig(params, workflow.session.config, workflow.commandLine)
 
-    // cleanup_work is mutually exclusive with -resume: the work directory's task files
-    // are removed at teardown of a SUCCESSFUL run, so the NEXT -resume finds nothing
-    // cached and re-runs everything. It defaults to true now, so this warns rather than
-    // refuses -- which of the two the user meant is genuinely ambiguous, the cost is a
-    // re-run rather than lost data, and refusing would break every documented
-    // `--start <step> ... -resume` invocation in docs/usage.md.
-    //
-    // `log` IS bound here. It is NOT bound in conf/*.config, where the same call aborts
-    // the run under the v1 config parser -- see conf/modules.config's errorStrategy
-    // comments and tests/test_error_strategy_policy.py.
+    // cleanup_work empties work/ after success, so the next -resume caches nothing.
+    // Warn rather than refuse: the cost is a re-run, not lost data.
     if (params.cleanup_work && workflow.resume) {
         log.warn "--cleanup_work is true (the default) AND -resume was passed. The work " +
                  "directory is emptied after a successful run, so the NEXT -resume will " +
                  "find nothing cached and re-run every task. Set cleanup_work to false in " +
                  "a -params-file or a profile (Nextflow 26 rejects a boolean value on the " +
-                 "command line) for the iterate-with--resume loop docs/usage.md describes."
+                 "command line) for the iterate-with--resume loop docs/resuming.md describes."
     }
 
-    // --start past preprocessing re-enters from artifacts a cleaning level does not
-    // publish. THIS run reads the prior output fine -- it is a different run's tree --
-    // so it is a warning rather than a refusal; what it cannot do is be re-entered the
-    // same way itself.
+    // --start past preprocessing at a cleaning level: this run reads the prior tree fine,
+    // but its own output cannot be re-entered the same way.
     if (params.cleanup_level != 'none' && !ParamUtils.isEntryPoint(params, 'preprocessing')) {
         log.warn "--start ${params.start} re-enters from intermediates that " +
                  "--cleanup_level=${params.cleanup_level} does not publish. This run reads " +
@@ -110,51 +74,30 @@ workflow MIRAGE {
 
     /* -------------------- STEP GATE -------------------- */
 
-    // Validate and resolve --stop: default to last step if not provided. Computed
-    // HERE, before the mode branch, so add_cycle shares it with the standard path
-    // instead of bypassing it: add_cycle used to fall straight into its own
-    // validation block and never look at --start/--stop at all, so a contradictory
-    // pair (e.g. --start postprocessing --stop preprocessing) silently passed
-    // --dry_run instead of erroring the way the standard path always has.
+    // Validate and resolve --stop (default: last step). Before the mode branch so
+    // add_cycle shares the --start/--stop validation.
     if (params.stop) {
         ParamUtils.validateStop(params.stop, params.start)
     }
     def effective_stop = params.stop ?: ParamUtils.STEP_ORDER.last()
 
-    // Which steps this run covers. Computed once: the gate is a pure function of
-    // (start, stop), so re-asking it at every site only creates opportunities for
-    // the three arguments to disagree. (A closure would read better still, but the
-    // strict Nextflow parser cannot invoke a closure-typed local as a function.)
-    // add_cycle does not consume these booleans below -- it has its own fixed
-    // recompute-registration-and-quantification flow, gated by validateAddCycle's
-    // own prerequisites, not by --start/--stop -- but it shares the validation
-    // above them, which is the point of moving this block up.
+    // Which steps this run covers, computed once. add_cycle does not use these.
     boolean run_preprocessing  = ParamUtils.shouldRun('preprocessing', params.start, effective_stop)
     boolean run_registration   = ParamUtils.shouldRun('registration', params.start, effective_stop)
     boolean run_segmentation   = ParamUtils.shouldRun('segmentation', params.start, effective_stop)
     boolean run_postprocessing = ParamUtils.shouldRun('postprocessing', params.start, effective_stop)
 
-    // MERGE_AND_PYRAMID's memory model uses an UNMEASURED bytes-per-file-byte
-    // ratio (conf/modules.config, the `plane * 3.25d` term). On real slides it
-    // has been observed to under-reserve into a hard node-memory cliff. The
-    // retry ramp is the only safety net, and it is x4 at most. Gated on
-    // run_postprocessing -- the real "does this run reach MERGE_AND_PYRAMID"
-    // condition (ParamUtils.shouldRun against the STEPS table above), not a
-    // dedicated skip param, because add_cycle mode reaches the same process via
-    // ASSEMBLE_EXPORT without ever setting --start/--stop.
+    // MERGE_AND_PYRAMID's memory uses an unmeasured compression ratio
+    // (conf/modules.config). Gated on run_postprocessing; add_cycle reaches the same
+    // process without --start/--stop.
     if (run_postprocessing) {
         log.warn "MERGE_AND_PYRAMID memory is estimated from an unmeasured ratio. " +
                  "On slides larger than ~40 GB, measure r = (H*W*2)/file_size on your " +
                  "own data and set --max_memory accordingly (see docs/resources.md)."
     }
 
-    // --quantify_compartments / --expanded_quantification / --embed_masks, resolved
-    // ONCE here (the single decision site on every path, standard and add_cycle
-    // alike) and threaded down as an argument -- the same seam
-    // --registration_method has in subworkflows/local/registration.nf. Nothing
-    // below this line should read params.quantify_compartments /
-    // params.expanded_quantification / params.embed_masks directly;
-    // tests/test_compartment_mode_routing.py enforces that.
+    // Compartment flags resolved once and passed down as an argument. Nothing below may
+    // read the three params directly (tests/test_compartment_mode_routing.py).
     def compartment_mode = ParamUtils.compartmentMode(params)
 
     if (run_postprocessing) {
@@ -170,22 +113,10 @@ workflow MIRAGE {
     )
     warnUnknownColumns(params.input, params.start)
 
-    // Fail-fast semantic validation (per-row format + per-patient reference
-    // counts + file existence). Runs here so it is also exercised by --dry_run.
-    // false: on the linear path a patient MUST declare its reference. There is no
-    // auto-promotion any more -- `--allow_auto_reference` and the rule that promoted a
-    // patient's first samplesheet row are both gone. Which slide the others are warped
-    // onto is not something the pipeline may choose on the operator's behalf, and at
-    // every entry point after preprocessing the sheet is a checkpoint this pipeline
-    // wrote, so a missing reference there means a corrupt or hand-edited file.
-    // The fifth argument: refuse, here, two slides of one patient with the same channel
-    // set when the backend that is about to run cannot tell them apart afterwards
-    // (RegBackends.pairsOutputsBySignature). Only when REGISTER will actually run --
-    // a --start past registration reads a checkpoint this pipeline wrote and pairs
-    // nothing. This is a second read of --registration_method on the linear path
-    // (registration.nf's is the one that selects the adapter); it selects nothing,
-    // it asks the table a yes/no question, and validateParameters() above has
-    // already confined the value to the schema's enum.
+    // Fail-fast semantic validation (row format, reference counts, file existence), also
+    // run by --dry_run. false: on the linear path every patient must declare its
+    // reference. Last argument: when REGISTER will run with a backend that pairs outputs
+    // by channel signature, refuse two slides of one patient with the same channel set.
     CsvUtils.validateInputSemantics(
         params.input,
         params.start,
@@ -202,20 +133,12 @@ workflow MIRAGE {
 
     /* -------------------- INPUT -------------------- */
 
-    // INPUT_CHECK reads the samplesheet once here, at the entry step, for every
-    // sample/count-derived need downstream (PREPROCESSING/REGISTRATION/SEGMENTATION's
-    // inputs, FINAL_QC's manifest). Which column holds the image to carry forward is
-    // fixed by --start, because each step's checkpoint CSV names the file that step
-    // produced. postprocessing's entry is the one exception: segmented.csv carries
-    // four columns INPUT_CHECK's [meta, one_file] shape cannot express, so
-    // READ_SEGMENTED_CHECKPOINT (subworkflows/local/segmentation.nf) reads it a
-    // second time, below, for the extra mask/contour columns specifically.
+    // INPUT_CHECK reads the samplesheet once. --start picks the column holding the image
+    // to carry forward. At --start postprocessing, READ_SEGMENTED_CHECKPOINT also reads
+    // the mask/contour columns that [meta, one_file] cannot carry.
     def entry_column = ParamUtils.entryColumnForStep(params.start)
 
-    // INPUT_CHECK resolves the reference from this sheet (CsvUtils.resolveReferenceRows)
-    // and stamps it into meta.is_reference, so the decision is made once, here, and every
-    // step downstream -- including the checkpoint writers -- carries it rather than
-    // re-deriving it. registration.nf used to derive it instead, from arrival order.
+    // INPUT_CHECK resolves the reference once into meta.is_reference.
     INPUT_CHECK(params.input, entry_column)
 
     /* -------------------- PREPROCESSING -------------------- */
@@ -247,25 +170,15 @@ workflow MIRAGE {
 
     /* -------------------- POSTPROCESSING -------------------- */
 
-    // READ_SEGMENTED_CHECKPOINT re-runs EXTRACT_CELL_PROPERTIES (and, under
-    // --quantify_compartments, EXTRACT_NUCLEI_PROPERTIES) to recover contours from a
-    // reused mask at --start postprocessing -- the one entry point where
-    // run_segmentation is false, so ch_qc_artifacts below cannot get their
-    // versions/size_log from SEGMENTATION.out. Declared here (not inside the
-    // isEntryPoint branch below) so the FINAL QC section can read it regardless;
-    // stays Channel.empty() at every other entry point.
+    // Versions/size logs from READ_SEGMENTED_CHECKPOINT (--start postprocessing only);
+    // declared here so FINAL QC can read them. Empty at every other entry point.
     def ch_seg_reader_versions  = Channel.empty()
     def ch_seg_reader_size_logs = Channel.empty()
 
     if (run_postprocessing) {
 
-        // Registration QC feeds the SpatialData export's `uns`/`obsm`. It only exists
-        // when REGISTRATION actually ran IN THIS SESSION. Gated on run_registration
-        // itself (not on isEntryPoint('postprocessing')): with the segmentation step
-        // now sitting between registration and postprocessing, "postprocessing is not
-        // the entry point" no longer implies registration ran this session — entry
-        // could be 'segmentation' instead, in which case REGISTRATION was never
-        // invoked and referencing REGISTRATION.out would fail outright.
+        // Registration QC for the SpatialData export exists only if REGISTRATION ran in
+        // this session (entry could be 'segmentation').
         def ch_reg_qc_for_post        = run_registration ? REGISTRATION.out.seg_qc        : Channel.empty()
         def ch_reg_residuals_for_post = run_registration ? REGISTRATION.out.seg_residuals : Channel.empty()
 
@@ -277,11 +190,7 @@ workflow MIRAGE {
         def ch_morphology_for_post
 
         if (ParamUtils.isEntryPoint(params, 'postprocessing')) {
-            // The ONE place INPUT_CHECK's [meta, one_file] shape is not enough:
-            // postprocessing's entry checkpoint (segmented.csv) carries four more
-            // columns beyond a single image path. READ_SEGMENTED_CHECKPOINT
-            // (subworkflows/local/segmentation.nf) is the dedicated reader —
-            // mirrors add_cycle.nf's own splitCsv checkpoint readers.
+            // segmented.csv carries mask/contour columns beyond one image path.
             READ_SEGMENTED_CHECKPOINT(params.input, compartment_mode)
             ch_for_postprocessing       = READ_SEGMENTED_CHECKPOINT.out.samples
             ch_cell_mask_for_post       = READ_SEGMENTED_CHECKPOINT.out.cell_mask
@@ -319,14 +228,9 @@ workflow MIRAGE {
 
     /* -------------------- FINAL QC + TRACE -------------------- */
 
-    // One tagged stream of everything the run produced for reporting. FINAL_QC
-    // owns both end-of-run aggregations and both of their param gates
-    // (--skip_final_qc_report, --enable_trace), so there is nothing to branch on
-    // here — steps that did not run simply contribute nothing.
-    //
-    // INPUT_CHECK runs unconditionally above (every entry point reads the samplesheet
-    // through it), and now runs a real process -- PREFLIGHT_SCALE -- so its versions/
-    // size_log are contributed here unconditionally too, same as every linear step.
+    // One tagged stream of everything the run produced for reporting. FINAL_QC owns the
+    // report and trace gates; steps that did not run contribute nothing. INPUT_CHECK
+    // always runs (PREFLIGHT_SCALE), so its artifacts are always included.
     def ch_qc_artifacts = Channel.empty()
         .mix(INPUT_CHECK.out.versions.map  { f -> ['versions', f] })
         .mix(INPUT_CHECK.out.size_logs.map { f -> ['size_log', f] })
@@ -347,9 +251,7 @@ workflow MIRAGE {
             .mix(REGISTRATION.out.size_logs.map        { f -> ['size_log', f] })
     }
     if (run_segmentation) {
-        // No dedicated QC-image kind: ParamUtils.STEPS' 'segmentation' entry declares
-        // qcKinds: [] on purpose (see its comment) — SEGMENT and the two property
-        // extractors only ever contribute the two UNIVERSAL_QC_KINDS.
+        // Segmentation has no QC-image kind, only versions and size logs.
         ch_qc_artifacts = ch_qc_artifacts
             .mix(SEGMENTATION.out.versions.map  { f -> ['versions', f] })
             .mix(SEGMENTATION.out.size_logs.map { f -> ['size_log', f] })
@@ -359,9 +261,7 @@ workflow MIRAGE {
             .mix(POSTPROCESSING.out.postprocess_qc.map { f -> ['postprocess_qc', f] })
             .mix(POSTPROCESSING.out.versions.map       { f -> ['versions', f] })
             .mix(POSTPROCESSING.out.size_logs.map      { f -> ['size_log', f] })
-            // READ_SEGMENTED_CHECKPOINT's re-run EXTRACT_CELL_PROPERTIES (+
-            // EXTRACT_NUCLEI_PROPERTIES) versions/size_log, at --start postprocessing
-            // only -- Channel.empty() (declared above) at every other entry point.
+            // From READ_SEGMENTED_CHECKPOINT at --start postprocessing; empty otherwise.
             .mix(ch_seg_reader_versions.map  { f -> ['versions', f] })
             .mix(ch_seg_reader_size_logs.map { f -> ['size_log', f] })
     }

@@ -6,224 +6,98 @@
 [![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?logo=docker)](https://www.docker.com/)
 [![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg)](https://sylabs.io/docs/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-<!-- DOI: filled in by plan 14 once the Zenodo deposition exists. The badge is a
-     CONCEPT DOI (it resolves to the newest version, so it never needs updating):
-     [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.<CONCEPT_ID>.svg)](https://doi.org/10.5281/zenodo.<CONCEPT_ID>)
-     Zenodo shows both the concept DOI and the version DOI on the deposition page;
-     take the one labelled "Cite all versions". -->
 
-## Introduction
+**From separately acquired staining rounds of one tissue section to a single-cell table.**
+MIRAGE is a Nextflow pipeline for multiplexed immunofluorescence on whole slides. It aligns the
+rounds at the scale of a nucleus ([STARE](https://github.com/sceriff0/stare) by default, VALIS as
+the second mode), finds every cell (StarDist by default), measures every marker in nucleus,
+cytoplasm and whole cell, and writes files that open directly in QuPath and in scverse tools.
 
-MIRAGE is a Nextflow DSL2 pipeline for whole slide image (WSI) processing. It supports multiplex fluorescence imaging workflows end-to-end: illumination correction, multi-modal registration, cell segmentation, single-cell marker quantification, and QuPath-compatible GeoJSON export for interactive gating via FlowPath. The pipeline is designed for HPC SLURM environments but also runs locally via Docker or Singularity.
+![MIRAGE: preprocessing, registration, segmentation and postprocessing](docs/assets/mirage_schematic.png)
 
-## Pipeline Summary
+## Quick start
 
-1. **Image format conversion** — every input is read through a dispatch table
-   (`bin/utils/ome_io.py`) and staged as OME-TIFF with the nuclear marker moved to
-   channel 0. See [Supported formats](#supported-formats).
-2. **Illumination correction** (`TILE_FOR_BASIC` → `BASICPY` → `APPLY_PROFILES`) — per-channel
-   flatfield correction via the BaSiC algorithm, through nf-core's
-   [BASICPY](https://github.com/peng-lab/BaSiCPy) module at upstream defaults (no darkfield is
-   estimated or removed); produces a corrected OME-TIFF per image.
-3. **Multi-modal image registration** — two interchangeable backends, chosen with
-   `--registration_method`:
-   - **`valis`** (default) — graph-based whole-stack alignment via
-     [VALIS](https://github.com/MathOnco/valis) 1.2.0 at its defaults; rigid + non-rigid.
-   - **`tiled`** (STARE) — JVM-free, internally tiled and fully parallel; coarse NCC
-     rotation-sweep anchor (ORB fallback), per-tile refinement, global solve, tiled warp.
-     Every step stays within a few GB, so it runs on a workstation.
-4. **Cell segmentation** (`SEGMENT`) — three interchangeable backends via `--seg_method`:
-   **InstanSeg** (default; channel-invariant, runs on an unconfigured clone),
-   **StarDist** (needs a trained model directory), **CellSAM** (needs a weight download).
-   Outputs nuclear and whole-cell instance masks per patient.
-5. **Single-cell marker quantification** (`QUANTIFY`) — per-cell intensity statistics across
-   every registered channel, with optional Nucleus / Cytoplasm / Cell compartments; outputs CSV
-   tables.
-6. **QuPath GeoJSON export** (`EXPORT_GEOJSON`) — every cell with raw marker intensities and
-   morphological measurements, in QuPath-native GeoJSON, for interactive gating via FlowPath.
-7. **Pyramidal OME-TIFF export** — all registered channels assembled into a tiled,
-   multi-resolution OME-TIFF for QuPath / napari / OMERO.
-8. **SpatialData export** — an additive scverse-native `.zarr` store carrying the same masks,
-   polygons, measurements and QC. Written by default; `skip_spatialdata_export` turns it off.
-9. **Quality control reporting** — before/after registration overlays, segmentation and
-   intensity QC, an aggregated HTML report, and a computational-resource report.
+**1. Install** Java 17 or newer, [Nextflow](https://www.nextflow.io/) 25.04.0 or newer, and
+[Docker](https://docs.docker.com/get-docker/) (Apptainer/Singularity on a cluster). Every
+analysis tool comes in a container. The images are built for Intel/AMD (`linux/amd64`) only; see
+[Install](docs/installation.md) for Linux, macOS, Windows (WSL 2) and clusters.
 
-## Supported formats
+```bash
+git clone https://github.com/sceriff0/mirage.git
+cd mirage
+```
 
-Every reader is installed in the `mirage-convert` image; the dispatch happens in
-`bin/utils/ome_io.py::detect_reader`, and an extension no reader claims raises
-`UnsupportedFormatError` at conversion time rather than producing a corrupt OME-TIFF.
-
-| Extension | Reader |
-|---|---|
-| `.ome.tif`, `.ome.tiff`, `.tif`, `.tiff` | `bioio` |
-| `.nd2`, `.czi`, `.lif` | `bioio` |
-| `.svs`, `.qptiff`, `.vsi`, `.scn`, `.mrxs`, `.bif`, `.ims` | `bioio-bioformats` (Bio-Formats, jars baked into the image) |
-| `.ndpi`, `.ndpis` | `tifffile` |
-| `.h5`, `.hdf5` | `hdf5` |
-
-The TIFF, HDF5 and synthesised Hamamatsu rows are exercised on synthetic fixtures
-in CI on every push; the Bio-Formats row has no synthetic fixture and is
-validated only by the cluster kit. The five vendor formats that cannot be
-synthesised (`.czi`, `.nd2`, `.lif`, real scanner `.ndpi` bytes, `.svs`) need a
-cluster run against real vendor files, and as of this release none has been
-recorded yet — the current state, tracked format by format, is in
-[`docs/validation/format_validation.md`](docs/validation/format_validation.md).
-
-## Quick Start
-
-### Prerequisites
-
-1. **Java 11 or newer** — Nextflow's runtime. Check with `java -version`.
-2. **Nextflow `>=25.04.0`** — [install](https://www.nextflow.io/docs/latest/getstarted.html).
-   Verified on 25.04.7 and 26.04.6.
-3. **The `nf-schema@2.5.1` plugin** — Nextflow fetches it from the plugin registry on the first
-   run. On a network-isolated compute node it must be pre-provisioned; see
-   [Offline / air-gapped execution](docs/usage.md#offline-air-gapped-execution).
-4. **[Singularity/Apptainer](https://apptainer.org/)** (recommended on HPC) or
-   **[Docker](https://docs.docker.com/get-docker/)** (local/dev).
-5. Clone the repository:
-
-   ```bash
-   git clone https://github.com/sceriff0/mirage.git
-   cd mirage
-   ```
-
-### The samplesheet
-
-One row per image; rows are grouped by `patient_id` and each patient is processed
-independently. A `--start preprocessing` samplesheet needs exactly these four columns
-(`lib/ParamUtils.groovy`'s `STEPS` is the source of truth), and each patient needs exactly one
-`is_reference=true` row:
+**2. Describe your slides** in `samplesheet.csv`, one row per image file:
 
 ```csv
 patient_id,path_to_file,is_reference,channels
-P001,/data/raw/P001_panel1.nd2,true,DAPI|CD3|CD8|CD4
-P001,/data/raw/P001_panel2.nd2,false,DAPI|PANCK|SMA|VIMENTIN
-P002,/data/raw/P002_panel1.czi,true,DAPI|CD3|CD8|CD4
-P002,/data/raw/P002_panel2.czi,false,DAPI|FOXP3|KI67|CD20
+P001,/data/P001_round1.nd2,true,DAPI|PANCK|SMA
+P001,/data/P001_round2.nd2,false,DAPI|CD45|CD163
 ```
 
-`channels` is pipe-separated, in acquisition order, and must include one of
-`params.nuclear_markers` (default `DAPI`, `CELLTOX`). Later stages take a different image
-column — the full table is in
-[Usage → The samplesheet](docs/usage.md#the-samplesheet).
+| Column | Meaning |
+|---|---|
+| `patient_id` | The same label on every round of one section |
+| `path_to_file` | Full path to the image (ND2, CZI, LIF, NDPI, SVS, OME-TIFF, …) |
+| `is_reference` | `true` on exactly one row per patient; the other rounds are aligned onto it |
+| `channels` | Channel names in acquisition order, separated by `\|`; every row contains the nuclear stain |
 
-### Size your run first
-
-`max_cpus` and `max_memory` have no default and are required — a run that omits
-them is refused at launch. Make a `site.config` once and layer it on every
-command with `-c`:
+**3. Run.** On a laptop or workstation (4 CPUs, 16 GB, segmentation on the CPU):
 
 ```bash
-cp conf/site.config.template site.config
-# edit max_cpus / max_memory (and the SLURM fields, if any) to match your machine
+nextflow run . -profile local,docker \
+  -params-file params/no_gpu.json \
+  --input samplesheet.csv --outdir results
 ```
 
-`site.config` is gitignored, so your paths never reach a commit.
-
-### Full pipeline from raw images
-
-Use `--start` to choose the entry point and `--stop` to terminate early at a given step. Both flags accept `preprocessing`, `registration`, `segmentation`, or `postprocessing`. If `--stop` is omitted, the pipeline runs through to the end.
+On a SLURM cluster, after setting `max_cpus` and `max_memory` in your own `site.config`
+(`cp conf/site.config.template site.config`):
 
 ```bash
-nextflow run . \
-  --input samplesheet.csv \
-  --outdir results \
-  --start preprocessing \
-  --stop registration \
-  --registration_method valis \
-  -profile slurm,singularity \
-  -c site.config \
-  -params-file params/full_pipeline.json
+nextflow run . -profile slurm,singularity -c site.config \
+  --input samplesheet.csv --outdir results
 ```
 
-### Resume from registration checkpoint
+If a run stops, repeat the command with `-resume`.
 
-```bash
-nextflow run . \
-  --input results/csv/preprocessed.csv \
-  --start registration \
-  --registration_method valis \
-  --outdir results \
-  -profile slurm,singularity \
-  -c site.config \
-  -resume
-```
+## What you get
 
-### Resume from segmentation checkpoint
+Under `results/<patient_id>/`:
 
-```bash
-nextflow run . \
-  --input results/csv/registered.csv \
-  --start segmentation \
-  --outdir results \
-  -profile slurm,singularity \
-  -c site.config \
-  -resume
-```
+| File | What it is |
+|---|---|
+| `pyramid/pyramid.ome.tiff` | All rounds aligned into one multi-resolution image (QuPath, napari, OMERO) |
+| `geojson/export/cells.geojson` | Every cell as a QuPath object with its measurements |
+| `quantification/merged_quant.csv` | One row per cell: marker intensities and morphology |
+| `spatialdata/<patient_id>.zarr` | The same cells as a SpatialData store for scverse tools |
+| `qc/` | Before/after registration overlays and segmentation checks |
 
-### Resume from postprocessing checkpoint
+`results/qc/` holds an HTML report for the whole run. Cell types are called afterwards, in
+QuPath, with [FlowPath](https://github.com/sceriff0/flowpath).
 
-```bash
-nextflow run . \
-  --input results/csv/segmented.csv \
-  --start postprocessing \
-  --outdir results \
-  -profile slurm,singularity \
-  -c site.config \
-  -resume
-```
+## Learn more
 
-### Dry-run (validation only)
+Full documentation: **<https://mirage-pipeline.readthedocs.io/>**
+- [Your first run](docs/quickstart.md) — from an empty computer to a running pipeline
+- [The samplesheet](docs/samplesheet.md) · [Choosing methods](docs/choosing_methods.md) ·
+  [GPU or no GPU](docs/gpu.md) · [Running on a cluster](docs/hpc.md) ·
+  [Troubleshooting](docs/troubleshooting.md)
+- [The steps](docs/pipeline.md) · [Outputs](docs/outputs.md) ·
+  [Parameters](docs/parameters.md) · [Resources](docs/resources.md)
+- [The paper](docs/paper.md) · [Developing](docs/developing.md)
 
-```bash
-nextflow run . \
-  --input samplesheet.csv \
-  --outdir results \
-  --start preprocessing \
-  -c site.config \
-  -params-file params/dry_run.json
-```
+## Citation
 
-## Documentation
-
-Full documentation is hosted at **<https://mirage-pipeline.readthedocs.io/>**.
-
-- [Installation](docs/installation.md) — dependencies, containers, and setup
-- [Usage](docs/usage.md) — samplesheet format, parameters, profiles
-- [Outputs](docs/usage.md#outputs) — output directory layout and file descriptions
-- [Quick start walkthrough](docs/usage.md#quick-start-synthetic-data) — end-to-end run on the bundled test data
-- [Troubleshooting](docs/usage.md#troubleshooting-faq) — common failures and remediation
-- [Parameters](docs/parameters.md) — full parameter reference
-- [Registration QC](docs/registration_qc.md) — interpreting registration quality metrics
-- [Citation](docs/citation.md) — how to cite MIRAGE and its dependencies
-- [Supported formats](docs/validation/format_validation.md) — which readers were validated, and on what
-- [Resources](docs/resources.md) — per-process requests, retry policy, containers
-- [Developing](docs/developing.md) — running the suite, the guards, and how to add a process
-
-To build the documentation locally:
-
-```bash
-pip install -r docs/requirements.txt
-mkdocs serve
-```
+If you use MIRAGE, cite the pipeline and the tools your run used; see
+[`docs/citation.md`](docs/citation.md), [`CITATION.cff`](CITATION.cff) and
+[`CITATIONS.md`](CITATIONS.md).
 
 ## Credits
 
-MIRAGE was developed by Valerio Fassi and Yinxiu Zhan at the Istituto Europeo di Oncologia. Questions and bug reports: the [GitHub issue tracker](https://github.com/sceriff0/mirage/issues).
-
-## Citations
-
-If you use MIRAGE in your research, please cite the relevant tools listed in [CITATIONS.md](CITATIONS.md).
-
-Core dependencies include:
-
-- **VALIS** — Gatenbee et al. (2023), *Nature Communications* — [https://doi.org/10.1038/s41467-023-40218-9](https://doi.org/10.1038/s41467-023-40218-9)
-- **StarDist** — Schmidt et al. (2018), *MICCAI* — [https://doi.org/10.1007/978-3-030-00934-2_30](https://doi.org/10.1007/978-3-030-00934-2_30)
-- **BaSiCPy** — Peng et al. (2017), *Nature Communications* — [https://doi.org/10.1038/ncomms14836](https://doi.org/10.1038/ncomms14836)
-- **Nextflow** — Di Tommaso et al. (2017), *Nature Biotechnology* — [https://doi.org/10.1038/nbt.3820](https://doi.org/10.1038/nbt.3820)
+MIRAGE, STARE and FlowPath are developed at the European Institute of Oncology (IEO), Milan, by
+Valerio Fassi and Yinxiu Zhan with the Imaging and Screening Unit. Questions and bug reports: the
+[issue tracker](https://github.com/sceriff0/mirage/issues).
 
 ## License
 
-MIRAGE is released under the MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).

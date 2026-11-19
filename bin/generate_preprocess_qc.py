@@ -87,11 +87,9 @@ def normalize_image(
     img = (img - p_low) / (p_high - p_low)
     img = np.clip(img, 0, 1)
 
-    # Convert to 8-bit. ROUND before casting -- `.astype()` floors, which biases every pixel
-    # down by up to one level and, worse, starves the top bin: only an input of exactly 1.0
-    # would reach 255, so the brightest tissue reads one level dark on every QC render.
-    # Matches the half-to-even convention stated at bin/preprocess.py:354.
-    # Guarded by tests/test_dtype_rounding_contract.py.
+    # Round before casting: `.astype()` floors, which darkens every pixel by up to one
+    # level and leaves 255 reachable only by exactly 1.0
+    # (tests/test_dtype_rounding_contract.py).
     return np.round(img * 255).astype(np.uint8)
 
 
@@ -164,25 +162,16 @@ def generate_preprocess_qc(
     if logger is None:
         logger = get_logger(__name__)
 
-    # Open the image lazily (zarr-backed view) and read/normalize/downsample one
-    # channel at a time below, instead of tifffile.imread'ing the whole (C, H, W)
-    # stack up front. This is a peak-MEMORY optimization only, not a read-size
-    # optimization: downsample_image's anti-aliased resize (skimage.transform.resize,
-    # order=1, anti_aliasing=True) needs every source pixel by definition, so there is
-    # no I/O to save here -- read_decimated is called with factor=1 below, meaning
-    # every pixel of every channel is still read, at full resolution, exactly as
-    # before. What changes is that peak memory becomes one full-resolution plane plus
-    # the downsampled outputs, never the whole multi-channel stack at once.
+    # Open lazily and process one channel at a time, so peak memory is one
+    # full-resolution plane plus the downsampled outputs, not the whole stack. Every
+    # pixel is still read (the anti-aliased resize needs them all).
     logger.info(f"Opening image lazily: {image_path}")
     lazy_arr, _dtype, close = open_lazy(image_path)
     closed = False
     try:
-        # Handle (Y, X, C) format — only true if last dim matches channels AND first
-        # dim does not. open_lazy always presents the array channel-FIRST (a 2-D image
-        # is promoted to C=1, matching the old np.expand_dims(..., axis=0) handling),
-        # so it has no notion of a channel-LAST layout. That shape is never produced by
-        # this pipeline's own preprocess.py (always written with axes="CYX"), but the
-        # old whole-stack path is kept as an exact-behavior fallback for it.
+        # (Y, X, C) input: only when the last dim matches the channel count and the first
+        # does not. open_lazy is always channel-first, so this layout (never written by the
+        # pipeline itself) falls back to a whole-stack read.
         channel_last = (
             len(lazy_arr.shape) == 3
             and lazy_arr.shape[2] == len(channel_names)

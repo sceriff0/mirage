@@ -232,43 +232,23 @@ def clip_negative_values(
 # ---------------------------------------------------------------------------
 # Streaming counterparts
 #
-# ``clip_negative_values`` and ``log_image_stats`` both take ONE array and log ONE line
-# computed over the whole of it. A caller that never holds the whole image -- every
-# gigapixel-safe reader in this repository -- cannot call them without fragmenting that
-# single line into one line per chunk, each with a percentage computed against a chunk
-# instead of against the image. Same pixels, different (wrong) observable output.
-#
-# These two classes fold chunk statistics into the same aggregates and emit the SAME
-# line(s), once, at the end. They are the sanctioned way to keep the log contract while
-# streaming; do not call the whole-array functions from a chunked loop.
+# The whole-array functions above log one line computed over the whole image. Called per
+# chunk they would log one line per chunk, with percentages against the chunk. These
+# classes fold chunk statistics and log the same line(s) once, at the end; use them from
+# chunked loops.
 # ---------------------------------------------------------------------------
 
 
 class StreamingNegativeClip:
     """Accumulates ``clip_negative_values``' whole-image statistics across chunked reads,
-    and emits the SAME log line(s) it would have emitted from a single whole-array call --
-    once, after the last chunk, not once per chunk.
+    and logs the same line(s) as one whole-array call, once, after the last chunk.
 
-    ``clip_negative_values`` computes GLOBAL negative-pixel stats (count, percentage of
-    the WHOLE image, min before/after) from one array and logs one line. Reading in chunks
-    means no single call ever sees the whole array, so calling it per chunk would fragment
-    that into N lines, each with a percentage computed against a single chunk's size
-    instead of the whole image's. This class keeps the numbers identical to a real
-    whole-array call: ``count``/``size`` are summed across chunks and the percentage is
-    computed once, at the end, from those sums (never averaged or summed per chunk), and
-    ``min_before``/``min_after`` are the true min across all chunks, computed the same way
-    a single ``data.min()`` over the whole array would.
+    Counts and sizes are summed and the percentage computed once from the sums; the mins
+    are true minima across chunks. Clipping every chunk unconditionally is pixel-identical
+    to the whole-array version, since clipping nonnegative data is a no-op.
 
-    Clipping is applied to every chunk unconditionally (when the dtype is signed/float):
-    ``np.clip(x, 0, None)`` is a no-op on already-nonnegative data, so this is
-    pixel-identical to the original's whole-array ``if has_neg: data = np.clip(...)``
-    regardless of whether the specific chunk -- or even the whole image -- had any
-    negative values.
-
-    PASS ONLY REAL PIXELS. A caller that pads its chunks (a partial write-tile at a slide
-    edge, say) must hand over the valid sub-array, not the padded buffer: the padding
-    would inflate ``size`` and change the reported percentage, which is the one number
-    this class exists to keep honest.
+    Pass only real pixels: padding in an edge chunk would inflate ``size`` and change the
+    reported percentage.
     """
 
     def __init__(self, dtype, logger, stage_name):
@@ -303,8 +283,8 @@ class StreamingNegativeClip:
         return clipped
 
     def finalize(self):
-        """Log the aggregate, exactly once, matching detect_negative_values' and
-        clip_negative_values' original whole-array log lines."""
+        """Log the aggregate once, matching detect_negative_values' and
+        clip_negative_values' whole-array log lines."""
         if not self._active:
             return
 
@@ -328,20 +308,14 @@ class StreamingNegativeClip:
 class StreamingImageStats:
     """The chunked counterpart of :func:`log_image_stats`.
 
-    Emits the same three possible lines -- the stats line, the negative-value warning and
-    the wrapped-value warning -- from folded per-chunk aggregates. ``dtype`` and ``shape``
-    are supplied by the caller because a chunk knows neither the image's full shape nor,
-    once it has been cast, necessarily the storage dtype.
+    Emits the same three possible lines (stats, negative-value warning, wrapped-value
+    warning) from folded per-chunk aggregates. ``dtype`` and ``shape`` come from the caller,
+    since a chunk knows neither.
 
-    THE MEAN IS ACCUMULATED IN float64, which is what ``ndarray.mean()`` on an integer
-    array does anyway (NumPy promotes integer accumulators to float64), so at the one call
-    site that matters -- ``bin/apply_basic_profiles.py``, which reports stats on the
-    storage-dtype output -- the printed ``mean=...`` is identical to the whole-array call.
-    On a float32 input it is *more* accurate than ``ndarray.mean()``'s pairwise float32
-    sum, which can only move the value inside the two decimals the format shows.
+    The mean is accumulated in float64, as ``ndarray.mean()`` does for integer arrays, so
+    the printed mean matches the whole-array call on integer data.
 
-    PASS ONLY REAL PIXELS, for the same reason :class:`StreamingNegativeClip` requires it:
-    padded chunk edges would enter the mean and the wrapped-value percentage.
+    Pass only real pixels: padded chunk edges would enter the mean and the percentage.
     """
 
     def __init__(self, dtype, shape, stage_name, logger=None):
@@ -397,25 +371,14 @@ class StreamingImageStats:
 class StreamingWrappedValues:
     """The chunked counterpart of :func:`detect_wrapped_values`.
 
-    ``detect_wrapped_values`` counts pixels above ``dtype_max * min_value_threshold`` in ONE
-    array, turns that count into a percentage of the WHOLE image, and decides
-    ``has_wrapped`` from that percentage. A caller that never holds the whole image cannot
-    call it without recomputing the percentage against a chunk -- which changes both the
-    number it reports and, because the decision threshold is 0.01%, whether it reports at
-    all. A chunk that is entirely inside a bright region trips a 0.01% test that the whole
-    image does not.
+    Count and size are summed across chunks and the percentage computed once at the end:
+    a per-chunk percentage would change both the number and, at the 0.01% threshold,
+    whether a warning fires. ``max value`` is the running max over suspicious pixels.
 
-    So the count and the size are summed across chunks and the percentage is computed once,
-    at the end, from those sums. ``max value`` is the running maximum over suspicious pixels
-    only, which is what ``data[suspicious_mask].max()`` returns from a single call.
+    ``finalize`` returns the same ``(has_wrapped, count, percentage)`` triple and logs the
+    same warning as the whole-array function.
 
-    ``finalize`` returns the SAME ``(has_wrapped, count, percentage)`` triple the whole-array
-    function returns and logs the same warning line, so a caller that formats its own message
-    from the triple -- ``bin/merge_channels_pyramid.py`` does -- keeps printing the same
-    message with the same numbers.
-
-    PASS ONLY REAL PIXELS, for the same reason :class:`StreamingNegativeClip` requires it:
-    padded chunk edges would enter ``size`` and move the percentage.
+    Pass only real pixels: padded chunk edges would enter ``size`` and move the percentage.
     """
 
     def __init__(self, dtype, min_value_threshold: float = 0.9, logger=None):

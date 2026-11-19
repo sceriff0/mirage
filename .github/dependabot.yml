@@ -1,15 +1,9 @@
-# Dependabot keeps the supply chain fresh: GitHub Actions and Python deps.
-# Grouped, weekly PRs keep noise low while closing the "deps silently rot" gap.
+# Dependabot: grouped weekly updates for GitHub Actions, pip pins and base images.
 version: 2
 updates:
-  # GitHub Actions used across .github/workflows/*.yml AND .github/actions/*/action.yml.
-  #
-  # BOTH ENTRIES ARE NEEDED. `directory: "/"` means `.github/workflows/` to this
-  # ecosystem and NOTHING ELSE -- a local composite action is a separate manifest that
-  # Dependabot only reads when its directory is listed. Since 2026-09-01 the pins for
-  # actions/cache, actions/setup-python, nf-core/setup-nextflow and nf-core/setup-nf-test
-  # live in `.github/actions/**`, so without the glob below those four would have quietly
-  # stopped being updated at the moment they stopped being duplicated.
+  # Both entries are needed: "/" covers only .github/workflows/; the composite
+  # actions in .github/actions/* (which pin actions/cache, setup-python,
+  # setup-nextflow, setup-nf-test) are read only when listed.
   - package-ecosystem: "github-actions"
     directories:
       - "/"
@@ -26,15 +20,8 @@ updates:
       - "dependencies"
       - "github-actions"
 
-  # Python pins. /requirements is where they live: constraints.txt is the version
-  # authority shared by every container image and every CI job, and the per-image and
-  # per-job files sit beside it. It used to point at "/" -- the root requirements.txt --
-  # which is an unpinned superset CI explicitly refuses to install, so Dependabot was
-  # watching a file whose contents reached nothing.
-  #
-  # Inline `RUN pip install pkg==x` in a Dockerfile is still invisible to Dependabot.
-  # That is one of the reasons the pins were moved into files; where an inline pin has to
-  # stay (containers/convert, the numpy-2 / bioio island), it is out of scope for this bot.
+  # Python pins live in /requirements (constraints.txt is shared by images and CI).
+  # Inline `pip install pkg==x` in a Dockerfile (e.g. containers/convert) is not seen.
   - package-ecosystem: "pip"
     directory: "/requirements"
     schedule:
@@ -49,9 +36,7 @@ updates:
       - "dependencies"
       - "python"
 
-  # Container base images (`FROM ...`) across containers/*/Dockerfile. Nothing watched
-  # these before, so a base image could sit on an unpatched tag indefinitely -- the images
-  # are only rebuilt on a push to main touching containers/** or requirements/**.
+  # Container base images (`FROM ...`) in containers/*/Dockerfile.
   - package-ecosystem: "docker"
     directories:
       - "/containers/*"

@@ -80,7 +80,9 @@ def heap_for_attempt(task_memory_gb: int, attempt: int, reg_jvm_heap_gb=None) ->
     """Mirrors register.nf's derivation with its constants read live from the script.
     ``attempt`` is taken and ignored: that the heap does not depend on it is the rule."""
     del attempt
-    heap_request = reg_jvm_heap_gb if reg_jvm_heap_gb is not None else _default_heap_gb()
+    heap_request = (
+        reg_jvm_heap_gb if reg_jvm_heap_gb is not None else _default_heap_gb()
+    )
     return min(heap_request, task_memory_gb - _mem_headroom_gb())
 
 

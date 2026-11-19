@@ -6,170 +6,179 @@ hide:
 
 <div class="mirage-hero" markdown>
 
-<div class="kick">Multiplex Imaging Registration, Analysis &amp; GeoJSON Export</div>
+<div class="kick">Whole-slide multiplexed immunofluorescence</div>
 
 # MIRAGE
 
-A Nextflow DSL2 pipeline that takes raw whole-slide microscopy from many panels
-and turns it into aligned images, segmented cells, single-cell marker tables, and
-QuPath-ready GeoJSON — reproducibly, on your laptop or an HPC cluster.
+From separately acquired staining rounds of one tissue section to a single-cell table: MIRAGE
+aligns the rounds at the scale of a nucleus, finds every cell, measures every marker, and writes
+files that open in QuPath and scverse.
 
 <div class="mirage-badges" markdown>
-[:material-rocket-launch: Install](installation.md){ .md-button .md-button--primary }
-[:material-walk: How to use](usage.md){ .md-button }
-[:material-sitemap: The pipeline](pipeline.md){ .md-button }
+[Your first run :octicons-arrow-right-24:](quickstart.md){ .md-button .md-button--primary }
+[What a run produces](outputs.md){ .md-button }
+[The paper](paper.md){ .md-button }
 [:fontawesome-brands-github: Source](https://github.com/sceriff0/mirage){ .md-button }
 </div>
 
 </div>
 
-[![Nextflow](https://img.shields.io/badge/nextflow%20DSL2-%E2%89%A525.04.0-23aa62.svg)](https://www.nextflow.io/)
-[![run with docker](https://img.shields.io/badge/run%20with-docker-0db7ed?logo=docker)](https://www.docker.com/)
-[![run with singularity](https://img.shields.io/badge/run%20with-singularity-1d355c.svg)](https://sylabs.io/docs/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/sceriff0/mirage/blob/main/LICENSE)
+![The four steps of MIRAGE: preprocessing, registration, segmentation and postprocessing](assets/mirage_schematic.png)
 
-## What MIRAGE does
+## Where to start
 
-MIRAGE is built for **multiplex fluorescence imaging**, where each tissue sample
-is imaged across several panels of markers. It stitches those panels into one
-coordinate space, finds every cell, measures every marker, and hands you
-analysis-ready tables and QuPath-native overlays.
+<div class="paths" markdown>
 
-```mermaid
-flowchart LR
-    A[Raw WSI panels<br/>ND2 · CZI · LIF · TIFF] --> B
-    subgraph PRE[Preprocessing]
-      B[Convert to OME-TIFF] --> C[BaSiC illumination<br/>correction]
-    end
-    C --> D
-    subgraph REG[Registration]
-      D[Whole-slide alignment<br/>VALIS or tiled/STARE]
-    end
-    D --> E
-    subgraph SEG[Segmentation]
-      E[Segment cells<br/>+ extract properties]
-    end
-    E --> F
-    subgraph POST[Postprocessing]
-      F[Quantify markers<br/>per cell] --> G[GeoJSON + pyramid<br/>OME-TIFF]
-    end
-    G --> H[(QuPath · napari ·<br/>FlowPath)]
-```
+<div class="path" markdown>
+<div class="who">I have slides and little coding experience</div>
 
-The four stages — **preprocessing → registration → segmentation → postprocessing** — run in that
-order and are independently restartable, so you can re-run just the part you're
-tuning. By default MIRAGE **stops at quantified cells** — the exported GeoJSON carries
-raw marker intensities, and you gate/phenotype downstream in QuPath or the
-[FlowPath](https://flowpath.readthedocs.io/) ecosystem.
+Start from an empty computer: install three things, fill in one table, paste one command.
 
-## Highlights
+[Your first run](quickstart.md)
+</div>
 
-- **Any Bio-Formats input** — reads ND2, CZI, LIF, NDPI, TIFF, HDF5 and more,
-  normalizes to OME-TIFF, and moves the configured nuclear marker
-  (`params.nuclear_markers`, default `DAPI`/`CELLTOX`) to channel 0.
-- **Two registration backends** — **VALIS** (default, deep-feature rigid + non-rigid
-  alignment) or **tiled/STARE** (JVM-free, fully parallel), both aligning every panel
-  to a shared reference with quantitative error metrics.
-- **Three segmentation backends** — swap between **StarDist**, **InstanSeg**, and
-  **CellSAM** with a single `--seg_method` flag.
-- **Single-cell quantification** — per-cell marker intensities, optional
-  nucleus / cytoplasm / cell compartments, and morphology.
-- **QuPath-native export** — GeoJSON with raw intensities (z-scores travel in the
-  companion `cells_data.csv`), plus a pyramidal OME-TIFF for interactive viewing and
-  gating.
-- **Restartable & HPC-ready** — checkpoint CSVs between stages, SLURM/Singularity
-  profiles, and resource-aware retries.
+<div class="path" markdown>
+<div class="who">I run pipelines on a cluster</div>
 
-## A 30-second taste
+Apptainer, SLURM, job sizing, offline nodes, checkpoints.
+
+[Running on a cluster](hpc.md) · [Checkpoints & resuming](resuming.md) · [Parameters](parameters.md)
+</div>
+
+<div class="path" markdown>
+<div class="who">I want to know how it works</div>
+
+Every process in order, the registration method, the resource model, and what the paper measured.
+
+[The pipeline](pipeline.md) · [The paper](paper.md) · [Resources](resources.md)
+</div>
+
+</div>
+
+## What a run does
+
+<div class="stages" markdown>
+
+<div class="stage" markdown>
+<div class="n">1</div>
+**Preprocessing**
+
+Reads each round (ND2, CZI, LIF, NDPI, SVS, TIFF, HDF5 and more) and writes it as OME-TIFF with
+the nuclear stain first. Illumination correction with BaSiC is optional and off by default.
+</div>
+
+<div class="stage" markdown>
+<div class="n">2</div>
+**Registration**
+
+Aligns every round of a patient onto one reference round. **STARE**, the default, measures
+displacements tile by tile and fits one slide-wide field; VALIS is the second mode.
+</div>
+
+<div class="stage" markdown>
+<div class="n">3</div>
+**Segmentation**
+
+Finds nuclei and whole cells on the registered image. **StarDist** with MIRAGE's trained model
+is the default; InstanSeg and CellSAM are one flag away.
+</div>
+
+<div class="stage" markdown>
+<div class="n">4</div>
+**Postprocessing**
+
+Measures every marker per cell in nucleus, cytoplasm and whole cell, and exports a pyramidal
+OME-TIFF, QuPath GeoJSON and a SpatialData store.
+</div>
+
+</div>
+
+The four stages run in this order and each can be restarted on its own. MIRAGE stops at
+quantified cells: cell types are called afterwards, in QuPath, with
+[FlowPath](https://flowpath.readthedocs.io/).
+
+## The command
 
 ```bash
-# 1. Clone and generate the bundled synthetic test data
-git clone https://github.com/sceriff0/mirage.git && cd mirage
-python tests/testdata/generate_complete_testdata.py
-
-# 2. Run the whole pipeline on the test data (CPU, ~15 min)
-nextflow run . -profile test,docker --outdir results
+nextflow run . -profile local,docker \
+  -params-file params/no_gpu.json \
+  --input samplesheet.csv --outdir results
 ```
 
-That's the full preprocessing → registration → segmentation → postprocessing run. [Usage](usage.md)
-tours every file it produces.
+That is a complete run at the defaults on a laptop or workstation.
+[Your first run](quickstart.md) explains each part and gives the cluster form.
 
-## Get started
+## Why STARE is the default
+
+Each STARE task reads a fixed window, so its memory does not grow with the slide, and it
+needs no GPU. On the paper's eight cases it reached a higher matched-pair nuclear Dice than VALIS at a fraction of the
+memory; [Choosing methods](choosing_methods.md#registration-stare-or-valis) gives the
+numbers and when to pick VALIS instead.
+
+## Find your way
 
 <div class="grid cards" markdown>
 
--   :material-download:{ .lg .middle } **Install**
+-   :material-play-circle-outline:{ .lg .middle } **Your first run**
 
     ---
 
-    Nextflow, a container runtime, and a clone of the repo. You're five minutes
-    from your first run.
+    Install, describe your slides, run, open the results.
 
-    [:octicons-arrow-right-24: Installation](installation.md)
+    [:octicons-arrow-right-24: Get started](quickstart.md)
 
--   :material-walk:{ .lg .middle } **Run it**
-
-    ---
-
-    The four-stage model, the samplesheet, resuming from checkpoints, and what
-    lands in `--outdir`.
-
-    [:octicons-arrow-right-24: Usage](usage.md)
-
--   :material-tune:{ .lg .middle } **Tune it**
+-   :material-table:{ .lg .middle } **The samplesheet**
 
     ---
 
-    All 89 operator-settable parameters, grouped by stage, with defaults and guidance.
+    One row per image file: the columns, the rules, the formats that are read.
 
-    [:octicons-arrow-right-24: Parameters](parameters.md)
+    [:octicons-arrow-right-24: Samplesheet](samplesheet.md)
+
+-   :material-call-split:{ .lg .middle } **Choosing methods**
+
+    ---
+
+    STARE or VALIS, StarDist, InstanSeg or CellSAM, illumination correction on or off.
+
+    [:octicons-arrow-right-24: Choosing methods](choosing_methods.md)
+
+-   :material-file-tree:{ .lg .middle } **Outputs**
+
+    ---
+
+    Every file a run writes, and how the measurement columns are named.
+
+    [:octicons-arrow-right-24: Outputs](outputs.md)
+
+-   :material-check-decagram-outline:{ .lg .middle } **Checking registration**
+
+    ---
+
+    The overlays and the per-round scores a run reports about its own alignment.
+
+    [:octicons-arrow-right-24: Registration QC](registration_qc.md)
+
+-   :material-tune:{ .lg .middle } **Parameters**
+
+    ---
+
+    Every setting, grouped by stage, with its default.
+
+    [:octicons-arrow-right-24: Reference](parameters.md)
 
 -   :material-sitemap:{ .lg .middle } **The pipeline**
 
     ---
 
-    Every process in execution order, its defaults, and the two registration
-    backends — the site rendering of Supplementary Figure S1.
+    Every process in execution order, with six schematics of the hard parts.
 
-    [:octicons-arrow-right-24: Pipeline](pipeline.md)
-
--   :material-image-multiple:{ .lg .middle } **Supplementary figures**
-
-    ---
-
-    Six self-contained figures — S1 the whole pipeline,
-    [S2 registration](figures/registration-schematic.html){ target=_blank },
-    [S3 quality control](figures/qc-schematic.html){ target=_blank },
-    [S4 lazy reads](figures/zarr-schematic.html){ target=_blank },
-    [S5 coarse alignment](figures/coarse-schematic.html){ target=_blank },
-    [S6 accuracy measures](figures/accuracy-schematic.html){ target=_blank }.
-
-    [:octicons-arrow-right-24: S1 · pipeline](figures/pipeline-schematic.html){ target=_blank }
-
--   :material-file-tree:{ .lg .middle } **Inputs & outputs**
-
-    ---
-
-    The samplesheet contract per entry point, the checkpoint CSVs, the full
-    published tree, and the measurement-key grammar.
-
-    [:octicons-arrow-right-24: Inputs & outputs](outputs.md)
-
--   :material-server:{ .lg .middle } **Resources**
-
-    ---
-
-    What each process asks the scheduler for, how it grows on a retry, what
-    clamps it, and which container it runs in.
-
-    [:octicons-arrow-right-24: Resources](resources.md)
+    [:octicons-arrow-right-24: How it works](pipeline.md)
 
 </div>
 
-!!! note "Source of truth"
-    When the docs and the code disagree, the code wins —
-    [`nextflow.config`](https://github.com/sceriff0/mirage/blob/main/nextflow.config)
-    holds parameter defaults and
-    [`nextflow_schema.json`](https://github.com/sceriff0/mirage/blob/main/nextflow_schema.json)
-    the schema. Please [open an issue](https://github.com/sceriff0/mirage/issues)
-    if you spot a mismatch. Found MIRAGE useful? See [Citation](citation.md).
+!!! note "When the docs and the code disagree"
+    The code wins:
+    [`nextflow.config`](https://github.com/sceriff0/mirage/blob/main/nextflow.config) holds every
+    default. Please [open an issue](https://github.com/sceriff0/mirage/issues) if you find a
+    mismatch.

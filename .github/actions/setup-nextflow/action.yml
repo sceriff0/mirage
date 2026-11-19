@@ -1,106 +1,24 @@
-# =============================================================================
-# Set up Nextflow (composite action)
-# =============================================================================
-# ONE definition of the four-step Nextflow preamble that every Nextflow job in
-# this repo used to carry inline: cache ~/.nextflow, install the pinned
+# Set up Nextflow (composite action): cache ~/.nextflow, install the pinned
 # Nextflow, cache the plugins directory, provision nf-schema into it.
 #
-# Before this action those four steps existed as 30 instances across ci.yml and
-# release.yml, and they had already drifted: three jobs had no `Cache Nextflow`
-# step at all, five cache keys differed in ways nothing chose deliberately, and
-# release.yml carried none of the plugin provisioning until 2026-08-31 (its own
-# comment records that). One definition is what stops that recurring.
+# Caching rules for every cache in this repo:
+#   1. hashFiles() targets manifests (requirements/*, nextflow.config), never a
+#      source tree; a source hash misses on every commit that matters.
+#   2. A cache entry is immutable: the first save under a key wins, later saves
+#      no-op. Jobs that install different amounts must not share a key.
+#   3. Caches are scoped to repository + ref, so a PR cannot poison main's.
 #
-# THE CACHE KEY IS DERIVED, not passed in. The five inline copies used five
-# different keys (`-nextflow-`, `-nextflow-real-`, `-nextflow-release-`, ...)
-# which only fragmented the cache: what lands in ~/.nextflow is a function of the
-# Nextflow VERSION and of nothing else this repository controls, and that version
-# is the key. Sharing one key across ci.yml and release.yml is deliberate —
-# GitHub Actions caches are repository-scoped, so the release gate now warms on
-# CI's cache instead of paying a cold download.
+# The ~/.nextflow key is just OS + arch + Nextflow version, with no restore-keys:
+# its contents depend on nothing else. The `latest-everything` leg is
+# effectively uncached (the key never changes); a date in the key would only
+# write a never-reused entry per day.
 #
-# THE THREE CACHING RULES. This file holds both of the repository's own
-# `actions/cache` steps, so the rules live here and the other two cache sites
-# (.github/actions/setup-python-env, .github/workflows/containers.yml) point
-# at them.
+# Do not cache ~/.nf-test here. nf-core/setup-nf-test caches it under its own
+# nf-test-version key; a second cache restores the old binary on an nf-test bump
+# and its install step then fails with "dest already exists".
 #
-#   1. `hashFiles()` targets MANIFESTS -- requirements/*, nextflow.config, a
-#      lockfile -- never a source tree. A source-tree hash produces a key that
-#      MISSES on every commit that changes the thing being built, i.e. on every
-#      run that matters, and writes a fresh never-reused entry each time against
-#      the repository's 10 GB LRU budget. That is worse than no cache: it is a
-#      cache that pays the save cost and never pays out.
-#   2. A cache entry is IMMUTABLE. The first writer under a key wins; every later
-#      save under the same key silently no-ops. Two jobs installing DIFFERENT
-#      amounts under one key is a race, not a share -- whichever job finishes
-#      first decides what everyone else restores for the life of the entry.
-#   3. Caches are scoped to REPOSITORY + REF, not per job. A PR run reads main's
-#      cache and writes its own; it cannot poison main's. That is a security
-#      property, not a bug, and it is why one key shared by ci.yml and
-#      release.yml is a share rather than a leak.
-#
-# WHY THE KEY BELOW HAS NO SOURCE HASH AND NO restore-keys (2026-09-01, CI
-# redesign Phase 3). It used to read
-# `...-nextflow-<version>-${{ hashFiles('**/*.nf') }}` with two restore-key
-# prefixes. What lands in ~/.nextflow is the Nextflow DISTRIBUTION -- the
-# launcher and the framework jars for one version -- and not one byte of it is a
-# function of this repository's `.nf` sources, so the hash only guaranteed a miss
-# (rule 1). With the hash gone the key is fully determined by the version string:
-# it hits, or the version was bumped and a fresh download is exactly what is
-# wanted.
-#
-# ONE EXCEPTION, and it is the `latest-everything` leg. That string does not
-# change when the version behind it does, so under rule 2 the entry is written
-# once and then never refreshed: edge Nextflow restores a stale framework
-# directory and downloads the current one beside it, every run. That leg is
-# effectively uncached in steady state. It is left that way on purpose -- the
-# obvious fix, a date component in the key, writes a fresh never-reused entry
-# every day, which is defect 1 again with a different glob. Correctness is
-# unaffected: a cached framework directory is additive, and Nextflow uses the
-# version it was asked for.
-#
-# There is nothing left for a restore-key prefix to fall back TO, and a
-# prefix fallback would only restore the very entry the key already names.
-# `runner.arch` is in the key because the distribution is per-architecture and a
-# future arm64 runner must not restore an amd64 entry under rule 2.
-#
-# WHY `~/.nf-test` IS NOT CACHED HERE. It used to ride along in the paths below.
-# It must not, for two independent reasons, both verified against the pinned
-# action's own source (nf-core/setup-nf-test@v1, dist/index.js) on 2026-09-01:
-#
-#   * That action ALREADY caches nf-test itself. It calls @actions/cache's
-#     restoreCache/saveCache over exactly `~/.nf-test/nf-test` and
-#     `~/.nf-test/nf-test.jar`, under its OWN key `nf-test-<version>-install-pdiff-<bool>`.
-#     Caching the same directory here is a second entry for the same bytes.
-#   * Worse, the two keys disagree about what they are keyed ON. This key names
-#     the NEXTFLOW version; theirs names the NF-TEST version. Bump
-#     `env.NFTEST_VERSION` and their key misses while this one still hits -- so
-#     `~/.nf-test/nf-test` is restored by us, their restore fails, and their
-#     install path runs `fs.move(src, '~/.nf-test/nf-test')` with no
-#     `overwrite: true`, which fs-extra fails with "dest already exists". Every
-#     nf-test job in the repository goes red on an nf-test version bump.
-#
-# It was also, under rule 2, a race: since Phase 2 every Nextflow job shares this
-# one key, and most of them (nextflow-stub, lint, the release gate's Nextflow
-# jobs) never install nf-test at all. Whichever of them saved first fixed an
-# EMPTY ~/.nf-test into the entry for its lifetime.
-#
-# tests/test_ci_cache_keys.py guards all of this: a `hashFiles()` over a source
-# tree, a cached path with no installer in the same file, and two cache steps
-# sharing one key template each fail there.
-#
-# GUARDS THAT READ THIS FILE. Moving a step into a composite action moves it out
-# of `.github/workflows/*.yml`, which is where several guard tests used to stop
-# looking. tests/ci_actions.py resolves a workflow to the local actions it uses,
-# and tests/test_ci_stack_pinned.py, tests/test_ci_job_hygiene.py and
-# tests/test_release_workflow_graph.py all go through it. In particular the
-# `nextflow plugin install` line below is one of the blocking checks
-# test_release_workflow_graph.BLOCKING_CHECKS enumerates — asserted here, not in
-# the workflows, so do not inline it back into one of them. Since Phase 5 that
-# table is checked against `.github/workflows/_test-suite.yml`, the reusable
-# workflow ci.yml and release.yml both call, rather than against two copies of a
-# gate.
-# =============================================================================
+# tests/test_ci_cache_keys.py checks these rules; the guards resolve local
+# actions through tests/ci_actions.py, so steps may live here rather than inline.
 name: 'Set up Nextflow'
 description: >-
   Cache and install Nextflow, then cache and provision the nf-schema plugin
@@ -129,12 +47,8 @@ runs:
     - name: Cache Nextflow
       uses: actions/cache@v4
       with:
-        # ~/.nextflow ONLY: the launcher plus the framework jars for one
-        # version. nf-core/setup-nf-test caches ~/.nf-test itself -- see the
-        # header, where re-adding it here is spelled out as a red build.
+        # ~/.nextflow only; see the header for why not ~/.nf-test.
         path: ~/.nextflow
-        # No source hash and no restore-keys, deliberately. See "WHY THE KEY
-        # BELOW HAS NO SOURCE HASH" in the header.
         key: ${{ runner.os }}-${{ runner.arch }}-nextflow-${{ inputs.nextflow-version }}
 
     - name: Install Nextflow
@@ -146,27 +60,18 @@ runs:
       if: inputs.plugins == 'true'
       uses: actions/cache@v4
       with:
-        # Matches the NXF_PLUGINS_DIR the calling workflow sets at `env:` level,
-        # so nf-schema is downloaded once per repository rather than once per
-        # job per push. Same mechanism docs/usage.md documents for air-gapped
-        # clusters, so CI exercises it rather than only describing it.
+        # Matches the caller's NXF_PLUGINS_DIR (the same mechanism docs/hpc.md
+        # describes for air-gapped clusters).
         path: ${{ github.workspace }}/.nextflow-plugins
-        # UNCHANGED by Phase 3, and correct as it stands. nextflow.config is the
-        # file that DECLARES the plugin, so it is a manifest, not source: rule 1
-        # is satisfied and the key rotates exactly when the pin does. The
-        # restore-key prefix is safe here in a way it is not for the
-        # distribution above, because `Provision Nextflow plugins` runs
-        # afterwards and installs whatever a stale prefix hit failed to bring.
+        # nextflow.config declares the plugin, so the key rotates with the pin.
+        # A stale restore-key hit is safe: the provision step below fills gaps.
         key: ${{ runner.os }}-nf-plugins-${{ hashFiles('nextflow.config') }}
         restore-keys: |
           ${{ runner.os }}-nf-plugins-
 
     - name: Provision Nextflow plugins
-      # Install the pinned nf-schema explicitly so a registry outage fails in a
-      # step that names it, instead of halfway into a pipeline run. The version
-      # is read out of nextflow.config rather than duplicated here, so CI and
-      # the pipeline cannot pin different versions. No-op when the cache above
-      # already restored it.
+      # Install nf-schema up front so a registry outage fails here, not mid-run.
+      # The version is read from nextflow.config so CI and the pipeline agree.
       if: inputs.plugins == 'true'
       shell: bash
       run: |

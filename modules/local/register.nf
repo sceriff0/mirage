@@ -1,38 +1,25 @@
 /*
  * REGISTER - VALIS whole-slide registration: valis-wsi 1.2.0, its default or its hires example
  *
- * The benchmark's `valis120` call (bin/register.py's header): Valis() given the patient's
- * slides and the reference only, register() at VALIS's defaults (rigid 512 px, non-rigid
- * 2048 px, align_to_reference False, no micro-registration), every slide warped in the
- * reference frame. The one non-default argument is the registration channel, passed by
- * index (the nuclear channel, index 0) instead of VALIS's name match on "dapi".
- * params.reg_valis_mode = 'hires' runs valis-wsi 1.2.0's OWN high-resolution example instead
- * (the benchmark's valis120_hires row): MicroRigidRegistrar in the constructor, then
- * register_micro() at floor(0.25 x the smallest slide's longest side), as shipped, with the same
- * channel-by-index and the same reference-frame warp. bin/register.py's header has the detail.
- * The tuned configuration this replaced is at the git tag archive/valis-mirage-tuned.
- *
- * Input: Reference image path, preprocessed images, and metadata
- * Output: Registered OME-TIFF files aligned to reference coordinate space
+ * 'default': register() at VALIS's defaults (rigid 512 px, non-rigid 2048 px,
+ * align_to_reference False, no micro-registration), every slide warped in the reference
+ * frame. The only non-default is the registration channel, passed by index (nuclear,
+ * index 0) instead of VALIS's name match on "dapi".
+ * 'hires' (params.reg_valis_mode): valis-wsi's own high-resolution example,
+ * MicroRigidRegistrar then register_micro() at 0.25 x the smallest slide's longest side.
+ * Details in bin/register.py's header.
  */
 process REGISTER {
-    // Uses patient_id (not meta.patient_id) because this is a fan-in process:
-    // multiple per-slide metas are grouped into a single patient-level invocation.
-    // patient_id is the grouping key; all_metas carries the per-slide metadata list.
+    // Fan-in: one task per patient; all_metas carries the per-slide metas.
     tag "${patient_id}"
 
-    // containers/valis: upstream's cdgatenbee/valis-wsi:1.2.0 (FROM its index digest
-    // sha256:4fd20b687ae0f08c47011753bc5083dca5ac65a454d3615589eddf6b14e3c419, read from
-    // Docker Hub 2026-10-11) with ONLY the four fixes that let a user who is not root run it
-    // under Apptainer -- no Python package added or moved (its smoke.sh checks the freeze).
-    // The bare upstream image has no Python for a non-root user (/root is 0700). Under
-    // Singularity it also needs --writable-tmpfs (conf/modules.config). lib/WarpBackends.groovy's
-    // valis row carries the SAME image, so the registrar pickle loads in the VALIS that wrote it.
+    // Upstream valis-wsi:1.2.0 plus the fixes for running as non-root under Apptainer
+    // (containers/valis). Needs --writable-tmpfs under Singularity. WarpBackends' valis row
+    // must use the same image so the registrar pickle loads in the VALIS that wrote it.
     container 'bolt3x/mirage-valis:1.0.0'
 
     input:
-    // Use stageAs to avoid filename collision when reference is included in preproc_files
-    // meta carries patient_id for publishDir consistency across all processes
+    // stageAs avoids a name collision: the reference is also in preproc_files
     tuple val(meta), val(patient_id), path(reference, stageAs: 'ref/*'), path(preproc_files, stageAs: 'input_?/*'), val(all_metas)
 
     output:
@@ -41,9 +28,8 @@ process REGISTER {
     path("*.size.csv")                                                                     , emit: size_log
     path("preprocessed/data/*.csv")                                                        , emit: summary, optional: true
     tuple val(patient_id), path("preprocessed/data/*_registrar.pickle")                    , emit: registrar, optional: true
-    // Displacement fields for staged registration QC (reg_qc >= 2). Optional
-    // because it is only requested at that level, and because a failure to write it must
-    // never fail a registration — see bin/utils/stage_checkpoint.py.
+    // Displacement fields for staged QC (reg_qc >= 2); optional, and failing to write
+    // it never fails registration.
     tuple val(patient_id), path("reg_stage_checkpoint")                                    , emit: stage_checkpoint, optional: true
 
     when:
@@ -51,32 +37,19 @@ process REGISTER {
 
     script:
     def args = task.ext.args ?: ''
-    // Extract reference filename from the staged path (ref/filename.tif). The pipeline
-    // always identifies the reference slide (meta.is_reference) and
-    // stages it here, so --reference is always passed; register.py's standalone
-    // marker-based fallback is not used from the pipeline.
+    // The reference is always staged, so --reference is always passed.
     def ref_filename = reference ? reference.name : ''
     def ref_arg = ref_filename ? "--reference ${ref_filename}" : ''
-    // reg_qc >= 2 scores each registration stage separately; the checkpoint carries the
-    // displacement fields WARP_SEG_QC needs to report 'non_rigid' apart from 'rigid'.
-    // ParamUtils.regQcLevel is the single source of truth (null reg_qc -> 2), shared with
-    // registration.nf/add_cycle.nf so this process can't drift from the rest of the pipeline.
+    // reg_qc >= 2: write the checkpoint WARP_SEG_QC needs to separate stages.
+    // ParamUtils.regQcLevel owns the default (null -> 2).
     def reg_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
     def stage_ckpt = reg_qc_level >= 2 ? '--stage-checkpoint-dir reg_stage_checkpoint' : ''
-    // VALIS's own two configurations (params.reg_valis_mode, schema enum default|hires). An
-    // itemised params.x read, never the bare `params` map, so only this value enters the task
-    // hash. `default` renders NOTHING here: its command is byte-identical to the one before
-    // the option existed, so register.py runs its own default. The flag shares the
-    // stage-checkpoint line for the same reason (no new, empty continuation line).
+    // 'default' renders nothing, so register.py runs its own default. The flag shares the
+    // stage-checkpoint line to avoid an empty continuation line.
     def hires      = params.reg_valis_mode == 'hires'
     def mode_flags = [hires ? '--valis-mode hires' : '', stage_ckpt].findAll { it }.join(' ')
-    // JVM heap: a fixed 10 GB at every attempt (ruling 2026-10-21), VALIS's own value and
-    // the benchmark's. reg_jvm_heap_gb overrides it; register.py starts the JVM through
-    // slide_io.init_jvm because valis-wsi 1.2.0's registration.init_jvm ignores the size.
-    // Explicit null test, NOT `?:` -- Elvis treats 0 as unset, so an explicit
-    // `--reg_jvm_heap_gb 0` would silently become the default instead of being honoured
-    // or refused. The schema's `minimum: 1` refuses it up front; this keeps the code correct
-    // without depending on that. Guarded by tests/test_nullable_numeric_params_no_elvis.py.
+    // JVM heap: fixed 10 GB (VALIS's own value) unless reg_jvm_heap_gb is set.
+    // Explicit null test, not `?:`, which would treat 0 as unset.
     def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : 10
     def jvm_heap_gb = Math.min(heap_request, task.memory.toGiga() - 4)
 
@@ -186,21 +159,18 @@ process REGISTER {
     """
 
     stub:
-    // Generate output files matching input count with proper naming pattern
     def output_files = all_metas.collect { m ->
         def markers = m.channels.join('_')
         "${patient_id}_${markers}_registered.ome.tiff"
     }
     def touch_commands = output_files.collect { "touch registered_slides/${it}" }.join('\n    ')
-    // Build stub manifest JSON mapping filenames to their channel names
+    // stub manifest: filename -> channel names
     def manifest_map = [all_metas, output_files].transpose().collectEntries { m, fname ->
         [(fname): m.channels]
     }
     def manifest_json = groovy.json.JsonOutput.toJson(manifest_map)
-    // Mirror the real path: the stage checkpoint exists only at reg_qc >= 2, so stub runs
-    // exercise the same channel wiring the real run does (including its absence at reg_qc<2).
-    // Uses the same ParamUtils.regQcLevel default (null -> 2) as the script block above.
-    // At hires the real checkpoint records that a micro pass follows (micro_registration true).
+    // As in script:, the checkpoint exists only at reg_qc >= 2; at hires it records
+    // micro_registration true.
     def stub_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
     def stub_micro    = params.reg_valis_mode == 'hires'
     def stub_ckpt = stub_qc_level < 2 ? '' : """

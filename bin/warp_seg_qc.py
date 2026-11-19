@@ -5,47 +5,29 @@ Each slide's nuclei are segmented on its NATIVE (pre-registration) image and exp
 GeoJSON (see ``segment_to_geojson.py``). This step warps those polygons through the VALIS
 registrar **once per registration stage** and reports how the same cells behave at each:
 
-  native      no transform                          — the raw stage misalignment
-  rigid       rigid only (post micro-rigid M)       — **the anchor**
-  non_rigid   rigid + wave-1 non-rigid field        — needs the REGISTER pre-micro checkpoint
-  micro       rigid + non-rigid + micro residual    — what the pipeline actually ships
+  native      no transform                          (raw stage misalignment)
+  rigid       rigid only (post micro-rigid M)       (the anchor)
+  non_rigid   rigid + wave-1 non-rigid field        (needs the REGISTER pre-micro checkpoint)
+  micro       rigid + non-rigid + micro residual    (what the pipeline ships)
 
-**Correspondence is established once, at the rigid stage, and then held fixed.** Two things
-make that the right anchor. Cells are close enough after rigid for nearest-neighbour pairing to
-be meaningful — before any registration they are a whole tissue-offset apart, and any matcher
-run there is pairing noise. And because ``MicroRigidRegistrar`` runs inside ``register()``
-*before* the non-rigid stage, the rigid transform the anchor uses is the very transform every
-later stage builds on; the pairing is therefore valid for all of them by construction.
+Correspondence is fixed once, at the rigid stage, and held for every later stage, so a
+change between stages is geometry rather than different cells being paired. Rigid is the
+anchor because cells are close enough there for nearest-neighbour pairing, and every later
+stage builds on the same rigid transform.
 
-Holding the pairing is what makes the per-stage numbers mean something. Re-deriving the match
-at each stage lets a score move because *different cells got paired*, or because a cell the
-rasterizer occluded at one stage reappeared at another. Neither
-is a registration effect. With the pairing fixed, every change between stages is geometry.
+Two metrics per stage, over the fixed pairs:
 
-Two metrics per stage, both over the fixed pairs:
+  * **per-pair IoU**: mean, percentiles and the fraction at IoU >= threshold. Each pair is
+    rasterized in its own bounding-box window, so peak RAM is one nucleus, not one slide.
+  * **centroid residual displacement**: median/p90/max distance between paired centroids,
+    in px and, when the pixel size is known, in µm.
 
-  * **per-pair IoU** — mean/percentiles and the fraction at IoU >= threshold. Each pair is
-    rasterized in its own bounding-box window, so peak RAM is one nucleus rather than one
-    slide. This replaces the whole-slide uint32 label images the previous implementation
-    needed (19 GB on a 60k x 40k slide) and with them the raster-budget machinery.
-  * **centroid residual displacement** — median/p90/max distance between paired centroids, in
-    px and, where the slide metadata carries a pixel size, in µm. It has no resolution floor
-    the way a thresholded IoU does, and "residual error is 1.4 µm after non-rigid" is a
-    number that can be quoted.
+``full_transform`` is the headline: the same pairing rule and scorer applied once in the
+final stage's frame, so cells rigid left out of reach are still counted. The ladder stays
+the per-stage diagnostic. Deltas are reported against the anchor; a wrong sign means a
+stage made things worse.
 
-**The headline number is separate, and is paired after the whole transform.** The ladder's
-final-stage record is conditional on the rigid stage: a cell rigid left outside the match
-radius is never paired, however well the later stages place it. ``full_transform`` applies
-the same pairing rule and the same per-pair scorer once, in the final stage's frame, and is
-the Dice/displacement to quote for "how good is what the run ships". The ladder remains the
-diagnostic for "which stage bought it".
-
-Deltas are reported against the anchor, so ``delta_vs_anchor.micro.displacement_px_p50`` reads
-directly as "what the non-rigid and micro stages bought over rigid alone" — and, when it has
-the wrong sign, as a warning that a stage made things worse.
-
-Runs in the VALIS container (valis + numpy + scipy + scikit-image). The warp is injectable so
-the staging, matching and scoring logic is unit-testable without VALIS.
+Runs in the VALIS container. The warp is injectable, so the logic is testable without VALIS.
 """
 
 from __future__ import annotations
@@ -60,13 +42,10 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "utils"))
 
-# Read-only $HOME on HPC clusters breaks numba's on-disk cache during the valis import
-# (RuntimeError: '_repeat_1d': no locator available). Redirect + disable before importing valis
-# (mirrors register.py / reg_finalize.py).
+# A read-only $HOME breaks numba's on-disk cache during the valis import; set before it.
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba_cache")
 os.environ["NUMBA_DISABLE_CACHING"] = "1"
-# matplotlib (pulled in transitively by valis) builds a font cache under $HOME by default; on a
-# read-only cluster $HOME that warns/stalls. Redirect its config + generic XDG cache to /tmp too.
+# matplotlib (via valis) caches under $HOME too.
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig")
 os.environ.setdefault("XDG_CACHE_HOME", "/tmp/xdg_cache")
 
@@ -83,19 +62,13 @@ from utils.valis_stage_warp import (
 logger = get_logger(__name__)
 
 ANCHOR_STAGE = STAGE_RIGID
-# Pair two cells only if they are within this many median nuclear radii. The gate is HARD --
-# it is what makes match_lsa's component decomposition exact, and what keeps a cell with no
-# true partner (tissue tear, fold, out-of-overlap region) from being assigned one.
-#
-# 1.5, widened from the 1.0 that mutual-NN needed. Under mutual-NN a wider gate directly buys
-# wrong pairs, because a wrong nearest neighbour becomes a wrong pair. LSA resolves contention
-# globally, so the gate stops being a match-quality knob and becomes purely an
-# "is there a partner at all" filter -- which wants to be generous, not tight.
+# Pair two cells only within this many median nuclear radii. A hard gate: it keeps a cell
+# with no true partner unpaired and makes match_lsa's component split exact. Generous because
+# LSA resolves contention itself; mutual-NN would need a tighter gate (~1.0).
 DEFAULT_MATCH_RADIUS_FACTOR = 1.5
 DEFAULT_SUPERSAMPLE = 2
 DEFAULT_IOU_THRESH = 0.5
-# Deltas are reported only for these — the headline numbers. Counts and percentile widths are
-# all in the per-stage records; the delta of a count is not a meaningful quantity.
+# Deltas are reported only for these headline numbers.
 _DELTA_KEYS = (
     "iou_mean",
     "iou_p50",
@@ -115,7 +88,7 @@ def _log(msg, t0=None):
 # ── VALIS access (lazy + injectable) ───────────────────────────────────────────
 def default_loader(pickle_path):
     """Load a VALIS registrar from a pickle path (lazy VALIS import)."""
-    from valis import registration  # lazy: real VALIS package, as in bin/register.py
+    from valis import registration  # lazy
 
     return registration.load_registrar(str(pickle_path))
 
@@ -124,14 +97,11 @@ def default_loader(pickle_path):
 def plan_stages(checkpoint=None) -> tuple:
     """Decide which transform states this run can actually distinguish.
 
-    Returns ``(stages, separable, note)``. There are three cases, and conflating them is how a
-    QC report ends up quietly reporting the same warp twice under two names:
+    Returns ``(stages, separable, note)``. Three cases, so no warp is reported twice:
 
-    * checkpoint present, micro-registration ran — all four stages are distinct.
-    * checkpoint present, micro-registration was skipped — the pickle's field *is* the wave-1
-      field, so ``micro`` would duplicate ``non_rigid``; it is not emitted.
-    * no checkpoint — the pickle's field already has the micro residual composed in and the
-      intermediate is unrecoverable, so ``non_rigid`` is not emitted.
+    * checkpoint, micro ran: all four stages are distinct.
+    * checkpoint, micro skipped: ``micro`` would duplicate ``non_rigid``, so it is omitted.
+    * no checkpoint: the micro residual is already composed in, so ``non_rigid`` is omitted.
     """
     if checkpoint is None:
         return (
@@ -154,8 +124,8 @@ def plan_stages(checkpoint=None) -> tuple:
 def _stage_geometry(warp, slide_name, native_ps, stage):
     """Warp a native :class:`PolySet` into ``stage``'s frame and measure it.
 
-    The returned set shares its ring bookkeeping with ``native_ps``, so feature index ``i`` is
-    the same cell at every stage — the invariant the fixed pairing depends on.
+    The returned set shares ring bookkeeping with ``native_ps``, so feature ``i`` is the same
+    cell at every stage, which the fixed pairing relies on.
     """
     warped = native_ps.with_xy(warp(slide_name, native_ps.xy, stage))
     area, cent = cp.feature_area_centroid(warped)
@@ -231,14 +201,9 @@ def score_full_transform(
 ) -> dict:
     """Pair the cells in the FINAL stage's frame and score those pairs there.
 
-    The staged ladder fixes its pairing at the rigid anchor, which is what makes its
-    between-stage deltas pure geometry -- and also what makes its final-stage number
-    conditional on the rigid stage: a cell that rigid left outside the match radius is
-    never paired, so it is absent from the final Dice even when the later stages put it
-    exactly on its partner. This record asks the other question, "how good is what the
-    run ships", with the same rule (same pairing backend, same radius factor, same
-    per-pair scorer) applied once, after the complete transform. The match radius is
-    sized from the cells as they are in this frame, the way the anchor sizes its own.
+    The ladder pairs at the rigid anchor, so a cell rigid left out of reach never counts.
+    This applies the same pairing rule and scorer once, after the complete transform,
+    with the match radius sized from the cells in this frame.
     """
     cell_radius = cp.median_equivalent_radius(np.concatenate([area_ref, area_mov]))
     radius = (
@@ -262,9 +227,8 @@ def score_full_transform(
         **score_kwargs,
     )
     n_ref, n_mov = int(len(area_ref)), int(len(area_mov))
-    # Per-pair residuals of THESE pairs -- the per-cell CSV. Popped by run() before the
-    # record is serialized. Reference centroids are in the final stage's frame, which is
-    # the frame SEGMENT ran on, so the downstream join onto cell_mask is a spatial one.
+    # Per-cell CSV rows; popped before serializing. Reference centroids are in the frame
+    # SEGMENT ran on, so they join spatially onto cell_mask.
     per_cell = (
         {
             "stage": stage,
@@ -311,9 +275,8 @@ def run(
 ) -> dict:
     """Score every stage in ``stages`` against a correspondence fixed at the anchor.
 
-    The anchor is computed first regardless of where it sits in the reporting order, and each
-    remaining stage is warped, scored and dropped before the next is built — so peak memory is
-    the two native vertex arrays plus one stage's, not one array per stage.
+    The anchor is computed first; each other stage is warped, scored and dropped before the
+    next, so peak memory is the two native vertex arrays plus one stage's.
     """
     t0 = time.perf_counter()
     with open(ref_geojson) as f:
@@ -331,7 +294,7 @@ def run(
             f"anchor stage {ANCHOR_STAGE!r} is not in the stage plan {stages}"
         )
 
-    # ── anchor: warp, size the match radius from the cells themselves, pair once ──
+    # ── anchor: warp, size the match radius from the cells, pair once ──
     a_ref, a_area_ref, a_cent_ref = _stage_geometry(
         warp, ref_slide, ref_native, ANCHOR_STAGE
     )
@@ -414,9 +377,7 @@ def run(
         pairing=pairing,
         **score_kwargs,
     )
-    # The final stage re-paired in its own frame (see score_full_transform). Built from the
-    # geometry the ladder already warped, so it costs no extra warp. When the anchor IS
-    # the final stage this is the anchor's own pairing, computed the same way.
+    # The final stage re-paired in its own frame, reusing the ladder's warped geometry.
     full = None
     if stages[-1] == ANCHOR_STAGE:
         full = score_full_transform(
@@ -457,10 +418,8 @@ def run(
             )
         del s_ref, s_mov, c_ref, c_mov, ar_ref, ar_mov
 
-    # The per-cell residuals are the full-transform pairs': the only per-cell
-    # registration-confidence signal the pipeline produces, joined downstream onto the
-    # quantification table. They used to be the rigid-anchored pairs at the final stage,
-    # which left out every cell the rigid stage had not already brought within reach.
+    # Per-cell residuals come from the full-transform pairing; joined downstream onto
+    # the quantification table.
     per_cell = full.pop("_per_cell")
     _log(
         f"full transform ('{full['stage']}', paired there): "
@@ -484,11 +443,9 @@ def run(
         "stage_order": list(stages),
         "stages": records,
         "delta_vs_anchor": deltas,
-        # The headline accuracy: paired AND scored after the complete transform. The
-        # `stages` ladder above stays the per-stage diagnostic (pairing fixed at rigid).
+        # Headline: paired and scored after the complete transform.
         FULL_TRANSFORM_KEY: full,
-        # Not serialized into the QC JSON (it is per-cell, not per-slide); the caller
-        # writes it to a separate CSV when --per-cell-csv is given.
+        # Per-cell, not serialized; written to --per-cell-csv by the caller.
         "_per_cell": per_cell,
         "matching": matching,
         "counts": {
@@ -512,9 +469,7 @@ def write_per_cell_csv(path, per_cell, moving_name) -> int:
     registered reference image (and therefore ``cell_mask``) lives in, which is what
     makes a downstream spatial join onto cell labels well-posed.
 
-    Always writes a header, so a slide that paired no cells yields an empty table
-    rather than a missing file (the consumer can then distinguish "ran, found
-    nothing" from "never ran").
+    Always writes a header, so "ran, paired nothing" differs from "never ran".
 
     Returns the number of data rows written.
     """
@@ -542,11 +497,9 @@ def build_record(
 ) -> dict:
     """Assemble the per-slide QC record (per-stage metrics + deltas vs. the anchor) as a dict.
 
-    ``micro_reg`` (0/1/2), when known, is recorded together with ``rigid_includes_micro_rigid``:
-    at level >= 1 the ``rigid`` stage is affine ∘ micro-rigid, because VALIS composes
-    MicroRigidRegistrar into ``slide.M`` and the two are not separable. Stating it keeps the
-    report honest instead of letting a reader assume ``rigid`` is a pure affine transform.
-    When it is None (e.g. an injected-warp unit run) the fields are omitted rather than guessed.
+    ``micro_reg`` (0/1/2), when known, is recorded with ``rigid_includes_micro_rigid``: at
+    >= 1 the ``rigid`` stage is affine ∘ micro-rigid, which VALIS composes into ``slide.M``.
+    When None the fields are omitted.
     """
     rec = {
         "patient_id": patient_id,
@@ -620,8 +573,7 @@ def write_report(
         moving_slide=moving_slide,
         **run_kwargs,
     )
-    # Pop before build_record: it splats `result` into the JSON record, and these are
-    # numpy arrays (not serializable) and per-cell rather than per-slide.
+    # Pop before build_record: numpy arrays, per-cell, not serializable.
     per_cell = result.pop("_per_cell", None)
     if per_cell_csv:
         write_per_cell_csv(per_cell_csv, per_cell, moving_name or moving_slide)
@@ -636,7 +588,7 @@ def write_report(
         micro_reg=micro_reg,
     )
     with open(output, "w") as f:
-        # write(dumps(...)): ~5.6x faster than dump(). Safe -- one summary record.
+        # write(dumps(...)) is much faster than dump() for one record.
         f.write(json.dumps(record, indent=2))
     return record
 
@@ -688,11 +640,8 @@ def parse_args(argv=None):
         default=None,
         help="display filename for the reference slide",
     )
-    # "reference": the frame REGISTER writes the registered slides in (valis_config's
-    # crop="reference"), i.e. the frame the cell mask is segmented in, so the per-cell
-    # residuals join onto the right cells. "overlap" shifted every point by the overlap
-    # box's origin -- harmless to Dice/displacement (both sides shift together), wrong
-    # for the residual join. lib/WarpBackends.groovy also passes it explicitly.
+    # Must match REGISTER's crop="reference" (the cell mask's frame), or per-cell residuals
+    # join onto the wrong cells.
     ap.add_argument("--crop", default="reference")
     ap.add_argument(
         "--clip-to-frame",
@@ -775,11 +724,8 @@ def parse_args(argv=None):
 def _main_tiled(a):
     """JVM-free reg_qc=2 for the tiled ('STARE') method.
 
-    The scorer is method-agnostic (it takes an injected ``warp``), so the only tiled-specific work
-    is building that warper from the STARE manifest instead of a VALIS registrar. The manifest is
-    self-contained: it names the reference and carries one moving slide, both reachable by the
-    warper; stages are ``native/rigid/refined`` (no destructive micro composition, so always
-    separable and no checkpoint needed).
+    Builds the warper from the STARE manifest (reference + one moving slide) instead of a
+    VALIS registrar. Stages are ``native/rigid/refined``, always separable.
     """
     from tiled_stage_warp import (
         STAGE_NATIVE,
@@ -842,18 +788,12 @@ def main(argv=None):
     configure_logging(level=logging.INFO)
     a = parse_args(argv)
 
-    # The manifest-based method carries no VALIS registrar and needs no JVM — score through
-    # the STARE manifest (M0 + mesh) instead. Equality rather than `!= "valis"` so a THIRD
-    # method has to declare which of the two readers it wants.
+    # Equality, not `!= "valis"`: a new method must choose its reader explicitly.
     if a.method == "tiled":
         return _main_tiled(a)
 
-    # Start the BioFormats JVM BEFORE any slide I/O. registration.load_registrar() unpickles VALIS
-    # Slide objects whose BioFormats-backed readers reconstruct against a live JVM, and the warp
-    # parameters read slide geometry — exactly like the register stages, which is why they all call
-    # init_jvm() first. Without this, load_registrar() dies with jpype JVMNotRunning. WARP_SEG_QC
-    # stages no TIFFs, so the auto-sizer always lands on its 8 GB floor; pass --jvm-heap-gb to make
-    # the reservation explicit rather than incidental.
+    # The JVM must run before load_registrar(), which rebuilds BioFormats readers
+    # (else JVMNotRunning). No TIFFs are staged, so auto-sizing gives its 8 GB floor.
     from valis import registration
     from valis_config import init_jvm
 

@@ -1,10 +1,10 @@
 /* ===========================================================================
-   MIRAGE documentation — "supplementary figure" design language
+   MIRAGE documentation — "method schematic" design language
    ---------------------------------------------------------------------------
    The token set and the component vocabulary below are ported from
-   docs/figures/pipeline-schematic.html (Supplementary Figure S1) so the site and
+   docs/figures/pipeline-schematic.html (Schematic 1) so the site and
    the figures read as one artefact: sober monochrome, hard edges, serif prose,
-   mono data. The three figures (S1 pipeline, S2 registration, S3 quality
+   mono data. The three figures (1 pipeline, 2 registration, 3 quality
    control) carry that token block verbatim and self-contained -- each has to
    open from file:// with no external stylesheet -- so a change here is a change
    in four files, not one.
@@ -840,3 +840,98 @@ body,
   color: var(--paper);
   background: var(--ink);
 }
+
+/* ---------------------------------------------------------------------------
+   12. The overlay accent, and the landing-page components
+   ---------------------------------------------------------------------------
+   The one place this site has colour. The two hues are the pseudo-colours of
+   every registration overlay MIRAGE draws (reference round cyan, moving round
+   magenta; where the two coincide the nuclei read grey), so the accent means
+   something: it marks the thing to act on, and nothing else is coloured.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --ref:    #0b7a84;   /* reference round */
+  --mov:    #a3267e;   /* moving round */
+  --accent: var(--mov);
+}
+[data-md-color-scheme="slate"] {
+  --ref:    #6fd3da;
+  --mov:    #e58ccb;
+  --accent: var(--mov);
+}
+
+/* Readability: the body was set for a figure caption, not for a page. */
+.md-typeset { font-size: 0.8rem; line-height: 1.68; }
+.md-nav { font-size: 0.7rem; }
+.md-typeset .standfirst { max-width: 70ch; }
+.md-typeset p, .md-typeset li { max-width: 78ch; }
+.md-typeset .grid p, .md-typeset .grid li,
+.md-typeset table p, .md-typeset table li,
+.md-typeset .admonition p, .md-typeset .admonition li { max-width: none; }
+
+/* The accent, used sparingly */
+.md-typeset a, [data-md-color-scheme="slate"] .md-typeset a { color: var(--ink); }
+.md-typeset pre > code { padding-left: 0.9em; padding-right: 0.9em; }
+.md-typeset a { text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 1px; }
+.md-typeset a.md-button, .md-typeset .headerlink, .md-typeset .grid.cards a { text-decoration: none; }
+.md-typeset .md-button--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+[data-md-color-scheme="slate"] .md-typeset .md-button--primary { color: #14171a; }
+.md-tabs__link--active { box-shadow: inset 0 -2px 0 var(--accent); }
+.md-typeset .grid.cards > ul > li:hover { border-top-color: var(--accent); }
+
+/* Masthead: larger, since it is the one place a newcomer lands */
+.md-typeset .mirage-hero h1 { font-size: 2.4rem; letter-spacing: -0.02em; }
+.md-typeset .mirage-hero p { font-size: 1.02rem; max-width: 64ch; line-height: 1.55; }
+.md-typeset .mirage-hero .mirage-badges .md-button { margin: 0 6px 6px 0; }
+
+/* Three ways in */
+.md-typeset .paths {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+}
+.md-typeset .path {
+  border: 1px solid var(--rule); border-top: 2.5px solid var(--ink);
+  padding: 12px 14px 10px; min-width: 0; background: var(--panel);
+}
+.md-typeset .path:first-child { border-top-color: var(--accent); }
+.md-typeset .path .who { font-weight: 700; font-size: 0.84rem; color: var(--ink); }
+.md-typeset .path p { margin: 0.5em 0; color: var(--ink-2); }
+
+/* The four stages */
+.md-typeset .stages {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0;
+  border: 1px solid var(--rule);
+}
+.md-typeset .stage { padding: 12px 14px; min-width: 0; border-left: 1px solid var(--rule-2); }
+.md-typeset .stage:first-child { border-left: none; }
+.md-typeset .stage .n {
+  font-family: var(--mono); font-size: 0.62rem; color: var(--ink-3);
+  border-bottom: 1px solid var(--rule-2); padding-bottom: 4px; margin-bottom: 8px;
+}
+.md-typeset .stage p { margin: 0.35em 0; font-size: 0.74rem; color: var(--ink-2); }
+.md-typeset .stage p:first-of-type { font-size: 0.82rem; color: var(--ink); }
+
+/* Measured numbers */
+.md-typeset .stats {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+}
+.md-typeset .stat { border-top: 2.5px solid var(--ink); padding: 8px 0 0; min-width: 0; }
+.md-typeset .stat .v {
+  font-family: var(--sans); font-weight: 700; font-size: 1.7rem; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; color: var(--ink); line-height: 1.1;
+}
+.md-typeset .stat p { margin: 0.3em 0 0; font-size: 0.74rem; color: var(--ink-2); }
+
+@media (max-width: 900px) {
+  .md-typeset .paths, .md-typeset .stats { grid-template-columns: minmax(0, 1fr); }
+  .md-typeset .stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .md-typeset .stage:nth-child(3) { border-left: none; }
+  .md-typeset .stage:nth-child(n+3) { border-top: 1px solid var(--rule-2); }
+}
+@media (max-width: 520px) {
+  .md-typeset .stages { grid-template-columns: minmax(0, 1fr); }
+  .md-typeset .stage { border-left: none; border-top: 1px solid var(--rule-2); }
+  .md-typeset .stage:first-child { border-top: none; }
+  .md-typeset .mirage-hero h1 { font-size: 1.9rem; }
+}
+.md-typeset table:not([class]) td code { white-space: nowrap; }

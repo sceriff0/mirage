@@ -1,13 +1,9 @@
 /*
- * EXTRACT_NUCLEI_PROPERTIES - Compute nucleus contours, re-keyed to cell labels
+ * EXTRACT_NUCLEI_PROPERTIES - nucleus contours keyed by cell label
  *
- * Runs (only when params.quantify_compartments) on the nuclear mask, passing the
- * whole-cell mask as --reference_mask so the emitted contours.json is keyed by
- * CELL label. EXPORT_GEOJSON then attaches each nucleus polygon to its cell via a
- * plain identity lookup. Re-uses extract_cell_properties.py.
- *
- * Input:  nuclei mask + cell mask (same patient)
- * Output: morphology.csv (nucleus, unused downstream) + contours.json (keyed by cell label)
+ * Runs only with params.quantify_compartments. The cell mask is passed as
+ * --reference_mask so contours.json is keyed by cell label and EXPORT_GEOJSON can attach
+ * each nucleus to its cell directly. morphology.csv is unused downstream.
  */
 process EXTRACT_NUCLEI_PROPERTIES {
     tag "${meta.patient_id}"

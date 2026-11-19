@@ -1,21 +1,11 @@
-# SEG_QUALITY_EVAL / MERGE_SEG_EVAL — reference-free 2D segmentation quality (CSE).
+# SEG_QUALITY_EVAL / MERGE_SEG_EVAL: reference-free 2D segmentation quality (CSE).
 #
-# Hard pins, not lower bounds. The vendored subset in bin/utils/cse/ is a COPY of upstream
-# CellSegmentationEvaluator 1.5.19, so unlike a pip-installed package it does not move with its
-# dependencies, and its composite QualityScore comes out of a fixed PCA model.
+# Hard pins. bin/utils/cse/ is a copy of CellSegmentationEvaluator 1.5.19 and its
+# QualityScore comes from a fixed PCA model. Run tests/test_cse_equivalence.py after any
+# bump; it compares against tests/data/cse/golden_metrics.json.
 #
-# These pins now follow tests/test_container_harmonisation.py's HARMONISED table rather than
-# diverging from it. They used to be held back (scipy 1.11.4, pandas 2.2.3, tifffile 2023.2.28)
-# on the argument that any bump would "shift scores across a cohort with no error". That was
-# never measured, and the measurement contradicts it: tests/test_cse_equivalence.py reproduces
-# tests/data/cse/golden_metrics.json exactly against scipy 1.13.1, scikit-learn 1.7.2,
-# scikit-image 0.24.0 and tifffile 2023.4.12 — i.e. across a wider version spread than this
-# bump — so the QualityScore is not as brittle as the old comment feared. Run that test after
-# any further bump; it is what makes a real drift detectable rather than silent.
-#
-# COPY'd into containers/segeval/Dockerfile, and `-r`-included by requirements/ci.txt --
-# so this file is also the single authority for CI's matplotlib, scikit-learn and
-# xmltodict versions, which no image other than this one pins.
+# COPY'd into containers/segeval/Dockerfile and `-r`-included by requirements/ci.txt, so
+# this file also sets CI's matplotlib, scikit-learn and xmltodict versions.
 -c constraints.txt
 
 numpy==1.26.4          # harmonised; <2.0 is also what the vendored subset expects
@@ -26,22 +16,10 @@ scikit-learn==1.5.2    # KMeans over the channel matrix (functions.py) + the PCA
 tifffile==2025.5.10    # harmonised — the image reader, see bin/seg_quality_eval.py
 xmltodict==0.13.0      # OME-XML parsing for the pixel-size lookup
 
-# REQUIRED, despite never being used for what its name suggests. The vendored CSE source runs
-# `import matplotlib.pyplot as plt` at the top of functions.py's foreground_separation() and then
-# never touches `plt` — the import is dead in upstream 1.5.19 but it still EXECUTES, and
-# single_method_eval.py:96 calls that function on the main evaluation path. Without matplotlib the
-# image builds clean and then dies with ModuleNotFoundError the first time CSE scores a mask —
-# which conf/modules.config's errorStrategy 'ignore' branch would swallow, publishing a run with
-# no seg-eval numbers and no failure. Pinned and installed rather than deleted from the vendored
-# copy, which is kept byte-identical to upstream on purpose. The Dockerfile smoke-tests it.
+# Required although unused: the vendored functions.py imports matplotlib.pyplot inside
+# foreground_separation(), which runs on the main evaluation path. Without it CSE fails
+# with ModuleNotFoundError. The vendored copy stays byte-identical to upstream.
 matplotlib==3.8.4
 
-# NO aicsimageio. It was here to read a physical pixel size out of OME metadata, and that value is
-# always overridden: modules/local/seg_quality_eval.nf always renders --pixel-size-um (from
-# cse_pixel_size_um, else params.pixel_size, which defaults to 0.325), and main() prefers the CLI
-# value over anything read from the file. It also cannot coexist with the harmonised tifffile —
-# the OME-TIFF reader plugin caps tifffile below 2025.5.10, so pinning both is a pip
-# ResolutionImpossible. The vendored copy's get_voxel_volume/get_pixel_area still carry a lazy
-# `from aicsimageio import AICSImage`, but nothing in bin/ calls either function, so that import
-# never executes. Listed in tests/test_container_harmonisation.py's FORBIDDEN so it cannot return
-# without a deliberate edit.
+# No aicsimageio: the pixel size always comes from --pixel-size-um, and its OME-TIFF plugin
+# caps tifffile below the harmonised version. Listed in test_container_harmonisation's FORBIDDEN.

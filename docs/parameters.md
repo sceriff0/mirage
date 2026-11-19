@@ -26,7 +26,8 @@ actually resolved.</p>
     - **Validation & enums** — `lib/ParamUtils.groovy`
     - **Schema** — `nextflow_schema.json`
 
-    Pass values on the command line (`--param value`), or load a preset with
+    Pass values on the command line (`--param value`; true/false values only
+    through a `-params-file`, see [Boolean parameters](usage.md#boolean-parameters)), or load a preset with
     `-params-file params/full_pipeline.json` and override individual values. Note
     the convention: pipeline parameters use a **double dash** (`--input`);
     Nextflow's own options use a **single dash** (`-profile`, `-resume`,
@@ -36,7 +37,7 @@ actually resolved.</p>
 
 | Parameter | Default | Description |
 |---|---|---|
-| `input` | `null` | Path to the samplesheet CSV. **Required.** Columns depend on `--start` — see [Samplesheet & Input](usage.md#the-samplesheet). |
+| `input` | `null` | Path to the samplesheet CSV. **Required.** Columns depend on `--start` — see [The samplesheet](samplesheet.md#columns-per-entry-point). |
 | `outdir` | `null` | Output root directory. **Required** — no default. Checkpoint CSVs are written to `<outdir>/csv/`. |
 
 ## Workflow control
@@ -50,11 +51,12 @@ actually resolved.</p>
 
 !!! tip "Run a single stage"
     `--start registration --stop registration` runs registration only, reading a
-    `<outdir>/csv/preprocessed.csv` checkpoint. See [Restartability](usage.md#checkpoints-resuming).
+    `<outdir>/csv/preprocessed.csv` checkpoint. See [Checkpoints & resuming](resuming.md).
 
 ## Preprocessing
 
-Bio-Formats conversion + BaSiC illumination correction.
+Bio-Formats conversion + BaSiC illumination correction (the correction is off by default:
+`skip_preprocessing = true`).
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -64,17 +66,18 @@ Bio-Formats conversion + BaSiC illumination correction.
 | `preproc_tile_size` | `1950` | BaSiC FOV tile size (px). |
 
 BaSiC otherwise runs at nf-core BASICPY's upstream defaults — no darkfield estimation,
-no autotune, non-overlapping FOVs. The knobs that once exposed those
-(`preproc_autotune`, `preproc_n_iter`, `preproc_overlap`, `preproc_no_darkfield`,
-`preproc_pool_workers`) were removed with the in-process BaSiC path;
-`preproc_pool_workers` additionally set the correction process's `cpus`, which is now
-owned outright by `conf/modules.config`. See `docs/basic_illumination.md`.
+no autotune, non-overlapping FOVs — with no parameters of its own; the correction
+process's `cpus` are owned by `conf/modules.config`. When to turn it on:
+[Choosing methods](choosing_methods.md#illumination-correction-on-or-off). How it runs:
+[Illumination correction](basic_illumination.md).
 
 ## Registration
 
 Two backends, selected by `--registration_method`: **STARE tiled** (default; JVM-free, fully
 parallel) and **VALIS** (graph-based whole-slide alignment). Every STARE task asks 2–4 GB at the
 defaults — see the memory note under [Tiled / STARE](#tiled-stare-registration_methodtiled).
+Which to pick, and what the paper measured for each:
+[Choosing methods → Registration](choosing_methods.md#registration-stare-or-valis).
 
 ### Common
 
@@ -87,10 +90,9 @@ defaults — see the memory note under [Tiled / STARE](#tiled-stare-registration
     There is **no parameter** that picks a registration reference for you. Every
     patient must declare exactly one `is_reference=true` row; a patient with none
     is a **hard error at launch**, at every entry point, and two `true` rows are
-    the same error. `allow_auto_reference`, which promoted a patient's first
-    samplesheet row, was **removed** — two sheets differing only in row order
-    produced two different alignments and nothing recorded that the pipeline had
-    chosen. Passing the flag now **fails the launch** as an unrecognised parameter
+    the same error: two sheets differing only in row order must never produce two
+    different alignments. Passing the retired `allow_auto_reference` flag **fails
+    the launch** as an unrecognised parameter
     (`validation.logging.unrecognisedParams = 'error'`).
 
 ### VALIS
@@ -102,10 +104,7 @@ every slide warped in the reference frame (bicubic, VALIS's default). No micro-r
 runs. There are **no VALIS registration settings**. The one argument that differs from VALIS's
 default is the registration channel: VALIS matches the channel *name* `"dapi"` (falling back to
 channel 0 with a warning); the pipeline passes the nuclear channel by **index 0**, where
-conversion always puts it, so a channel named like "DAPI_x" can never be chosen instead. The
-tuned VALIS 1.0.0 configuration this replaced (`memory_mode` tiers, SuperPoint/SuperGlue,
-keypoint cap, micro-registration, `reg_max_image_dim`, the `tma` profile) is archived at the git
-tag `archive/valis-mirage-tuned`.
+conversion always puts it, so a channel named like "DAPI_x" can never be chosen instead.
 
 **`reg_valis_mode hires`** swaps in VALIS's *own* other configuration, its high-resolution
 example (valis-wsi 1.2.0 `docs/examples.rst`), **as shipped**: `MicroRigidRegistrar` in the
@@ -135,76 +134,43 @@ and how to read it.
 
 ### Tiled / STARE (`registration_method=tiled`)
 
-STARE is an alternative registration backend that is **JVM-free** (no Bio-Formats/Java
+STARE is the default registration backend. It is **JVM-free** (no Bio-Formats/Java
 heap), tiles the slide internally, and runs fully in parallel. These params apply only when
-`--registration_method tiled`.
+`registration_method` is `tiled` (the default).
 
 **Sizing.** Every STARE step is region-streamed and bounded by a parameter, not by the slide.
 `TILED_COARSE` estimates its rigid anchor with an FFT NCC rotation sweep (0.25–0.43 GB peak RSS
-measured at 512–2048 px, 2 GB requested); from v1.0.0 until 2026-09-27 it was a DISK U-Net that
-asked ~48 GB at the then-default `high` tier, so sites sized for that can lower `max_memory` for STARE.
+measured at 512–2048 px, 2 GB requested).
 
 | Parameter | Default | Description |
 |---|---|---|
 | `reg_tiled_nuclear_index` | `null` | Nuclear/fiducial channel index used to estimate the transform. `null` resolves it from the slide's channel metadata against `nuclear_markers`; set an integer only to override. |
-| `reg_tiled_tile` | `2048` | Tile core size (px): one `TILED_REG_TILE` task per tile. Not the mesh resolution since STARE v2 — that is `reg_tiled_stride`. |
-| `reg_tiled_halo` | `256` | SOLVE's range-gate default (`reg_tiled_max_disp` when that is `null`) and COARSE's anchor-residual warning threshold (px). Not a read margin since STARE v2 (`TILED_REG_TILE` reads the core plus `3 × stride` each side), but `TILED_REG_TILE`'s memory request is sized for the core plus `max(halo, 3 × stride)` each side. |
-| `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. (STARE v2 has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
-| `reg_tiled_stride` | `64` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver since STARE v2) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. See `research/stare-optimal-design-2026-09-27.md` §2. |
+| `reg_tiled_tile` | `2048` | Tile core size (px): one `TILED_REG_TILE` task per tile. The mesh resolution is `reg_tiled_stride`, not this. |
+| `reg_tiled_halo` | `256` | SOLVE's range-gate default (`reg_tiled_max_disp` when that is `null`) and COARSE's anchor-residual warning threshold (px). Not a read margin (`TILED_REG_TILE` reads the core plus `3 × stride` each side), but `TILED_REG_TILE`'s memory request is sized for the core plus `max(halo, 3 × stride)` each side. |
+| `reg_tiled_max_disp` | `null` | **Range gate.** Drop a window vector whose displacement magnitude (px) is at or beyond this — the match was never inside the read window, so the peak is an artefact. `null` uses `reg_tiled_halo`, the physically-motivated bound. (STARE has no confidence or TRE gate: REG_TILE emits only foreground-masked vectors whose correlation peak ratio clears its floor, and SOLVE never zeroes a small displacement.) |
+| `reg_tiled_stride` | `64` | **REG_TILE vector-lattice stride (px).** Each tile measures a grid of window vectors instead of one control point: window `W = 2 × stride` (50 % overlap), lattice node `k` centred at `W/2 + k·stride` in reference-frame pixels on one slide-global lattice, owned by the tile whose core contains it. Two passes (a quarter-resolution pass capturing ±`stride` px, then full resolution with a 3-point Gaussian peak fit); a window is measured only when ≥ 25 % of it is tissue and kept only with a peak ratio ≥ 1.2. SOLVE (`stare.solve`, the only solver) removes a robust (Huber) affine, smooths the residual by robust DCT-PLS (Garcia 2010: thin-plate penalty, bisquare weights) with the smoothing parameter chosen by spatial block cross-validation (GCV below 25 valid vectors), fills unmeasured nodes from the smoother, reports the interpolated field's Lipschitz constant / min det(I+J) as a fold certificate (never rescaling the field), and calibrates each vector's σ from block-CV held-out residuals binned by peak ratio (scored on disjoint folds). The per-tile read box is the core plus `3 × stride` each side, and `TILED_REG_TILE`'s memory request is derived from it. |
 | `reg_tiled_out_tile` | `1024` | Streaming stitch write-tile size (px) — gigapixel-safe. |
-| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); if neither is trustworthy **the task fails** naming both slides and the scores, rather than emitting an unverifiable M0. Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateStareKnobs` — anything below it (including `0`, which used to disable decimation) aborts before any process is instantiated. |
+| `reg_tiled_coarse_max_dim` | `1024` | Longest side (px) of the thumbnail the coarse anchor (M0) is **refined** on. The anchor sweeps rotation over 0–360° at 256 px (NCC), refines the two best distinct angles ±3° at this resolution, and falls back to ORB + RANSAC when the sweep is ambiguous (peak NCC < 0.3 or best/second-distinct peak < 1.15); the ORB fit is accepted with at least 30 inliers. If neither passes, the candidate transforms are compared on up to eight 1,024 px nuclear patches read at full resolution: a candidate confirmed by at least three patches is used, and otherwise the best candidate is kept and **flagged as unverified** (the task does not fail). Cost is CPU, not memory (0.25–0.43 GB for the whole stage at 512–2048 px); `TILED_COARSE`'s memory request is still derived from this value. The M0 quantisation bound (half a 0.25° step at the thumbnail half-diagonal, reported as `coarse_tre`) grows with the decimation factor and must stay well inside `reg_tiled_halo`. **A 256 px floor is enforced at launch** by `ParamUtils.validateStareKnobs` — anything below it (including `0`) aborts before any process is instantiated. |
 
 ### No tiers
 
 **Neither backend has cost tiers.** VALIS runs valis-wsi 1.2.0 at its defaults (see
 [VALIS](#valis)); STARE runs one default configuration, the four
-values in the table above (the former `high` row), and each knob is set directly:
+values in the table above, and each knob is set directly:
 
 ```bash
 --reg_tiled_tile 4096                                  # STARE: set the knob directly
 ```
 
-STARE's tiers (`reg_tiled_mode`) were removed on 2026-11-04. A run that still passes
-`reg_tiled_mode` is refused at launch (`ParamUtils.checkRetiredParams`) unless the value is
+`reg_tiled_mode` is a retired parameter. A run that passes it is refused at launch (`ParamUtils.checkRetiredParams`) unless the value is
 `high` (a no-op, which only warns); the message gives the retired row's values to set instead —
 `medium`: `reg_tiled_tile` 1024, `reg_tiled_halo` 192, `reg_tiled_out_tile` 768,
 `reg_tiled_coarse_max_dim` 1024; `low`: 512 / 128 / 512 / 512.
 
 ## Segmentation
 
-One process, `SEGMENT`, dispatching to three genuinely different segmenters via
-`--seg_method`. They are **not** drop-in equivalents: they read different things,
-build the whole-cell mask differently, and have different prerequisites.
-
-### Choosing a backend
-
-| | `instantseg` | `stardist` **(default)** | `cellsam` |
-|---|---|---|---|
-| **Reads** | The full multichannel image — **channel-invariant** | One channel, hardcoded to **index 0** | One nuclear channel, **resolved by marker name** |
-| **Whole-cell mask** | Predicted natively, alongside nuclei | Expanded from nuclei by `seg_expand_distance` | Expanded from nuclei by `seg_expand_distance` |
-| **Precondition** | A writable model cache | Channel 0 **must** be a nuclear marker — otherwise the task exits 1 | A nuclear channel must exist — a negative index exits 1 |
-| **Weights** | Apache-2.0, auto-downloaded from BioImage.IO | Trained model [`DSUnit/stardist`](https://huggingface.co/DSUnit/stardist), auto-downloaded at a pinned commit | **Gated** — needs `DEEPCELL_ACCESS_TOKEN` |
-| **Runs on a fresh clone?** | **Yes** | **Yes** (needs network on first use, or a pre-downloaded copy in `segmentation_model_dir`) | No — set `cellsam_model_path` or export a token |
-| **Container image** | `bolt3x/mirage-instanseg:1.0.0` | `bolt3x/mirage-stardist:1.0.0` | `bolt3x/mirage-cellsam:1.0.0` |
-| **Entry point** | `segment_instantseg.py` | `segment.py` | `segment_cellsam.py` |
-
-!!! tip "Why StarDist is the default"
-    It runs the trained nuclear model used for the paper's cohort, published at
-    [huggingface.co/DSUnit/stardist](https://huggingface.co/DSUnit/stardist) and
-    pinned to one commit, so every run loads the same weights. `segment.py`
-    downloads its three files (`config.json`, `thresholds.json`,
-    `weights_best.h5`) on first use; on a cluster without network access,
-    pre-download them into `<segmentation_model_dir>/DSUnit__stardist__68b94406104b/`
-    and they are used offline. A branch name instead of a commit is refused.
-
-    InstanSeg is the only backend that predicts the whole-cell mask directly rather
-    than dilating nuclei by a fixed radius — so **`seg_expand_distance` has no
-    effect when InstanSeg is selected**. An unrecognised `--seg_method` is
-    rejected by name at launch rather than silently running a different
-    segmenter.
-
-All three write both a `*_cell_mask.tif` and a `*_nuclei_mask.tif` regardless of
-backend, so everything downstream is backend-agnostic.
+One process, `SEGMENT`, dispatching to three different segmenters via `--seg_method`.
+Which backend to pick, side by side: [Choosing methods → Segmentation](choosing_methods.md#segmentation-stardist-instanseg-or-cellsam).
 
 ### Backend selection & shared
 
@@ -228,7 +194,7 @@ Consumes the **DAPI channel** (must be channel 0 — guaranteed upstream).
 | `seg_pmax` | `99.8` | Upper percentile for normalization. |
 | `seg_n_tiles_x` | `16` | Inference tiles along X. |
 | `seg_n_tiles_y` | `16` | Inference tiles along Y. |
-| `seg_prob_thresh` | `null` | Detection probability threshold. `null` uses the model's built-in default. |
+| `seg_prob_thresh` | `null` | Detection probability threshold. `null` uses the model's own thresholds (for the default model: probability 0.61, non-maximum suppression 0.3). |
 
 ### InstanSeg (`seg_method=instantseg`)
 
@@ -357,9 +323,7 @@ Two things to know before reading the numbers:
   factor. Keep it fixed across a cohort.
 - **A dropped score is announced, not silent.** CSE's usual failure is resource
   exhaustion on full-WSI masks. Both processes retry three times (climbing the
-  memory ramp) and then `ignore`, logging a warning naming the patient. Previously
-  the ignore was silent, which is how the scorer came to be described as "always
-  ignored" while runs stayed green.
+  memory ramp) and then `ignore`, logging a warning naming the patient.
 
 [cse]: https://doi.org/10.1091/mbc.E22-08-0364
 - **`qc/mirage_resource_report.html`** — computational-resource report built from
@@ -374,7 +338,7 @@ Two things to know before reading the numbers:
 
 Per-process requests, resource labels, retry policy and containers:
 **[Resources](resources.md)**. Cluster invocations:
-[Running on HPC / SLURM](usage.md#running-on-hpc).
+[Running on a cluster](hpc.md).
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -427,8 +391,7 @@ is far lower, so raising `queue_size` alone has no effect — raise `max_forks` 
 
 ### `cleanup_level`
 
-At `none` — the default since 2026-09-10 (it was `final` from 2026-08-25) — a run
-publishes everything, and its output can be re-entered by `--start`.
+At `none`, the default, a run publishes everything, and its output can be re-entered by `--start`.
 At `final`, the opt-in cleaning level, a run publishes only what it was run to produce:
 
 | Kept | Dropped |
@@ -487,17 +450,13 @@ the directory to disappear entirely.
 !!! warning "Mutually exclusive with `-resume`"
     A cleaned run leaves no cache to resume from, and **this does not fail loudly**:
     re-running with `-resume` against a cleaned work directory exits 0 and silently
-    re-runs every task. Verified on the stub dataset — 57 cache hits against an
-    intact `work/`, 0 against a cleaned one, both green. If you iterate with
-    `-resume`, leave `cleanup_work` off. See
-    [Checkpoints & resuming](usage.md#checkpoints-resuming).
+    re-runs every task. If you iterate with `-resume`, leave `cleanup_work` off. See
+    [Checkpoints & resuming](resuming.md).
 
-!!! note "Why this used to default to off"
-    `conf/modules.config`'s QC `errorStrategy` used to end in `'ignore'`, so a run
-    could exit 0 with a QC task having failed — and cleanup deleted that task's work
-    directory, the only place its logs and partial outputs lived. That branch is
-    gone: the QC selector is `retry-then-fail`, so a broken QC task fails the run
-    and a green run implies a complete output tree. Two processes still carry a
+!!! note "Why cleaning a successful run loses no evidence"
+    A failed run keeps its work directory. The QC processes use `retry-then-fail`,
+    so a broken QC task fails the run, and a green run implies a complete output
+    tree. Two processes carry a
     deliberate `retry-then-drop` policy (`SEG_QUALITY_EVAL`, `MERGE_SEG_EVAL`, both
     opt-in); when either is dropped, `main.nf`'s `onComplete` says so by name in the
     run log rather than leaving it to be inferred from an absent column.
@@ -515,11 +474,12 @@ Ready-made `-params-file` JSON presets in `params/`:
 
 | Preset | Purpose |
 |---|---|
-| `params/full_pipeline.json` | All stages from preprocessing, on the InstanSeg backend (see the file's `_comment_seg_method` for the StarDist switch) |
+| `params/full_pipeline.json` | All stages from preprocessing, with STARE registration and the StarDist backend (the file's `_comment_seg_method` describes the alternatives); it turns BaSiC illumination correction on (`skip_preprocessing: false`) |
 | `params/preprocessing_only.json` | Preprocessing only |
 | `params/registration_only.json` | Registration from a checkpoint |
 | `params/postprocessing_only.json` | Postprocessing from a checkpoint |
 | `params/test.json` | Minimal self-contained test run (carries its own small ceilings) |
+| `params/no_gpu.json` | `seg_gpu` off alone — segmentation on the CPU, for a machine with no NVIDIA GPU; combine with `-profile local,docker` |
 | `params/dry_run.json` | `dry_run` alone — combine with any other flags |
 | `params/seg_quality_eval.json` | Turns the opt-in CSE segmentation-quality scorer on |
 
@@ -530,14 +490,13 @@ nextflow run . -profile slurm,singularity -c site.config \
   --seg_method cellsam            # override any preset value on the CLI
 ```
 
-!!! warning "Presets never carry site sizing — that's `-c site.config`'s job (R4)"
+!!! warning "Presets never carry site sizing — that's `-c site.config`'s job"
     `full_pipeline.json`, `preprocessing_only.json`, `registration_only.json` and
     `postprocessing_only.json` deliberately do **not** set `max_cpus`/`max_memory`/
     `max_time` (their `_comment_resources` entry says so). A `-params-file` value
     **overrides a `-c` config file** (Nextflow's own precedence order), so a
     preset that baked in one cluster's ceiling would silently defeat any
-    `site.config` layered on top of it on a different cluster — that mistake
-    shipped in these four presets before ruling R4. `max_cpus`/`max_memory` have
+    `site.config` layered on top of it on a different cluster. `max_cpus`/`max_memory` have
     no default and are `required` in `nextflow_schema.json`, so every command
     that loads one of these presets needs `-c site.config`
     (`cp conf/site.config.template site.config`, then edit the ceiling) or the
@@ -549,8 +508,9 @@ nextflow run . -profile slurm,singularity -c site.config \
 ## See also
 
 - :material-sitemap: **What each process does, in order** — [The pipeline](pipeline.md)
-- :material-file-tree: **Every input column and output path** — [Inputs & outputs](outputs.md)
+- :material-table: **Every input column** — [The samplesheet](samplesheet.md)
+- :material-file-tree: **Every output path** — [Outputs](outputs.md)
 - :material-server: **Every resource request, retry rule and container** — [Resources](resources.md)
-- :material-console: **Command recipes & the samplesheet** — [Usage](usage.md)
-- :material-help-circle: **Common questions** — [Usage → Troubleshooting & FAQ](usage.md#troubleshooting-faq)
+- :material-console: **Command recipes** — [Command line](usage.md)
+- :material-help-circle: **Common errors** — [Troubleshooting](troubleshooting.md)
 - :material-book-open-variant: **How to cite** — [Citation](citation.md)

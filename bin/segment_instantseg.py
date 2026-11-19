@@ -5,11 +5,8 @@ Channel-invariant alternative to StarDist on DAPI. InstanSeg's pretrained
 ``fluorescence_nuclei_and_cells`` model consumes the full multichannel image
 and emits both nuclei and whole-cell instance masks in one pass.
 
-Drop-in I/O contract with ``segment.py``:
-- writes ``{prefix}_nuclei_mask.tif`` and ``{prefix}_cell_mask.tif`` as
-  uint32 instance labels (compression='zlib')
-- emits ``versions.yml`` (instanseg + torch + python)
-- emits ``{prefix}.SEGMENT.size.csv`` (input-size trace row)
+Writes ``{prefix}_nuclei_mask.tif`` and ``{prefix}_cell_mask.tif`` (uint32, zlib), the
+same contract as ``segment.py``.
 """
 
 from __future__ import annotations
@@ -20,7 +17,6 @@ import sys
 import time
 from pathlib import Path
 
-# Add parent directory to path to import lib modules
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
 import numpy as np
@@ -30,23 +26,17 @@ from ome_io import write_tiff
 
 logger = get_logger(__name__)
 
-#: TIFF tile size (px) for the nuclei/cell mask writes below -- a TIFF LAYOUT choice, not a
-#: processing tile size. See ``bin/convert_image.py:35-49`` for why an untiled write forces
-#: every downstream region read to decode the whole plane. Deliberately half of
-#: CONVERT_TIFF_TILE/WRITE_TILE's 2048, not copied from it: measured directly on the mask's
-#: own read pattern (many small windowed per-cell/per-region reads, not whole-plane decodes)
-#: -- see docs/perf/2026-08-26-rss.md's tiled-vs-striped table.
+#: TIFF tile size (px) of the mask files, a layout choice, not a processing tile. Smaller
+#: than the image writers' 2048 because masks are read in many small windows.
 MASK_TIFF_TILE = 1024
 
 
 def _to_numpy(arr):
     """Convert torch tensor or numpy-like object to numpy ndarray.
 
-    InstanSeg may return either a numpy array or a torch tensor depending on
-    version/device. This shim handles both without importing torch directly.
+    InstanSeg returns either, depending on version/device; torch is not imported.
     """
     if hasattr(arr, "detach"):
-        # torch tensor — move to CPU first
         try:
             arr = arr.detach().cpu().numpy()
         except Exception:
@@ -59,43 +49,21 @@ def _to_numpy(arr):
 def _extract_2d_masks(labeled_output, target: str):
     """Reduce InstanSeg's labeled output to a (nuclei_2d, cell_2d) pair.
 
-    InstanSeg's ``eval_small_image`` returns instance labels with shape that
-    varies by ``target``. Common observed shapes:
-      - target='all_outputs': (1, 2, Y, X) or (2, Y, X) — index 0 = nuclei, index 1 = cells
-      - target='nuclei':      (1, 1, Y, X) or (1, Y, X) or (Y, X) — single nuclei map
-      - target='cells':       (1, 1, Y, X) or (1, Y, X) or (Y, X) — single cell map
+    Output shape varies by ``target``:
+      - 'all_outputs': (1, 2, Y, X) or (2, Y, X); index 0 = nuclei, 1 = cells
+      - 'nuclei' / 'cells': (1, 1, Y, X), (1, Y, X) or (Y, X); a single map
 
-    This routine is defensive: it strips leading singleton dims, then dispatches
-    by remaining ndim.
-
-    A single label map is REFUSED, not replicated into both outputs. See the
-    comment on that branch: replication preserves the file contract and voids
-    the data contract, because Cytoplasm = Cell - Nucleus is then empty for
-    every cell and every cytoplasmic measurement is silently zero. So of the
-    three targets above, only 'all_outputs' can satisfy this reader -- which is
-    what nextflow.config already ships as the default.
+    A single map is refused rather than copied into both outputs: identical masks
+    make Cytoplasm = Cell - Nucleus empty for every cell. Only 'all_outputs' works.
     """
     arr = _to_numpy(labeled_output)
     logger.info(f"  InstanSeg raw output shape: {arr.shape}, dtype: {arr.dtype}")
 
-    # Strip leading singleton dims (e.g. batch axis)
+    # Strip leading singleton dims (e.g. batch axis).
     while arr.ndim > 3 and arr.shape[0] == 1:
         arr = arr[0]
 
-    # ONE LABEL MAP IS NOT TWO MASKS.
-    #
-    # This branch used to `return single, single` -- replicating the one map
-    # into both outputs and calling it "contract-preserving". It preserves the
-    # FILE contract (both _nuclei_mask.tif and _cell_mask.tif get written) and
-    # destroys the DATA contract: downstream computes
-    # Cytoplasm = Cell - Nucleus, so an identical pair makes the cytoplasm
-    # EMPTY FOR EVERY CELL. Every cytoplasmic column in measurements.csv comes
-    # out zero and no output anywhere looks wrong.
-    #
-    # `--target nuclei` and `--target cells` produce a single map by
-    # construction, so they can never satisfy this reader. nextflow.config
-    # defaults seg_instantseg_target to 'all_outputs', so no shipped path
-    # relied on the replication -- which is what makes refusing safe.
+    # One label map is not two masks: copying it would zero every cytoplasmic value.
     if arr.ndim == 2 or (arr.ndim == 3 and arr.shape[0] == 1):
         raise ValueError(
             f"InstanSeg returned a SINGLE label map (shape {arr.shape}) for "
@@ -115,11 +83,7 @@ def _extract_2d_masks(labeled_output, target: str):
     if arr.ndim == 3:
         n = arr.shape[0]
         if n >= 2:
-            # InstanSeg eval_small_image with target='all_outputs' returns a
-            # tensor of shape (2, Y, X): index 0 = nuclei labels, index 1 =
-            # cell labels.
-            # Ref: instanseg/inference_class.py upstream and the README usage
-            # examples at https://github.com/instanseg/instanseg.
+            # target='all_outputs': index 0 = nuclei labels, index 1 = cell labels.
             nuclei_2d = arr[0]
             cell_2d = arr[1]
             return nuclei_2d, cell_2d
@@ -145,10 +109,8 @@ def run_instanseg(
 ):
     """Run the InstanSeg segmentation pipeline on a multichannel image.
 
-    Uses ``eval_medium_image`` (sliding-window tiled inference) so that peak
-    activation memory scales with ``tile_size`` and ``batch_size`` rather than
-    with the full image dimensions. ``eval_small_image`` was previously used
-    and is unsuitable for WSI-scale registered outputs (OOM).
+    Uses ``eval_medium_image`` (sliding-window inference), so peak memory scales with
+    ``tile_size`` and ``batch_size``, not the image size.
 
     Parameters
     ----------
@@ -160,19 +122,14 @@ def run_instanseg(
         Name of the pretrained InstanSeg model. Default is
         ``'fluorescence_nuclei_and_cells'``.
     target
-        InstanSeg ``eval`` target. In practice only ``'all_outputs'`` works
-        here: ``'cells'`` and ``'nuclei'`` produce a single label map, and a
-        single map is REFUSED rather than written to both
-        ``_nuclei_mask.tif`` and ``_cell_mask.tif``. Replicating it used to be
-        described as contract-preserving; it preserves the file contract and
-        voids the data contract, since Cytoplasm = Cell - Nucleus is then
-        empty for every cell.
+        InstanSeg ``eval`` target. Only ``'all_outputs'`` works: ``'cells'`` and
+        ``'nuclei'`` give a single label map, which is refused.
     pixel_size
         Override pixel size in µm/px. If None, InstanSeg's auto-detected value
         from the OME metadata is used.
     use_gpu
-        Whether GPU is requested. InstanSeg picks a device internally; this
-        flag is informational and warned about if CUDA is unavailable.
+        Whether GPU is requested. InstanSeg picks the device itself; this only
+        warns if CUDA is unavailable.
     prefix
         Output filename prefix. Defaults to the input image's stem.
     tile_size
@@ -194,11 +151,10 @@ def run_instanseg(
 
     ensure_dir(output_dir)
 
-    # Defer heavy imports until after argparse/help works without GPU stacks
+    # Deferred so --help works without the GPU stack.
     from instanseg import InstanSeg  # type: ignore
 
-    # Check CUDA availability if GPU requested (informational only — InstanSeg
-    # routes device internally)
+    # Informational only: InstanSeg picks the device itself.
     if use_gpu:
         try:
             import torch
@@ -213,13 +169,11 @@ def run_instanseg(
         except Exception as exc:
             logger.warning(f"  Could not query torch CUDA state: {exc}")
 
-    # 1. Load model
     start_time = time.time()
     logger.info("Loading InstanSeg model...")
     model = InstanSeg(model_name, verbosity=1)
     logger.info(f"  Model load time: {time.time() - start_time:.2f}s")
 
-    # 2. Read multichannel image (InstanSeg handles channel-invariance)
     logger.info("Reading image via InstanSeg...")
     image_array, detected_pixel_size = model.read_image(image_path)
     logger.info(
@@ -230,10 +184,6 @@ def run_instanseg(
     effective_pixel_size = pixel_size if pixel_size is not None else detected_pixel_size
     logger.info(f"  Effective pixel size used: {effective_pixel_size}")
 
-    # 3. Run segmentation via tiled sliding-window inference.
-    # eval_medium_image keeps peak memory bounded by tile_size * batch_size
-    # rather than by full image dimensions; required for WSI-scale inputs.
-    # Ref: instanseg/inference_class.py eval_medium_image signature.
     logger.info(
         f"Running InstanSeg eval_medium_image "
         f"(target={target}, tile_size={tile_size}, batch_size={batch_size})..."
@@ -251,11 +201,8 @@ def run_instanseg(
     )
     logger.info(f"  Segmentation time: {time.time() - seg_start:.2f}s")
 
-    # 4. Unpack outputs into 2D nuclei + cell masks
     nuclei_2d, cell_2d = _extract_2d_masks(labeled_output, target=target)
 
-    # Cast to uint32 — downstream (extract_cell_properties / quantify) expects
-    # unique integer label ids per cell.
     nuclei_mask = nuclei_2d.astype(np.uint32, copy=False)
     cell_mask = cell_2d.astype(np.uint32, copy=False)
 
@@ -264,7 +211,6 @@ def run_instanseg(
     logger.info(f"  Nuclei detected: {n_nuclei}")
     logger.info(f"  Cells detected:  {n_cells}")
 
-    # 5. Save outputs (mirror segment.py naming)
     basename = prefix if prefix else Path(image_path).stem
     nuclei_mask_path = Path(output_dir) / f"{basename}_nuclei_mask.tif"
     cell_mask_path = Path(output_dir) / f"{basename}_cell_mask.tif"
@@ -272,10 +218,7 @@ def run_instanseg(
     logger.info("")
     logger.info("Saving segmentation masks...")
     logger.info(f"  Nuclei mask: {nuclei_mask_path.name}")
-    # bigtiff for the same reason tiled_stitch.py:118 and extract_mask_series.py give:
-    # a 40000x40000 uint32 label mask is 6.4 GB before compression, and classic TIFF's
-    # 32-bit offsets overflow past 4 GB. Compression usually keeps it under -- usually is
-    # not a contract. Guarded by tests/test_slide_io_seam.py.
+    # bigtiff: a 40k x 40k uint32 mask is 6.4 GB raw, past classic TIFF's 4 GB offsets.
     write_tiff(
         nuclei_mask_path,
         nuclei_mask,

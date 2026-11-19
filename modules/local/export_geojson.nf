@@ -1,16 +1,9 @@
 /*
- * EXPORT_GEOJSON - Export cell data to QuPath-compatible GeoJSON
+ * EXPORT_GEOJSON - export cells to QuPath GeoJSON
  *
- * Exports all cells with raw marker intensities and morphological measurements
- * in QuPath's native GeoJSON format. No phenotype classification is applied —
- * gating is handled downstream by FlowPath in QuPath.
- *
- * Input:
- *   - Merged quantification CSV with per-cell marker intensities + morphology
- *   - Pre-computed contours JSON for polygon cell boundaries
- * Output:
- *   - GeoJSON with QuPath-native measurement format (array of name/value)
- *   - CSV with raw intensities + z-scores per marker
+ * Every cell with raw marker intensities and morphology as QuPath measurements, plus a
+ * CSV with raw intensities and per-marker z-scores. No phenotyping: gating is done in
+ * QuPath by FlowPath.
  */
 process EXPORT_GEOJSON {
     tag "${meta.patient_id}"
@@ -18,17 +11,14 @@ process EXPORT_GEOJSON {
     container "bolt3x/mirage-quantify:1.0.0"
 
     input:
-    // Stage the nucleus contours under a distinct name: both EXTRACT_CELL_PROPERTIES
-    // and EXTRACT_NUCLEI_PROPERTIES emit a file literally named contours.json, and
-    // (when compartments are disabled) the same cell-contours file is passed into
-    // both slots — either way an unstaged duplicate would collide in the work dir.
+    // Distinct stage name: both contour inputs are named contours.json (and are the
+    // same file when compartments are off).
     tuple val(meta), path(quant_csv), path(contours_json), path(nucleus_contours_json, stageAs: 'nucleus_contours.json')
 
     output:
     tuple val(meta), path("export/cells.geojson"), emit: geojson
-    // Whole-cell-only companion (no nucleusGeometry), written only in the
-    // per-compartment path (params.quantify_compartments). Lighter/faster to import
-    // in QuPath; same measurements, so FlowPath compartment gating still works.
+    // Whole-cell-only companion (no nucleusGeometry), written only with
+    // params.quantify_compartments; lighter to import, same measurements.
     tuple val(meta), path("export/cells_wholecell.geojson"), optional: true, emit: geojson_wholecell
     tuple val(meta), path("export/cells_data.csv"), emit: csv
     path "versions.yml"                            , emit: versions
@@ -39,8 +29,7 @@ process EXPORT_GEOJSON {
 
     script:
     def args = task.ext.args ?: ''
-    // Per-compartment quantification: pass the nucleus contours (re-keyed to cell
-    // labels) so each cell gets a nucleusGeometry in the single combined cells.geojson.
+    // Nucleus contours (keyed by cell label) give each cell a nucleusGeometry.
     def nucleus_arg = params.quantify_compartments ? "--nucleus_contours_json ${nucleus_contours_json}" : ''
     // --pixel_size is NOT optional here even though the script has a parameter for it.
     // It was omitted, and export_geojson.py's own argparse default silently supplied

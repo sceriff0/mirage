@@ -25,7 +25,6 @@ process MERGE_AND_PYRAMID {
     script:
     def args = task.ext.args ?: ''
 
-    // Parameters are centralized in nextflow.config; no fallback needed here.
     def pixel_size_x = params.pixel_size
     def pixel_size_y = params.pixel_size
     def pyramid_resolutions = params.pyramid_resolutions
@@ -33,13 +32,8 @@ process MERGE_AND_PYRAMID {
     def tile_size = params.tilex
     def compression = params.compression
 
-    // Embed cell + nuclei segmentation masks as a second, single-resolution
-    // uint32 OME series only when masks were actually staged.
-    // subworkflows/local/assemble_export.nf is the single source of truth for the
-    // embed_masks decision, for both the linear and the add_cycle path (it only
-    // wires mask_files into this process's input when
-    // embed_masks && quantify_compartments && expanded_quantification); an
-    // empty mask_files list means Nextflow staged no masks/ dir.
+    // Masks go in as a second, single-resolution uint32 OME series only when staged;
+    // assemble_export.nf decides whether to stage them (empty list = no masks/ dir).
     def masks_arg = mask_files ? "--masks-dir masks" : ""
 
     """

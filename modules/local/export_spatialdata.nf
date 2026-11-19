@@ -1,21 +1,12 @@
 /*
  * EXPORT_SPATIALDATA - serialize postprocessing output as a SpatialData .zarr
  *
- * Writes the scverse-native representation of a patient: cell/nuclei label masks,
- * cell/nucleus polygons, and an AnnData table of per-compartment marker intensities
- * plus morphology — with registration and segmentation QC in `uns`, and per-cell
- * registration residuals in `obsm`.
+ * Cell/nuclei label masks, polygons and an AnnData table (per-compartment intensities
+ * + morphology), with registration/segmentation QC in `uns` and per-cell residuals in
+ * `obsm`. Nothing is recomputed; this re-serialises POSTPROCESSING's artifacts.
  *
- * Nothing here is recomputed; every element is a re-serialization of an artifact
- * POSTPROCESSING already produced. The OME-TIFF and QuPath GeoJSON remain the
- * primary outputs — this is additive.
- *
- * The pyramid is written into the store only under `--spatialdata_include_image`.
- * spatialdata.write() materializes every element, so including a multi-cycle WSI
- * duplicates the largest artifact the pipeline makes; default off keeps stub and
- * CI runs cheap, and the flag produces a self-contained, depositable object.
- *
- * Optional inputs are passed as `[]` and simply stage nothing.
+ * The pyramid is included only with --spatialdata_include_image, since it duplicates
+ * the largest artifact. Optional inputs are passed as `[]`.
  */
 process EXPORT_SPATIALDATA {
     tag "${meta.patient_id}"
@@ -43,14 +34,8 @@ process EXPORT_SPATIALDATA {
     def image_arg     = (params.spatialdata_include_image && pyramid) ? "--include-image --pyramid ${pyramid}" : ''
     def qc_arg        = qc_json       ? "--qc-json ${qc_json}"             : ''
     def resid_arg     = reg_residuals ? "--reg-residuals ${reg_residuals}" : ''
-    // meta.pixel_size, not params.pixel_size: --pyramid (the only image this process
-    // ever sees) is rendered only under --spatialdata_include_image, which defaults to
-    // false, so bin/export_spatialdata.py's
-    // resolve_pixel_size(args.pixel_size, args.pyramid, ...) is called with image=None
-    // on the shipped default path and cannot resolve 'auto' itself. meta.pixel_size is
-    // the number INPUT_CHECK's PREFLIGHT_SCALE already resolved per-slide. A fourth
-    // consumer of the same defect, found auditing this fix -- not one of the three the
-    // originating review named.
+    // meta.pixel_size (resolved per slide): without the pyramid the script has no
+    // image to resolve params.pixel_size == 'auto' from.
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${quant_csv}"], "${meta.patient_id}.EXPORT_SPATIALDATA.size.csv")}
 

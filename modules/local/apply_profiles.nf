@@ -1,22 +1,13 @@
 /*
  * APPLY_PROFILES - apply BASICPY's illumination profiles and reassemble the slide
  *
- * nf-core's BASICPY module computes PROFILES ONLY; upstream, mcmicro applies them
- * downstream inside ASHLAR. mirage has no ASHLAR, so this process is the missing half:
+ * nf-core's BASICPY only computes profiles (mcmicro applies them inside ASHLAR); this
+ * applies corrected = (image - darkfield) / flatfield per channel, per pseudo-FOV,
+ * reassembled from TILE_FOR_BASIC's positions sidecar.
  *
- *     corrected = (image - darkfield) / flatfield
- *
- * per channel, per pseudo-FOV, reassembled from TILE_FOR_BASIC's positions sidecar.
- *
- * Three contracts carried over from the in-process BaSiC path, all in
- * bin/apply_basic_profiles.py: the nuclear/fiducial channel is left uncorrected (the
- * decision is TILE_FOR_BASIC's, recorded in the sidecar), negatives are clipped through
- * bin/utils/validation.py's clip_negative_values in ONE aggregate log line, and the
- * float->integer store rounds before casting.
- *
- * Input:  the slide, its tile-position sidecar, and BASICPY's *-dfp / *-ffp profiles
- * Output: <name>_corrected.ome.tif -- the same artifact PREPROCESS published, in the same
- *         place, so the preprocessed checkpoint row is unchanged.
+ * The nuclear channel is left uncorrected (TILE_FOR_BASIC's decision, from the sidecar),
+ * negatives are clipped, and values are rounded before the integer cast.
+ * Output <name>_corrected.ome.tif matches what PREPROCESS publishes.
  */
 process APPLY_PROFILES {
     tag "${meta.patient_id}"

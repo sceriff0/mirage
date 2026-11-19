@@ -24,8 +24,7 @@ process TILED_STITCH {
     script:
     def prefix    = "${meta.patient_id}_${meta.channels.join('_')}"
     def slidename = meta.channels.join('_')
-    // A plain param with a nextflow.config default (STARE has no cost tiers since 2026-11-04);
-    // an itemised `params.x` read, so only this value enters the task hash.
+    // itemised params.x read: only this value enters the task hash
     def out_tile  = params.reg_tiled_out_tile as int
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${moving}"], "${prefix}.TILED_STITCH.size.csv")}

@@ -22,23 +22,10 @@ process SEG_QUALITY_EVAL {
     script:
     def args = task.ext.args ?: ''
     def prefix = "${meta.patient_id}"
-    // meta.pixel_size, not params.pixel_size, for the fallback: bin/seg_quality_eval.py
-    // does a bare float() on this value and never reads scale from `image` itself (see
-    // that script's own note), so the literal string 'auto' (the shipped
-    // params.pixel_size default) raises ValueError -- and this process's
-    // retry-then-drop errorStrategy SWALLOWS that, silently dropping the artifact
-    // instead of failing the run. meta.pixel_size is the number INPUT_CHECK's
-    // PREFLIGHT_SCALE already resolved per-slide. cse_pixel_size_um still takes
-    // precedence when the operator explicitly sets it.
+    // Fallback is meta.pixel_size (resolved per slide), not params.pixel_size: the script
+    // calls float() on it, and 'auto' would fail and be dropped by retry-then-drop.
     def px = params.cse_pixel_size_um != null ? params.cse_pixel_size_um : meta.pixel_size
-    // THROW, do not silently omit. `px ? "--pixel-size-um ${px}" : ''` used to render
-    // an absent flag when px was null -- Groovy null is FALSY, so the ternary's ''
-    // branch fired instead of the script ever seeing `null` -- and this process's
-    // retry-then-drop errorStrategy (conf/modules.config) retried three times against
-    // an input that could never change, then silently dropped the artifact: a green
-    // run missing a QC file with no error anywhere. Every checkpoint now records a
-    // real pixel_size (lib/Checkpoint.groovy), so a null one here means a genuine bug
-    // upstream, not a value this process should quietly work around.
+    // Throw rather than omit the flag: retry-then-drop would otherwise drop the artifact silently.
     if (px == null)
         throw new IllegalStateException(
             "SEG_QUALITY_EVAL(${meta.patient_id}): no pixel size available -- meta.pixel_size is " +

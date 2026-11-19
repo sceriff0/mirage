@@ -58,7 +58,10 @@ def _register_kwargs() -> dict:
     """Evaluate register_kwargs() from its source, with only the constant it reads bound."""
     fn = _function("register_kwargs")
     namespace = {"REGISTRATION_CHANNEL": _module_constant("REGISTRATION_CHANNEL")}
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), str(REGISTER_PY), "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[fn], type_ignores=[]), str(REGISTER_PY), "exec"),
+        namespace,
+    )
     return namespace["register_kwargs"]()
 
 
@@ -84,14 +87,19 @@ def test_the_registration_channel_is_the_nuclear_channel_by_index():
 
 def test_register_is_called_with_exactly_register_kwargs():
     calls = _calls(_function("valis_registration"), "register")
-    assert len(calls) == 1, f"expected one registrar.register(...) call, found {len(calls)}"
+    assert len(calls) == 1, (
+        f"expected one registrar.register(...) call, found {len(calls)}"
+    )
     call = calls[0]
     assert not call.args, "registrar.register() takes no positional arguments here"
     assert len(call.keywords) == 1 and call.keywords[0].arg is None, (
         "registrar.register() must be called as register(**register_kwargs()) and nothing else"
     )
     inner = call.keywords[0].value
-    assert isinstance(inner, ast.Call) and getattr(inner.func, "id", None) == "register_kwargs"
+    assert (
+        isinstance(inner, ast.Call)
+        and getattr(inner.func, "id", None) == "register_kwargs"
+    )
 
 
 def test_the_registrar_gets_the_slides_and_the_reference_and_nothing_else():
@@ -99,7 +107,9 @@ def test_the_registrar_gets_the_slides_and_the_reference_and_nothing_else():
     constructor_kwargs(valis_mode), which is {} at `default` and the hires example's
     MicroRigidRegistrar at `hires` (tests/test_register_valis_modes.py)."""
     calls = _calls(_function("valis_registration"), "Valis")
-    assert len(calls) == 1, f"expected one registration.Valis(...) call, found {len(calls)}"
+    assert len(calls) == 1, (
+        f"expected one registration.Valis(...) call, found {len(calls)}"
+    )
     kwargs = sorted(str(k.arg) for k in calls[0].keywords if k.arg is not None)
     assert kwargs == ["img_list", "reference_img_f"], (
         f"Valis() is given {kwargs}; every constructor argument except the slides and the "

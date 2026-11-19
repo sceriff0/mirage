@@ -89,10 +89,9 @@ def parse_measurement_key(key: str) -> Tuple[str, Optional[str], Optional[str]]:
 def sanitize_for_uns(obj):
     """Make a QC document safe to write through AnnData → Zarr.
 
-    Python ``None`` does not round-trip cleanly; ``bin/warp_seg_qc.py`` emits
-    ``"radius_factor": None`` today. Numeric ``None`` becomes NaN, everything
-    else is dropped. Also coerces numpy scalars, which AnnData writes as
-    0-d arrays that read back awkwardly.
+    Python ``None`` does not round-trip cleanly: numeric ``None`` becomes NaN and other
+    ``None`` values are dropped. Numpy scalars are coerced to Python scalars, since AnnData
+    writes them as 0-d arrays.
     """
     if isinstance(obj, dict):
         out = {}
@@ -118,8 +117,8 @@ def sanitize_for_uns(obj):
 def load_qc(reg_qc_paths: List[str], versions_paths: List[str]) -> Tuple[Dict, Dict]:
     """Collect QC into a flattened dict (``uns['qc']``) and verbatim JSON strings.
 
-    Storing both is deliberate: the flattened form is what people actually index
-    into, and the verbatim string guarantees nothing is lost to flattening.
+    The flattened form is for indexing; the verbatim strings keep anything flattening
+    would lose.
     """
     qc: Dict = {"registration": {}}
     raw: Dict = {"registration": {}}
@@ -171,35 +170,13 @@ def build_shapes(contours_path: str, labels: np.ndarray, name: str):
 def read_mask(path: str):
     """Lazily read a label mask as a 2-D dask array, squeezing any singleton axis.
 
-    Same read strategy as ``read_pyramid_lazy`` (dask-backed, aszarr-opened), and
-    for the same reason on the *consumer* side: ``Labels2DModel.parse`` wraps the
-    array structurally (dims + transformation) and never computes across labels.
-    That is unlike ``quantify.py``/``mask_to_geojson.py``, which DO force a
-    whole-array read because region properties and contour tracing are global — a
-    cell label can straddle any tile boundary those pick. No such constraint
-    applies here, so the read stays lazy rather than loading the whole mask up
-    front.
+    ``Labels2DModel.parse`` never computes across labels, so the mask can stay lazy here
+    (unlike quantification and contour tracing, which need the whole array).
 
-    The two sites are not necessarily on the same grid, though, and that is what
-    the explicit ``rechunk`` below is for. ``bin/merge_channels_pyramid.py``
-    writes the pyramid tiled at ``tile_size`` (512 by default); ``bin/segment.py``
-    /``bin/segment_cellsam.py`` now also write the mask tiled (``MASK_TIFF_TILE =
-    1024``, see those files), so the dask array's native chunks are 1024×1024, not
-    the single-row strips an untiled write used to produce. This ``rechunk`` is
-    therefore a cheap 2×2-chunk merge to a common 2048 grid today, not the
-    row-to-block rebuild it used to be — but it is still needed: ``spatialdata``'s
-    ``sdata.write()`` passes no ``storage_options``, so ``ome_zarr.writer``
-    defaults the *output* zarr's chunk grid to whatever the dask chunksize
-    happens to be (``chunks_opt = level.chunksize``), and an unpinned 1024 grid
-    here would otherwise propagate into the exported store instead of the 2048
-    the rest of the pipeline uses. Not routed through ``tiled_io.open_lazy``: it opens this
-    same underlying zarr array internally, but never returns it — only its own
-    ``(c, y, x)``-tuple-indexed ``_CHW`` wrapper, paired with a ``close`` callable
-    whose lifetime would then have to be threaded through this lazy dask graph
-    instead of closed immediately. For a 2-D mask it would also force a leading
-    ``C=1`` axis right back off. Reading the zarr store directly with
-    ``da.from_zarr`` sidesteps all three and hands ``Labels2DModel.parse`` a real,
-    unwrapped dask array to rechunk.
+    The array is rechunked to a 2048 grid because ``sdata.write()`` passes no
+    ``storage_options`` and the output zarr's chunks follow the dask chunksize. Read with
+    ``da.from_zarr`` rather than ``tiled_io.open_lazy``, which returns a ``(c, y, x)``
+    wrapper plus a ``close`` callable instead of the array itself.
     """
     import dask.array as da
     import tifffile
@@ -208,27 +185,17 @@ def read_mask(path: str):
     arr = da.from_zarr(store).squeeze()
     if arr.ndim != 2:
         raise ValueError(f"expected a 2-D label mask in {path}, got shape {arr.shape}")
-    # Re-chunk onto the pipeline's common 2048 grid (see docstring) before this array
-    # ever reaches Labels2DModel.parse / sdata.write(), so the exported store's
-    # chunk grid stays sane and matches the pyramid's regardless of the source
-    # mask TIFF's own tile size.
+    # Rechunk to the common 2048 grid (see docstring) so the exported store's chunk
+    # grid does not depend on the source TIFF's tile size.
     return arr.rechunk({0: 2048, 1: 2048})
 
 
 def read_pyramid_lazy(path: str):
     """Lazily read the full-resolution level of a pyramidal OME-TIFF as (c, y, x).
 
-    Dask-backed so peak memory is one chunk rather than the whole slide — the
-    pyramid is the largest artifact the pipeline produces, and materializing it
-    here would defeat the point of an out-of-core format.
-
-    Not routed through ``tiled_io.open_lazy`` for the same reason ``read_mask``
-    isn't: it opens the identical underlying zarr array internally but exposes
-    only its own ``(c, y, x)``-tuple-indexed wrapper plus a ``close`` callable, not
-    the array itself. ``Image2DModel.parse`` below builds a multiscale pyramid over
-    this array via ``scale_factors``, which needs a genuine, unwrapped dask array
-    (rechunk-able, numpy-slicable) — exactly what reading the zarr store directly
-    with ``da.from_zarr`` gives it.
+    Dask-backed so peak memory is one chunk, not the whole slide. Read with
+    ``da.from_zarr`` rather than ``tiled_io.open_lazy`` because ``Image2DModel.parse``
+    needs a real dask array to build its multiscale pyramid over.
     """
     import dask.array as da
     import tifffile
@@ -318,16 +285,10 @@ def build_table(
     adata = ad.AnnData(X=X, obs=obs, var=var)
 
     if {"x", "y"} <= set(df.columns):
-        # Pixels, not micrometres: SpatialData's convention is intrinsic pixel
-        # coordinates plus a transformation carrying the scale. Storing µm here
-        # would double-apply pixel_size on any cross-modality alignment.
-        #
-        # Corner-of-pixel, because build_shapes' polygons already are. The
-        # quantification CSV carries raw regionprops centroids, which are
-        # centre-of-pixel; contours.json was converted by
-        # extract_cell_properties. Storing the centroids unconverted put every
-        # cell's point half a pixel up-and-left of its own polygon -- see
-        # bin/utils/pixel_convention.py for the rule and who else applies it.
+        # Pixels, not micrometres: SpatialData stores intrinsic pixel coordinates plus a
+        # scale transformation, so µm here would double-apply pixel_size.
+        # Corner-of-pixel, to match build_shapes' polygons; the CSV centroids are
+        # centre-of-pixel (bin/utils/pixel_convention.py).
         adata.obsm["spatial"] = centre_to_corner(
             df[["x", "y"]].to_numpy(dtype=np.float64)
         )

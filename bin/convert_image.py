@@ -9,7 +9,7 @@ Supports:
 - NDPI/NDPIS (Hamamatsu) via tifffile
 - HDF5 (.h5, .hdf5) via h5py
 - SVS/QPTIFF/VSI/SCN/MRXS/BIF/IMS (Aperio/Vectra/Olympus/Leica/3DHistech/Ventana/Imaris)
-  via bioio-bioformats -- ruling R2's "any Bio-Formats-compatible format" route
+  via bioio-bioformats
 """
 
 from __future__ import annotations
@@ -83,9 +83,7 @@ def read_image_bioio(file_path: Path) -> Tuple[Any, dict]:
             # having two 'C' characters in the dimension order
             if "C" in dim_order and img.dims.C == 1:
                 c_pos = dim_order.index("C")
-                # np.squeeze on a dask array returns a dask array (dispatched via
-                # __array_function__), so this stays a view on the graph -- it does not
-                # allocate the second full-size copy the eager version did.
+                # np.squeeze on a dask array stays lazy (dispatched via __array_function__).
                 image_data = np.squeeze(img.dask_data, axis=c_pos)
                 dim_order = dim_order[:c_pos] + dim_order[c_pos + 1 :]
                 logger.info(f"Squeezed singleton C dimension at position {c_pos}")
@@ -101,10 +99,8 @@ def read_image_bioio(file_path: Path) -> Tuple[Any, dict]:
         image_data = img.dask_data
 
     ps = img.physical_pixel_sizes
-    # None means "the file did not say", not "0.325". The one fallback lives in
-    # convert_to_ome_tiff, so that a missing scale and a scale that genuinely equals the
-    # default stay distinguishable up to that point -- warn_on_pixel_size_mismatch has
-    # to be able to tell them apart.
+    # None means "the file did not say". The fallback lives in convert_to_ome_tiff so
+    # warn_on_pixel_size_mismatch can tell a missing scale from one equal to the default.
     pixel_size_x = ps.X
     pixel_size_y = ps.Y
     pixel_size_z = ps.Z
@@ -341,27 +337,14 @@ def read_image_h5(file_path: Path) -> Tuple[np.ndarray, dict]:
 def read_image(file_path: Path) -> Tuple[Any, dict]:
     """Read `file_path` with whichever reader `ome_io.detect_reader` names.
 
-    The BioIO branch returns a LAZY dask array; the tifffile and HDF5 branches still
-    return a decoded ``np.ndarray``. Both are accepted by ``ome_io.write_ome_tiff``,
-    which only needs ``.shape``, ``.dtype`` and per-plane indexing.
+    The BioIO branch returns a lazy dask array; the tifffile and HDF5 branches return a
+    decoded ``np.ndarray``. ``ome_io.write_ome_tiff`` accepts both. An unclaimed extension
+    raises ``UnsupportedFormatError`` from ``detect_reader``.
 
-    An unclaimed extension now raises ``UnsupportedFormatError`` out of
-    ``detect_reader`` instead of falling through to BioImage. That fall-through is what
-    made a ``.png`` in a samplesheet fail several frames inside a plugin, naming a
-    problem that was not the problem.
-
-    ``bioio`` and ``bioio-bioformats`` share this branch: the Bio-Formats route IS
-    BioImage, with one more plugin installed. ``require_reader`` is called first so a run
-    in an image that lacks the plugin says which distribution is missing and which image
-    carries it, rather than dying on a bare ModuleNotFoundError.
-
-    For ``bioio-bioformats`` specifically, ``point_jvm_cache_off_readonly_home()`` runs
-    BEFORE ``read_image_bioio`` constructs ``BioImage`` -- this is the actual CONVERT_IMAGE
-    read path (``ome_io._open_bioio`` is a separate opener used by ``read_info``/
-    ``read_plane``, and carries the same call for its own callers). Without it, the first
-    Bio-Formats-triggering ``BioImage()`` call starts jgo's Maven resolve against
-    ``Path.home()``, which is the cluster's read-only ``$HOME`` -- see
-    ``bin/utils/jvm_cache.py``'s docstring for the exact crash.
+    ``bioio`` and ``bioio-bioformats`` share this branch. ``require_reader`` runs first so a
+    missing plugin is named. For ``bioio-bioformats``, ``point_jvm_cache_off_readonly_home()``
+    runs before ``BioImage`` is constructed, because the Bio-Formats Maven resolve otherwise
+    writes under the cluster's read-only ``$HOME`` (see ``bin/utils/jvm_cache.py``).
     """
     reader = detect_reader(file_path)
     logger.info(f"Detected reader: {reader}")
@@ -453,18 +436,12 @@ def convert_to_ome_tiff(
     logger.info(f"Input channels: {channel_names}")
     logger.info(f"Output channels: {output_channels}")
 
-    # The single fallback point. params.pixel_size owns every downstream µm
-    # conversion (GeoJSON measurements, the published pyramid's PhysicalSize,
-    # InstantSeg's rescaling), so a file that claims a different scale does not change
-    # any of them -- but the operator has to be told, here, rather than finding out from
-    # a scale-disagreement warning in QuPath several steps later.
+    # Single fallback point. params.pixel_size drives every downstream µm conversion,
+    # so a file claiming a different scale changes nothing, but the operator is warned.
     det_x = metadata.get("physical_pixel_size_x")
     det_y = metadata.get("physical_pixel_size_y")
-    # 'auto' is resolved from what aicsimageio read off the VENDOR file -- the only
-    # place in the pipeline where the original scanner scale is still available.
-    # read_ome_pixel_size's tifffile path cannot open .czi/.ndpi/.svs, so the numbers
-    # are handed over directly rather than re-read. Absent metadata raises here, which
-    # is the point of 'auto': it promises the real scale or nothing.
+    # 'auto' uses the scale read off the vendor file, the only place it is still
+    # available (read_ome_pixel_size cannot open .czi/.ndpi/.svs). Absent metadata raises.
     configured = resolve_pixel_size(
         pixel_size_um, detected=(det_x, det_y), source=input_path.name, logger=logger
     )
@@ -551,12 +528,8 @@ def convert_to_ome_tiff(
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ome_io owns the metadata dict AND the write. The dict used to be built here, and
-    # identically in three other scripts; see ome_io.ome_metadata for why that mattered.
-    #
-    # bigtiff=True unconditionally, not the size-derived default: that is what this
-    # converter has always written, and tests/test_convert_streaming_write.py compares
-    # its output against a reference writer that also sets it.
+    # ome_io owns the metadata dict and the write. bigtiff=True unconditionally, as
+    # tests/test_convert_streaming_write.py's reference writer expects.
     logger.info(f"Writing: {output_filename.name}")
 
     write_ome_tiff(
@@ -596,9 +569,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Comma-separated channel names (optional, reads metadata when omitted)",
     )
-    # str, not float: may be the literal 'auto'. Resolved against the metadata
-    # aicsimageio already read off the vendor file -- read_ome_pixel_size's tifffile
-    # path cannot speak .czi/.ndpi/.svs. No default: see nextflow.config's pixel_size.
+    # str, not float: may be the literal 'auto'. No default: see nextflow.config's
+    # pixel_size.
     parser.add_argument("--pixel_size", type=str, default=None)
     parser.add_argument(
         "--nuclear-markers",
