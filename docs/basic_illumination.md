@@ -146,7 +146,7 @@ drift. `params.preproc_skip_nuclear` still switches it off.
 * `--no_autotune` is **inverted** (`action="store_false"`, `default=True`, gated by
   `if not args.no_autotune:`), so *not* passing it is what leaves autotune off. Passing it
   turns autotune on.
-* It **errors under `-profile conda` / `-profile mamba`** by design, in both its `script:`
+* It **errors when Conda is enabled** (`conda.enabled = true`) by design, in both its `script:`
   and its `stub:` block.
 * Its version emit is a hardcoded `val("1.2.0")` on a versions **topic** channel, while
   its container is tagged `1.2.0-patch5`. mirage's QC report collects `versions.yml`
