@@ -135,7 +135,7 @@ workflow POSTPROCESSING {
     def contributes = { meta -> !(meta.keep_channels != null && meta.keep_channels.isEmpty()) }
 
     ch_retention_in = ch_registered
-        .filter { meta, _f -> !meta.is_reference && contributes(meta) }
+        .filter { meta, _f -> !meta.is_reference && contributes.call(meta) }
         .map { meta, img -> [meta.patient_id, meta, img] }
         .combine(ch_mask, by: 0)
         .map { _pid, meta, img, cmask, nmask -> [meta, img, cmask, nmask] }

@@ -265,7 +265,7 @@ workflow ADD_CYCLE {
     def contributes = { meta -> !(meta.keep_channels != null && meta.keep_channels.isEmpty()) }
 
     ch_retention_in = ch_new_for_split
-        .filter { meta, _f, _is_ref -> contributes(meta) }
+        .filter { meta, _f, _is_ref -> contributes.call(meta) }
         .map { meta, img, _is_ref -> [meta.patient_id, meta, img] }
         .combine(ch_masks, by: 0)
         .map { _pid, meta, img, cmask, nmask -> [meta, img, cmask, nmask] }
