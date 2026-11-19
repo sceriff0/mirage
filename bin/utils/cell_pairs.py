@@ -16,7 +16,8 @@ stage. This module owns the three pieces that requires:
    stops a cell with no true partner from pairing with whatever happens to be closest.
 
 3. :func:`pair_iou` — per-pair IoU by rasterizing each pair in its **own bounding-box window**,
-   not on a shared slide-sized grid, so peak RAM is one nucleus, not one slide. ``supersample`` recovers
+   not on a shared slide-sized grid. Peak RAM is one nucleus, not one slide, which is the whole
+   reason this replaces the previous whole-slide label-image approach. ``supersample`` recovers
    sub-pixel precision: a 30 px nucleus scored at 2x is a 60 px grid, so the IoU quantum is
    ~1% instead of ~4%.
 
@@ -35,14 +36,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# A pair whose two cells span a window larger than this (after supersampling) is not scored:
-# real nuclei are a few thousand px, so this is a warp artifact or a merged blob. Such pairs
-# are counted and reported.
+# A pair whose two cells span a window larger than this (after supersampling) is not scored.
+# Real nuclei are a few thousand px; anything at this scale is a warp artifact or a merged
+# blob, and rasterizing it would reintroduce exactly the unbounded allocation this design
+# exists to remove. Such pairs are counted and reported, never silently dropped.
 DEFAULT_MAX_PAIR_WINDOW_PX = 4_000_000
 
-# A connected component of the candidate graph larger than this falls back to mutual-NN
-# inside that component instead of the exact solve. Components are normally 1-4 cells; a
-# badly registered region can chain them. 5000 members is at most ~50 MB of cost matrix.
+# A connected component of the candidate graph larger than this is not solved exactly — it
+# falls back to mutual-NN inside that component. Percolation is the only way to get one:
+# after a 1.5-radius gate on rigid-aligned tissue a component is normally 1-4 cells, but a
+# badly-registered region can chain them. 5000 members is a <=2500x2500 dense sub-matrix
+# (~50 MB), which is the same "bounded, counted, never silently dropped" posture as
+# DEFAULT_MAX_PAIR_WINDOW_PX above.
 DEFAULT_MAX_COMPONENT_CELLS = 5_000
 
 
@@ -224,7 +229,9 @@ def median_equivalent_radius(area: np.ndarray) -> float:
 # ── correspondence ─────────────────────────────────────────────────────────────
 def _finite_rows(cent):
     """``(rows, index)``: the rows of ``cent`` whose coordinates are all finite, and where
-    they came from (:func:`match_lsa`'s NaN filter)."""
+    they came from. This is :func:`match_lsa`'s NaN filter; :func:`match_mutual_nn` keeps
+    its own inline equivalent (``np.flatnonzero(np.isfinite(...).all(axis=1))``) rather than
+    calling this helper, and is left that way deliberately."""
     cent = np.asarray(cent, dtype=float)
     if cent.size == 0:
         return cent.reshape(0, 2), np.empty(0, dtype=np.int64)

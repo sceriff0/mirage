@@ -1,13 +1,30 @@
 """Redirect scyjava's BioFormats-JVM (jgo/Maven) cache off a read-only $HOME.
 
-No ``valis`` import, so it is testable without valis and callable before the JVM starts.
+Import-light on purpose (no ``valis`` import) so the guard is unit-testable in CI without a
+valis install, and so it can be called from any entrypoint before the JVM starts.
 
-scyjava derives its jgo cache and Maven repo from ``Path.home()`` at import time and ignores
-``JGO_CACHE_DIR`` / ``M2_REPO``. On a read-only cluster ``$HOME``, jgo's first
-``os.makedirs($HOME/.jgo)`` fails with ``OSError [Errno 30] Read-only file system``.
-``scyjava.config.set_cache_dir`` / ``set_m2_repo`` overwrite those values whenever scyjava
-was imported. Used by the VALIS path (valis_config.py) and the convert path
-(ome_io._open_bioio, convert_image.py). Call before the JVM starts.
+Why this exists
+---------------
+Two real consumers pin scyjava for two different reasons. The VALIS runtime path
+(``bin/utils/valis_config.py``, running in the external ``cdgatenbee/valis-wsi`` image) pins
+``scyjava<1.11``: that scyjava computes its jgo ``cache_dir`` and Maven ``m2_repo`` from
+``pathlib.Path.home()`` at *import time* and passes them **explicitly** into
+``jgo.resolve_dependencies`` (in scyjava's config and _jvm modules). It never consults the
+``JGO_CACHE_DIR`` / ``M2_REPO`` environment variables — so setting those (e.g. the Dockerfile ENV)
+has no effect on where the JVM cache lands. On an HPC compute node ``$HOME`` (e.g.
+``/hpcnfs/...``) is a read-only mount, so jgo's first-run ``os.makedirs($HOME/.jgo)`` dies with
+``OSError [Errno 30] Read-only file system`` before the JVM can start — the REG_PREP /
+REG_MICRO_PREP / REG_FINALIZE crash.
+
+The convert path (``bin/utils/ome_io._open_bioio`` / ``bin/convert_image.py``,
+``containers/convert``) runs scyjava 1.12.5 instead, where
+``scyjava.config.set_cache_dir``/``set_m2_repo`` are verified present — confirmed by the Task 13
+build — so the same timing-immune lever below applies to both consumers despite the version gap.
+
+The timing-immune lever is ``scyjava.config.set_cache_dir`` / ``set_m2_repo``: they overwrite the
+frozen module globals that ``get_cache_dir()`` returns, regardless of when scyjava was imported.
+Call :func:`point_jvm_cache_off_readonly_home` after valis/scyjava are importable and *before*
+``registration.init_jvm``.
 """
 
 import os
@@ -21,10 +38,13 @@ def point_jvm_cache_off_readonly_home():
 
     Preference order when ``$HOME`` is read-only:
 
-    1. A warm cache baked into the image (``/root/.jgo`` + ``/root/.m2``): jgo reuses an
-       existing workspace, so no writes and no network. ``$MIRAGE_JVM_HOME`` overrides the root.
-    2. Node-local scratch (``$TMPDIR``, else ``/tmp``), where jgo rebuilds its workspace; this
-       needs the jars from a baked m2 repo or the network.
+    1. A **warm baked cache** shipped in the image (``/root/.jgo`` + ``/root/.m2``, made
+       world-readable at build). jgo short-circuits on an existing ``buildSuccess`` workspace, so
+       pointing scyjava here needs no writes and no network — the offline-node golden path.
+       Override the search root with ``$MIRAGE_JVM_HOME``.
+    2. **Node-local writable scratch** (``$TMPDIR``, set by SLURM/Nextflow; else ``/tmp``). jgo will
+       (re)build its workspace here; that needs the BioFormats jars reachable via a baked m2 repo
+       (preferred, kept read-only) or the network. Only helps if the jars are available.
 
     Returns the chosen jgo cache dir (str), or ``None`` when no redirect was needed/possible.
     """
