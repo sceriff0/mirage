@@ -1,47 +1,13 @@
 {
-    "_comment_io": "=== Input/Output ===",
     "input": "/path/to/samplesheet.csv",
     "outdir": "/path/to/results",
-    "start": "preprocessing",
 
-    "_comment_workflow": "=== Workflow Control ===",
-    "dry_run": false,
-    "debug_channels": false,
-
-    "_comment_preproc": "=== Preprocessing ===",
+    "_comment_preproc": "Turns BaSiC illumination correction on (off by default).",
     "skip_preprocessing": false,
-    "preproc_skip_nuclear": true,
-    "preproc_tile_size": 1950,
-    "preprocess_qc_scale_factor": 0.25,
     "pixel_size": 0.325,
 
-    "_comment_reg_common": "=== Registration (Common) ===",
-    "registration_method": "tiled",
-    "nuclear_markers": ["DAPI", "CELLTOX"],
-    "skip_registration_qc": false,
-    "qc_scale_factor": 0.25,
-
-    "_comment_reg_valis": "=== Registration (VALIS, with registration_method valis) === valis-wsi 1.2.0 at its defaults: there are no VALIS registration settings.",
-
-    "_comment_seg": "=== Segmentation ===",
-    "_comment_seg_method": "stardist is nextflow.config's default, with the trained model of segmentation_model: a Hugging Face snapshot pinned to one commit and downloaded on first use (into segmentation_model_dir when set; a copy already there is used offline). The StarDist knobs are seg_pmin, seg_pmax, seg_prob_thresh, seg_n_tiles_x and seg_n_tiles_y, and every one of them is silently discarded while seg_method is anything else. instantseg needs no trained model and its weights are Apache-2.0.",
+    "_comment_seg_method": "stardist is the default; the alternatives are instantseg and cellsam.",
     "seg_method": "stardist",
-    "seg_gpu": true,
-    "seg_expand_distance": 10,
-    "seg_pmin": 1.0,
-    "seg_pmax": 99.8,
-    "seg_n_tiles_y": 16,
-    "seg_n_tiles_x": 16,
 
-    "_comment_output": "=== Image Output / Pyramid ===",
-    "tilex": 512,
-    "pyramid_resolutions": 8,
-    "pyramid_scale": 2,
-    "compression": "zstd",
-
-    "_comment_resources": "=== Resource Limits === NOT SET ON PURPOSE (R4). max_cpus/max_memory have no default and are required by nextflow_schema.json; they are per-SITE, not per-run, so they belong in your own -c site.config (copied from conf/site.config.template), never in a -params-file. A -params-file value overrides -c, so a resource block here would silently defeat any site.config you layer on top of this preset.",
-
-    "_comment_trace": "=== Tracing ===",
-    "enable_trace": true,
-    "trace_dir": ".trace"
+    "_comment_resources": "max_cpus, max_memory and max_time are not set here: they are per site and belong in your -c site.config (from conf/site.config.template). A -params-file value overrides -c, so setting them here would defeat it."
 }
