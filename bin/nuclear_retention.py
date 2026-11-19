@@ -147,7 +147,7 @@ def parse_args(argv=None):
         default=None,
         help="Channel names, e.g. the samplesheet's own list (optional; will try to "
         "read from OME metadata when omitted, same fallback as split_multichannel.py "
-        "--channels). Backward compatible: omitting it is unchanged.",
+        "--channels).",
     )
     p.add_argument("--output", required=True)
     return p.parse_args(argv)

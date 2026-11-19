@@ -403,7 +403,7 @@ jobs:
 
             ### Container images
 
-            Published to Docker Hub under `bolt3x/mirage-<component>:1.0.0` (one descriptive tag per image).
+            Published to Docker Hub under `bolt3x/mirage-<component>:${{ needs.validate.outputs.version_no_v }}` (one tag per image, the one the modules pull).
 
             ### Quick Start
 

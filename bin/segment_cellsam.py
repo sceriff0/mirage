@@ -213,7 +213,7 @@ def parse_args():
         "--image",
         type=str,
         required=True,
-        help="Path to multichannel OME-TIFF image (e.g., registered image from VALIS)",
+        help="Path to multichannel OME-TIFF image (e.g., the registered image)",
     )
 
     parser.add_argument(
@@ -241,7 +241,7 @@ def parse_args():
         "--use-gpu",
         action="store_true",
         default=False,
-        help="Request GPU (cellsam_pipeline picks the device automatically; informational)",
+        help="Require a GPU: exit with an error if CUDA is unavailable (cellsam_pipeline picks the device itself)",
     )
 
     parser.add_argument(
