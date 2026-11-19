@@ -47,9 +47,8 @@ from measurements import MORPHOLOGY_COLS
 
 __all__ = ["main", "generate_postprocessing_qc"]
 
-# Morphology columns that should not appear in intensity distribution plots
-# (single source of truth: bin/utils/measurements.py). Wrapped in a set here
-# since this module does membership tests in a loop.
+# Morphology columns excluded from intensity plots (owner: bin/utils/measurements.py),
+# as a set for membership tests.
 MORPHOLOGY_COLUMNS = set(MORPHOLOGY_COLS)
 
 

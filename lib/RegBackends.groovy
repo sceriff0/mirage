@@ -2,39 +2,19 @@
 ========================================================================================
     RegBackends — what a registration backend IS, in one table
 ========================================================================================
-    The registration method's identity was re-decided in five places:
+    One table for the registration backends (cf. SegBackends). WarpBackends keeps the
+    reg_qc=2 warp's own knobs, but both must list the same backends; the schema enum
+    must match too (tests/test_reg_backends.py).
 
       1. nextflow_schema.json's `registration_method` enum (the valid names)
       3. subworkflows/local/register_patient.nf's dispatch (which adapter to invoke)
       4. subworkflows/local/seg_qc.nf's branch (which join shape the transforms have)
       5. lib/WarpBackends.groovy's own two-key map (the reg_qc=2 warp's knobs)
 
-    Adding or retiring a backend meant finding all five and keeping them consistent, and
-    missing one was silent. The silence had a DIRECTION, which is the part worth keeping
-    in mind: register_patient.nf's dispatch once read `if (tiled) ... else VALIS`, so any
-    method the schema enum gained but that file did not know about registered with VALIS
-    and reported success. A benchmark arm would have measured VALIS twice under two
-    labels and no test could have told.
+    Optional emits use a null object: an adapter without a stage checkpoint or TRE
+    emits Channel.empty() and consumers tolerate zero artifacts.
 
-    This class is lib/SegBackends.groovy's shape applied to the same problem, one layer
-    up: SegBackends keys the three segmenters, WarpBackends keys the reg_qc=2 warp, and
-    this keys registration itself. WarpBackends stays a separate table on purpose -- its
-    fields are that process's knobs (container, stage list, flag closures) and belong
-    with it -- but the two must agree on WHICH backends exist, which
-    tests/lib_probe.nf and tests/test_reg_backends.py both assert.
-
-    THE ADAPTER IS A STRING, NOT A REFERENCE. A Nextflow workflow cannot be invoked by
-    name out of a map, so register_patient.nf keeps a two-arm `if`. What moves here is
-    the DECISION -- which adapter, which join shape, which modes -- not the call.
-
-    OPTIONAL EMITS ARE A NULL-OBJECT CONTRACT, recorded here rather than discovered in a
-    consumer. `hasStageCheckpoint` and `hasIntrinsicTre` say what an adapter can fill;
-    an adapter for a method that produces neither emits `Channel.empty()` and every
-    consumer tolerates zero artifacts. A third backend answers both questions in this
-    table instead of adding a required input somewhere.
-
-    All methods are static; nothing here reads params. `method` arrives as an argument,
-    which is what keeps params.registration_method read exactly once on the linear path
+    Static; `method` is an argument, so params.registration_method is read once
     (in subworkflows/local/registration.nf).
 ========================================================================================
 */
@@ -44,14 +24,10 @@ class RegBackends {
     /*
      * The single table answering "what is this registration backend?".
      *
-     *   adapter            the subworkflow name register_patient.nf invokes. A String;
-     *                      see the header on why it cannot be a reference.
-     *   segQcJoin          'per_patient' when the method produces ONE transform per
-     *                      patient (VALIS's registrar pickle), 'per_slide' when it
-     *                      produces one per moving slide (the tiled backend's transform
-     *                      manifest). seg_qc.nf builds a different join for each.
-     *   hasStageCheckpoint whether the method writes a pre-micro stage checkpoint the
-     *                      reg_qc=2 warp can separate 'non_rigid' from 'micro' with.
+     *   adapter            the subworkflow name register_patient.nf invokes.
+     *   segQcJoin          'per_patient' (one transform per patient, VALIS pickle) or
+     *                      'per_slide' (one per moving slide, tiled manifest).
+     *   hasStageCheckpoint whether the method writes a pre-micro stage checkpoint.
      *   hasIntrinsicTre    whether the method estimates its own TRE.
      *
      *                      hasStageCheckpoint and hasIntrinsicTre are the ADAPTER
@@ -72,21 +48,10 @@ class RegBackends {
      *   supportedModes     the run modes this backend may run under. Only 'linear'
      *                      exists on this branch; the dev branch adds 'add_cycle'.
      *   pairsOutputsBySignature
-     *                      whether the backend returns its registered files WITHOUT the
-     *                      slide identity, so that the adapter must pair them back to
-     *                      their metas by OME channel SET (lib/RegisteredMatch.groovy).
-     *                      VALIS renames its outputs; the tiled adapter keeps each
-     *                      slide's meta through its fan-out. Read at LAUNCH by
-     *                      workflows/mirage.nf to refuse, before any task runs, a
-     *                      patient whose two slides share one channel set -- under such
-     *                      a backend they are indistinguishable after registration, and
-     *                      RegisteredMatch.pair used to be the first thing to say so,
-     *                      after REGISTER had already run the whole group (head_neck
-     *                      patient 046, 12 slides, 2026-09-11).
-     *   warp               the lib/WarpBackends.groovy key for this method. Equal to the
-     *                      method name today, and stated rather than assumed so that a
-     *                      future backend reusing another's warp does not have to be
-     *                      discovered by reading WarpBackends.
+     *                      outputs lose slide identity and are paired back by channel set
+     *                      (RegisteredMatch). workflows/mirage.nf uses it to refuse, at
+     *                      launch, a patient whose slides share one channel set.
+     *   warp               the WarpBackends key for this method.
      */
     static final Map<String, Map> BACKENDS = [
         valis: [adapter: 'VALIS_ADAPTER', segQcJoin: 'per_patient', hasStageCheckpoint: true,
@@ -105,11 +70,8 @@ class RegBackends {
     /**
      * The backend entry for `method`.
      *
-     * Throws on an unknown name rather than returning null. Every accessor below goes
-     * through this for that reason: a `supportsMode('ashlar', 'add_cycle')` that answered
-     * `false` would read as "that backend does not support add_cycle", which is a
-     * different and much more plausible-looking statement than "there is no such
-     * backend".
+     * Throws on an unknown name, so accessors never answer `false` for a backend
+     * that does not exist.
      */
     static Map of(String method) {
         def backend = BACKENDS[method]

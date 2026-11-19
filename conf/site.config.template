@@ -2,15 +2,12 @@
 ========================================================================================
     Site-specific configuration template
 ========================================================================================
-    THE ONE PLACE PER-SITE SIZING LIVES. `max_cpus` and `max_memory` have NO
-    default in nextflow.config (they are declared null on purpose -- a default
-    there is a lie about somebody else's machine) and nextflow_schema.json marks
-    both required, so a run that does not set them is refused at launch:
+    Per-site sizing lives here. `max_cpus` and `max_memory` have no default and
+    are required, so a run that does not set them is refused at launch:
 
         ERROR ~ Validation of pipeline parameters failed!
         * Missing required parameter(s): max_cpus, max_memory
 
-    Every command in the MIRAGE documentation therefore ends in `-c site.config`.
     Make yours once:
 
         cp conf/site.config.template site.config
@@ -18,34 +15,25 @@
         nextflow run . -profile slurm,singularity -c site.config \
             --input samplesheet.csv --outdir results
 
-    `site.config` at the repository root is gitignored, so your paths and
-    account names never reach a commit.
+    `site.config` at the repository root is gitignored.
 
-    Prefer a NAMED PROFILE only if you also control nextflow.config:
+    A named profile works too if you control nextflow.config:
 
         profiles { mysite { includeConfig 'conf/mysite.config' } }
 
-    Note the ordering trap if you do: a profile body is evaluated while
-    nextflow.config is parsed, whereas a `-c` file is layered afterwards and
-    wins on params regardless of argument order.
+    but a `-c` file wins over a profile on params regardless of argument order.
 
-    THE REVERSE TRAP -- SIX PARAMS MUST NOT BE SET IN THIS FILE. cleanup_work,
-    enable_trace, trace_dir, concurrency, max_forks and queue_size each drive a
-    SCALAR inside nextflow.config (`cleanup`, `trace.enabled`, `executor.queueSize`,
-    `process.maxForks`, ...) that is evaluated while nextflow.config is parsed --
-    which is BEFORE this file is layered. A pin here changes the param and reaches
-    nothing that reads it (measured 2026-09-09). The pipeline REFUSES such a run at
-    launch (ParamUtils.validateFrozenConfig) rather than ignore the pin. Pass those
-    six with -params-file (the two booleans can only go that way) or on the command
-    line.
+    Do not set cleanup_work, enable_trace, trace_dir, concurrency, max_forks or
+    queue_size here: they are fixed before a `-c` file is read, and the pipeline
+    refuses such a run (ParamUtils.validateFrozenConfig). Pass them with
+    -params-file or on the command line (the two booleans only via -params-file).
 ========================================================================================
 */
 
 params {
     // ---- Required: this machine's ceiling ----------------------------------
-    // Every per-process request is clamped to these by process.resourceLimits.
-    // They are CEILINGS, not requests: set them to what the node or partition
-    // actually has, not to what a task should ask for.
+    // Ceilings, not requests: every task request is clamped to these. Set them to
+    // what the node or partition actually has.
     max_cpus               = 16
     max_memory             = '64.GB'
     max_time               = '48.h'
@@ -54,11 +42,10 @@ params {
     outdir                 = '/path/to/results'
 
     // ---- Segmentation model location ---------------------------------------
-    // Only consulted when seg_method = 'stardist' (the default). The shipped
-    // segmentation_model is a pinned Hugging Face snapshot, downloaded on first use
-    // into segmentation_model_dir; on a cluster without network access, pre-download
+    // Used when seg_method = 'stardist' (the default). The shipped model is downloaded
+    // on first use into segmentation_model_dir. Without network access, pre-download
     // config.json, thresholds.json and weights_best.h5 into
-    // <segmentation_model_dir>/DSUnit__stardist__68b94406104b/ and it is used offline.
+    // <segmentation_model_dir>/DSUnit__stardist__68b94406104b/.
     // Set segmentation_model to a folder name under that directory to use your own.
     segmentation_model_dir = '/path/to/models/'
     // segmentation_model  = 'your_stardist_model_name'

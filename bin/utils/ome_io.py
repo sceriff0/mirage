@@ -1,37 +1,18 @@
 """The one place this pipeline decides how to read an image, and the only place it writes one.
 
-TWO OWNERSHIPS, ONE MODULE.
+**Which reader claims a file.** `detect_reader` answers from one table and raises
+`UnsupportedFormatError` for anything unclaimed, naming the suffix and the supported list.
 
-**Which reader claims a file.** `bin/convert_image.py` used to answer this with three
-module-level sets and a silent `return "bioio"` fall-through, so an unrecognised
-extension -- a .png dropped into a samplesheet -- was handed to BioImage and failed
-several frames inside a plugin, naming a problem that was not the problem.
-`detect_reader` answers it from ONE table and raises `UnsupportedFormatError` for
-anything unclaimed, with the suffix and the supported list in the message.
+**Every TIFF this pipeline writes.** `tests/test_ome_io_is_the_only_writer.py` fails on
+any `tifffile` write call outside this file.
 
-**Every TIFF this pipeline writes.** Before this module there was no writer helper at
-all: ten scripts called `tifffile.imwrite`/`tifffile.TiffWriter` directly, and the OME
-metadata dict (PhysicalSizeX/Y + unit + channel names + axes) was rebuilt independently
-in four of them -- plus a fifth, hand-written `<OME ...>` XML template in
-`merge_channels_pyramid.py` that nothing ever called. `tests/test_ome_io_is_the_only_writer.py`
-now fails on any `tifffile` write call outside this file.
+Lazy imports are required: CI installs `tifffile`, `numpy`, `zarr` and `dask` but not
+`bioio`, `bioio-bioformats` or `h5py` (those are in `containers/convert` only). A
+module-scope import of them would deselect every test that imports this module. So only
+`tifffile` and `numpy` are hard imports; vendor readers import their backend inside the
+function. `jvm_cache` is safe at module scope: its `scyjava` import is lazy.
 
-LAZY IMPORTS ARE A HARD REQUIREMENT, NOT A STYLE CHOICE. `requirements/ci.txt` installs
-`tifffile`, `numpy`, `zarr` and `dask`, and installs NONE of `bioio`, `bioio-bioformats`
-or `h5py` (they belong to `containers/convert` alone). A module-scope `import bioio` here
-would break every pytest that imports this module, in CI, at collection time -- silently,
-because a module-scope failure deselects the whole file rather than failing it (see
-tests/conftest.py's floor). So `tifffile` and `numpy` are the only hard imports; every
-vendor-format reader imports its backend INSIDE the function that needs it.
-
-IMPORT CONVENTION. Flat (`from ome_io import ...`) by scripts that
-`sys.path.insert(0, .../bin/utils)` first, matching `pixel_size.py`, `tiled_io.py` and
-`segment_io.py`.
-
-`jvm_cache` is a third module-scope sibling import, alongside `pixel_size` and `tiled_io`:
-it is stdlib-only at import time (its own `scyjava` import is lazy, inside the function
-body), so importing it here does not violate the lazy-heavy-dependency rule above. It is
-called by `_open_bioio` for the `bioio-bioformats` route -- see that function's docstring.
+Imported flat (`from ome_io import ...`) by scripts that put `bin/utils` on `sys.path`.
 """
 
 from __future__ import annotations
@@ -81,18 +62,13 @@ class UnsupportedFormatError(ValueError):
 #: The reader names `detect_reader` returns and `ImageInfo.reader` reports.
 READERS = ("bioio", "bioio-bioformats", "tifffile", "hdf5")
 
-#: suffix -> reader. THE dispatch table; there is no fall-through.
+#: suffix -> reader. The dispatch table; there is no fall-through.
 #:
-#: `.ome.tif`/`.ome.tiff` are listed separately from `.tif`/`.tiff` even though both
-#: resolve to the same reader, because the two-part suffix is the one this pipeline's own
-#: intermediates carry and a future split (an OME-specific fast path) must not have to
-#: reintroduce the double-suffix parse to make it.
+#: `.ome.tif`/`.ome.tiff` are listed separately from `.tif`/`.tiff` so an OME-specific
+#: path can be split off later without reparsing the double suffix.
 #:
-#: The `bioio-bioformats` block is the R2 route: "any Bio-Formats-compatible format",
-#: honoured by installing `bioio-bioformats` in `containers/convert` and baking its jars
-#: at build time (phase 06). Declaring the route here BEFORE the plugin exists is
-#: deliberate -- `require_reader` turns its absence into a message naming the plugin,
-#: which is strictly better than a suffix that silently routes somewhere wrong.
+#: The `bioio-bioformats` formats need that plugin, installed only in `containers/convert`;
+#: `require_reader` turns its absence into a message naming the plugin.
 _SUFFIX_TO_READER = {
     ".ome.tif": "bioio",
     ".ome.tiff": "bioio",
@@ -124,9 +100,8 @@ _READER_MODULES = {
     "hdf5": ("h5py",),
 }
 
-#: pip distribution name per module, for the message. `bioio_bioformats` is installed as
-#: `bioio-bioformats`; telling an operator to `pip install bioio_bioformats` works by
-#: accident today and is not what the container's requirements file says.
+#: pip distribution name per module, for the message (`bioio_bioformats` installs as
+#: `bioio-bioformats`).
 _MODULE_TO_DISTRIBUTION = {
     "bioio": "bioio",
     "bioio_bioformats": "bioio-bioformats",
@@ -136,13 +111,10 @@ _MODULE_TO_DISTRIBUTION = {
 
 
 def _module_is_importable(name: str) -> bool:
-    """Whether `name` can be imported, WITHOUT importing it.
+    """Whether `name` can be imported, without importing it.
 
-    `importlib.util.find_spec` rather than a try/import: importing `bioio` pulls a
-    five-plugin, JVM-adjacent stack, and this is called on a path where the answer is
-    usually "no". Exported (no underscore prefix would be nicer, but it is genuinely
-    internal) only so tests/test_ome_io.py can ask the same question before asserting on
-    the absent-plugin message.
+    `find_spec` rather than a try/import: importing `bioio` pulls a heavy, JVM-adjacent
+    stack. Also used by tests/test_ome_io.py before asserting on the absent-plugin message.
     """
     try:
         return importlib.util.find_spec(name) is not None
@@ -154,14 +126,10 @@ def _module_is_importable(name: str) -> bool:
 def detect_reader(path) -> str:
     """Which of `READERS` claims `path`, by extension alone.
 
-    Extension alone, deliberately: this is called before the file is opened -- it is what
-    DECIDES how to open it -- and content sniffing a vendor format needs the very reader
-    this function is choosing. A file whose bytes disagree with its name fails at the
-    read, loudly, which is the right place for that failure.
+    Extension alone: this decides how to open the file, and sniffing a vendor format would
+    need the reader being chosen. A file whose bytes disagree with its name fails at the read.
 
-    Raises `UnsupportedFormatError` for anything not in the table. There is no
-    fall-through: `convert_image.get_file_format`'s silent `return "bioio"` is the
-    behaviour this replaces.
+    Raises `UnsupportedFormatError` for anything not in the table; there is no fall-through.
     """
     name = Path(path).name.lower()
     for double in (".ome.tif", ".ome.tiff"):
@@ -182,11 +150,9 @@ def detect_reader(path) -> str:
 def require_reader(reader: str) -> None:
     """Fail now, naming the plugin, if `reader`'s backend is not installed.
 
-    The `.svs/.qptiff/.vsi/.scn/.mrxs/.bif/.ims` route needs `bioio-bioformats`, which
-    `containers/convert` installs (with its Bio-Formats jars baked at build time) and no
-    other image does. Without this check a run in the wrong image dies with a bare
-    `ModuleNotFoundError: No module named 'bioio_bioformats'` several frames inside a
-    reader, which does not tell an operator that the fix is the image.
+    The `.svs/.qptiff/.vsi/.scn/.mrxs/.bif/.ims` route needs `bioio-bioformats`, installed
+    only in `containers/convert`. Without this check a run in the wrong image dies with a
+    bare `ModuleNotFoundError` that does not say the fix is the image.
     """
     modules = _READER_MODULES.get(reader)
     if modules is None:
@@ -204,23 +170,16 @@ def require_reader(reader: str) -> None:
         )
 
 
-#: TIFF tile size (px) for the pipeline's canonical converted intermediate -- a TIFF
-#: LAYOUT choice, not a processing tile size (contrast ``params.preproc_tile_size``,
-#: BaSiC's pseudo-FOV grid).
+#: TIFF tile size (px) for the canonical converted intermediate: a layout choice, not a
+#: processing tile size (contrast ``params.preproc_tile_size``).
 #:
-#: tifffile's zarr view of a STRIPED (untiled) TIFF reports ``chunks=(1, H, W)``, one
-#: chunk per whole plane, so every "read just this region" call downstream -- the BaSiC
-#: path, the STARE registration path, SPLIT_CHANNELS, the QC processes -- decodes the
-#: entire plane to slice it. Measured on a 6000x6000 uint16 plane: a single 2048^2 region
-#: read peaks at 76.7 MiB striped vs 16.0 MiB tiled. CONVERT_IMAGE writes the pipeline's
-#: canonical intermediate, so an untiled write there is the origin of that cost for every
-#: reader below it. Pinned by ``tests/test_convert_streaming_write.py``.
+#: A striped TIFF's zarr view has one chunk per whole plane, so every region read
+#: downstream decodes the entire plane (a 2048^2 read on a 6000x6000 uint16 plane peaks
+#: at 76.7 MiB striped vs 16.0 MiB tiled). Pinned by ``tests/test_convert_streaming_write.py``.
 CONVERT_TIFF_TILE = 2048
 
-#: Above this many bytes a classic TIFF's 32-bit offsets overflow
-#: (``struct.error: 'I' format requires 0 <= number <= 4294967295``). 2 GiB rather than
-#: 4 GiB because the ceiling applies to the largest OFFSET, not to the payload, and the
-#: header/IFD overhead of a tiled multi-page file is not accounted for anywhere else.
+#: Above this many bytes a classic TIFF's 32-bit offsets overflow. 2 GiB rather than
+#: 4 GiB because the limit is on the largest offset, which includes header/IFD overhead.
 BIGTIFF_THRESHOLD_BYTES = 2**31
 
 _MICRON = "µm"
@@ -235,26 +194,17 @@ def ome_metadata(
 ) -> dict:
     """The OME metadata dict tifffile serialises into an image's header.
 
-    THIS IS THE FINDING THIS MODULE EXISTS FOR. The same six-key dict was rebuilt
-    independently in ``convert_image.py``, ``merge_channels_pyramid.py``,
-    ``apply_basic_profiles.py`` and ``tiled_stitch.py`` -- four copies of one convention,
-    each free to drift in unit spelling, key order or which keys it omits. A fifth copy,
-    ``merge_channels_pyramid.build_ome_xml``, hand-wrote the ``<OME ...>`` XML itself and
-    was called by nothing at all.
+    The single builder of this dict, so unit spelling, key order and omitted keys cannot
+    drift between writers.
 
-    KEY ORDER IS PART OF THE OUTPUT. tifffile walks this dict to build the XML, so the
-    order below is the attribute order in the header of every file the pipeline writes.
-    It is the order ``convert_image.py`` used; changing it is a diff in a published
-    artifact for no behavioural reason. ``tests/test_ome_io.py`` pins it.
+    Key order is part of the output: tifffile walks the dict to build the XML, so this is
+    the attribute order in every header. ``tests/test_ome_io.py`` pins it.
 
-    ``None`` OMITS RATHER THAN SUBSTITUTES. A missing scale means "the file did not say",
-    and inventing one is the exact failure ``bin/utils/pixel_size.py`` exists to prevent
-    (its module docstring has the full argument). Same for channel names: an anonymous
-    header is honest, a mislabelled one is not.
+    ``None`` omits rather than substitutes: an unknown scale or channel list is left out,
+    never invented (see ``bin/utils/pixel_size.py``).
 
-    ``pixel_size_um`` may be one number (X and Y equal) or an ``(x, y)`` pair -- the
-    vendor formats ``convert_image.py`` reads report the two separately and they can
-    genuinely differ.
+    ``pixel_size_um`` may be one number (X and Y equal) or an ``(x, y)`` pair; vendor
+    formats report the two separately and they can differ.
     """
     if isinstance(pixel_size_um, tuple):
         px_x, px_y = pixel_size_um
@@ -279,12 +229,9 @@ def ome_metadata(
 def _wants_bigtiff(bigtiff: Optional[bool], nbytes: int) -> bool:
     """Resolve the tri-state ``bigtiff`` argument.
 
-    ``None`` -- the default -- means "BigTIFF iff the payload exceeds
-    ``BIGTIFF_THRESHOLD_BYTES``", so a small file stays a classic TIFF (which every reader
-    accepts) and a real whole-slide image does not overflow. ``True``/``False`` are the
-    caller asserting, and win: ``bin/convert_image.py`` passes ``True`` unconditionally
-    because that is what it has always written and its outputs are compared against a
-    reference writer.
+    ``None`` (the default) means BigTIFF iff the payload exceeds
+    ``BIGTIFF_THRESHOLD_BYTES``, so small files stay classic TIFFs. ``True``/``False`` are
+    the caller's choice and win (``bin/convert_image.py`` always passes ``True``).
     """
     if bigtiff is not None:
         return bool(bigtiff)
@@ -295,19 +242,12 @@ def _wants_bigtiff(bigtiff: Optional[bool], nbytes: int) -> bool:
 def ome_tiff_writer(path, *, bigtiff: bool = True, ome: bool = True):
     """An open ``tifffile.TiffWriter``, for a caller that must issue SEVERAL writes.
 
-    ``write_ome_tiff`` below covers the single-shot case and is what most callers want.
-    This exists for the two shapes it cannot express:
+    ``write_ome_tiff`` covers the single-shot case. This is for callers that need more:
 
-    * ``bin/merge_channels_pyramid.py`` writes the base resolution with ``subifds=N`` and
-      then each pyramid level onto the SAME open writer -- several ``.write()`` calls that
-      have to share one file handle.
+    * ``bin/merge_channels_pyramid.py`` writes the base with ``subifds=N`` and then each
+      pyramid level onto the same open writer.
     * ``bin/apply_basic_profiles.py`` and ``bin/tiled_stitch.py`` feed generators that
-      COMPUTE each tile (an illumination correction, a warp) rather than slicing a source
-      array, so there is no array for ``write_ome_tiff`` to walk.
-
-    The caller keeps its generator and its per-write arguments; what moves here is the
-    writer's construction, which is the part that was being re-decided per file.
-    ``tests/test_ome_io_is_the_only_writer.py`` is what makes this the only route.
+      compute each tile, so there is no array for ``write_ome_tiff`` to walk.
     """
     writer = tifffile.TiffWriter(str(path), bigtiff=bigtiff, ome=ome)
     try:
@@ -331,28 +271,18 @@ def _iter_planes(image_data: Any, shape: Tuple[int, ...]) -> Iterator[np.ndarray
     them); they are walked in C order, which is the page order tifffile expects for
     ``shape=``.
 
-    THE ASSUMPTION THIS FUNCTION MAKES EXPLICIT: how much memory the write costs is the
-    READER's decision, not this function's. It is bounded by ONE axis-0 chunk of whatever
-    the reader handed back -- one plane when the reader chunks per plane (the good case),
-    the whole stack when it returns a single chunk.
+    Memory is bounded by one axis-0 chunk of what the reader returned: one plane when the
+    reader chunks per plane, the whole stack when it returns a single chunk.
 
-    So the planes are NOT fetched one index at a time. Doing that is a REGRESSION, not
-    merely a missed optimisation: dask does not cache across independent ``compute()``
-    calls, so on a single-chunk array ``image_data[i]`` decodes the WHOLE stack, once per
-    plane -- same peak as an eager write, times N the work. Measured on an 8-plane
-    single-chunk fixture: 8 whole-stack decodes.
-
-    A plain ``.rechunk()`` does not fix that either (measured: still 8 decodes).
-    Rechunking splits the graph DOWNSTREAM of the source read, and every plane's
-    ``compute()`` still re-reads the source chunk. Iterating in chunk-sized slabs is what
-    actually bounds it, and it bounds it at exactly one decode per chunk for every
-    chunking --
+    Planes are not fetched one index at a time: dask does not cache across ``compute()``
+    calls, so on a single-chunk array ``image_data[i]`` would decode the whole stack once
+    per plane. ``.rechunk()`` does not help either (each plane still re-reads the source
+    chunk). Iterating in chunk-sized slabs decodes each chunk exactly once;
     ``tests/test_convert_streaming_write.py::test_a_chunk_is_decoded_once_whatever_the_chunking``
-    pins 1/2/8-plane chunks at 8/4/1 decodes.
+    pins it.
 
-    Array-likes with no ``chunks`` (a plain ndarray, or the NDPI/HDF5 readers' output)
-    keep the plain per-index walk: there is no decode to amortise, and the caller may only
-    support scalar-tuple indexing.
+    Array-likes with no ``chunks`` (a plain ndarray, the NDPI/HDF5 readers' output) keep
+    the per-index walk.
     """
     lead = shape[:-2]
     chunks = getattr(image_data, "chunks", None)
@@ -374,22 +304,13 @@ def _iter_tiles(
 ) -> Iterator[np.ndarray]:
     """Yield TILES, row-major within each plane -- what tifffile's tiled writer wants.
 
-    tifffile's iterator mode is tile-wise, not plane-wise, whenever ``tile=`` is set:
-    it walks ``numtiles`` items per page and raises ``ValueError('tile is too large')``
-    the moment one is bigger than a single tile. Feeding it ``_iter_planes`` therefore
-    only works while a whole plane happens to FIT IN ONE TILE, which is exactly the case
-    a small fixture creates -- tifffile pads an undersized item without complaint. So the
-    striped-vs-tiled write was once covered by a test that could not fail, and the first
-    real slide (30552 x 32072) failed at CONVERT_IMAGE with "tile is too large".
-    ``tests/test_convert_streaming_write.py`` and ``tests/test_ome_io.py`` both now write
-    a plane LARGER than one tile.
+    With ``tile=`` set, tifffile's iterator mode is tile-wise and raises
+    ``ValueError('tile is too large')`` on any item bigger than one tile. Feeding it planes
+    only works while a plane fits in one tile, which small fixtures hide; tests write a
+    plane larger than one tile.
 
-    Partial edge tiles are yielded short and tifffile pads them, so the output is
-    identical for shapes that are not tile multiples.
-
-    Peak memory is unchanged: this only re-slices what ``_iter_planes`` already decoded,
-    so the bound is still ONE SOURCE CHUNK, and all of that function's chunk reasoning
-    applies here untouched.
+    Partial edge tiles are yielded short and tifffile pads them. Peak memory is still one
+    source chunk, as in ``_iter_planes``.
     """
     th, tw = tile
     for plane in _iter_planes(image_data, shape):
@@ -404,12 +325,9 @@ def _warn_if_the_reader_chunked_the_whole_stack_together(
 ) -> None:
     """Say so, loudly, when the lazy read cannot actually save any memory.
 
-    ``_iter_planes`` bounds the write at one axis-0 chunk, so a single-chunk array is
-    never WORSE than an eager write. But it is not better either: that one decode is the
-    whole decompressed stack. The saving is the reader's to give, and whether a given
-    bioio plugin gives it is not something this pipeline controls -- so an operator who
-    sized CONVERT_IMAGE expecting a per-plane peak is told here rather than finding out
-    from an OOM.
+    With a single-chunk array, the one decode ``_iter_planes`` does is the whole
+    decompressed stack. Whether a bioio plugin chunks per plane is outside this pipeline's
+    control, so the operator is warned here rather than by an OOM.
     """
     chunks = getattr(image_data, "chunks", None)
     if not chunks or len(shape) < 3 or shape[0] < 2 or len(chunks[0]) != 1:
@@ -425,9 +343,8 @@ def _warn_if_the_reader_chunked_the_whole_stack_together(
 
 
 def _downsample_plane(plane: np.ndarray, factor: int) -> np.ndarray:
-    """Strided decimation for a pyramid level. Strided, not interpolated, on purpose:
-    a pyramid level is a NAVIGATION aid, and this function is also used on LABEL images
-    where any interpolation invents label ids that never existed."""
+    """Strided decimation for a pyramid level. Strided, not interpolated: this is also used
+    on label images, where any interpolation invents label ids that never existed."""
     return plane[::factor, ::factor]
 
 
@@ -446,37 +363,22 @@ def write_ome_tiff(
     """Write ``data`` as a TILED OME-TIFF, streaming, never holding the whole slide.
 
     ``data`` is ``(C, Y, X)`` for the default ``axes='CYX'``; it may be a plain ndarray OR
-    a LAZY array-like (anything with ``.shape``, ``.dtype`` and per-index/slab indexing --
-    a dask array is the case this was built for). Reading lazily and then writing eagerly
-    saves nothing: a whole-array ``tifffile.imwrite`` passes its argument through
-    ``numpy.asarray``, so the slide would simply be materialised at the write instead of
-    at the read. Both halves had to change together, and this is the second half.
+    a lazy array-like (anything with ``.shape``, ``.dtype`` and per-index/slab indexing,
+    typically dask). A whole-array ``tifffile.imwrite`` would materialise it via
+    ``numpy.asarray``, so this hands ``TiffWriter.write`` an iterator of tiles with an
+    explicit ``shape=`` and ``dtype=``.
 
-    The streaming form hands ``TiffWriter.write`` an ITERATOR of tiles together with an
-    explicit ``shape=`` and ``dtype=``, which it cannot infer from a generator.
+    The write is tiled, not striped (see ``CONVERT_TIFF_TILE``).
 
-    THE WRITE IS TILED, NOT STRIPED -- see ``CONVERT_TIFF_TILE`` for the measurement.
-    Tiling changes the on-disk layout, not the pixels.
+    ``photometric="minisblack"`` makes one page equal one channel, which every per-page
+    read downstream depends on; without it a ``(C, H, W)`` array becomes one page with C
+    samples. ``tests/test_slide_io_seam.py`` pins it.
 
-    ``photometric="minisblack"`` is the precondition that makes ONE PAGE EQUAL ONE
-    CHANNEL, which every downstream per-page read in this pipeline depends on. Without it
-    tifffile stores a ``(C, H, W)`` array as one page with C samples and both ``key=`` and
-    ``pages[i]`` raise IndexError. ``tests/test_slide_io_seam.py`` pins it.
-
-    ``pyramid_levels`` > 1 writes the extra levels as subIFDs of the base page -- the
-    layout QuPath reads -- each a strided 2x decimation of its parent. Each level's shape
-    is derived from the ACTUAL downsampled array (``planes[0].shape``), never recomputed
-    by ceil-division arithmetic, so an odd, non-square plane decimates correctly.
-    ``bin/merge_channels_pyramid.py`` does NOT use this path: it needs per-level
-    compression arguments, per-level resolution tags and its own validators, and goes
-    through ``ome_tiff_writer`` instead.
-
-    THE PYRAMID BRANCH IS NOT STREAMING. Building level 1 needs the whole base plane
-    stack, so it materialises it in full (``np.stack`` of every plane) before decimating
-    -- unlike the base-level write above, which stays tile-by-tile. No production caller
-    passes ``pyramid_levels > 1`` today: ``convert_image.py`` is this function's only
-    caller and always writes a single level; ``merge_channels_pyramid.py`` (the one
-    multi-level writer) uses ``ome_tiff_writer`` directly, not this function.
+    ``pyramid_levels`` > 1 writes extra levels as subIFDs of the base page (the layout
+    QuPath reads), each a strided 2x decimation of its parent, with shapes taken from the
+    actual downsampled arrays so odd sizes work. The pyramid branch is not streaming: it
+    materialises the base stack. ``bin/merge_channels_pyramid.py`` uses ``ome_tiff_writer``
+    instead, for per-level compression and resolution tags.
 
     ``bigtiff=None`` means BigTIFF iff the payload exceeds ``BIGTIFF_THRESHOLD_BYTES``;
     pass ``True``/``False`` to assert.
@@ -519,13 +421,8 @@ def write_ome_tiff(
             subifds=levels - 1 if levels > 1 else None,
         )
 
-        # The reduced levels. Each is derived from the level ABOVE it, not from the
-        # base, so the decimation cost is geometric rather than quadratic -- and it is
-        # materialised one level at a time, which for a >=2x reduction is always
-        # smaller than the base the caller already handed us. The base itself was
-        # never materialised as a WHOLE array above (it was streamed tile by tile), so
-        # this is the first point the full base is held in memory; it is unavoidable
-        # once a reduced level must be computed from it.
+        # Each reduced level is derived from the level above it (geometric cost). The base
+        # is materialised here for the first time; unavoidable once a level is computed.
         if levels > 1:
             lead = shape[:-2]
             current = np.stack(list(_iter_planes(data, shape))).reshape(shape)
@@ -548,20 +445,11 @@ def write_ome_tiff(
 def write_tiff(path, data: Any, **kwargs) -> Path:
     """Write a NON-OME TIFF, forwarding every keyword argument to tifffile verbatim.
 
-    DELIBERATELY THIN, AND HERE FOR ONE REASON: it makes the seam TOTAL. Eight call sites
-    in ``bin/`` write something that is not an OME slide -- the segmentation label masks
-    (three backends plus the ``add_cycle`` re-extraction), one single-channel plane per
-    marker, the multi-site pseudo-FOV stack BASICPY fits on, and two ImageJ QC composites
-    -- and each makes decisions this module has no opinion about (a mask is zlib+BigTIFF
-    and tiled; an ImageJ composite is neither, and in fact CANNOT be BigTIFF, tifffile
-    refuses the combination). Inventing defaults here would change all eight the day they
-    were migrated.
-
-    So it sets NOTHING. What it buys is that ``tests/test_ome_io_is_the_only_writer.py``
-    can be a closed rule -- no allowlist, no per-file exception -- and that a new writer
-    anywhere in ``bin/`` is a call into this module rather than a fresh, unreviewed set of
-    TIFF decisions. Anything OME-shaped belongs in ``write_ome_tiff``, which does have
-    opinions and states them.
+    It sets nothing: the non-OME writers (label masks, single-channel planes, the BaSiC
+    pseudo-FOV stack, ImageJ QC composites) each make their own TIFF choices, some of which
+    conflict (an ImageJ composite cannot be BigTIFF). Its purpose is to keep
+    ``tests/test_ome_io_is_the_only_writer.py`` a closed rule. OME slides belong in
+    ``write_ome_tiff``.
     """
     tifffile.imwrite(str(path), data, **kwargs)
     return Path(path)
@@ -571,31 +459,20 @@ def write_tiff(path, data: Any, **kwargs) -> Path:
 class ImageInfo:
     """What is known about an image without decoding its pixels.
 
-    ``shape_cyx`` is ALWAYS three-dimensional and channel-first, even for a 2-D file
-    (promoted to ``C=1``). Every consumer in this pipeline indexes ``(C, Y, X)``, and a
-    2-D image reported as ``(Y, X)`` makes ``shape_cyx[0]`` the image height -- a bug that
-    reads as a plausible channel count.
+    ``shape_cyx`` is always 3-D and channel-first, a 2-D file promoted to ``C=1``, so
+    ``shape_cyx[0]`` can never be mistaken for the height.
 
-    ``channels is None`` means the file carries no channel names, which is ORDINARY: most
-    intermediates in this pipeline carry none, and `meta.channels` is what the pipeline
-    actually trusts. ``pixel_size_um is None`` means the file declares no scale, which is
-    likewise ordinary -- see ``bin/utils/pixel_size.py`` for why that must stay
-    distinguishable from a scale that happens to equal the configured one.
+    ``channels is None`` (no channel names) and ``pixel_size_um is None`` (no declared
+    scale) are both ordinary; see ``bin/utils/pixel_size.py`` for why a missing scale must
+    stay distinguishable.
 
-    ``reader`` is ``detect_reader``'s answer for this path -- what a CONVERSION of it
-    would use. It is not necessarily the module that produced this ``ImageInfo``: a
-    ``.ome.tif`` routes to ``bioio`` for conversion but is inspected here through
-    ``tifffile``, which needs no plugin and is installed everywhere.
+    ``reader`` is ``detect_reader``'s answer, i.e. what a conversion would use; a
+    ``.ome.tif`` routes to ``bioio`` for conversion but is inspected with ``tifffile``.
 
-    ``channels_are_samples`` is True for an interleaved RGB (or RGBA/CMYK-style) file --
-    bioio reports one of those as TCZYXS with C=1 and S (samples) equal to the number of
-    colour components, which is NOT the same axis this pipeline's own multichannel
-    intermediates carry as C. ``read_info`` REMAPS S onto ``shape_cyx``'s C position (so
-    ``shape_cyx == (S, Y, X)``, never the nonsense ``(1, X, S)`` a naive C/last-two-axes
-    read would produce) and ``read_plane`` follows the same remap when indexing, so a
-    caller never has to know which axis it actually came from. This flag exists so a
-    caller that DOES care (a caller writing an RGB thumbnail, say) can tell "3 real
-    channels" apart from "3 colour samples of one channel" after the fact.
+    ``channels_are_samples`` is True for an interleaved RGB-like file, which bioio reports
+    as C=1 with S colour samples. ``read_info`` maps S onto the C position, and
+    ``read_plane`` indexes it the same way; the flag lets a caller tell 3 channels from
+    3 colour samples.
     """
 
     path: Path
@@ -621,16 +498,9 @@ def _is_tifffile_readable(path) -> bool:
 def _samples_axis_index(path) -> Optional[int]:
     """Where the SAMPLES axis sits in the array ``tifffile`` hands back, or ``None``.
 
-    ``read_info`` reports THAT a file is interleaved (``channels_are_samples``) but not
-    WHERE the samples axis is, and the two are not the same question: ``photometric="rgb"``
-    writes ``YXS`` (S last) while ``planarconfig="separate"`` writes ``SYX`` (S first).
-    ``read_plane`` needs the position, so it re-derives it from ``series.axes`` -- the
-    same string ``_info_via_tifffile`` reads -- rather than assuming ``-1``.
-
-    Deliberately NOT a field on ``ImageInfo``: it is meaningful only for the tifffile
-    branch (bioio answers the same question through ``get_image_data("YX", S=...)``, which
-    needs no index), and ``ImageInfo``'s shape is part of the published contract in
-    ``docs/superpowers/plans/2026-09-02-release-1.0.0/00-master.md``.
+    ``photometric="rgb"`` writes ``YXS`` (S last), ``planarconfig="separate"`` writes
+    ``SYX`` (S first), so ``read_plane`` re-derives the position from ``series.axes``.
+    Not an ``ImageInfo`` field: only the tifffile branch needs it.
     """
     with tifffile.TiffFile(str(path)) as tf:
         series = tf.series[0] if tf.series else tf.pages[0]
@@ -688,12 +558,9 @@ def _channel_names_from_ome(xml: Optional[str]) -> Optional[List[str]]:
 def _pixel_size_from_ndpi_resolution_tags(x_res, y_res, res_unit) -> Optional[float]:
     """The classic-TIFF resolution convention NDPI actually carries, in µm.
 
-    Mirrors ``bin/convert_image.py::read_single_ndpi``'s conversion exactly (RESUNIT 2 =
-    inch, 3 = centimetre; anything else -- including the "no unit" default every plain
-    TIFF this repo writes carries -- means no usable scale). Only reached for
-    ``reader == "tifffile"`` (``.ndpi``/``.ndpis``), which has no OME header to answer
-    ``read_ome_pixel_size`` and no other convention available; see that function's
-    docstring for why it does not read these tags itself.
+    Mirrors ``bin/convert_image.py::read_single_ndpi`` (RESUNIT 2 = inch, 3 = centimetre;
+    anything else means no usable scale). Only used for ``.ndpi``/``.ndpis``, which carry no
+    OME header.
     """
     x_val = x_res[0] / x_res[1] if isinstance(x_res, tuple) else x_res
     y_val = y_res[0] / y_res[1] if isinstance(y_res, tuple) else y_res
@@ -712,19 +579,12 @@ def _info_via_tifffile(path: Path, reader: str) -> ImageInfo:
     """``ImageInfo`` for anything opened directly with ``tifffile``, INCLUDING the S->C
     remap this pipeline's contract needs for an interleaved file (RGB and similar).
 
-    ``_is_tifffile_readable`` diverts every plain ``.tif``/``.tiff``/``.ndpi`` here rather
-    than through ``_info_via_bioio`` -- ``tifffile`` is installed in every image and in
-    CI, ``bioio`` in exactly one -- so this function needs its OWN copy of the remap
-    ``_info_via_bioio`` performs, not a shared one: the two readers report axes under
-    different names (``img.dims.order``/``.S``/``.C`` for bioio, ``series.axes`` here) and
-    there is no common object to factor the logic onto.
+    Plain ``.tif``/``.tiff``/``.ndpi`` come here (tifffile is installed everywhere, bioio
+    in one image), so this has its own copy of ``_info_via_bioio``'s remap; the two report
+    axes differently and share no object to factor it onto.
 
-    ``series.axes`` names a samples axis ``'S'`` (e.g. ``'YXS'`` for an interleaved RGB
-    TIFF written with ``photometric="rgb"``). Left unhandled, the samples axis stays
-    wherever tifffile put it -- trailing, for ``YXS`` -- and ``shape_cyx`` comes out
-    ``(Y, X, S)`` instead of ``(S, Y, X)``: a channel count that is actually the image
-    height. Mirrors ``_info_via_bioio``'s R/G/B default for a 3-sample file, ``S0``..
-    otherwise, only when the file names no channels itself.
+    Without the remap an interleaved ``YXS`` file would report ``(Y, X, S)``. Channel
+    names default to R/G/B for 3 samples, ``S0``.. otherwise, when the file names none.
     """
     with tifffile.TiffFile(str(path)) as tf:
         series = tf.series[0] if tf.series else tf.pages[0]
@@ -732,9 +592,8 @@ def _info_via_tifffile(path: Path, reader: str) -> ImageInfo:
         axes = getattr(series, "axes", None) or ""
         dtype = np.dtype(series.dtype)
         channels = _channel_names_from_ome(getattr(tf, "ome_metadata", None))
-        # NDPI (reader == "tifffile") carries no OME header, only the classic TIFF
-        # XResolution/YResolution/ResolutionUnit tags -- read the RAW values here,
-        # inside the file handle's lifetime, and convert after it closes.
+        # NDPI has no OME header, only classic resolution tags: read them while the
+        # file is open, convert after.
         resolution_values = None
         if reader == "tifffile":
             page0 = tf.pages[0]
@@ -857,26 +716,14 @@ def _first_image_dataset(group):
 def _open_bioio(path: Path, reader: str):
     """The one place bioio is imported and a ``BioImage`` constructed.
 
-    ``require_reader`` lives INSIDE this function, not in its callers, so that a test
-    monkeypatching ``_open_bioio`` bypasses the bioio/bioio-bioformats installed-ness
-    check entirely -- a fake reader object handed back by the test stands in for the
-    WHOLE bioio round trip, not just the ``BioImage(...)`` construction, which is what
-    makes the S->C remap (see ``ImageInfo.channels_are_samples``) testable without bioio
-    installed anywhere in this environment.
+    ``require_reader`` is called here, not by callers, so a test that monkeypatches this
+    function replaces the whole bioio round trip and can exercise the S->C remap without
+    bioio installed.
 
-    For the ``bioio-bioformats`` route ONLY, this calls
-    ``jvm_cache.point_jvm_cache_off_readonly_home()`` BEFORE constructing ``BioImage`` --
-    that is the only call in the repository that starts the Bio-Formats JVM through bioio
-    rather than through valis, and it is the same read-only-``$HOME`` trap
-    ``bin/utils/valis_config.py::init_jvm`` already guards: scyjava derives its jgo
-    ``cache_dir``/``m2_repo`` from ``Path.home()`` at import time and never consults
-    ``JGO_CACHE_DIR``/``M2_REPO``, so nothing short of this call points it at the image's
-    baked ``/root/.jgo`` + ``/root/.m2`` cache before the first Maven-triggering CALL --
-    ``BioImage(str(path))`` below. Ordering versus the *import* of ``bioio``/``scyjava`` is
-    immaterial: ``scyjava.config``'s setters rebind module globals that are only read when
-    Maven actually resolves a dependency, which happens on the first JVM-touching call, not
-    on import. Plain ``bioio`` (OME-TIFF/TIFF/ND2/CZI/LIF) starts no JVM, so the call is
-    skipped there.
+    For ``bioio-bioformats`` only, ``jvm_cache.point_jvm_cache_off_readonly_home()`` runs
+    before ``BioImage`` is constructed: scyjava derives its jgo/Maven cache from
+    ``Path.home()``, which is read-only on the cluster, and the redirect must happen before
+    the first Maven-triggering call. Plain ``bioio`` starts no JVM.
     """
     require_reader(reader)
     if reader == "bioio-bioformats":
@@ -889,17 +736,10 @@ def _open_bioio(path: Path, reader: str):
 def _info_via_bioio(path: Path, reader: str) -> ImageInfo:
     """``ImageInfo`` for anything routed through bioio, INCLUDING the S->C remap.
 
-    bioio reports an interleaved RGB (or similar) file as ``TCZYXS`` with ``C=1`` and
-    ``S`` (samples) equal to the number of colour components -- three colour SAMPLES of
-    one channel, not three channels. Reading ``C`` and the trailing two shape entries
-    without accounting for ``S`` (the pre-fix behaviour) reports ``(1, X, S)``: a
-    channel count of 1, a "height" that is actually the image width, and a "width" that
-    is actually the sample count. Whenever ``S`` is present and greater than 1 while
-    ``C`` is exactly 1, this remaps ``S`` onto ``shape_cyx``'s C position instead, and
-    defaults channel names to ``R``/``G``/``B`` for a 3-sample file (``S0``.. otherwise)
-    when the file names none. Y and X are located by NAME in ``dims.order`` rather than
-    assumed to be the trailing two shape entries, because a samples axis can itself
-    trail Y/X (``...YXS``).
+    bioio reports an interleaved RGB-like file as ``TCZYXS`` with ``C=1`` and ``S`` colour
+    samples. When ``S > 1`` and ``C == 1``, ``S`` is mapped onto the C position and channel
+    names default to R/G/B for 3 samples (``S0``.. otherwise) if the file names none. Y and
+    X are found by name in ``dims.order``, since S can trail them (``...YXS``).
     """
     img = _open_bioio(path, reader)
     order = getattr(img.dims, "order", None) or ""
@@ -937,19 +777,11 @@ def _info_via_bioio(path: Path, reader: str) -> ImageInfo:
 def read_info(path) -> ImageInfo:
     """Everything known about an image without decoding its pixels.
 
-    THE READER THAT INSPECTS IS NOT ALWAYS THE READER THAT CONVERTS, and that is
-    deliberate. ``detect_reader`` names what a CONVERSION would use -- ``bioio`` for a
-    ``.ome.tif``, because the conversion path wants BioImage's dimension handling. But
-    ``bioio`` is installed in exactly one image, and this pipeline's own intermediates are
-    ``.ome.tif``, so routing inspection through it would make ``read_info`` unusable
-    everywhere except ``containers/convert``. Anything ``tifffile`` can open is therefore
-    inspected with ``tifffile``, which is installed in every image and in CI, while
-    ``ImageInfo.reader`` still reports ``detect_reader``'s answer.
+    The inspecting reader is not always the converting one: anything ``tifffile`` can open
+    is inspected with it (installed everywhere), while ``ImageInfo.reader`` still reports
+    ``detect_reader``'s answer (``bioio`` for a ``.ome.tif``).
 
-    ``pixel_size.read_ome_pixel_size`` is asked for the scale rather than the header being
-    re-parsed here: that module owns the unit table, the OME default-unit rule and the
-    non-positive rejection, and a second copy of any of them is a silent scale error in
-    whichever copy falls behind.
+    The scale comes from ``pixel_size.read_ome_pixel_size``, which owns the unit rules.
     """
     path = Path(path)
     reader = detect_reader(path)
@@ -979,36 +811,16 @@ def read_info(path) -> ImageInfo:
 def read_plane(path, channel: int, *, lazy: bool = True):
     """One 2-D ``(Y, X)`` plane.
 
-    ``lazy=True`` (the default) reads through ``tiled_io.open_lazy`` -- tifffile's zarr
-    view -- so ONLY that channel's tiles are decoded. The eager alternative,
-    ``TiffFile.asarray(out="memmap")``, is misleadingly named: on compressed input it
-    decodes the ENTIRE image into a new full-size uncompressed temp file and memory-maps
-    THAT, so "extract one channel" costs a full decode and a full-size scratch file. On a
-    20 GB slide that is 20 GB of temp disk to use one plane. ``bin/utils/segment_io.py``'s
-    docstring records the measurement.
+    ``lazy=True`` (the default) reads through ``tiled_io.open_lazy``, so only that
+    channel's tiles are decoded. ``TiffFile.asarray(out="memmap")`` would decode the whole
+    compressed image into a full-size temp file first.
 
-    ``lazy=False`` exists for the formats ``open_lazy`` cannot open (HDF5, and the vendor
-    formats behind bioio) and for a caller that wants the plane materialised anyway.
+    ``lazy=False`` is for formats ``open_lazy`` cannot open (HDF5, bioio vendor formats)
+    or a caller that wants the plane materialised.
 
-    On a file where ``read_info`` found ``channels_are_samples`` True (an interleaved
-    RGB-like file), ``channel`` indexes the SAMPLE axis, not C -- the same remap
-    ``read_info`` applies, so a caller never has to know which axis it actually came
-    from. **All three branches honour it**, which they did not before plan 07: the
-    ``_is_tifffile_readable`` branches assumed the channel axis was axis 0 of the array
-    tifffile hands back, which for an interleaved ``YXS`` file (``fmt_rgb.tiff``) is Y,
-    so ``read_plane("fmt_rgb.tiff", 1)`` returned shape ``(64, 3)`` -- one ROW and all
-    three samples -- instead of the ``(64, 64)`` single-sample plane promised above. A
-    wrong-shaped array, not an error: the caller most likely to hit it is a QC or
-    thumbnail path that would have gone on to write it out.
-
-    The remap is applied HERE rather than inside ``tiled_io.open_lazy`` deliberately.
-    ``open_lazy`` is shared by ``tiled_stitch``, ``merge_channels_pyramid``,
-    ``registration`` and ``qc.py``, none of which ever sees interleaved bytes -- the main
-    path runs through ``CONVERT_IMAGE``, which normalises to planar ``(C, Y, X)`` first --
-    so changing what ``open_lazy`` presents would alter a view four callers depend on in
-    order to fix a case none of them reach. ``_samples_axis_index`` re-derives the axis
-    position from ``series.axes`` instead, which costs one header read and leaves
-    ``open_lazy``'s contract untouched.
+    When ``read_info`` reports ``channels_are_samples``, ``channel`` indexes the sample
+    axis, in all three branches. The remap is done here rather than in ``open_lazy``,
+    whose other callers never see interleaved data.
     """
     path = Path(path)
     info = read_info(path)
@@ -1019,8 +831,7 @@ def read_plane(path, channel: int, *, lazy: bool = True):
         )
 
     if _is_tifffile_readable(path):
-        # `None` for the ordinary planar case, so `key` stays (channel, :, :) and this
-        # is byte-for-byte the pre-plan-07 index for every non-interleaved file.
+        # `None` for the ordinary planar case, so `key` stays (channel, :, :).
         s_idx = _samples_axis_index(path) if info.channels_are_samples else None
         if s_idx is None:
             key = (channel, slice(None), slice(None))

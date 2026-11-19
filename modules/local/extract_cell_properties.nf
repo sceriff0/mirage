@@ -1,15 +1,8 @@
 /*
- * EXTRACT_CELL_PROPERTIES - Compute morphology and contours from cell mask
- *
- * Runs ONCE per patient (after SEGMENT) to extract:
- *   - Morphological properties via regionprops (centroids, area, shape descriptors)
- *   - Simplified polygon contours via find_contours + Douglas-Peucker
- *
- * This avoids redundant regionprops computation in per-channel QUANTIFY processes
- * and provides contours for polygon-based GeoJSON export in EXPORT_GEOJSON.
- *
- * Input: Cell segmentation mask from SEGMENT
- * Output: morphology.csv + contours.json
+ * EXTRACT_CELL_PROPERTIES - per-patient morphology (regionprops) and simplified
+ * polygon contours from the cell mask: morphology.csv + contours.json.
+ * Computed once here so per-channel QUANTIFY skips regionprops; EXPORT_GEOJSON
+ * uses the contours.
  */
 process EXTRACT_CELL_PROPERTIES {
     tag "${meta.patient_id}"

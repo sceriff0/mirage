@@ -1,6 +1,5 @@
-# The Python linter CI runs. BLOCKING: `ruff` is in the `all-tests` gate's `needs:`
-# alongside the test jobs, so a ruff failure fails the build.
+# The Python linter CI runs; a ruff failure fails the build.
 #
-# Pinned so a new ruff release cannot turn a green build red without a commit. Its
-# configuration is ruff.toml; keep the pin and that file in step.
+# Pinned so a new ruff release cannot turn the build red without a commit. Keep in step
+# with ruff.toml.
 ruff==0.16.0

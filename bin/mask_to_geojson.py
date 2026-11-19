@@ -41,14 +41,10 @@ def mask_to_feature_collection(mask, simplify_tolerance: float = 1.0) -> dict:
             continue
         contour = max(contours, key=len)
         simp = approximate_polygon(contour, tolerance=simplify_tolerance)
-        # NOTE: no corner offset here. These rings stay in skimage's
-        # centre-of-pixel convention on purpose, because they feed VALIS's
-        # warp_geojson reg-QC path rather than QuPath, and VALIS addresses the
-        # raster the way skimage does. This is the ONE deliberate opt-out from
-        # bin/utils/pixel_convention.py, which records the reason; do not "fix"
-        # it to match extract_cell_properties.py's corner-of-pixel contours.
-        # (No import: this script runs in the segmentation container and stays
-        # dependency-free beyond numpy/scipy/skimage.)
+        # No corner offset: these rings stay centre-of-pixel because they feed VALIS's
+        # warp_geojson reg-QC path, not QuPath. This is the one opt-out from
+        # bin/utils/pixel_convention.py (not imported, to keep this script's
+        # dependencies to numpy/scipy/skimage).
         ring = [[float(c - 1 + minc), float(r - 1 + minr)] for r, c in simp]
         if len(ring) < 3:
             continue
@@ -82,10 +78,7 @@ def main():
     ap = argparse.ArgumentParser(description="StarDist cell-mask TIFF -> cell GeoJSON.")
     ap.add_argument("--mask", required=True)
     ap.add_argument("--out", required=True)
-    # Matches segment_to_geojson.py's --tolerance default: it passes this same
-    # Douglas-Peucker quantity straight through to mask_to_feature_collection()
-    # (segment_to_geojson.py:74-76), so this is not a different value with its own
-    # meaning -- it's the identical parameter, only reachable standalone here.
+    # Douglas-Peucker tolerance in pixels, passed to mask_to_feature_collection().
     ap.add_argument("--tolerance", type=float, default=1.0)
     a = ap.parse_args()
     n = write_geojson(a.mask, a.out, simplify_tolerance=a.tolerance)

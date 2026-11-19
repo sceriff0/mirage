@@ -15,19 +15,8 @@ Examples
 
 Notes
 -----
-``create_registration_qc`` reads its nuclear/fiducial channel through
-``tiled_io.open_lazy`` + ``read_decimated`` rather than ``tifffile.imread``ing
-every marker channel of the whole slide. What that removes is the
-**N-channel overread**: only the ``pick_nuclear_index``-resolved channel is
-ever decoded, not every marker channel in the panel. It does **not** remove
-any spatial overread -- the read stays at full resolution
-(``decimation_factor(..., max_dim=None)`` always returns ``1`` here), because
-``GENERATE_REGISTRATION_QC`` runs with ``save_fullres=True`` unconditionally
-in production (see ``conf/modules.config``'s ``GENERATE_REGISTRATION_QC``
-block: no ``--no-fullres`` is ever passed), so the ``*_fullres.tif`` artifact
-this function publishes genuinely needs full-resolution pixels. Decimating
-the read would change that published artifact, not just the (already
-downsampled) preview.
+``create_registration_qc`` decodes only the resolved nuclear/fiducial channel of
+each slide, at full resolution: the published ``*_fullres.tif`` needs every pixel.
 """
 
 from __future__ import annotations
@@ -96,7 +85,7 @@ def autoscale_for_display(img: NDArray, method: str = "minmax") -> NDArray[np.ui
         img_max = img.max()
         range_val = max(img_max - img_min, 1e-6)
         normalized = (img - img_min) / range_val
-        # Fix: Round before converting to uint8 to avoid truncation artifacts
+        # Round before the uint8 cast to avoid truncation artifacts
         return np.round(normalized * 255).astype(np.uint8)
     elif method == "percentile":
         return autoscale(img, low_p=1.0, high_p=99.0)
@@ -123,19 +112,12 @@ def compose_on_reference_canvas(ref: NDArray, mov: NDArray) -> NDArray:
 
     Notes
     -----
-    **Pad-or-crop, never rescale — this is the whole point of the function.**
-    The "before" panel of the registration QC figure overlays the NATIVE moving
-    slide on the reference. Rescaling a differently-sized native image onto the
-    reference's shape would absorb the scale component of the misalignment into
-    the resampling, so the panel would understate the pre-registration error and
-    make registration look better than it was. Padding and cropping preserve
-    every pixel's original position in the reference frame, which is what a
-    reader of the figure is entitled to assume they are seeing.
+    Pad-or-crop, never rescale: rescaling a differently-sized native image would
+    absorb the scale part of the misalignment and make the "before" panel
+    understate the pre-registration error.
 
-    Origin-aligned rather than centre-aligned because that is the convention
-    both registration backends use: VALIS resolves slides into a shared space
-    whose origin is the reference's, and the tiled/STARE backend warps each
-    moving slide into the reference's shape from the same corner.
+    Origin-aligned because both registration backends put slides in the
+    reference's frame from the same corner.
     """
     if ref.ndim != 2 or mov.ndim != 2:
         raise ValueError(
@@ -210,7 +192,7 @@ def create_nuclear_overlay(
 
     # Downsample if requested
     if scale_factor != 1.0:
-        # Fix: Round before converting to uint8 to avoid truncation artifacts
+        # Round before the uint8 cast to avoid truncation artifacts
         ref_down = np.round(
             rescale(
                 ref_scaled, scale=scale_factor, anti_aliasing=True, preserve_range=True
@@ -266,11 +248,8 @@ def cyx_to_bgr(cyx: NDArray) -> NDArray:
 def _hstack_panels(panels, gap: int) -> NDArray:
     """Concatenate ``(3, H, W)`` panels left-to-right with a blue separator.
 
-    The separator is blue 255 rather than black. Black is indistinguishable from
-    a dark region of either panel, so a reader cannot tell where one panel ends;
-    blue is the one channel a nuclear overlay never uses (red = moving, green =
-    reference, blue = 0), so the band is unmistakable and cannot be mistaken for
-    signal.
+    Blue rather than black: black looks like a dark region of a panel, and blue is
+    the one channel the overlay never uses.
     """
     if len(panels) == 1:
         return panels[0]
@@ -302,8 +281,7 @@ def render_before_after(
     native : NDArray or None
         The moving slide's nuclear/fiducial plane BEFORE registration, i.e.
         exactly what entered the registration step. ``None`` renders the
-        "after" panel alone, which is what this process produced before the
-        before/after change and keeps the script usable by hand on a pair.
+        "after" panel alone.
     registered : NDArray
         The moving slide's nuclear/fiducial plane AFTER registration (2-D).
     scale_factor : float, default=1.0
@@ -328,15 +306,9 @@ def render_before_after(
     the pair comparable at a glance: fringing that shrinks from left to right is
     exactly the correction registration applied.
     """
-    # The REGISTERED plane is expected to already be on the reference canvas -- that is
-    # what registration produced it for. Routing it through compose_on_reference_canvas
-    # (needed because the NATIVE plane genuinely differs in shape) means a registered
-    # slide that is NOT on the reference canvas is now silently padded or cropped, where
-    # create_nuclear_overlay used to raise "Shape mismatch". Pad-or-crop is the right
-    # rendering behaviour -- a QC figure that refuses to draw tells its reader nothing --
-    # but it must not be silent, because the discrepancy is a registration-output defect,
-    # not a QC one. The native panel is deliberately NOT warned about: differing there is
-    # the normal case.
+    # The registered plane should already be on the reference canvas; if not, it is
+    # pad-or-cropped to draw, with a warning, because that is a registration defect.
+    # The native plane differing in shape is normal.
     if registered.shape != reference.shape:
         logger.warning(
             "Registered plane %s does not match the reference canvas %s; the 'after' "
@@ -412,8 +384,7 @@ def create_registration_qc(
         registration step. When given, the output is a TWO-panel figure: left
         *Before* (reference + native), right *After* (reference + registered),
         both on the reference canvas. When omitted, only the "after" panel is
-        rendered, which is what this function produced before the before/after
-        change and keeps it usable by hand on a plain pair.
+        rendered.
     pixel_size_um : float, optional
         The reference/registered images' pixel size in micrometers, i.e.
         ``pixel_size.read_ome_pixel_size``'s answer for this patient. When given,
@@ -421,9 +392,8 @@ def create_registration_qc(
         ``*_QC_RGB.tif`` and ``*_QC_RGB_fullres.tif`` -- ``resolution`` is
         pixels-per-unit, so the tag is ``1 / pixel_size_um`` at full resolution
         and scaled by ``scale_factor`` for the downsampled preview, which covers
-        the same tissue in fewer, larger pixels. When omitted (the default), no
-        resolution tag is written and the output is unchanged from before this
-        parameter existed.
+        the same tissue in fewer, larger pixels. When omitted, no resolution tag
+        is written.
 
     Returns
     -------
@@ -485,31 +455,14 @@ def create_registration_qc(
     if native_path is not None and not native_path.exists():
         raise FileNotFoundError(f"Native image not found: {native_path}")
 
-    # Resolve the nuclear/fiducial channel from OME metadata (convert_image guarantees
-    # OME-XML is always present) BEFORE touching pixel data, so a malformed/missing
-    # OME-XML fails fast without paying for opening either slide's pixel store. This MUST
-    # go through pick_nuclear_index rather than testing for the literal "DAPI":
-    # nuclear_markers is configurable and a CELLTOX-only panel is a supported input. The
-    # old literal test worked only by accident -- it fell back to channel 0, which
-    # CONVERT_IMAGE happens to reserve for the nuclear channel -- so it produced a correct
-    # overlay and a spurious warning on every non-DAPI slide, and would have picked the
-    # wrong channel the moment that promotion invariant changed.
+    # Resolve the nuclear channel from OME metadata before reading pixels, so bad
+    # metadata fails fast. Use pick_nuclear_index, never a literal "DAPI": the marker
+    # list is configurable (e.g. CELLTOX-only panels).
     ref_channels = extract_channel_names_from_ome(reference_path)
     reg_channels = extract_channel_names_from_ome(registered_path)
 
-    # A silent fallback to channel 0 here used to work ONLY by accident: channel 0 is
-    # CONVERT_IMAGE's reserved nuclear-channel slot, so the fallback happened to
-    # reproduce the correct overlay on every slide that followed that convention, and
-    # emitted a spurious warning on every slide that did not. The moment a panel is
-    # nuclear-marker-only under a NON-default --nuclear-markers list that fails to
-    # match (e.g. a CELLTOX-only panel queried with the DAPI-only default), the
-    # fallback silently builds the overlay from a marker channel instead -- a
-    # misregistration would then be masked by a QC image that looks aligned only
-    # because it was never looking at the nuclear signal. Raise instead: a QC failure
-    # under retry-then-fail is the correct outcome for "this panel does not have any
-    # of the configured nuclear/fiducial markers", not a mis-rendered PNG that still
-    # exits 0. See tests/test_generate_registration_qc.py::
-    # test_a_marker_list_that_matches_nothing_fails_loudly.
+    # No match raises rather than falling back to channel 0: a fallback could build the
+    # overlay from a marker channel and make a misregistration look aligned.
     ref_nuc_idx = pick_nuclear_index(ref_channels, nuclear_markers)
     if ref_nuc_idx is None:
         raise ValueError(
@@ -535,50 +488,12 @@ def create_registration_qc(
             f"Registered nuclear channel: {reg_nuc_idx} ({reg_channels[reg_nuc_idx]})"
         )
 
-    # Read only the resolved nuclear/fiducial channel of each slide, through a lazy,
-    # region-readable zarr view (open_lazy) rather than tifffile.imread's whole-stack
-    # read of every marker channel at full resolution -- the N-CHANNEL overread this step
-    # used to pay, twice, on the two largest inputs the QC step sees. This is NOT a
-    # spatial decimation: `factor` is 1 here, and stays 1, because this function always
-    # needs true full-resolution pixels (the *_fullres.tif output is unconditional in
-    # production -- see the module docstring). Only the unused channels are no longer
-    # read; every pixel of the used one still is. decimation_factor is still the source of
-    # true decimation.
+    # Read only the resolved channel through a lazy zarr view. factor stays 1: the
+    # *_fullres.tif output needs full-resolution pixels.
     #
-    # read_decimated always returns float32 here -- do NOT pass a narrower dtype
-    # (uint8/uint16) even though the only consumer of ref_nuc/reg_nuc is
-    # autoscale_for_display on the way to uint8 (below, and inside create_nuclear_overlay).
-    # This was tried (task 3, first pass) and reverted. Two things are both true and worth
-    # keeping straight:
-    #   1. Narrowing the read is NOT safe on its own: a uint16 array divided by a uint16
-    #      range_val promotes to float64 under numpy's true-divide, where the float32
-    #      arithmetic autoscale_for_display has always run stays float32 -- different
-    #      intermediate precision that demonstrably rounds np.round(normalized * 255)
-    #      differently for real (min, max, value) triples (e.g. min=13286, max=62449,
-    #      value=52520: uint16-input -> 203, float32-input -> 204 -- float32's coarser
-    #      spacing manufactures a spurious .5 tie that round-half-to-even then resolves the
-    #      other way). See
-    #      tests/test_tiled_io.py::test_autoscale_uint16_vs_float32_disagree_at_a_real_triple
-    #      and tests/test_registration_qc_lazy_read.py's adversarial-pixel test for the
-    #      reproduced counter-example. Fixing that requires widening back to float32 right
-    #      before autoscale_for_display sees the array.
-    #   2. That widen-back is exactly what erases the memory saving the narrow read
-    #      appeared to offer. Measured (docs/perf/2026-08-26-rss.md, isolated processes,
-    #      7000x6000 fixture): a narrow read that is NEVER widened back does measure ~48%
-    #      lower peak RSS than this always-float32 read -- but once the mandatory widen-back
-    #      cast runs, the measured peak RSS is statistically indistinguishable from never
-    #      narrowing at all (670.8 MB either way). So narrowing here buys nothing once it is
-    #      made correct, and only adds a cast plus branching. Left at float32, unconditionally.
-    #
-    # The real, measured win at this call site is read_decimated's pre-allocated
-    # destination (no band-list-plus-concatenate doubling, at any factor): measured ~24%
-    # lower peak RSS than the prior list+concatenate implementation, at this exact
-    # (default-dtype, no narrowing) call shape -- but that number is a READ-PHASE-ONLY
-    # figure (isolated open_lazy + read_decimated, no render). The measured full
-    # create_registration_qc peak (read + autoscale/stack/rescale/PNG-TIFF write) showed no
-    # equivalent improvement -- statistically within noise of the pre-branch baseline. See
-    # docs/perf/2026-08-26-rss.md for both sets of numbers; do not extend the read-phase
-    # figure into an end-to-end claim it doesn't support.
+    # Keep the read float32. A uint16 read would go through autoscale_for_display in
+    # float64 and round some pixels differently (tests/test_registration_qc_lazy_read.py
+    # has a counter-example); widening back to fix that erases the memory saving.
     ref_close = reg_close = None
     try:
         ref_arr, _ref_dtype, ref_close = open_lazy(reference_path)
@@ -587,28 +502,19 @@ def create_registration_qc(
         ref_nuc = read_decimated(ref_arr, ref_nuc_idx, factor)
         reg_nuc = read_decimated(reg_arr, reg_nuc_idx, factor)
     finally:
-        # Both opens now live inside this try, so a failure on the SECOND open_lazy call no
-        # longer leaks the first store's handle -- but it also means ref_close may never get
-        # bound (open_lazy(reference_path) itself can raise before returning). Guard each
-        # close individually rather than assuming both succeeded.
+        # open_lazy can raise before returning, so close each handle only if bound.
         if ref_close is not None:
             ref_close()
         if reg_close is not None:
             reg_close()
 
-    # The native (pre-registration) plane, read through the ome_io seam that owns every
-    # image read added after plan 05 (read_info/read_plane). Its channel index is resolved
-    # the same way the reference's and the registered slide's are -- pick_nuclear_index
-    # over the OME channel names, never a literal "DAPI" test -- because the native slide
-    # of a CELLTOX-only panel is as supported an input as any other.
+    # The native (pre-registration) plane, via ome_io's read_info/read_plane, with the
+    # channel resolved by pick_nuclear_index like the other two.
     native_nuc = None
     if native_path is not None:
         native_info = read_info(native_path)
         native_channels = list(native_info.channels or [])
-        # Same rule as the reference/registered channel resolution above: raise rather
-        # than silently fall back to channel 0, for the same reason (a fallback that
-        # happens to be right only when a panel follows the channel-0-is-nuclear
-        # convention, and silently wrong otherwise).
+        # Raise rather than fall back to channel 0, as above.
         native_nuc_idx = pick_nuclear_index(native_channels, nuclear_markers)
         if native_nuc_idx is None:
             raise ValueError(
@@ -616,26 +522,14 @@ def create_registration_qc(
                 f"{native_path.name} (channels: {native_channels}, markers: "
                 f"{list(nuclear_markers) if nuclear_markers else 'default'})."
             )
-        # read_plane returns the source's native dtype (uint16 for this pipeline's
-        # slides), while ref_nuc/reg_nuc above are always float32 (read_decimated has no
-        # dtype= parameter -- see the comment above that read for why that is load-bearing:
-        # autoscale_for_display's min-max stretch rounds a uint16 input and a float32 input
-        # to different uint8 values at some real (min, max, value) triples, a ±1 LSB
-        # difference in the SAME pixel depending only on which dtype it arrived as). Widen
-        # here so the native panel goes through create_nuclear_overlay with the same
-        # arithmetic precision the reference/registered panels already use.
+        # Widen to float32 so this panel is scaled with the same arithmetic as the others.
         native_nuc = np.asarray(
             read_plane(native_path, native_nuc_idx, lazy=True), dtype=np.float32
         )
 
-    # Resolution tags for both QC TIFFs, only when a pixel size was given (the default
-    # `None` writes no tag, leaving output byte-for-byte unchanged from before this
-    # parameter existed). tifffile's `resolution` is PIXELS PER UNIT, i.e. the inverse of
-    # a µm-per-pixel size. The full-res write is always at scale_factor=1.0 (see above), so
-    # its pixel size is exactly `pixel_size_um`; the downsampled preview covers the same
-    # tissue in `scale_factor` as many pixels per side, so each of its pixels spans
-    # `pixel_size_um / scale_factor` -- a DIFFERENT physical size from the full-res write,
-    # not the same tag copied twice.
+    # Resolution tags, only when a pixel size is given. tifffile's `resolution` is pixels
+    # per unit. The preview's pixels span pixel_size_um / scale_factor, so its tag differs
+    # from the full-res one.
     def _resolution_kwargs(px_um):
         if px_um is None:
             return {}
@@ -650,21 +544,13 @@ def create_registration_qc(
     )
     preview_resolution_kwargs = _resolution_kwargs(preview_pixel_size_um)
 
-    # The XResolution/ResolutionUnit TIFF tags above are not, on their own, a usable scale
-    # bar in the tools this figure is actually opened in: ImageJ reads its scale off the
-    # ImageDescription's `unit=` line (present only when `metadata={"unit": ...}` is passed
-    # alongside `imagej=True`), and an OME-XML reader reads PhysicalSizeX/Y, not the TIFF
-    # tags. Both dicts below are built from the SAME `pixel_size_um`/`preview_pixel_size_um`
-    # `_resolution_kwargs` already used, so the tag and the description/XML can never drift
-    # apart, and both stay absent (byte-for-byte the old dict) when pixel_size_um is None.
+    # ImageJ reads its scale from the description's `unit=` and OME readers from
+    # PhysicalSizeX/Y, not from the TIFF tags, so set those too, from the same values.
     fullres_metadata = {"axes": "CYX", "mode": "composite"}
     if pixel_size_um is not None:
         fullres_metadata["unit"] = "um"
 
-    # ome_metadata is ome_io.py's one builder of the PhysicalSizeX/Y(+Unit) dict (see its
-    # own docstring for why a second hand-built copy is exactly the drift this module
-    # exists to prevent). channels=None: this composite is an RGB display overlay, not a
-    # labelled multi-marker stack, so there is no Channel/Name list to carry.
+    # channels=None: the composite is an RGB display overlay, with no channel names.
     preview_metadata = ome_metadata(None, preview_pixel_size_um, axes="CYX")
     preview_metadata["mode"] = "composite"
 
@@ -674,11 +560,8 @@ def create_registration_qc(
             ref_nuc, native_nuc, reg_nuc, scale_factor=1.0
         )
         fullres_output_path = output_path.with_name(output_path.stem + "_fullres.tif")
-        # An ImageJ TIFF is a CLASSIC TIFF (tifffile refuses imagej + bigtiff), so its
-        # 32-bit offsets overflow on a whole-slide composite: "'I' format requires
-        # 0 <= number <= 4294967295", ten minutes into the write. Above the same payload
-        # threshold ome_io uses, write the composite as an OME BigTIFF instead -- the
-        # format the preview below already has -- with the same pixels and scale.
+        # ImageJ TIFFs are classic TIFFs, whose 32-bit offsets overflow on a whole-slide
+        # composite. Above ome_io's BigTIFF threshold, write an OME BigTIFF instead.
         if rgb_stack_full.nbytes > BIGTIFF_THRESHOLD_BYTES:
             fullres_ome_metadata = ome_metadata(None, pixel_size_um, axes="CYX")
             fullres_ome_metadata["mode"] = "composite"

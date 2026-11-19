@@ -2,13 +2,10 @@
 # Smoke test for bolt3x/mirage-valis (the pipeline's VALIS 1.2.0 image, built FROM
 # upstream's cdgatenbee/valis-wsi:1.2.0 with only the four permission/asset fixes).
 #
-# ONE DEFINITION, RUN IN TWO PLACES: the Dockerfile RUNs it as a build step, and
-# .github/workflows/containers.yml runs it again with `docker run` against the built image.
+# Run by the Dockerfile at build time and again by containers.yml on the built image.
 #
-# AS THE CLUSTER RUNS IT: every VALIS check below runs as an unprivileged user (uid 65534)
-# when the script itself is root, from /, with HOME pointing at an empty directory, and
-# with every proxy variable pointed at a closed local port, so a lookup that misses a baked
-# file and goes to the network fails the BUILD, not a cluster task.
+# Checks run as the cluster does: as uid 65534 (when started as root), from /, with an
+# empty HOME and every proxy pointed at a closed port, so a network lookup fails the build.
 
 set -euo pipefail
 
@@ -37,7 +34,7 @@ as_user() {
 # 1. The interpreter is reachable at all (it lives under /root, see the Dockerfile).
 as_user "$PY" -c "import sys; print('python', sys.version.split()[0], 'at', sys.executable, 'as uid', __import__('os').getuid())"
 
-# 2. UPSTREAM'S STACK IS UPSTREAM'S, line for line: this image adds no Python package.
+# 2. The Python stack is upstream's, line for line.
 "$PY" -m pip freeze --all | grep -E '^[A-Za-z0-9._-]+==[^ ]+$' | LC_ALL=C sort > "$SCRATCH/now.txt"
 if ! LC_ALL=C diff /opt/mirage/upstream-freeze.txt "$SCRATCH/now.txt" >&2; then
   echo "the Python stack differs from upstream's freeze (diff above)" >&2
@@ -45,8 +42,7 @@ if ! LC_ALL=C diff /opt/mirage/upstream-freeze.txt "$SCRATCH/now.txt" >&2; then
 fi
 echo "upstream's $(wc -l < /opt/mirage/upstream-freeze.txt) pinned distributions are untouched"
 
-# The versions read from the registry, so that a rebuilt upstream tag is noticed here
-# as well as by the digest.
+# Expected versions, so a rebuilt upstream tag is noticed here as well as by the digest.
 as_user "$PY" -c "
 import numpy, scipy, skimage, pandas, psutil, torch, torchvision, kornia, pyvips
 got = dict(numpy=numpy.__version__, scipy=scipy.__version__, skimage=skimage.__version__,
@@ -82,7 +78,7 @@ for name in ('depth-save.pth', 'disk_lightglue_v0-1_arxiv-pth'):
 print('weights readable as uid', os.getuid(), ':', sorted(p.name for p in pathlib.Path(home, 'hub', 'checkpoints').iterdir()))
 "
 
-# 5. THE IMPORT THAT DOWNLOADS, with the network closed, as that user. It must find both
+# 5. The import that downloads, with the network closed, as that user. It must find both
 # weight files, and it must be the installed package (from /, not /usr/local/src).
 as_user "$PY" -c "
 import valis
@@ -93,7 +89,7 @@ matcher = registration.DEFAULT_MATCHER
 print('valis', valis.__version__, 'from', valis.__file__, 'default matcher', type(matcher).__name__, 'on', type(getattr(matcher, 'feature_detector', None)).__name__)
 "
 
-# 6. THE JVM, with the network closed, as that user: it must start from the jar beside
+# 6. The JVM, with the network closed, as that user: it must start from the jar beside
 # the installed package (a Maven lookup would be refused), and the jar must be upstream's
 # Bio-Formats 7.0.0. Starting it also rewrites <package>/data/bf_formats.txt, which is
 # the write a user who is not root could not do in upstream's image.
@@ -114,5 +110,5 @@ assert os.access(formats, os.W_OK) and os.access(package / 'data', os.W_OK | os.
 print('Bio-Formats', version, 'from the jar beside the installed package, as uid', os.getuid(), '; bf_formats.txt rewritten:', formats.stat().st_mtime_ns != before)
 "
 
-# procps supplies `ps`; every image in containers/ carries it.
+# procps supplies `ps`, which Nextflow's task-metrics wrapper needs.
 ps -e -o pid= -o ppid= > /dev/null && echo "procps OK: nextflow task-metrics wrapper can run"

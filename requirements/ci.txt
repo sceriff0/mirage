@@ -1,95 +1,44 @@
-# The environment CI's Python unit-test suite runs in. Installed by
-# `pip install -r requirements/ci.txt` in every workflow job that runs `pytest tests/`.
+# CI's Python unit-test environment: the union of several production images' dependency
+# sets, so it matches no single image. Every package CI shares with an image takes its
+# version from that image's own file via `-r`; the two exceptions are noted where they sit.
 #
-# BE HONEST ABOUT WHAT THIS IS. The suite spans four production images' dependency sets,
-# so this environment matches NO single shipped image — it is their union. What this file
-# guarantees is narrower and checkable: every package that CI shares with a production
-# image takes its version FROM that image's own file, never from a second copy written
-# here. The `-r` lines below are how, and the two exceptions are named and explained.
-#
-# TWO VERSION STRINGS BELOW: `anndata<0.12` and `h5py==3.11.0`, and each reason is spelled
-# out where it sits. Everything else is either constrained by constraints.txt or comes from
-# a production image's own file.
-#
-# NOTE ON torch: it is NOT included here. `requirements/torch-cpu.txt` carries an
-# `--index-url`, which applies to the whole pip resolve if it is pulled in by `-r`, so CI
-# installs it as a separate `pip install -r` step after this one. No image installs it any
-# more; tests/test_valis_matching_bounds.py is what needs it (see that file's header).
+# torch is not included: requirements/torch-cpu.txt carries an `--index-url` that would
+# apply to the whole resolve, so CI installs it in a separate `pip install -r` step.
 -c constraints.txt
 
-# containers/segeval — the CSE evaluation image. Supplies numpy, scipy, pandas,
-# scikit-image, scikit-learn, tifffile, xmltodict and matplotlib at the versions that image
-# ships. scikit-learn and matplotlib in particular are load-bearing for QualityScore and
-# have no other home; taking them from this file rather than restating them is the reason
-# CI cannot drift from the image any more.
+# containers/segeval (CSE evaluation). Supplies numpy, scipy, pandas, scikit-image,
+# scikit-learn, tifffile, xmltodict and matplotlib at the image's versions.
 -r segeval.txt
 
-# containers/stare — the STARE registration image. Supplies zarr, numcodecs and
-# imagecodecs on top of the imaging stack above (same harmonised pins, so no conflict).
-# zarr/numcodecs must move together: a newer numcodecs drops blosc.cbuffer_sizes that zarr
-# 2.18 imports, and tests/test_tiled_stitch_streaming.py then fails at COLLECTION.
-# imagecodecs supplies the zstd/LZW codecs tifffile writes through — its absence is not an
-# ImportError, it surfaces only on a WRITE.
+# containers/stare. Supplies zarr, numcodecs and imagecodecs on the same harmonised pins.
+# zarr and numcodecs must move together (newer numcodecs drops blosc.cbuffer_sizes that
+# zarr 2.18 imports). Without imagecodecs, tifffile fails only on a write.
 -r stare.txt
 
-# ---- The STARE package: comes with `-r stare.txt` above (a pinned release of
-# github.com/sceriff0/stare), exactly the version the image installs.
+# ---- The STARE package: comes with `-r stare.txt` above, the version the image installs.
 
 # ---- CI-only tooling -------------------------------------------------------------------
 pytest
 pytest-cov
 
-# pyyaml is named EXPLICITLY. It used to be declared only in the root requirements.txt,
-# which CI installed with `|| true`, and tests/test_ci_job_hygiene.py importorskips it at
-# MODULE scope — so a swallowed failure silently deleted both of that file's guards. It
-# survived only transitively, as a dependency of dask.
+# Named explicitly: tests/test_ci_job_hygiene.py importorskips it at module scope.
 pyyaml
 
 # ---- Runtime packages the suite needs that no `-r` above supplies ----------------------
 
-# dask[array] powers bin/convert_image.py's lazy read (BioImage.dask_data), driven for real
-# by tests/test_convert_lazy_read.py and tests/test_convert_streaming_write.py, which import
-# it unconditionally. UNPINNED HERE ON PURPOSE: constraints.txt owns the version
-# (dask==2026.7.1, what containers/convert, containers/stardist and containers/cellsam run).
+# bin/convert_image.py's lazy read. Unpinned here: constraints.txt owns the version.
 dask[array]
 
-# h5py powers the generator's HDF5 slide fixture (tests/testdata/
-# generate_complete_testdata.py) and bin/convert_image.py's read_image_h5.
-# PINNED HERE DIRECTLY, NOT VIA constraints.txt: as of plan 06's regqc cleanup,
-# containers/convert is the ONLY image that installs h5py (removed from
-# containers/regqc's requirements/regqc.txt on 2026-09-02), and
-# tests/test_ci_stack_pinned.py::test_every_constrained_package_is_installed_by_more_than_one_image
-# forbids constraining a package fewer than two images install. 3.11.0 matches
-# containers/convert/Dockerfile's own pin, taken by hand rather than round-tripped
-# through constraints.txt.
+# The HDF5 test fixture and bin/convert_image.py's read_image_h5. Pinned here, not in
+# constraints.txt, because only containers/convert installs it; matches that Dockerfile.
 h5py==3.11.0
 
-# opencv, as the HEADLESS build — the runners have no display libs. bin/utils/qc.py imports
-# cv2 at module scope, and tests/test_merge_pyramid_streaming.py and
-# tests/test_registration_qc_lazy_read.py both importorskip("cv2") at MODULE scope, so its
-# absence silently deselects 29 tests.
-#
-# UNPINNED HERE. requirements/constraints.txt now carries BOTH opencv distribution names
-# at the same release — `opencv-python` (what containers/regqc and containers/merge
-# install) and `opencv-python-headless` (what CI installs) — so this line names no version
-# and the two cannot drift apart. tests/test_ci_stack_pinned.py's EQUIVALENT_DISTRIBUTIONS
-# asserts they stay equal. Also worth knowing: opencv-python-headless>=5 requires numpy>=2
-# and would collide with the constrained numpy==1.26.4.
+# Headless build (runners have no display libs). Unpinned: constraints.txt pins both
+# opencv distribution names at the same release. opencv>=5 would need numpy>=2.
 opencv-python-headless
 
-# anndata powers tests/test_join_flowpath.py. THIS IS THE ONE GENUINE DIVERGENCE between CI
-# and every shipped image, and it cannot be closed by a constraints file. anndata's only
-# production home is containers/spatialdata — python:3.12 with zarr>=3.0.0 — and zarr 3
-# removes the store API tifffile's aszarr relies on ("Unsupported type for store_like:
-# 'ZarrTiffStore'"), which breaks the tiled streaming/fanout tests. So CI pins anndata
-# below 0.12, the last line that works against the constrained zarr 2.18.3. The right fix
-# is a separate job running those two test files inside bolt3x/mirage-spatialdata; until
-# then this line is the honest record of the gap.
-#
-# The SAME gap has a second face: requirements/spatialdata.txt was locked to exact pins on
-# 2026-09-02 (ruling R6) and resolved on CPython 3.12, which no CI leg runs. Adding 3.12
-# to _test-suite.yml's python-tests matrix would NOT close it — that job installs this
-# file, i.e. zarr 2.18.3 and the anndata cap below, so it would exercise a combination no
-# image ships while still never importing spatialdata. One job, running these two test
-# files inside bolt3x/mirage-spatialdata, closes both.
+# For tests/test_join_flowpath.py. anndata's production home is containers/spatialdata
+# (python 3.12, zarr 3), which CI does not reproduce; zarr 3 breaks tifffile's aszarr, so
+# CI caps anndata below 0.12 to work with zarr 2.18.3. Closing this gap needs a job that
+# runs those tests inside the spatialdata image.
 anndata<0.12

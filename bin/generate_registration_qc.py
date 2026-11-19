@@ -60,14 +60,6 @@ panel to the right one is exactly the correction registration applied.
 The moving slide is placed on the reference canvas by pad-or-crop at the
 origin, never by rescaling: a rescale would absorb the scale component of the
 misalignment and make the "before" panel understate the error.
-
-Notes
------
-This is a refactored version that uses shared library modules following
-DRY, KISS, and software engineering best practices.
-
-The previous implementation duplicated code from register_cpu.py and
-register_gpu.py. This version imports from lib.qc instead.
 """
 
 from __future__ import annotations
@@ -81,7 +73,7 @@ from typing import List, Tuple
 # Add utils directory to path
 sys.path.insert(0, str(Path(__file__).parent / "utils"))
 
-# Import from shared library modules (eliminates code duplication)
+# Import from shared library modules
 from logger import configure_logging, get_logger
 from qc import create_registration_qc
 
@@ -267,7 +259,7 @@ def _process_single_image(
         base_name = registered_path.stem.removesuffix(".ome")
         output_path = output_dir / f"{base_name}_QC_RGB.tif"
 
-        # Call library function (eliminates code duplication)
+        # Call library function
         create_registration_qc(
             reference_path=reference_path,
             registered_path=registered_path,
@@ -297,18 +289,6 @@ def main() -> int:
     -------
     int
         Exit code (0 for success, 1 if any images failed).
-
-    Notes
-    -----
-    This function:
-    1. Configures logging using singleton pattern from lib.logger
-    2. Parses and validates command-line arguments
-    3. Processes each registered image in batch mode
-    4. Provides summary statistics
-    5. Returns appropriate exit code
-
-    The logging is configured once at startup and shared across all modules
-    that import from lib.logger, following the singleton pattern.
     """
     # Parse arguments
     args = parse_args()
@@ -331,10 +311,8 @@ def main() -> int:
         logger.error(f"Reference image not found: {args.reference}")
         return 1
 
-    # --native is positional against --registered: index i of one is index i of the
-    # other. A silent zip() would pair the wrong slides when the lengths differ, and
-    # a wrongly-paired "before" panel is worse than no before panel at all -- it
-    # looks like a catastrophic registration failure.
+    # --native pairs with --registered by position. Refuse a length mismatch rather
+    # than zip() the wrong slides into a misleading "before" panel.
     if args.native is not None and len(args.native) != len(args.registered):
         logger.error(
             f"--native takes one path per --registered image, in the same order: "

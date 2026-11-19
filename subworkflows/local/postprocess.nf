@@ -16,10 +16,7 @@ include { MERGE_SEG_EVAL           } from '../../modules/local/merge_seg_eval'
 // plain function, not a process/workflow, but Nextflow's `include` pulls in either.
 include { QUANTIFY_MARKERS; groupTiffsByPatient } from './quantify_markers'
 include { ASSEMBLE_EXPORT          } from './assemble_export'
-// The checkpoint writer is shared with add_cycle.nf, the same way
-// register_patient.nf's CHECKPOINT_WRITER call is shared with it. This file used
-// to own the only copy, so an add_cycle run wrote no csv/postprocessed.csv and
-// could never be the --prior_outdir of a second cycle.
+// Shared with add_cycle.nf, so both write csv/postprocessed.csv.
 include { POSTPROCESSED_CHECKPOINT } from './postprocessed_checkpoint'
 
 /*
@@ -31,11 +28,6 @@ include { POSTPROCESSED_CHECKPOINT } from './postprocessed_checkpoint'
         per cell against masks produced upstream by subworkflows/local/segmentation.nf,
         merges results, and exports QuPath-compatible GeoJSON with raw measurements
         for FlowPath gating.
-
-        SEGMENT / EXTRACT_CELL_PROPERTIES / EXTRACT_NUCLEI_PROPERTIES no longer run
-        here — they moved to segmentation.nf, their own resumable step
-        (Layout.SEGMENTED / Checkpoint.columns('segmented')). This file takes their
-        outputs as plain [meta/patient_id, file] inputs instead.
 
     Input:
         ch_registered:       [meta, file] — all registered slides (reference + moving)
@@ -66,29 +58,16 @@ workflow POSTPROCESSING {
     ch_morphology       // [meta, file] — segmentation.nf's EXTRACT_CELL_PROPERTIES.out.morphology
     ch_reg_qc           // Registration QC JSONs (may be empty)
     ch_reg_residuals    // Per-cell registration residual CSVs (may be empty)
-    compartment_mode    // ParamUtils.compartmentMode(params) — resolved once by
-                        // workflows/mirage.nf and threaded down, the same seam
-                        // --registration_method has. Passed straight through to
-                        // ASSEMBLE_EXPORT below; `.compartments` is also read here
-                        // directly for the nucleus-contour ternary.
+    compartment_mode    // ParamUtils.compartmentMode(params), resolved in workflows/mirage.nf
 
     main:
 
     // ========================================================================
-    // CHANNEL SPLITTING - Split all multichannel images (runs in PARALLEL with EXTRACT_CELL_PROPERTIES)
+    // CHANNEL SPLITTING - split all multichannel images
     // ========================================================================
-    // A slide whose keep-set resolved EMPTY contributes NO new markers: every channel it
-    // declares was already claimed by an earlier slide of the same patient
-    // (CsvUtils.resolveKeptChannelsPerSlide walks reference first, then samplesheet
-    // order). It is filtered out here rather than split.
-    //
-    // WHY FILTER RATHER THAN `optional: true`. SPLIT_CHANNELS declares `path("*.tiff")`
-    // as a MANDATORY output, and that is a real guard -- a genuinely failed split still
-    // trips it. Relaxing it to accommodate a slide that has no work to do would blind the
-    // guard for every slide. Dropping the slide is safe for every consumer: the same
-    // resolver sizes meta.channels_count (CsvUtils.countChannelsPerPatient sums the
-    // per-slide lists), so this slide already contributes ZERO to both channels_count-sized
-    // groupKeys below -- the groups still close on exactly the files that arrive.
+    // A slide with an empty keep-set adds no new markers (earlier slides claimed them all)
+    // and is filtered out, so SPLIT_CHANNELS' mandatory *.tiff output stays a real guard.
+    // channels_count already counts such a slide as zero.
     SPLIT_CHANNELS(
         ch_registered
             .filter { meta, _f ->
@@ -107,15 +86,8 @@ workflow POSTPROCESSING {
     // ========================================================================
     // SEGMENTATION QUALITY EVAL (CSE) - reference-free, informational, OPT-IN
     // ========================================================================
-    // Scores the SHIPPED masks against the reference image. Gated by ext.when on
-    // params.skip_seg_quality_eval (default true), so on a normal run neither
-    // process is instantiated at all.
-    //
-    // Scored against the REFERENCE slide, not every registered slide: CSE's
-    // metrics compare a mask to the multichannel image the mask was derived
-    // from, and SEGMENT only ever runs on the reference (segmentation.nf filters
-    // is_reference). Joining on patient_id keeps the three inputs together
-    // without assuming channel emission order.
+    // Scores the shipped masks against the reference image they were derived from.
+    // Gated by ext.when on params.skip_seg_quality_eval (default true).
     ch_seg_eval_in = ch_cell_mask
         .map { meta, cmask -> [meta.patient_id, meta, cmask] }
         .join(ch_nuclei_mask.map { meta, nmask -> [meta.patient_id, nmask] }, by: 0)
@@ -125,9 +97,7 @@ workflow POSTPROCESSING {
 
     SEG_QUALITY_EVAL(ch_seg_eval_in)
 
-    // .ifEmpty([]) so the collect() still emits when every patient's score was
-    // dropped (retried out, see conf/modules.config) — otherwise MERGE_SEG_EVAL
-    // never runs and the absence is invisible rather than an empty summary.
+    // .ifEmpty([]) so MERGE_SEG_EVAL still writes an (empty) summary if every score was dropped.
     MERGE_SEG_EVAL(
         SEG_QUALITY_EVAL.out.metrics.map { _meta, json -> json }.collect().ifEmpty([])
     )
@@ -136,23 +106,17 @@ workflow POSTPROCESSING {
     // ========================================================================
     // QUANTIFICATION - Join channels with their patient's mask
     // ========================================================================
-    // Carry BOTH masks (cell + nuclei) keyed by patient_id. The nuclear mask is
-    // always available from SEGMENT; QUANTIFY only uses it when
-    // params.quantify_compartments is set (per-compartment signal). The same pair
-    // feeds ASSEMBLE_EXPORT's embed_masks gate further down.
+    // Both masks keyed by patient_id (SEGMENT always emits the nuclear one). Also feeds
+    // ASSEMBLE_EXPORT's embed_masks gate.
     ch_mask = ch_cell_mask
         .map { meta, mask -> [meta.patient_id, mask] }
         .join(ch_nuclei_mask.map { meta, mask -> [meta.patient_id, mask] }, by: 0)
 
-    // Per-marker fan-out + QUANTIFY + per-patient grouping (with the groupKey
-    // streaming hint) all live in QUANTIFY_MARKERS, shared with add_cycle.nf.
-    // The --debug_channels views for this whole chain moved there with it, so this
-    // file no longer carries a debug-view helper of its own.
+    // Per-marker fan-out, QUANTIFY and per-patient grouping (shared with add_cycle.nf).
     QUANTIFY_MARKERS(SPLIT_CHANNELS.out.channels, ch_mask)
     ch_grouped_csvs = QUANTIFY_MARKERS.out.grouped_csv
 
-    // Join grouped intensity CSVs with morphology.csv (segmentation.nf's
-    // EXTRACT_CELL_PROPERTIES.out.morphology, taken in via ch_morphology)
+    // Join grouped intensity CSVs with morphology.csv.
     ch_morphology_by_patient = ch_morphology
         .map { meta, csv -> [meta.patient_id, csv] }
 
@@ -170,40 +134,13 @@ workflow POSTPROCESSING {
     // ========================================================================
     // MERGE - Combine split channel TIFFs with segmentation mask (per patient)
     // ========================================================================
-    // Group split channel TIFFs by patient for merging
-    // SPLIT_CHANNELS already handles DAPI filtering correctly
-    // Deduplicate by patient_id + marker to avoid duplicate channel names
-    // Use groupKey for streaming - emits as soon as channels_count items collected
-    //
-    // `remainder: true` for the same reason as QUANTIFY_MARKERS' grouping (same
-    // channels_count): an under-count must not be allowed to silently drop the patient
-    // from the pyramid outright. But — see the fuller account in QUANTIFY_MARKERS'
-    // GROUP comment, which this grouping mirrors — an under-count here does NOT degrade
-    // to "late but complete" the way it can for the CSV-merge paths. This grouping feeds
-    // MERGE_AND_PYRAMID with a one-file surplus group, which trips that process's memory
-    // closure (conf/modules.config:330-337 — pre-existing, NOT fixed here) and the run
-    // ABORTS with "No such file or directory: channels". `remainder: true` is kept anyway
-    // because keeping only one of the two channels_count-sized groupings (this one, or
-    // QUANTIFY_MARKERS') would be worse than keeping neither — the patient would reach
-    // geojson/ and quantification/ but not the pyramid, and so be missing from
-    // csv/postprocessed.csv, half-published and invisible to any later --start
-    // postprocessing or add_cycle run. These two groupings must keep identical
-    // channels_count semantics even though their downstream failure modes differ --
-    // WITHIN THIS FILE: both read the same meta.channels_count for the same
-    // patient. That equality is NOT a cross-file invariant: add_cycle.nf's own
-    // pyramid grouping deliberately uses a DIFFERENT total (new_count + prior_count,
-    // since it merges two pyramids' worth of channels) than its own QUANTIFY_MARKERS
-    // call (new-cycle channels only, because the prior quantification columns are
-    // merged onto the CSV separately, not re-quantified) -- the two counts SHOULD
-    // differ there. Do not "reconcile" them to match this file's equality.
-    // The channels_count-sized groupKey + remainder:true grouping itself is
-    // groupTiffsByPatient (subworkflows/local/quantify_markers.nf), shared with
-    // add_cycle.nf's own version of this same grouping — see that function's doc
-    // comment for why an under-count here is worse than for the CSV-merge paths.
+    // Group split TIFFs per patient, deduplicated on [patient_id, marker], with the same
+    // channels_count as QUANTIFY_MARKERS' grouping (groupTiffsByPatient). Both groupings must
+    // keep that count: losing one would publish a patient without its pyramid.
+    // add_cycle's pyramid count differs from its quantification count on purpose.
     ch_split_tagged = SPLIT_CHANNELS.out.channels
         .flatMap { meta, tiffs ->
-            // Normalize to List and create entries keyed by [patient_id, marker]
-            // Carry channels_count for groupKey
+            // Entries keyed by [patient_id, marker], carrying channels_count for groupKey.
             def tiff_list = tiffs instanceof List ? tiffs : [tiffs]
             tiff_list.collect { tiff ->
                 [meta.patient_id, meta.channels_count, tiff.baseName, tiff]
@@ -213,8 +150,6 @@ workflow POSTPROCESSING {
         .map { patient_id, channels_count, _marker, tiff -> [patient_id, channels_count, tiff] }
     ch_split_grouped = groupTiffsByPatient(ch_split_tagged)
 
-    // EXPORT_GEOJSON tuple assembly + the embed_masks pyramid gate live in
-    // ASSEMBLE_EXPORT, shared with add_cycle.nf.
     ASSEMBLE_EXPORT(
         MERGE_QUANT_CSVS.out.merged_csv,
         ch_contours,
@@ -225,11 +160,10 @@ workflow POSTPROCESSING {
     )
 
     // ========================================================================
-    // POSTPROCESSING QC (optional, runs in PARALLEL with MERGE_AND_PYRAMID)
+    // POSTPROCESSING QC (optional)
     // ========================================================================
     ch_postprocess_qc = Channel.empty()
     if (!params.skip_postprocessing_qc) {
-        // Join cell mask with merged CSV for QC visualization
         ch_for_postprocess_qc = ch_cell_mask
             .map { meta, mask -> [meta.patient_id, meta, mask] }
             .join(
@@ -257,14 +191,10 @@ workflow POSTPROCESSING {
                 [meta, csv, contours, nuc_contours, cmask, nmask, pyramid]
             }
 
-        // QC is collected run-wide rather than per patient: these channels are already
-        // flat file streams by the time they arrive, and `.ifEmpty([])` keeps the export
-        // running when reg_qc=0 or the run started at postprocessing.
+        // QC is collected run-wide; .ifEmpty([]) covers reg_qc=0 and --start postprocessing.
         EXPORT_SPATIALDATA(
             ch_sd_in,
-            // collect(sort: true), not collect(): these lists become EXPORT_SPATIALDATA's
-            // `path` inputs, which Nextflow hashes POSITIONALLY, and a bare collect()
-            // emits in arrival order -- so an identical rerun re-ran the export.
+            // collect(sort: true): path lists hash positionally, so arrival order breaks -resume.
             ch_reg_qc.map { it instanceof List ? it[-1] : it }.flatten().collect(sort: true).ifEmpty([]),
             ch_reg_residuals.map { it instanceof List ? it[-1] : it }.flatten().collect(sort: true).ifEmpty([])
         )
@@ -273,10 +203,6 @@ workflow POSTPROCESSING {
     // ========================================================================
     // CHECKPOINT - Collect all outputs by patient
     // ========================================================================
-    // The join, the publishedPath rules and the collectFile all live in
-    // POSTPROCESSED_CHECKPOINT, which add_cycle.nf calls with its own five
-    // streams. This file used to own the only copy, which is why an add_cycle
-    // run wrote no csv/postprocessed.csv and could not be chained.
     POSTPROCESSED_CHECKPOINT(
         ASSEMBLE_EXPORT.out.csv,
         ASSEMBLE_EXPORT.out.geojson,
@@ -286,13 +212,7 @@ workflow POSTPROCESSING {
     )
     ch_checkpoint_csv = POSTPROCESSED_CHECKPOINT.out.csv
 
-    // Collect size logs from all postprocessing processes. SEGMENT /
-    // EXTRACT_CELL_PROPERTIES / EXTRACT_NUCLEI_PROPERTIES moved to
-    // subworkflows/local/segmentation.nf and report their own size_logs/versions
-    // there now -- workflows/mirage.nf mixes SEGMENTATION.out.{size_logs,versions}
-    // into the run-wide QC stream directly, the same way it already does for every
-    // other step's aggregate output (this file's checkpoint_csv/postprocess_qc
-    // pattern), so nothing from that step is double-counted or dropped here.
+    // Segmentation's size logs and versions are collected by workflows/mirage.nf.
     ch_size_logs = Channel.empty()
         .mix(SEG_QUALITY_EVAL.out.size_log)
         .mix(SPLIT_CHANNELS.out.size_log)
@@ -300,15 +220,12 @@ workflow POSTPROCESSING {
         .mix(MERGE_QUANT_CSVS.out.size_log)
         .mix(ASSEMBLE_EXPORT.out.size_logs)
 
-    // Add postprocessing QC size logs if enabled
     if (!params.skip_postprocessing_qc) {
         ch_size_logs = ch_size_logs
             .mix(GENERATE_POSTPROCESSING_QC.out.size_log)
     }
 
-    // Collect versions from all postprocessing processes.
-    // QUANTIFY_MARKERS / ASSEMBLE_EXPORT already applied `.first()` internally
-    // (see the comments on their `versions` emits) — do not re-apply it here.
+    // QUANTIFY_MARKERS / ASSEMBLE_EXPORT versions are already de-duplicated.
     ch_versions = Channel.empty()
         .mix(SEG_QUALITY_EVAL.out.versions)
         .mix(SPLIT_CHANNELS.out.versions.first())

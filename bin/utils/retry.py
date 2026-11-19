@@ -1,19 +1,4 @@
-"""Retry utilities for transient failure handling.
-
-This module provides retry mechanisms for operations that may fail
-due to transient issues like memory pressure or I/O contention.
-
-Examples
---------
-Using the context manager:
->>> retry_ctx = RetryContext(max_attempts=2, delay_seconds=2.0)
->>> for attempt in retry_ctx:
-...     try:
-...         result = do_something()
-...         break
-...     except SomeError as e:
-...         retry_ctx.failed(e)
-"""
+"""Retry loop for operations that can fail transiently (memory pressure, I/O contention)."""
 
 from __future__ import annotations
 
@@ -32,9 +17,6 @@ logger = logging.getLogger(__name__)
 
 class RetryContext:
     """Context manager for retry operations with cleanup.
-
-    Provides an iterator-based retry mechanism that allows for
-    cleanup operations between retry attempts.
 
     Parameters
     ----------
@@ -56,25 +38,14 @@ class RetryContext:
 
     Examples
     --------
-    >>> def cleanup():
-    ...     gc.collect()
-    ...
-    >>> retry_ctx = RetryContext(
-    ...     max_attempts=2,
-    ...     delay_seconds=2.0,
-    ...     cleanup_func=cleanup
-    ... )
     >>> for attempt in retry_ctx:
     ...     try:
     ...         result = process_slide(slide)
-    ...         break  # Success, exit retry loop
+    ...         break
     ...     except MemoryError as e:
     ...         retry_ctx.failed(e)
-    ...         # Will retry after cleanup and delay
-
-    With error checking after loop:
     >>> if retry_ctx.last_exception:
-    ...     print(f"All retries failed: {retry_ctx.last_exception}")
+    ...     ...  # every attempt failed
     """
 
     def __init__(
@@ -111,14 +82,9 @@ class RetryContext:
 
         Notes
         -----
-        Exhaustion raises StopIteration and NOTHING ELSE. This used to raise
-        `self.last_exception`, which escaped the `for attempt in ctx:` loop
-        entirely: the caller's post-loop partial-failure handling was
-        unreachable, `all_attempts_failed` was dead code, and a single bad
-        slide killed a 400+ GB REGISTER task. The exception is preserved on
-        `self.last_exception` for the caller to inspect or re-raise --
-        whether exhaustion is fatal is the CALLER's decision, not the
-        iterator's.
+        Exhaustion raises only StopIteration, so the caller's post-loop handling
+        runs; the last error stays on ``self.last_exception`` and the caller
+        decides whether it is fatal.
         """
         if not self._should_retry or self.attempt >= self.max_attempts:
             raise StopIteration
@@ -138,14 +104,13 @@ class RetryContext:
         """
         self.last_exception = exception
 
-        # Run cleanup function if provided
         if self.cleanup_func:
             try:
                 self.cleanup_func()
             except Exception as cleanup_err:
                 logger.warning(f"Cleanup failed: {cleanup_err}")
 
-        # Wait before next retry (unless this was the last attempt)
+        # No wait after the last attempt.
         if self.attempt < self.max_attempts:
             logger.debug(
                 f"Retry {self.attempt}/{self.max_attempts} failed: {exception}. "

@@ -1,62 +1,23 @@
 #!/usr/bin/env python3
-"""Put upstream's own baked files where VALIS 1.2.0 looks for them, for any user.
+"""Put upstream's baked files where VALIS 1.2.0 looks for them, for any user.
 
-Run once by containers/valis/Dockerfile, as a build step. It needs NO network: every
-file it places is already in upstream's image (cdgatenbee/valis-wsi:1.2.0), in a place a
-user who is not root, on a compute node, cannot use. After it, smoke.sh imports VALIS and
-starts its JVM as an unprivileged user with every proxy variable pointed at a closed port.
+Run once by containers/valis/Dockerfile as a build step, with no network: every file it
+places is already in cdgatenbee/valis-wsi:1.2.0, but where a non-root user cannot use it.
 
-WHAT UPSTREAM'S IMAGE HOLDS, AND HOW THAT WAS LEARNED. Not from a running container
-(no Docker daemon where this was written) but from Docker Hub's registry API on
-2026-10-11: the image index, the linux/amd64 manifest, its config (environment, build
-history) and the file lists of its layers, streamed and listed without unpacking
-[PARTIAL: config and history in full; names, modes and link targets of layers 1, 3, 4,
-5, 8, 21 to 26 of 26; the dist-info names of layer 22; no file contents except
-pyproject.toml, docker_download_weights.py, pyvenv.cfg and the sha256 of the files named
-below].
+1. Python is a venv under ``/root`` (mode 0700). The Dockerfile opens ``/root`` for
+   reading; this script checks it.
+2. The Bio-Formats jar sits beside the source tree (``/usr/local/src/valis``), not the
+   installed package, and ``valis.slide_io.init_jvm`` otherwise asks Maven. It is linked
+   beside the installed package after checking its sha256.
+3. The weights are in root's torch cache, while ``torch.hub`` looks in
+   ``$TORCH_HOME/hub/checkpoints`` or the running user's ``~/.cache/torch``. The
+   Dockerfile sets ``TORCH_HOME=/opt/torch``; its checkpoints directory is linked to
+   upstream's after checking the two files the default matcher loads.
+4. ``<package>/data/bf_formats.txt`` is rewritten on every JVM start, so it is made
+   writable. Under Apptainer the image is still read-only, so the run needs
+   ``--writable-tmpfs``.
 
-1. Python is a virtual environment at ``/root/.local`` (``python3 -m venv ~/.local`` in
-   the build history; ``pyvenv.cfg``: 3.12.3), and ``/root`` is mode 0700 in every layer
-   that lists it. ``uv pip install .`` put VALIS and its stack into that environment
-   (``valis_wsi-1.2.0.dist-info/direct_url.json``: ``file:///usr/local/src``). As
-   published, the image therefore has NO Python for a user who is not root. The
-   Dockerfile opens ``/root`` for reading; this script checks it.
-
-2. The Bio-Formats jar is at ``/usr/local/src/valis/bioformats_package.jar`` (the build
-   history's ``wget .../bio-formats/7.0.0/artifacts/bioformats_package.jar -P valis``, run
-   in ``/usr/local/src``): beside the SOURCE tree, not beside the installed package.
-   ``valis.slide_io.init_jvm`` (valis-wsi 1.2.0 from PyPI, ``slide_io.py:231-262``
-   [PARTIAL: lines 87-300 read]) starts the JVM from
-   ``<directory of slide_io.py>/bioformats_package.jar`` when that file exists and
-   otherwise asks Maven. From ``/usr/local/src`` (the image's working directory)
-   ``import valis`` finds the source tree, so in Docker the jar is found; from any other
-   directory it finds the installed copy, which has no jar. The pipeline runs from the
-   repository, so the jar is linked beside the installed package. Its sha256 is the one
-   OME publishes (``.../7.0.0/artifacts/SHASUMS`` [FULL], read by the Task 11 agent on
-   2026-10-10) and the one the layer's file has (hashed from the registry stream).
-
-3. The weights are in root's own cache, ``/root/.cache/torch/hub/checkpoints``
-   (upstream's ``docker_download_weights.py`` builds ``DiskFD``, ``DeDoDeFD`` and both
-   LightGlue matchers at build time): six files. ``import valis`` builds the default
-   matcher (``registration.py:72``; DISK through ``kornia.feature.DISK.from_pretrained``,
-   LightGlue through ``kornia.feature.LightGlueMatcher('disk')``), and both go through
-   ``torch.hub.load_state_dict_from_url``, which looks in ``$TORCH_HOME/hub/checkpoints``
-   or, with no ``TORCH_HOME``, in ``~/.cache/torch`` OF WHOEVER IS RUNNING: not root's.
-   The image sets no ``TORCH_HOME``. The Dockerfile sets ``TORCH_HOME=/opt/torch`` and
-   this script links ``/opt/torch/hub/checkpoints`` to upstream's directory, after
-   checking the two files the default matcher loads against the sha256 of the files at
-   their published URLs (computed by the Task 11 agent on 2026-10-10 from
-   ``raw.githubusercontent.com/cvlab-epfl/disk/master/depth-save.pth`` and
-   ``github.com/cvg/LightGlue/releases/download/v0.1_arxiv/disk_lightglue.pth``; the
-   layer's files hash to the same values).
-
-4. ``<package>/data/bf_formats.txt`` is REWRITTEN by ``init_jvm`` on every JVM start
-   (``slide_io.py:95, 274-279``; new in 1.2.0). It is made writable by any user, in the
-   installed package and in the source tree. THAT IS NOT ENOUGH UNDER APPTAINER, where
-   the image is mounted read-only: the run must add ``--writable-tmpfs``
-   (containers/README.md says so in this image's row).
-
-Links, not copies: the files stay upstream's own, and the image does not grow.
+Links, not copies: the files stay upstream's and the image does not grow.
 """
 
 from __future__ import annotations

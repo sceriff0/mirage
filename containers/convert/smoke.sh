@@ -1,55 +1,20 @@
 #!/usr/bin/env bash
 # Import smoke test for bolt3x/mirage-convert.
 #
-# ONE DEFINITION, RUN IN TWO PLACES: this image's own Dockerfile RUNs it as a build
-# step, and .github/workflows/containers.yml runs it again with `docker run` against
-# the built image on a pull request that touched this build context. A stack that
-# resolves in pip and then explodes on first import therefore fails the BUILD, not a
-# cluster task six hours in.
+# Run as a build step by the Dockerfile and again by containers.yml against the built
+# image, so a stack that resolves in pip but fails on import fails the build.
 #
-# WHAT IT ASSERTS, AND WHY THAT SET. Exactly the third-party modules bin/convert_image.py
-# imports at run time (numpy, tifffile, bioio, h5py), PLUS the Bio-Formats reader, which
-# is the one whose failure mode is invisible to a pip resolve: bioio discovers its reader
-# plugins through an entry point, so a broken bioio-bioformats is not an ImportError in
-# convert_image.py -- it is a format the pipeline silently cannot read.
+# Asserts the modules bin/convert_image.py imports (numpy, tifffile, bioio, h5py) plus the
+# Bio-Formats reader: bioio finds plugins through an entry point, so a broken
+# bioio-bioformats is not an ImportError, just a format that silently cannot be read.
 #
-# THE POSITIVE LEG CALLS THE REAL PRODUCTION REDIRECT, NOT A HAND-ROLLED COPY OF IT.
-# Review round 1 on Task 7 found that this script used to call
-# `scyjava.config.set_cache_dir`/`set_m2_repo` directly -- two calls PRODUCTION NEVER
-# MADE, because nothing on the CONVERT_IMAGE run path called
-# `bin/utils/jvm_cache.py::point_jvm_cache_off_readonly_home()` at the time. That made
-# this script pass while proving nothing about the real run path: the redirect it
-# exercised and the redirect the pipeline uses were two different mechanisms that
-# happened to agree. `bin/utils/ome_io.py::_open_bioio` and
-# `bin/convert_image.py::read_image` now both call the guard for the bioio-bioformats
-# route, and the Dockerfile COPYs the real `bin/utils/jvm_cache.py` into the image (on
-# its own PYTHONPATH entry, never shadowing the copy Nextflow stages from the git
-# checkout at run time) so this script can call the SAME function.
-#
-# THE `HOME=/nonexistent` READ IS THE POINT. bffile fetches ome:formats-gpl through
-# scyjava/jgo into ~/.jgo + ~/.m2 at first use; the Dockerfile baked those under /root and
-# made them world-readable. This proves the reader OPENS A FILE with no usable $HOME --
-# the cluster's actual condition -- rather than merely that the package imports.
-#
-# THE NEGATIVE LEG PROVES THE LEVER IS LOAD-BEARING, NOT DECORATIVE. Run as root,
-# `HOME=/nonexistent` alone proves nothing: root can `os.makedirs('/nonexistent/...')`
-# freely (CAP_DAC_OVERRIDE), so a positive-only smoke test cannot tell "the redirect
-# worked" apart from "root can write anywhere anyway". This leg drops privileges to
-# UID 65534 (nobody) with `os.setuid`/`os.setgid` -- unprivileged, like
-# nextflow.config's `docker.runOptions = '-u $(id -u):$(id -g)'` -- and skips the guard
-# entirely, so scyjava is left with its Path.home()-derived default of
-# `/nonexistent/.jgo`. Creating that directory needs write access to `/` (root-owned,
-# mode 755), which UID 65534 does not have, so the read MUST fail. If it ever succeeds,
-# either the redirect stopped being load-bearing or this leg stopped exercising the
-# failure it claims to -- either way the smoke test should fail loudly, not stay quiet.
-#
-# The two Glencoe `command -v` assertions that used to be here are gone with the tools:
-# nothing in the pipeline invoked bioformats2raw or raw2ometiff.
+# The positive leg reads a file with HOME=/nonexistent through the production redirect
+# (bin/utils/jvm_cache.py, copied in by the Dockerfile). The negative leg repeats the
+# read as an unprivileged uid without the redirect and must fail; root alone would pass
+# because it can write anywhere.
 set -euo pipefail
 
-# `python` is NOT present in every base used here -- containers/convert installs
-# python3 with no `python` alternative -- so resolve the interpreter rather than
-# assuming a name.
+# Some bases have only `python3`.
 PY="$(command -v python || command -v python3)"
 
 "$PY" -c "
@@ -63,17 +28,14 @@ print('convert image OK:',
       '| bioio reader', BioImage.__name__,
       '| bioio-bioformats', bioio_bioformats.__name__)"
 
-# The baked Maven artifacts. jgo creates the directory before it populates it, so the
-# emptiness check is the one that matters.
+# The baked Maven artifacts. jgo creates the directory before filling it, so check it is
+# not empty.
 test -d /root/.m2/repository/ome/formats-gpl
 test -n "$(ls -A /root/.m2/repository/ome/formats-gpl)"
 test -d /root/.jgo
 echo "convert image OK: Bio-Formats jars are baked under /root/.m2 and /root/.jgo"
 
-# POSITIVE LEG: read a real file through Bio-Formats with NO usable $HOME, via the
-# PRODUCTION redirect (bin/utils/jvm_cache.py, COPYed in by the Dockerfile onto
-# /usr/local/lib/mirage_jvm) -- the exact function bin/utils/ome_io.py::_open_bioio and
-# bin/convert_image.py::read_image call for the bioio-bioformats route.
+# Positive leg: read through Bio-Formats with no usable $HOME, via the production redirect.
 PYTHONPATH=/usr/local/lib/mirage_jvm HOME=/nonexistent "$PY" -c "
 from jvm_cache import point_jvm_cache_off_readonly_home
 point_jvm_cache_off_readonly_home()
@@ -83,19 +45,11 @@ from bioio_bioformats import Reader
 print('Bio-Formats reads with no HOME (production redirect):',
       Reader('/tmp/smoke-probe.tif').dims)"
 
-# Clean up the probe file. Left behind, it bakes into the image as a root-owned,
-# mode-644 file (this RUN executes as root at build time) -- and a LATER run of this
-# same script under an unprivileged runtime uid (Task 13's `-u 1000:1000` check, the
-# exact condition nextflow.config's docker profile uses) then fails on
-# `tifffile.imwrite`'s open-for-write with a plain PermissionError on /tmp/smoke-probe.tif,
-# before the redirect this leg exists to prove is even reached. /tmp itself is
-# world-writable (sticky bit), so a FRESH file here is never the problem -- a STALE
-# one owned by a different uid is. Measured red/green while building convert 2026-09-03.
+# Remove the probe: left behind as a root-owned file, it makes a later run of this script
+# under another uid fail on the write before reaching the redirect.
 rm -f /tmp/smoke-probe.tif
 
-# NEGATIVE LEG: the same read, same HOME=/nonexistent, but WITHOUT the guard and
-# dropped to an unprivileged UID first -- must FAIL. set +e/-e brackets the one command
-# allowed to return non-zero.
+# Negative leg: same read without the redirect, as an unprivileged uid; must fail.
 set +e
 HOME=/nonexistent "$PY" -c "
 import os
@@ -127,14 +81,8 @@ if [ "$noguard_status" -eq 0 ]; then
 fi
 echo "convert image OK: Bio-Formats read correctly FAILS (exit $noguard_status) with no jvm-cache redirect -- the positive leg's redirect above is load-bearing, not decorative"
 
-# Same reason as the positive leg's cleanup above: this file was written by UID 65534
-# (the leg drops privilege before writing it), so left behind it bakes into the image
-# owned by 65534 and blocks a later rerun under any OTHER uid, including root's own
-# `docker run` default. rm runs here as the still-root outer shell (only the inner
-# python -c dropped privilege), so it can remove a 65534-owned file with no DAC issue.
+# Written by uid 65534, so remove it for the same reason (the outer shell is still root).
 rm -f /tmp/smoke-noguard-probe.tif
 
-# procps supplies `ps`. Nextflow's task-metrics wrapper hard-exits BEFORE the script
-# block when it is absent, and params.enable_trace defaults to true, so every task in
-# this image would fail with exit status 1 and empty stdout.
+# procps supplies `ps`, which Nextflow's task-metrics wrapper needs.
 ps -e -o pid= -o ppid= > /dev/null && echo "procps OK: nextflow task-metrics wrapper can run"

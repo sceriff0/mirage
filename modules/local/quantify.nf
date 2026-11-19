@@ -1,11 +1,6 @@
 /*
- * QUANTIFY - Marker intensity quantification
- *
- * Measures per-cell marker intensities from single-channel TIFFs using
- * segmentation masks. Computes morphological features and intensity statistics.
- *
- * Input: Single-channel TIFF and segmentation mask
- * Output: Per-channel quantification CSV with cell measurements
+ * QUANTIFY - per-cell intensity statistics of one single-channel TIFF under the
+ * segmentation mask; one CSV per channel.
  */
 process QUANTIFY {
     tag "${meta.patient_id} - ${meta.channel_name}"
@@ -25,11 +20,8 @@ process QUANTIFY {
 
     script:
     def args = task.ext.args ?: ''
-    // Channel name from CSV metadata (set in postprocess.nf from meta.channels)
     def channel_name = meta.channel_name
-    // Per-compartment quantification: route the nuclear mask in when enabled.
-    // The mask path is only available here (not in modules.config ext.args), so the
-    // toggle is read from params; the --expanded flag arrives via ext.args.
+    // The nuclear mask path exists only here, so this toggle cannot live in ext.args.
     def nuclei_arg = params.quantify_compartments ? "--nuclei_mask_file ${nuclei_mask}" : ''
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${channel_tiff}", "${cell_mask}"], "${meta.id}.QUANTIFY.size.csv")}

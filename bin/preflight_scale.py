@@ -1,25 +1,13 @@
 #!/usr/bin/env python3
-"""Pre-flight scale scan -- resolve `--pixel_size` for every input slide up front.
+"""Pre-flight scale scan: resolve `--pixel_size` for every input slide up front.
 
-`params.pixel_size` owns every micrometre measurement the pipeline produces (see
-`bin/utils/pixel_size.py`'s module docstring). A wrong or unresolvable value does not
-crash anything -- it silently corrupts every area, distance and density while producing
-a perfectly well-formed output tree, and the corruption is only ever noticed a long way
-downstream (in the published GeoJSON, or worse, in the sibling QuPath extension that
-consumes it). This script is the pre-flight that catches that BEFORE any heavy work
-starts: it reads every input image's OME header, resolves what scale the run will
-actually use for it, and either fails loudly (an unresolvable `auto`) or warns loudly
-(a supplied number that disagrees with, or cannot be confirmed by, the file).
+A wrong pixel size silently corrupts every area, distance and density downstream, so
+this reads each image's OME header before heavy work starts. It fails on an
+unresolvable `auto` and warns when a supplied number disagrees with, or cannot be
+confirmed by, the file.
 
-It reads ONLY OME metadata -- never pixel data. That is what makes it fast enough to run
-over every input rather than being folded into a per-file step deep in the pipeline:
-`read_ome_pixel_size` over this repo's whole six-fixture test set takes ~0.002s. If this
-script ever needs `.asarray()` or anything that decodes pixel data, that is a sign the
-contract has been broken -- stop and reconsider.
-
-Every problem it finds is collected across ALL images before this script decides
-anything, so a single invocation names every offending slide -- not just the first one
-an operator would otherwise have to fix one run at a time.
+Reads OME metadata only, never pixel data, so it stays fast over every input.
+Problems are collected across all images, so one run names every offending slide.
 
 Exit codes
 ----------
@@ -55,9 +43,7 @@ __all__ = ["main"]
 def _parse_pixel_size(raw: str) -> Optional[float]:
     """Return the configured µm/px as a float, or None for `'auto'`.
 
-    Raises ValueError for anything that is neither -- the same "positive number or
-    'auto', otherwise error" contract `resolve_pixel_size` documents, restated here
-    because this script decides for a whole batch rather than one image.
+    Raises ValueError for anything that is neither.
     """
     text = raw.strip()
     if text.lower() == AUTO:
@@ -96,18 +82,10 @@ def _parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
 
 
 def _warn_on_heterogeneous_scales(report: dict, logger) -> None:
-    """Warn -- never fail -- when this run's slides resolved to distinguishable scales.
+    """Warn (never fail) when this run's slides resolved to distinguishable scales.
 
-    Under `auto`, each slide's scale comes from its own OME header, so two slides of one
-    patient can legitimately resolve to different values -- and they are registered
-    together and merged into one pyramid regardless. This branch's whole policy is that
-    a resolved or supplied scale is surfaced, never refused: a real mixed-magnification
-    cohort exists, so this only warns, naming every distinct value and the slides
-    carrying it.
-
-    Reuses `PIXEL_SIZE_RTOL`, the same relative tolerance `warn_on_pixel_size_mismatch`
-    uses, so "different" means the same thing everywhere in this module -- a value
-    serialised as 0.32499998807907104 does not count as a second scale.
+    Mixed-magnification cohorts are legitimate, so this only names each distinct value
+    and its slides. Values within `PIXEL_SIZE_RTOL` count as one scale.
     """
     values = sorted({info["pixel_size"] for info in report.values()})
     if len(values) < 2:
@@ -148,10 +126,6 @@ def _warn_on_heterogeneous_scales(report: dict, logger) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point: resolve and validate every image's pixel size before the run starts.
 
-    Collects a verdict for EVERY image before deciding anything -- see the module
-    docstring; nothing here may break out of the loop early, because a
-    mixed-magnification cohort is legitimate and must be reported whole.
-
     Returns
     -------
     int
@@ -173,8 +147,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     unresolvable: List[str] = []
     unconfirmed: List[str] = []
 
-    # Collect a verdict for EVERY image before deciding anything -- see module
-    # docstring. Nothing here may break out of the loop early.
+    # Collect a verdict for every image before deciding; do not break out early.
     for image in args.images:
         path = Path(image)
         det_x, det_y = read_ome_pixel_size(path)
@@ -218,11 +191,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     if unconfirmed:
-        # Deliberately worded as "could not be verified", not as an error: this is the
-        # ordinary case for most WSI formats (see bin/utils/pixel_size.py), it fires on
-        # every default --pixel_size + no-OME-metadata run (including CI's own test
-        # profile), and the run is proceeding regardless -- the configured value stays
-        # authoritative either way.
+        # Not an error: most WSI formats carry no OME scale; the configured value wins.
         logger.warning(
             "  [SCALE UNCONFIRMED] --pixel_size %g was supplied, but it could not be "
             "verified against OME metadata for %d slide(s) (no PhysicalSizeX/Y present): "

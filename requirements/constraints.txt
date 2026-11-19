@@ -1,29 +1,17 @@
-# THE version authority for every package installed by more than one container image.
+# Version authority for every package installed by more than one container image.
 #
-# Read by BOTH the Dockerfiles under containers/ and the workflows under
-# .github/workflows/, so the version string exists exactly ONCE. Before this file there
-# were two copies -- an inline `pip install pkg==ver` in the workflow YAML and a pin in
-# the image -- plus a 42 KB test proving they were equal. There is now nothing to prove
-# equal.
-#
-# HOW IT IS USED
+# Read by the Dockerfiles under containers/ and by the CI workflows, so each version is
+# written once.
 #   * Per-image files (stare.txt, segeval.txt, regqc.txt) open with `-c constraints.txt`;
-#     pip resolves that path relative to the file that names it, so the Dockerfiles COPY
-#     both into the same directory.
-#   * Dockerfiles that pin inline pass `-c /tmp/requirements/constraints.txt` on the
-#     pip command line. The inline pin and the constraint must AGREE -- a constraint does
-#     not override a direct requirement, it conflicts with it and the build fails. That is
-#     the desired behaviour: a divergence stops the build instead of shipping.
-#   * requirements/ci.txt pulls the versions in by `-r`-including the production files,
-#     so CI restates nothing.
+#     pip resolves that path relative to the naming file, so Dockerfiles COPY both together.
+#   * Dockerfiles that pin inline pass `-c /tmp/requirements/constraints.txt`. An inline pin
+#     must agree with the constraint, or the build fails.
+#   * requirements/ci.txt `-r`-includes the production files.
 #
-# tests/test_container_harmonisation.py READS this file as its HARMONISED table (it no
-# longer restates it) and checks every image against it.
-# tests/test_ci_stack_pinned.py asserts no workflow names a version at all.
+# tests/test_container_harmonisation.py reads this file as its harmonised table.
 #
-# Ceilings are the newest release that still supports Python 3.10, except numpy, which is
-# held at the last 1.x because the segmentation image's TensorFlow 2.15 base requires
-# numpy<2.
+# Ceilings are the newest releases that support Python 3.10, except numpy, held at 1.x
+# because the segmentation image's TensorFlow 2.15 base requires numpy<2.
 numpy==1.26.4
 tifffile==2025.5.10
 imagecodecs==2025.3.30
@@ -34,56 +22,23 @@ scikit-image==0.25.2
 scipy==1.15.3
 dask==2026.7.1
 
-# csbdeep USED TO BE HERE and is not any more. It is installed by exactly ONE image now --
-# containers/stardist, which pins it inline at 0.8.0's successor 0.8.2 because
-# bin/segment.py does `from csbdeep.utils import normalize`. containers/regqc installed it
-# too until 2026-09-02, as part of a TensorFlow/StarDist stack that image never ran.
-# tests/test_ci_stack_pinned.py::test_every_constrained_package_is_installed_by_more_than_
-# one_image is what forced the move: this file is for SHARED packages, and a solo pin
-# belongs in the one image's own file.
-
-# opencv, BOTH distribution names, same release. `containers/regqc` and `containers/merge`
-# install `opencv-python` (they have the display libs); CI installs `opencv-python-headless`
-# (the runners do not). Two distributions, one upstream release -- so no single constraint
-# can cover both, and before they were listed here the two versions were written in two
-# files with nothing tying them: a CVE bump to regqc would have left CI testing
-# bin/utils/qc.py against a different cv2 than production ships, silently.
-#
-# The headless line constrains NO image -- a constraint on a package nobody requests is
-# inert -- so it costs the nine COPYing Dockerfiles nothing. It exists so `requirements/
-# ci.txt` can name `opencv-python-headless` with no version at all, and so the two are one
-# `git diff` apart. tests/test_ci_stack_pinned.py's EQUIVALENT_DISTRIBUTIONS asserts they
-# stay equal, and exempts the headless line from the "installed by more than one image"
-# rule that every other entry here must satisfy.
+# opencv under both distribution names at one release: regqc and merge install
+# `opencv-python`, CI installs `opencv-python-headless`. The headless line constrains no
+# image; it lets requirements/ci.txt name the package without a version.
 opencv-python==4.10.0.82
 opencv-python-headless==4.10.0.82
 
 # ---------------------------------------------------------------------------------------
-# DELIBERATELY NOT CONSTRAINED HERE, and where each one's single copy actually lives.
+# Not constrained here, and where each one is pinned:
 #
-# These three are shared between CI and a production image, but a global constraint on them
-# would be WRONG -- in three cases it would break a build outright. They are recorded here
-# so a reader looking for "where is this pinned?" finds the answer in one place, and each
-# authority file is the same file CI installs, so there is still only one copy.
+#   matplotlib  -> requirements/segeval.txt (3.8.4). containers/quantify pins 3.9.2, so a
+#                  single constraint would break one of the two builds.
 #
-#   matplotlib  -> requirements/segeval.txt (3.8.4), the image that runs the vendored CSE
-#                  evaluator. It DIVERGES on purpose: containers/quantify pins 3.9.2 for
-#                  plotting that has no version sensitivity, while segeval's is
-#                  load-bearing for QualityScore. A single constraint could not satisfy
-#                  both and would fail two image builds. (containers/regqc pinned 3.9.2
-#                  too until 2026-09-02, when the unimported dependency was removed.)
+#   scikit-learn-> requirements/segeval.txt (1.5.2). The vendored CSE subset depends on
+#                  sklearn internals; a global constraint would also force transitive
+#                  sklearn in images that never name it.
 #
-#   scikit-learn-> requirements/segeval.txt (1.5.2). The vendored CSE subset assigns fitted
-#                  PCA attributes by hand, so it is valid only against the sklearn internal
-#                  contract it was written for. Not constrained globally because a
-#                  transitive sklearn in an image that never names it (cellSAM's chain)
-#                  would be forced to this version by a constraint it has no reason to meet.
-#
-#   torch       -> requirements/torch-cpu.txt (2.3.1, CPU index), installed by CI only since
-#                  the tiled image became the torch-free containers/stare (2026-09-27;
-#                  kornia.txt went with it). NOT constrained globally: containers/cellsam and
-#                  containers/instanseg get a CUDA-matched torch from their
-#                  `pytorch/pytorch:2.6.0-cuda*` base and never pip-install it, so a global
-#                  `torch==2.3.1` constraint would make pip DOWNGRADE that baked CUDA wheel
-#                  to a CPU one the moment any transitive dependency touched torch.
+#   torch       -> requirements/torch-cpu.txt (2.3.1, CPU index), CI only. cellsam and
+#                  instanseg get a CUDA torch from their base image; a global constraint
+#                  would make pip downgrade it to a CPU wheel.
 # ---------------------------------------------------------------------------------------

@@ -27,9 +27,8 @@ from metadata import is_nuclear
 
 logger = get_logger(__name__)
 
-# Canonical morphology column order (single source of truth:
-# bin/utils/measurements.py). Kept as a list here since reorder_columns
-# below iterates it to build an ordered column selection.
+# Canonical morphology column order (owner: bin/utils/measurements.py), as a list
+# because reorder_columns iterates it.
 MORPHOLOGY_COLS = list(MORPHOLOGY_COLS)
 
 
@@ -69,16 +68,11 @@ def merge_intensities(
     merged = morphology.copy()
     base_labels = merged["label"].to_numpy()
 
-    # Marker columns are collected and concatenated ONCE at the end rather than merged in
-    # sequence. `merged.merge(..., how="left")` copies the whole growing table on every file, so
-    # N files cost N copies of an ever-wider frame; measured 2.05x / -274 MB (PERF-PLAN C12b).
-    # `how="left"` on a unique key IS a reindex, which is what makes the two equivalent.
-    #
-    # `pending` preserves the one subtlety this refactor could have broken: the old loop mutated
-    # `merged` as it went, so a marker arriving in file 2 collided with the copy file 1 had
-    # already added. Collision is therefore checked against the base table AND the not-yet-
-    # concatenated columns, so a later file still overwrites an earlier one, and `protected_cols`
-    # still keeps the EARLIER file's values. Pinned by tests/test_merge_quant_csvs.py.
+    # Marker columns are collected and concatenated once at the end, instead of a
+    # merge per file (each of which copies the growing table). Collisions are checked
+    # against the base table and the queued columns, so a later file still overwrites
+    # an earlier one and `protected_cols` keeps the earlier value
+    # (tests/test_merge_quant_csvs.py).
     pending: dict[str, object] = {}
 
     for csv_file in csv_files:
@@ -113,8 +107,7 @@ def merge_intensities(
         if not marker_cols:
             continue
 
-        # Validate cell labels. np.isin over the label arrays, not two python sets: the sets
-        # were one python int object per cell, built per file.
+        # Validate cell labels with np.isin over the label arrays.
         file_labels = df["label"].to_numpy()
         n_missing = int((~np.isin(base_labels, file_labels)).sum())
         n_extra = int((~np.isin(file_labels, base_labels)).sum())
@@ -125,9 +118,8 @@ def merge_intensities(
                 "%s: Has %d extra cells (will be ignored)", csv_file.name, n_extra
             )
 
-        # A duplicated label makes the reindex ambiguous. The old sequential merge did not
-        # error on it -- it DUPLICATED every matching base row, silently changing the cell
-        # count downstream. Refusing is the intended behaviour, not a regression.
+        # A duplicated label makes the reindex ambiguous (and would duplicate cells), so
+        # it is refused.
         if df["label"].duplicated().any():
             dupes = df.loc[df["label"].duplicated(), "label"].unique()[:5]
             raise ValueError(
@@ -151,12 +143,9 @@ def reorder_columns(
 ) -> pd.DataFrame:
     """Reorder columns and add fov/cell_size for downstream analysis.
 
-    The nuclear/fiducial marker leads the marker block. Which channel that is
-    comes from ``nuclear_markers`` (``params.nuclear_markers``, passed down by
-    MERGE_QUANT_CSVS) via the shared ``utils.metadata.is_nuclear`` rule -- this
-    used to test for the literal string ``"DAPI"``, so a CELLTOX panel silently
-    got alphabetical ordering instead. Ordering is presentational (every consumer
-    reads by column NAME), but it should not depend on how a panel is named.
+    The nuclear/fiducial marker leads the marker block, chosen from ``nuclear_markers``
+    (``params.nuclear_markers``) via ``utils.metadata.is_nuclear``. Ordering is
+    presentational; consumers read by column name.
     """
     # Separate morphology and marker columns
     morpho_present = [col for col in MORPHOLOGY_COLS if col in merged.columns]
@@ -248,11 +237,8 @@ def main() -> None:
     )
     logger.info("Merging %d intensity CSVs with morphology...", len(csv_files))
 
-    # The nuclear/fiducial marker is the protected column: it is identical across
-    # cycles, so on an add_cycle run the PRIOR table's copy is authoritative and an
-    # incoming one is dropped rather than overwriting it. This was pinned to the
-    # literal "DAPI", which made the protection silently inert for any other
-    # configured fiducial.
+    # The nuclear/fiducial marker is protected: it is identical across cycles, so on
+    # an add_cycle run the prior table's copy wins and an incoming one is dropped.
     nuclear_cols = tuple(
         col
         for col in morphology.columns
@@ -260,10 +246,8 @@ def main() -> None:
     )
     merged = merge_intensities(morphology, csv_files, protected_cols=nuclear_cols)
 
-    # Validate the row count is exactly preserved. A left merge on 'label' can
-    # both LOSE cells (fewer rows) and FAN OUT (more rows) — the latter happens
-    # when an intensity CSV has duplicate labels, silently duplicating cells into
-    # the GeoJSON and z-score stats. Guard both directions.
+    # The row count must be preserved exactly. A left merge on 'label' can lose cells
+    # or fan out (duplicate labels in an intensity CSV); guard both directions.
     cells_delta = len(merged) - len(morphology)
     if cells_delta < 0:
         logger.critical("Lost %d cells during merge", -cells_delta)

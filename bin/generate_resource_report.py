@@ -4,20 +4,10 @@ generate_resource_report.py
 Self-contained HTML computational-resources report for a MIRAGE run.
 Joins the aggregated input-size log with Nextflow's trace.txt. Stdlib only.
 
-CALLER: main.nf's `workflow.onComplete` -> generateResourceReport(Map cfg), which
-shells out to `python3 ${projectDir}/bin/generate_resource_report.py`. That is the
-ONLY caller, and it is invisible to a grep of modules/ and conf/ because no process
-invokes this script -- which is also why tests/test_pixel_size_is_passed.py's call-site
-scan can never reach it.
-
-STDLIB ONLY, and deliberately: onComplete runs on the LAUNCHING machine's interpreter,
-outside every container, so numpy/matplotlib/pandas may simply not be there. The
-`print()` at the end of main() is the one operator-facing line and stays a print for
-the same reason a report generated on the head node stays stdlib -- it is the script's
-result announcement on an interpreter whose logging configuration belongs to nobody.
-(bin/utils/logger.py IS itself stdlib-only, so importing it would work; it is not
-imported because a sys.path hack into the project tree is a worse dependency for a
-head-node script than one print.)
+Its only caller is main.nf's `workflow.onComplete` (generateResourceReport), not a
+process, so a grep of modules/ and conf/ will not find it. It runs on the launching
+machine's interpreter outside every container, hence stdlib only and a plain
+`print()` for the result line.
 """
 
 import argparse
@@ -36,14 +26,8 @@ def parse_bytes(s):
     if s is None:
         return None
     s = s.strip()
-    # Operator precedence note: `and` binds tighter than `or`, so the buggy
-    # source form of this condition (`s in {"-", "0"} and s == "-"`) reduces,
-    # for every value of s, to exactly `s == "-"` — the "0" set member was
-    # inert and never fired. A bare "0" is a real zero-byte reading (e.g.
-    # peak_rss/rchar/wchar can genuinely be 0 for a trivial task) and must
-    # keep falling through to float("0") == 0.0, matching parse_duration's
-    # and parse_percent's identical `not s or s == "-"` guard. Only "-"
-    # (Nextflow's not-run/cached sentinel) and empty are "missing".
+    # Only "-" (Nextflow's not-run/cached sentinel) and empty are missing. A bare "0"
+    # is a real zero-byte reading and falls through to 0.0, as in parse_duration.
     if not s or s == "-":
         return None
     m = re.match(r"^([\d.]+)\s*([KMGT]?B)$", s, re.IGNORECASE)
@@ -81,11 +65,8 @@ def parse_duration(s):
 def parse_percent(s):
     """Parse a percentage string ('142.3%', '-') to float.
 
-    Rejects a value that parses but is not finite (``'nan%'``, ``'inf%'``): a
-    corrupted trace field must not silently become a non-finite `cpu_pct`
-    that later renders as the literal text ``'nan%'``/``'inf%'`` in the
-    report -- `float()` parses those strings without error, so this has to be
-    checked explicitly rather than left to the `ValueError` path below.
+    Rejects a value that parses but is not finite (``'nan%'``, ``'inf%'``), which
+    ``float()`` accepts without error.
     """
     if s is None:
         return None
@@ -130,10 +111,7 @@ def parse_trace(path):
                     "realtime_s": parse_duration(r.get("realtime")),
                     "duration_s": parse_duration(r.get("duration")),
                     "cpu_pct": parse_percent(r.get("%cpu")),
-                    # The REQUEST, not the usage. nextflow.config's trace `fields` has
-                    # carried `memory` and `cpus` all along; nothing read them, so the
-                    # report could show what a task used and never what it asked for --
-                    # and over-provisioning is invisible without both.
+                    # The request, not the usage: needed to show over-provisioning.
                     "memory_b": parse_bytes(r.get("memory")),
                     "cpus": _int_or_none(r.get("cpus")),
                     "peak_rss_b": parse_bytes(r.get("peak_rss")),
@@ -146,10 +124,8 @@ def parse_trace(path):
 
 
 # The columns AGGREGATE_SIZE_LOGS writes, and the only header this reader accepts.
-# lib/ProcessEnvelope.groovy's SIZE_LOG_COLUMNS is the owner of the order; the two
-# are held equal by tests/test_size_log_schema_has_one_owner.py, because Python
-# cannot import Groovy and a silent reorder would produce a plausible wrong report
-# rather than an error.
+# Must equal lib/ProcessEnvelope.groovy's SIZE_LOG_COLUMNS
+# (tests/test_size_log_schema_has_one_owner.py).
 SIZE_LOG_COLUMNS = ("process", "sample_id", "filename", "bytes")
 
 
@@ -168,10 +144,7 @@ def parse_size_log(path):
         for row in reader:
             proc = (row.get("process") or "").strip()
             sample = (row.get("sample_id") or "").strip()
-            # No `proc == "STUB"` special case any more: ProcessEnvelope.sizeLogStub
-            # writes the REAL process name with 0 bytes, so a stub run's rows are
-            # ordinary rows that happen to sum to zero. The old literal made every
-            # process in a stub run collapse into one fake key.
+            # Stub runs write the real process name with 0 bytes, so no special case.
             if not proc:
                 continue
             try:
@@ -194,9 +167,8 @@ def _sumf(values):
 
 
 def _is_failure(row):
-    """A non-zero exit. `-` is Nextflow's not-run/cached sentinel and `` is a
-    missing field; neither is a failure, and counting them as one used to inflate
-    every failure count in the report."""
+    """A non-zero exit. `-` (Nextflow's not-run/cached sentinel) and `` (missing)
+    are not failures."""
     return row.get("exit") not in ("0", "", "-", None)
 
 
@@ -206,10 +178,8 @@ _GIB = 1024**3
 def _reserved_gb_h(row):
     """Reserved memory-hours for one task: GB requested x hours held.
 
-    Falls back to observed ``peak_rss`` when no request was recorded, because a
-    task that reserved an unknown amount still held something. Returns 0.0 when
-    neither number is available -- an unknown cost is reported as no cost rather
-    than guessed, and the task count beside it keeps the panel honest.
+    Falls back to observed ``peak_rss`` when no request was recorded. Returns 0.0 when
+    neither is available.
     """
     rt = row.get("realtime_s")
     if not rt:
@@ -266,9 +236,8 @@ def join_size(trace_rows, size_map):
         input_bytes = size_map.get((proc, tag))
         if input_bytes is None:
             # Fallback: a size sample whose id is a prefix of the trace tag
-            # (trace tag is meta.id = "<patient>_<stem>"; size sample is patient).
-            # Boundary-match on "_" so sample "P1" cannot prefix-match tag
-            # "P10_slide" (a plain startswith would false-positive there).
+            # (tag is meta.id = "<patient>_<stem>"; sample is patient). Boundary-match on "_"
+            # so "P1" does not match "P10_slide".
             for sample, b in by_proc.get(proc, []):
                 if sample and (tag == sample or tag.startswith(sample + "_")):
                     input_bytes = b
@@ -288,11 +257,8 @@ def fmt_bytes(b):
     Returns
     -------
     str
-        ``'N/A'`` when ``b`` is ``None``; ``'n/a'`` when ``b`` is a number but
-        not a finite one (``+-inf``/``nan`` -- a corrupted trace field or a
-        zero-denominator ratio upstream can produce one, and left unguarded it
-        would print as the literal ``'inf TB'``); otherwise one decimal place
-        and the largest unit at or below 1024 of the next one, capped at TB.
+        ``'N/A'`` when ``b`` is ``None``; ``'n/a'`` when ``b`` is not finite;
+        otherwise one decimal place in the largest fitting unit, capped at TB.
     """
     if b is None:
         return "N/A"
@@ -316,10 +282,8 @@ def fmt_secs(s):
     Returns
     -------
     str
-        ``'N/A'`` when ``s`` is ``None``; ``'n/a'`` when ``s`` is a number but
-        not a finite one (``int(inf)`` raises ``OverflowError`` and
-        ``int(nan)`` raises ``ValueError`` -- both real inputs here, not
-        hypothetical ones; see `_finite_or_none`).
+        ``'N/A'`` when ``s`` is ``None``; ``'n/a'`` when ``s`` is not finite
+        (``int()`` would raise on it).
     """
     if s is None:
         return "N/A"
@@ -338,12 +302,9 @@ def fmt_secs(s):
 # ---------------------------------------------------------------------------
 # Inline SVG panels
 #
-# Hand-rolled, stdlib-only, in the shape of bin/generate_qc_report.py's
-# _tiled_tre_heatmap_svg(). Copied in SHAPE and not imported: this script runs on
-# the head node OUTSIDE every container (F6), so it must stay importable with the
-# standard library alone, and it is deliberately self-contained -- see _esc's
-# docstring. Do not factor these into a shared module; that would give two
-# separately-owned scripts one file to drift in.
+# Hand-rolled and stdlib-only, in the shape of bin/generate_qc_report.py's SVG
+# helpers. Not shared with it: this script runs on the head node outside every
+# container and must import with the standard library alone.
 # ---------------------------------------------------------------------------
 
 _PANEL_W = 900  # viewBox width; the <svg> itself scales to its container
@@ -355,10 +316,8 @@ _VALUE_W = 150  # right gutter for the formatted value
 def short_process(name):
     """`MIRAGE:PREPROCESSING:CONVERT_IMAGE` -> `CONVERT_IMAGE`.
 
-    Fully-qualified process names are too long for a bar label at any readable
-    font size, and every one of them shares the same prefix, so the prefix
-    carries no information in a chart of this pipeline's own processes. The full
-    name is kept in each bar's <title> tooltip.
+    Bar labels drop the shared prefix; the full name stays in each bar's <title>
+    tooltip.
     """
     return (name or "").rsplit(":", 1)[-1]
 
@@ -366,10 +325,8 @@ def short_process(name):
 def _svg(width, height, body, title):
     """The one <svg> wrapper every panel here uses.
 
-    A viewBox plus `width:100%` makes the panel scale to the report's column at
-    any window size without a layout library, and `role`/`aria-label` give it a
-    name for a screen reader, which a <table> got for free and a bag of <rect>s
-    does not.
+    A viewBox plus `width:100%` scales the panel to the report column, and
+    `role`/`aria-label` name it for screen readers.
     """
     return (
         f'<svg viewBox="0 0 {width} {height}" width="100%" '
@@ -379,21 +336,11 @@ def _svg(width, height, body, title):
 
 
 def _finite_or_none(v):
-    """A finite float, or ``None`` -- collapses ``+-inf``/``nan`` into "missing".
+    """A finite float, or ``None``: collapses ``+-inf``/``nan`` into "missing".
 
-    In the shape of generate_qc_report.py's `_finite()` (plan 09), one value at
-    a time instead of a list. ``None`` already means "missing" everywhere a
-    panel below reads a rollup or joined-row field, and every one of those
-    reads already tolerates it (`... or 0.0`, `is not None`); the case this
-    adds is a reading that IS a number but not a finite one. A corrupted trace
-    field or a zero-denominator ratio upstream can produce one, and left
-    unguarded it slips past every `is not None` check: `int(inf)` raises
-    ``OverflowError`` in `fmt_secs`, and an unguarded division or f-string
-    renders the literal text ``'nan'``/``'inf'`` into an SVG coordinate or axis
-    label. Folding it into ``None`` here lets every existing missing-value path
-    handle it for free -- callers filter with the same `is not None` / `or 0.0`
-    idiom they already use, just applied to this function's return value
-    instead of the raw field.
+    Every panel already treats ``None`` as missing (`is not None`, `or 0.0`), so
+    folding non-finite readings into it keeps them out of ``fmt_secs`` and out of SVG
+    coordinates and labels.
     """
     if v is None:
         return None
@@ -405,9 +352,7 @@ def _finite_or_none(v):
 def _positive_finite(v):
     """True iff `v` is a finite number strictly greater than zero.
 
-    The one shape `size_vs_runtime_svg`'s log-log axes can plot: `math.log10`
-    is undefined at and below zero, and `+-inf`/`nan` cannot be placed on a log
-    axis either (see `_finite_or_none`).
+    The only values `size_vs_runtime_svg`'s log-log axes can plot.
     """
     fv = _finite_or_none(v)
     return fv is not None and fv > 0
@@ -416,20 +361,9 @@ def _positive_finite(v):
 def walltime_bars_svg(roll, top=15):
     """Per-process wall-time contribution, ranked, longest first.
 
-    Answers "where did the run's time actually go?" in one glance, which the
-    per-process table it replaces could not: sorted alphabetically, with ten
-    columns, the one number that matters was never adjacent to itself.
-
-    A process whose `realtime_total_s` is present but non-finite (`+-inf`/
-    `nan`) is dropped rather than drawn: `int(inf)` inside `fmt_secs` would
-    otherwise crash the whole report over one corrupted rollup row.
-
-    Each bar's percentage is its share of the RUN's total wall-time across
-    every process, not of the longest bar plotted here. Bar WIDTH still scales
-    to the longest of the top-N (`vmax`) so the ranking reads at a glance, but
-    the top bar dividing by itself would always print "100%" regardless of
-    how the run's time was actually distributed -- a truthful percentage needs
-    the run total as its denominator instead.
+    A process with a non-finite `realtime_total_s` is dropped. Each bar's percentage
+    is its share of the run's total wall-time; bar width scales to the longest bar
+    shown (`vmax`).
     """
     roll = [
         r
@@ -475,30 +409,14 @@ def walltime_bars_svg(roll, top=15):
 def memory_headroom_svg(roll, top=15):
     """Requested memory vs observed peak RSS, per process, ranked by waste.
 
-    This is where over-provisioning becomes visible, and it is the panel the old
-    report could not have drawn at all: it never read the trace's `memory`
-    column, so it showed usage with nothing to compare it against.
-
-    Two bars per process on a shared scale: a light track for the request and a
-    dark overlay for the observed peak. A wide light bar with a sliver of dark in
-    it is memory reserved and never used -- reserved GB.hours that the scheduler
-    could not give to anything else. A dark bar that overruns its track (drawn in
-    red) is the OOM-retry precursor, and must not be clipped to look like a
-    perfectly-sized task.
-
-    A process whose request or observed peak is present but non-finite
-    (`+-inf`/`nan`) is skipped like a missing value, not drawn: dividing by an
-    infinite request or subtracting an infinite peak would otherwise render as
-    the literal text 'nan% of nan TB' / 'requested inf TB'.
+    Two bars per process on a shared scale: a light track for the request and a dark
+    overlay for the observed peak. A peak that overruns its request is drawn in red,
+    not clipped. A process with a non-finite request or peak is skipped.
     """
     rows = [
         r
         for r in roll
-        # Deliberately a truthiness check, not `is not None`: `pct = 100 *
-        # obs / req` divides by `mem_req_max_b` below, and a genuine `0.0`
-        # request would divide-by-zero there. Skipping a falsy (0.0 or None)
-        # request is therefore load-bearing, not an oversight -- do not
-        # "fix" this to `is not None`.
+        # Truthiness, not `is not None`: a 0.0 request would divide by zero below.
         if _finite_or_none(r.get("mem_req_max_b"))
         and _finite_or_none(r.get("peak_rss_max_b")) is not None
     ]
@@ -541,18 +459,9 @@ def memory_headroom_svg(roll, top=15):
 def failure_cost_svg(roll, top=15):
     """What the run's failures and retries actually cost, per process.
 
-    Ranked by RESERVED MEMORY-HOURS, not by failure count. A count alone cannot
-    distinguish three cheap failures from one that held 450 GB for six hours, and
-    the second is the reason this panel exists: a retried task holds its whole
-    reservation for its whole wall-time and delivers nothing, which is invisible
-    in a green build. Measured across one real run, 19.6% of all reserved GB.h
-    went this way.
-
-    A process whose `failed_gb_h` or `failed_realtime_s` is present but
-    non-finite (`+-inf`/`nan`) is skipped like a missing value: ranking and
-    bar width both divide by the maximum `failed_gb_h`, and the tooltip
-    formats `failed_realtime_s` through `fmt_secs`, either of which would
-    otherwise render as the literal text 'nan'/'inf' rather than a real cost.
+    Ranked by reserved memory-hours, not by failure count: a retried task holds its
+    whole reservation for its whole wall-time and delivers nothing. A process with a
+    non-finite `failed_gb_h` or `failed_realtime_s` is skipped.
     """
     rows = [
         r
@@ -614,9 +523,8 @@ _SERIES = (
 def _stride_sample(items, cap):
     """Deterministically thin `items` to at most `cap` entries.
 
-    A fixed stride (rather than e.g. random sampling) keeps a re-render of the
-    same trace identical byte-for-byte, and keeps the sample spread across the
-    whole series rather than truncated to its first `cap` points.
+    A fixed stride keeps re-renders byte-identical and spreads the sample across the
+    whole series.
     """
     n = len(items)
     if n <= cap:
@@ -628,38 +536,15 @@ def _stride_sample(items, cap):
 def size_vs_runtime_svg(joined, top_processes=8, max_points_per_series=2000):
     """Input size against runtime, log-log, one series per process.
 
-    Reads join_size's output, i.e. the aggregated input-size log joined to the
-    trace by (process, tag). Answers the only question a resource report is
-    really asked: does this step's cost scale with the data, and where does it
-    stop being linear?
+    Reads join_size's output (input-size log joined to the trace by process and
+    tag). Log-log because inputs span MB to hundreds of GB and runtimes seconds to
+    hours. Points that cannot be placed on a log axis (zero, negative or non-finite,
+    see `_positive_finite`) are dropped and counted in the caption.
 
-    LOG-LOG, deliberately. One run spans megabytes to hundreds of gigabytes of
-    input and seconds to hours of runtime; on linear axes every point but the
-    largest collapses into the origin. The cost is that a log axis cannot place
-    a zero (or a negative, or `+-inf`/`nan` -- see `_positive_finite`), so such
-    tasks are dropped -- the panel states how many rather than parking them at
-    an arbitrary coordinate. A present-but-non-finite `input_bytes` or
-    `realtime_s` matters here specifically because it is NOT caught by a
-    ``<= 0`` check the way a zero or a negative is (``nan <= 0`` is ``False``,
-    and ``inf > 0`` is ``True``), so it would otherwise slip through as a
-    plottable point and either vanish from the drop count uncounted (`nan`) or
-    render as `cx='nan'` and an 'inf TB' axis label (`inf`).
-
-    The legend and the point budget are both RANKED BY POINT COUNT, never by
-    first appearance. On a real tiled-registration trace, `TILED_REG_TILE`
-    contributes 95% of all plottable points and is the run's largest wall-time
-    consumer, but a first-appearance `order` legended five small early
-    processes instead and left it unlabelled grey -- contradicting this
-    panel's own "one series per process" claim. The top `top_processes` by
-    point count get a legend entry and a stable colour; everything else is
-    drawn in one shared grey and rolled into a single "other (K processes)"
-    legend row, so every point is still accounted for by the legend. Each
-    process's own points are additionally capped to `max_points_per_series`
-    via a deterministic stride subsample (`_stride_sample`) -- uncapped, that
-    same 95%-of-points process alone drew one `<circle>` per task and pushed a
-    real report into the megabytes. The caption states how many of how many
-    points are actually drawn whenever the cap changed that number, so the
-    panel never silently shows a subset without saying so.
+    The legend and point budget are ranked by point count, not first appearance: the
+    top `top_processes` get a legend entry and colour, the rest share one grey
+    "other (K processes)" row. Each series is capped to `max_points_per_series` by
+    `_stride_sample`, and the caption says when the cap reduced the count.
     """
     usable = [
         j
@@ -697,9 +582,8 @@ def size_vs_runtime_svg(joined, top_processes=8, max_points_per_series=2000):
     xr = (x1 - x0) or 1.0
     yr = (y1 - y0) or 1.0
 
-    # Group by process (preserving arrival order within each group, so the
-    # stride subsample below is deterministic), then rank the GROUPS by point
-    # count -- see the docstring's real-trace measurement above.
+    # Group by process (keeping arrival order within each group, so the stride
+    # subsample is deterministic), then rank groups by point count.
     by_proc = {}
     for j, lx, ly in zip(usable, xs_all, ys_all):
         by_proc.setdefault(j["process"], []).append((j, lx, ly))
@@ -724,12 +608,8 @@ def size_vs_runtime_svg(joined, top_processes=8, max_points_per_series=2000):
             parts.append(
                 f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='4' fill-opacity='0.7' "
                 f"fill='{fill}'>"
-                # short_process, not the fully-qualified name: at up to
-                # max_points_per_series circles for the run's largest series,
-                # the qualified prefix repeated once per <title> was most of
-                # this panel's on-disk size. The legend already carries the
-                # mapping from short name to colour, and every other bar/key
-                # label in this file uses the short name too.
+                # short_process, not the qualified name: repeated in every <title>, the
+                # prefix dominated the panel's size. The legend maps short names to colours.
                 f"<title>{_esc(short_process(j['process']))} "
                 f"[{_esc(j.get('tag', ''))}]: "
                 f"{fmt_bytes(j['input_bytes'])} in {fmt_secs(j['realtime_s'])}"
@@ -814,9 +694,8 @@ svg text{font-family:'Segoe UI',Arial,sans-serif}
 
 def _esc(v):
     """Escape a dynamic value (process name, tag, status, exit code, path,
-    etc.) for safe inclusion in HTML. Kept as its own tiny helper (rather
-    than importing anything from generate_qc_report.py) so this script stays
-    stdlib-only and self-contained; `html` is stdlib so this is allowed."""
+    etc.) for safe inclusion in HTML. Kept local so this script stays
+    stdlib-only and self-contained."""
     return html.escape(str(v))
 
 
@@ -865,15 +744,13 @@ def build_html(
         parts.append("</main></body></html>")
         return "".join(parts)
 
-    # Run totals -- the one table that survives. Everything below it is a panel.
+    # Run totals table; everything below it is a panel.
     total_wall = _sumf([r.get("realtime_s") for r in trace_rows])
     n_fail = sum(1 for r in trace_rows if _is_failure(r))
     peak = _maxf([r.get("peak_rss_b") for r in trace_rows])
     peak_cpu = _maxf([r.get("cpu_pct") for r in trace_rows])
-    # Same missing/corrupted distinction as fmt_bytes/fmt_secs: `None` (no
-    # reading at all) is "N/A"; a present-but-non-finite reading (a corrupted
-    # trace's `%cpu` field) is "n/a" rather than the literal string 'nan%' or
-    # 'inf%'.
+    # `None` (no reading) is "N/A"; a non-finite reading is "n/a", as in
+    # fmt_bytes/fmt_secs.
     if peak_cpu is None:
         peak_cpu_cell = "N/A"
     elif _finite_or_none(peak_cpu) is None:
@@ -973,18 +850,9 @@ def main():
     Returns
     -------
     int
-        0 on success; 3 when the trace PATH EXISTED but carried zero task
-        rows (a header-only ``trace.txt``). That distinction matters because
-        main.nf only invokes this script once its own existence check on
-        `trace_txt` has already passed -- a missing path is caught and
-        warned about there without ever calling this script, so the one
-        remaining way to reach this branch from main.nf is a real file with
-        nothing in it. Exiting 0 there let a caller log "Resource report:
-        <path>" over a page that says "Trace data not available"; main.nf's
-        exit-code branch already exists to log a warning instead, so this is
-        the one line that makes it reachable. A path that never existed at
-        all (e.g. this script run by hand against a wrong --trace) still
-        exits 0 -- unchanged, and still "graceful" for that case.
+        0 on success, including when the trace path does not exist. 3 when the
+        trace exists but has zero task rows (header-only), so main.nf logs a
+        warning instead of announcing an empty report.
     """
     args = parse_args()
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")

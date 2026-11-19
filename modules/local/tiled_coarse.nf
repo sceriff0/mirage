@@ -20,12 +20,8 @@ process TILED_COARSE {
 
     script:
     def prefix     = "${meta.patient_id}_${meta.channels.join('_')}"
-    // Resolve the nuclear/fiducial channel the transform is estimated from, the same
-    // way SEGMENT's CellSAM backend does (lib/SegBackends.groovy): from THIS slide's
-    // channel metadata against params.nuclear_markers. params.reg_tiled_nuclear_index
-    // is an explicit override, not the source of truth -- the old fixed param restated
-    // an invariant CONVERT_IMAGE already guarantees, and named it after one marker, so
-    // a CELLTOX panel was read through something called "the DAPI index".
+    // Nuclear channel from this slide's channel metadata (as SEGMENT's CellSAM backend
+    // does); params.reg_tiled_nuclear_index is only an override.
     def nuclear_index = params.reg_tiled_nuclear_index != null
         ? params.reg_tiled_nuclear_index
         : MarkerUtils.nuclearIndex(meta.channels ?: [], params.nuclear_markers)
@@ -35,9 +31,7 @@ process TILED_COARSE {
             "patient ${meta.patient_id}. Configured nuclear_markers: " +
             "${MarkerUtils.markerList(params.nuclear_markers).join(', ')}. " +
             "Set params.reg_tiled_nuclear_index to override.")
-    // Plain params with nextflow.config defaults (STARE has no cost tiers since 2026-11-04).
-    // Itemised `params.x` reads, never the bare `params` map, so only these values enter the
-    // task hash (see CLAUDE.md, resume hashing).
+    // itemised params.x reads, never bare `params`: only these values enter the task hash
     def tile       = params.reg_tiled_tile as int
     def halo       = params.reg_tiled_halo as int
     def max_dim    = params.reg_tiled_coarse_max_dim as int
