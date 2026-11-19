@@ -162,7 +162,11 @@ def test_slurm_site_param_is_named_and_reaches_its_consumer(param, consumer):
             f"`slurm` profile's process.clusterOptions closure"
         )
     else:
-        assert re.search(rf"process\.queue\s*=\s*params\.{param}\b", nextflow_cfg), (
-            f"{param} is declared but never wired to process.queue in "
-            f"nextflow.config's `slurm` profile"
+        # A closure, so it is read per task after every -c file is merged; a plain
+        # `params.x` is frozen while nextflow.config is parsed and a site.config pin is lost.
+        assert re.search(
+            rf"process\.queue\s*=\s*\{{\s*params\.{param}\s*\}}", nextflow_cfg
+        ), (
+            f"{param} must reach process.queue through a closure "
+            f"(`process.queue = {{ params.{param} }}`) in nextflow.config's `slurm` profile"
         )
