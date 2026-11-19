@@ -1,29 +1,21 @@
 """bin/utils/valis_preflight.py: the VALIS 1.0.0 (through 1.2.0) pyramid-level -1 defect,
 and the clamp that closes it without modifying the VALIS image.
 
-The defect, reproduced 2026-09-08 with VALIS's own geometry code on the dimensions from
-a failed TMA run: `prep_images_for_large_non_rigid_registration` picks the pyramid level
-to read for each slide as `np.where(level_max < needed_src_dim)[0][0] - 1`. When even
-level 0 (full resolution) is smaller than the source dimension the non-rigid stage
-needs, that is `-1`. `slide2vips(-1)` then sizes the tile grid from
-`slide_dimensions[-1]` (Python negative index: the SMALLEST pyramid level, silently) and
-every tile thread calls Bio-Formats `setResolution(-1)`, which throws
-IllegalArgumentException. The reader swallows it (`print(e); pass`), leaves `tile`
-unbound, and `UnboundLocalError: local variable 'tile' referenced before assignment`
-propagates to `Valis.register()`'s catch-all, which kills the JVM and returns
-`(None, None, None)`.
+The defect: `prep_images_for_large_non_rigid_registration` picks each slide's pyramid
+level as `np.where(level_max < needed_src_dim)[0][0] - 1`, which is `-1` when even level 0
+is smaller than the non-rigid stage needs. `slide2vips(-1)` then sizes the tile grid from
+the smallest level and every tile thread calls Bio-Formats `setResolution(-1)`, which
+throws; the reader swallows it, `tile` stays unbound, and `Valis.register()`'s catch-all
+kills the JVM and returns `(None, None, None)`.
 
 The needed source dimension is `max_non_rigid_dim / (tissue-mask extent)`, so it depends
-on image CONTENT: on 2026-09-22 a TMA run at 1024 px (`-profile tma`) passed the old size
-preflight on every slide and still died, because the tissue box was a small part of the
-frame. No size check can predict that, which is why the fix is a clamp, not a refusal.
+on image content and no size check can predict it; hence a clamp, not a refusal.
 
 `clamp_negative_levels` wraps `BioFormatsSlideReader.slide2vips` / `slide2image` so a
-negative level reaches Bio-Formats as 0 -- the upstream one-line fix
-`max(closest_img_levels[0] - 1, 0)`, applied at the reader. It is safe by construction:
-`setResolution()` rejects every negative level, so the only calls it changes are calls
-that would have crashed. VALIS's next line, `resize_img(vips_level_img, src_img_shape_rc)`,
-upsamples level 0 to the size it asked for.
+negative level reaches Bio-Formats as 0 (the upstream fix
+`max(closest_img_levels[0] - 1, 0)`, applied at the reader). `setResolution()` rejects
+every negative level, so only calls that would have crashed change. VALIS's next line,
+`resize_img(vips_level_img, src_img_shape_rc)`, upsamples level 0 to the size it asked for.
 """
 
 from __future__ import annotations
@@ -90,9 +82,9 @@ def test_the_notice_names_the_slide_the_size_and_what_happens_to_it():
     msg = upsample_notice([("/x/001_003_small.ome.tif", 2720)], non_rigid_dim=4096)
     assert "001_003_small.ome.tif" in msg
     assert "2720" in msg and "4096" in msg
-    # what actually happens now: level 0 is read and upsampled, no crash
+    # level 0 is read and upsampled, no crash
     assert "full resolution" in msg and "upsampl" in msg
-    # and it must not read as a refusal or a remedy list any more
+    # and it must not read as a refusal or a remedy list
     assert "Refusing" not in msg and "Remedies" not in msg
 
 
@@ -199,9 +191,8 @@ def test_register_py_clamps_the_bio_formats_reader_before_it_builds_the_registra
 
 
 def test_register_py_no_longer_refuses_small_slides():
-    """The old preflight raised on any slide no larger than the non-rigid size. With the
-    clamp that input registers (level 0, upsampled), so a refusal would block a run that
-    works; it is a logged notice now."""
+    """A slide no larger than the non-rigid size registers with the clamp (level 0,
+    upsampled), so the preflight logs a notice instead of refusing."""
     tree = ast.parse((ROOT / "bin" / "register.py").read_text())
     fn = next(
         n
@@ -217,9 +208,8 @@ def test_register_py_no_longer_refuses_small_slides():
 
 
 def test_register_py_runs_the_preflight_before_it_builds_the_registrar():
-    """The check has to run before `registration.Valis(...)`, which starts the JVM
-    and reads every slide -- a check after that point has already paid for the
-    rigid stage the crash then throws away."""
+    """The check runs before `registration.Valis(...)`, which starts the JVM and
+    reads every slide."""
     assert "valis_preflight" in (ROOT / "bin" / "register.py").read_text(), (
         "bin/register.py does not import the preflight"
     )
@@ -231,9 +221,8 @@ def test_register_py_runs_the_preflight_before_it_builds_the_registrar():
 
 def test_register_py_treats_a_none_error_df_as_the_failure_it_is():
     """`Valis.register()` never raises: on any exception it prints the traceback,
-    kills the JVM and returns (None, None, None). bin/register.py used to log
-    'Initial registration completed' on that and fail 158 s later on the dead JVM
-    with advice about --micro-reg 0."""
+    kills the JVM and returns (None, None, None). bin/register.py must fail there,
+    not log success and die later on the dead JVM."""
     body = _valis_registration_body()
     call = body.index("registrar.register(")
     check = body.find("error_df is None", call)
@@ -246,7 +235,7 @@ def test_register_py_treats_a_none_error_df_as_the_failure_it_is():
 
 
 def test_the_micro_reg_advice_is_gone():
-    """'Try --micro-reg 0' was the diagnosis for every dead JVM. The micro pass is
-    consumed only by register_micro(), which had not run yet in the failing case."""
+    """No 'try --micro-reg 0' advice for a dead JVM: the micro pass is consumed only
+    by register_micro(), which has not run yet when register() fails."""
     src = (ROOT / "bin" / "register.py").read_text()
     assert "Try --micro-reg 0" not in src

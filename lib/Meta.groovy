@@ -86,12 +86,12 @@ class Meta {
         if (!schemaColumns.contains('id'))
             throw new IllegalStateException(
                 "Meta.fromCheckpointRow('${step}'): lib/Checkpoint.groovy's '${step}' schema " +
-                "does not declare an 'id' column. Every STEPS entry must carry one (RULING R17) " +
+                "does not declare an 'id' column. Every STEPS entry must carry one " +
                 "-- this is a Checkpoint.groovy bug, not a bad checkpoint file.")
         if (!row.containsKey('id'))
             throw new IllegalStateException(
                 "Meta.fromCheckpointRow('${step}'): this '${step}' checkpoint row has no 'id' " +
-                "column. This checkpoint predates identity tracking (RULING R17) -- re-run the " +
+                "column. This checkpoint predates identity tracking -- re-run the " +
                 "step that WROTE this checkpoint so the regenerated file records identity, " +
                 "rather than forcing it to be re-derived from a filename.")
         requirePresentInRow(row, 'id')

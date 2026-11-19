@@ -1,23 +1,13 @@
 /*
- * REGISTER_PATIENT is the shared registration core: it is called by REGISTRATION
- * (linear) and by ADD_CYCLE (incremental cyclic-IF), which used to reimplement it.
+ * REGISTER_PATIENT: the shared registration core, called by REGISTRATION (linear) and
+ * ADD_CYCLE. Most behaviour is asserted through those callers; what is asserted here:
  *
- * Most of its behaviour is already asserted THROUGH those two callers —
- * tests/subworkflows/local/registration.nf.test for the linear path,
- * tests/subworkflows/add_cycle.nf.test and tests/checkpoint_manifest.nf.test for
- * add_cycle. What is asserted HERE is the pair of properties that only became
- * expressible when the core was shared, and that nothing else can see:
- *
- *   1. the backend is chosen by the `method` ARGUMENT, not by reading
- *      params.registration_method. ADD_CYCLE passes the literal 'valis' because
- *      workflows/mirage.nf rejects --registration_method tiled in add_cycle mode;
- *      if this subworkflow read the param instead, sharing the core would have
- *      silently lifted that rejection.
- *   2. a single-slide group still bypasses the adapter entirely. add_cycle had lost
- *      this branch by copying; it is inert there (its groups are always size 2) but
- *      load-bearing on the linear path, where VALIS crashes on a lone image.
- *
- * Tagged "stub" because CI's blocking gate is `nf-test test --tag stub`.
+ *   1. the backend is chosen by the `method` argument, not params.registration_method.
+ *      ADD_CYCLE passes the literal 'valis' because workflows/mirage.nf rejects
+ *      --registration_method tiled in add_cycle mode; reading the param would lift
+ *      that rejection.
+ *   2. a single-slide group bypasses the adapter entirely (VALIS crashes on a lone
+ *      image).
  */
 
 nextflow_workflow {
@@ -35,8 +25,7 @@ nextflow_workflow {
 
         when {
             params {
-                // The param says tiled; the caller says valis. The caller must win —
-                // this is exactly the configuration add_cycle is protected against.
+                // The param says tiled; the caller says valis. The caller must win.
                 registration_method = 'tiled'
                 reg_qc = 0
             }
@@ -147,8 +136,8 @@ nextflow_workflow {
                     it.name.contains('REGISTER')
                 }.size() == 0 },
                 // ...but the slide still reaches the registered stream, and the
-                // checkpoint still records it (at its PREPROCESSED/native location,
-                // via meta.is_passthrough — see tests/checkpoint_manifest.nf.test).
+                // checkpoint still records it (at its preprocessed/native location,
+                // via meta.is_passthrough).
                 { assert workflow.out.registered.size() == 1 },
                 { assert workflow.out.checkpoint_csv },
                 { assert workflow.out.images_multi.size() == 0,

@@ -2,48 +2,23 @@
 """Guard: CI cache keys must be keyed on MANIFESTS, and each cached path must have
 an owner in the file that caches it.
 
-Three defects this repository actually shipped, all of them invisible in a green
-run because a cache is only ever a download accelerator -- it never changes an
-answer, only how long the answer takes:
+A cache defect is invisible in a green run: a cache only changes how long the answer
+takes. The rules:
 
-  1. **A source-tree hash in a cache key.** The Nextflow distribution cache was
-     keyed on ``${{ runner.os }}-nextflow-<version>-${{ hashFiles('**/*.nf') }}``.
-     Not one byte of ``~/.nextflow`` is a function of this repository's ``.nf``
-     files: it is the launcher and the framework jars for one Nextflow version.
-     So the key MISSED on every commit that touched the pipeline -- i.e. on every
-     run that matters -- and wrote a fresh, never-reused entry each time against
-     the repository-wide 10 GB LRU budget, evicting the caches that did work.
+  1. **No source-tree hash in a cache key.** ``~/.nextflow`` is the launcher and
+     framework jars for one Nextflow version; hashing ``**/*.nf`` into its key misses on
+     every pipeline commit and fills the 10 GB repository LRU with never-reused entries.
+  2. **A cached path has an owner in the caching file, and its key names what
+     determines its bytes.** ``nf-core/setup-nf-test`` caches ``~/.nf-test`` itself;
+     caching it again elsewhere under a different key makes its install fail with "dest
+     already exists" on an nf-test version bump.
+  3. **One key, one cache step.** A cache entry is immutable (first writer wins), so two
+     steps sharing a key race.
 
-  2. **A cached path with no owner in the caching file.** ``~/.nf-test`` was in
-     that same cache's ``path:`` list, inside ``.github/actions/setup-nextflow``,
-     which does not install nf-test. ``nf-core/setup-nf-test`` does -- and it
-     caches ``~/.nf-test/nf-test`` and ``~/.nf-test/nf-test.jar`` ITSELF, under
-     its own key ``nf-test-<version>-install-pdiff-<bool>`` (verified against
-     ``dist/index.js`` at the pinned ``@v1``, 2026-09-01). Two entries for the
-     same bytes, keyed on two different version strings: bump
-     ``env.NFTEST_VERSION`` and their key misses while ours still hits, so their
-     install runs ``fs.move(src, '~/.nf-test/nf-test')`` -- no ``overwrite:
-     true`` -- onto a file we just restored, and fs-extra fails the step with
-     "dest already exists". Every nf-test job in the repository goes red on an
-     nf-test version bump.
-
-  3. **Two cache steps under one key.** A cache entry is IMMUTABLE: the first
-     writer under a key wins and every later save silently no-ops. Two steps
-     caching different paths under one key is therefore a race, not a share --
-     whichever job finishes first decides what everybody restores for the life of
-     the entry.
-
-SCOPE is ``tests/ci_actions.scanned_files()`` -- every workflow AND every local
-composite action -- because both of the repository's own ``actions/cache`` steps
-live in a composite action now, and a guard whose glob stops at
-``.github/workflows/`` would examine zero cache steps and pass.
-
-The rules these tests encode are written out in prose, once, in
-``.github/actions/setup-nextflow/action.yml``. Both of the "must be in the table"
-checks below are deliberately CLOSED: a new cached path or a new hashed glob
-fails until someone writes down what it is for. That is the point -- every
-enumeration written on this project has been short, and a cache defect has no
-symptom to notice.
+Scope is ``tests/ci_actions.scanned_files()``: every workflow and every local composite
+action, where the repository's ``actions/cache`` steps live. The rules are written out in
+``.github/actions/setup-nextflow/action.yml``. Both tables below are closed: a new cached
+path or hashed glob fails until someone records what it is for.
 
 Plain pytest, paths derived from ``__file__``, per this directory's other guards.
 """
@@ -74,18 +49,9 @@ ci_actions = importlib.import_module("ci_actions")
 #
 #   installer        -- a substring that must appear in the SAME file. A path may
 #                       be cached only where something puts the bytes there.
-#                       `~/.nf-test` had no such owner in setup-nextflow, which is
-#                       defect 2 above.
 #   key_must_contain -- a substring that must appear in that cache step's `key:`.
-#                       This is the OTHER half of rule 2, and it is the half a
-#                       reviewer broke straight through on 2026-09-01: deleting
-#                       `${{ inputs.nextflow-version }}` from the distribution key
-#                       left `${{ runner.os }}-${{ runner.arch }}-nextflow` and all
-#                       five cases here passed. The `25.04.0` and
-#                       `latest-everything` legs would then share ONE immutable
-#                       entry, and whichever saved first would fix its framework
-#                       directory on the other for the life of the key. A key must
-#                       name what determines the bytes it covers.
+#                       Without the Nextflow version in the distribution key, the
+#                       matrix legs would share one immutable entry.
 CACHED_PATH_OWNERS = {
     "~/.nextflow": (
         "nf-core/setup-nextflow",
@@ -101,9 +67,7 @@ CACHED_PATH_OWNERS = {
     ),
 }
 
-# Every glob whose CONTENT is hashed into a cache key. Rule 1: manifests only.
-# `hashFiles('**/*.nf')` is not here, and adding it back is the failure this
-# guard exists to produce.
+# Every glob whose content is hashed into a cache key. Rule 1: manifests only.
 HASHED_GLOBS = {
     "nextflow.config": (
         "the file that DECLARES the nf-schema plugin version -- a manifest. It "
@@ -154,20 +118,9 @@ def cache_steps():
 def _uncommented(text: str) -> str:
     """`text` with its `#` comments removed -- whole-line AND trailing.
 
-    The owner check below is a substring search, and this file's own header
-    DISCUSSES `nf-core/setup-nf-test` at length -- so a search over the raw text
-    would find the owner of `~/.nf-test` in the very file that must not cache it,
-    and the check would go green over the defect it exists to catch. Verified by
-    doing it: with the raw text the "declared but in the wrong file" case passed.
-
-    WIDENED 2026-09-01 (CI redesign, Phase 5 fix round 2) FROM WHOLE-LINE ONLY.
-    The old form left the same hole one keystroke away: a TRAILING comment naming
-    the owner (`path: ~/.nf-test  # nf-core/setup-nf-test installs this`) also
-    satisfied the substring search, and that is a false NEGATIVE -- the unsafe
-    direction. `ci_actions.strip_line_comment` is the one quote-aware definition
-    of where a comment starts in this repository's CI guards, so this shares it
-    rather than carrying a fifth private one. Quote-awareness matters here too:
-    a naive cut truncates `VERSION="${VERSION#v}"`.
+    The owner check is a substring search, so a comment naming the owner (whole-line
+    or trailing) must not satisfy it. Uses the quote-aware
+    `ci_actions.strip_line_comment`, which does not truncate `VERSION="${VERSION#v}"`.
     """
     return "\n".join(
         stripped
@@ -195,8 +148,7 @@ def hashed_globs():
       * `hashFiles('<glob>')` inside an `actions/cache` `key:`/`restore-keys:`;
       * `cache-dependency-path:` (actions/setup-python) or
         `cache-dependency-glob:` (astral-sh/setup-uv), which the action hashes
-        into a key it builds itself. Leaving these out would let the SAME defect
-        move one step sideways and go unseen.
+        into a key it builds itself.
     """
     out = []
     for path, where, step in cache_steps():
@@ -217,9 +169,8 @@ def hashed_globs():
 # Non-vacuity: every check below is a "must not find" scan.
 # ---------------------------------------------------------------------------
 def test_the_scan_found_the_caches_this_repository_has():
-    """A scan that reads zero cache steps passes every rule below having checked
-    nothing -- and the caches are all in composite actions now, one glob away
-    from being invisible."""
+    """A scan that reads zero cache steps would pass every rule below having checked
+    nothing."""
     steps = cache_steps()
     assert len(steps) >= 2, (
         f"found {len(steps)} `actions/cache` step(s) across "
@@ -242,13 +193,9 @@ def test_the_scan_found_the_caches_this_repository_has():
 def test_no_cache_key_hashes_anything_but_a_declared_manifest():
     """A source-tree hash guarantees a MISS on every commit that matters.
 
-    It is not a neutral mistake. The entry is still SAVED, so every such run adds
-    a fresh never-reused entry to a 10 GB repository-wide LRU and evicts the
-    caches that do get hits. `hashFiles('**/*.nf')` in the Nextflow distribution
-    key was doing exactly that until 2026-09-01.
-
-    The table is closed on purpose: a new glob fails here until someone writes
-    down why it is a manifest.
+    The entry is still saved, so every such run adds a never-reused entry to the
+    10 GB repository-wide LRU and evicts caches that do get hits. The table is
+    closed: a new glob fails here until someone records why it is a manifest.
     """
     offenders = []
     for where, field, glob in hashed_globs():
@@ -269,11 +216,9 @@ def test_no_cache_key_hashes_anything_but_a_declared_manifest():
 # Rule 2, first half: a cached path must have an installer in the same file.
 # ---------------------------------------------------------------------------
 def test_every_cached_path_has_a_declared_installer_in_the_same_file():
-    """Caching a directory that nothing in the same file creates is how
-    ``~/.nf-test`` came to be cached by ``setup-nextflow``, twice over and under
-    the wrong key -- see defect 2 in this module's docstring.
+    """A cached path must be created by something in the same file (rule 2).
 
-    "In the same file" is the operative half. ``nf-core/setup-nf-test`` DOES
+    ``nf-core/setup-nf-test`` does
     install ``~/.nf-test``, but it lives in a different composite action, so a
     cache of that path in ``setup-nextflow`` is unowned there and fails here even
     if someone adds a CACHED_PATH_OWNERS entry for it.
@@ -347,8 +292,6 @@ def test_restore_keys_exist_exactly_where_the_key_can_miss():
       download, not the previous version's jars. A prefix there restores the very
       entry the key already names, or something deliberately superseded.
 
-    Stated as a rule rather than as two facts so that the next cache added has to
-    answer the question.
     """
     offenders = []
     for _path, where, step in cache_steps():
@@ -371,18 +314,11 @@ def test_restore_keys_exist_exactly_where_the_key_can_miss():
 
 
 def test_every_cached_path_is_keyed_on_what_determines_its_contents():
-    """The other half of rule 2, and the half that was missing.
+    """The other half of rule 2: a key names everything its bytes depend on.
 
-    A cache entry is immutable, so a key that does not name everything the cached
-    bytes depend on quietly merges two different things into one entry and hands
-    the loser whatever the winner saved. `test_no_two_cache_steps_share_a_key`
-    only catches two SEPARATE steps colliding; this catches ONE step whose key has
-    lost a component and now collides with itself across matrix legs.
-
-    Measured, not hypothetical: on 2026-09-01 a reviewer deleted
-    `${{ inputs.nextflow-version }}` from the distribution key and every case in
-    this file still passed, while `25.04.0` and `latest-everything` would have
-    shared one entry.
+    `test_no_two_cache_steps_share_a_key` catches two separate steps colliding;
+    this catches one step whose key lost a component and collides with itself
+    across matrix legs.
     """
     offenders = []
     checked = 0
@@ -413,16 +349,12 @@ def test_every_cached_path_is_keyed_on_what_determines_its_contents():
 
 
 def test_every_workflow_that_installs_nextflow_pins_nxf_plugins_dir():
-    """`NXF_PLUGINS_DIR` is load-bearing for the DISTRIBUTION cache, not just a
-    speed knob, and nothing asserted it.
+    """`NXF_PLUGINS_DIR` keeps the distribution cache a pure function of the version.
 
-    With the distribution key reduced to os/arch/version (Phase 3), `~/.nextflow`
-    is claimed to be a pure function of the Nextflow version. That is only true
-    while the plugins live somewhere else. A workflow that forgot the `env:` would
-    let nf-schema land in `~/.nextflow/plugins`, and the plugin set would be
-    frozen into a version-only entry that never rotates when `nextflow.config`
-    changes the pin -- the exact staleness the separate plugins cache exists to
-    avoid, reintroduced through the back door and invisible.
+    The distribution key is os/arch/version, which is only correct while the plugins
+    live elsewhere. Without the `env:`, nf-schema would land in `~/.nextflow/plugins`
+    and be frozen into a version-only entry that never rotates when `nextflow.config`
+    changes the pin.
 
     Scope is every JOB that reaches `.github/actions/setup-nextflow`, resolved
     through `tests/ci_actions.py`, so a job that picks it up via `setup-nf-test`

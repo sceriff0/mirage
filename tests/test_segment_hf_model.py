@@ -7,7 +7,7 @@ StarDist a local model folder. These tests pin the contract without network:
 * the shipped default parses, names a 40-hex commit, and agrees with the schema;
 * a branch name (``@main``) or a missing revision is refused, because the weights
   behind a moving ref can change under a run;
-* a folder already in the cache is used WITHOUT touching the network (the
+* a folder already in the cache is used without touching the network (the
   air-gapped route documented in docs/parameters.md);
 * a download goes through ``HF_ENDPOINT`` (here a ``file://`` tree standing in for
   the Hub), lands every file, and leaves no ``.part`` file behind;

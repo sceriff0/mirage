@@ -1,22 +1,16 @@
 """JVM heap: VALIS's own fixed 10 GB, and a diagnosable failure.
 
-User ruling 2026-10-21: the heap REGISTER gives VALIS's Bio-Formats JVM is VALIS's own
-shipped 10 GB (valis-wsi 1.2.0's ``registration.init_jvm`` passes the literal 10 on to
-``slide_io.init_jvm``, registration.py:132-135, so bin/register.py starts the JVM through
-``slide_io.init_jvm`` itself to make an override real), at every attempt. It is no longer scaled with the retry ramp
-(it was ``32 + 16 * task.attempt``): the benchmark runs VALIS with the heap VALIS ships,
-and the pipeline runs it the same way. ``reg_jvm_heap_gb`` still overrides it, and the task's memory still clamps it:
+REGISTER gives VALIS's Bio-Formats JVM VALIS's own 10 GB heap at every attempt
+(bin/register.py calls ``slide_io.init_jvm`` itself so an override takes effect).
+``reg_jvm_heap_gb`` overrides it, and the task's memory clamps it:
 
     def heap_request = params.reg_jvm_heap_gb != null ? params.reg_jvm_heap_gb : 10
     def jvm_heap_gb  = Math.min(heap_request, task.memory.toGiga() - 4)
 
-REGISTER's MEMORY still climbs with the attempt; only the heap is pinned. A heap-bound
-JVM OOM retried is therefore handed the same heap: retrying it cannot help, which the
-log message below must make diagnosable.
+REGISTER's memory climbs with the attempt but the heap does not, so a retried
+heap-bound OOM gets the same heap; the log message must make that diagnosable.
 
-``heap_for_attempt()`` reads the constants live out of the script via tests.nfmodel
-(never a private regex over the raw .nf file -- see
-tests/test_nfmodel.py::test_no_guard_parses_nextflow_source_privately).
+``heap_for_attempt()`` reads the constants out of the script via tests.nfmodel.
 """
 
 from __future__ import annotations
@@ -29,18 +23,13 @@ from tests.nfmodel import processes
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REGISTER_PY = REPO_ROOT / "bin" / "register.py"
 
-# Narrow, purpose-built patterns matched against the ALREADY-EXTRACTED
-# script_body text tests.nfmodel hands back (never against the raw .nf file
-# directly -- see tests/test_nfmodel.py::test_no_guard_parses_nextflow_source_privately,
-# which forbids a private parse of Nextflow source but not further processing
-# of text the model already extracted; tests/test_error_strategy_policy.py
-# does the same thing against with_name_blocks() bodies).
+# Matched against the script_body tests.nfmodel extracts, never the raw .nf file.
 _HEAP_REQUEST_RE = re.compile(
     r"def heap_request = params\.reg_jvm_heap_gb != null \? params\.reg_jvm_heap_gb : "
     r"(\d+)\s*$",
     re.MULTILINE,
 )
-# VALIS's own heap: registration.init_jvm(jar=None, mem_gb=10) (user ruling 2026-10-21)
+# VALIS's own heap: registration.init_jvm(jar=None, mem_gb=10)
 VALIS_HEAP_GB = 10
 _JVM_HEAP_RE = re.compile(
     r"def jvm_heap_gb = Math\.min\(heap_request, task\.memory\.toGiga\(\) - (\d+)\)"
@@ -125,12 +114,8 @@ def test_jvm_death_message_names_the_jvm_and_a_remedy():
     )
     assert "JVM" in jvm_death_msg
     # The surrounding log block is the "remedy" half, printed immediately before
-    # this RuntimeError is raised. The remedy named must be a real one. Until
-    # 2026-09-08 this asserted `--micro-reg 0`, which was folklore: the micro pass is
-    # consumed only by register_micro(), which had not run in any recorded JVM death.
-    # Until 2026-09-23 it asserted `--max-non-rigid-dim`, which was no remedy either:
-    # the level -1 crash depends on the tissue-mask extent, so no size was safe. It is
-    # clamped at the reader now, and the block points at the clamp's own log line.
+    # this RuntimeError is raised. The remedy named must be a real one: the level -1
+    # crash is clamped at the reader, and the block points at the clamp's log line.
     block = text[: text.index(jvm_death_msg)]
     block = block[block.rindex("JVM is not running") :]
     assert "clamp was NOT applied" in block

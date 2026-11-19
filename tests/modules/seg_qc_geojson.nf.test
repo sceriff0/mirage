@@ -43,25 +43,11 @@ nextflow_process {
 
     test("Should invoke mask_to_geojson.py with --tolerance and NO segmentation flags - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:`
-        // block, so no stub run can observe a rendered command at all.
-        //
-        // This case is the one that pins the change. SEG_QC_GEOJSON used to run StarDist
-        // itself (bin/segment_to_geojson.py + starDistCommonFlags()), which made it the one
-        // segmenter in the pipeline that ignored params.seg_method: at the shipped default
-        // (seg_method='instantseg') the registration QC scored a different segmenter's cells
-        // than the run shipped, and at stock defaults it could not run at all
-        // (segmentation_model is not a StarDist built-in and segmentation_model_dir is null
-        // -> FileNotFoundError, swallowed by the QC errorStrategy's 'ignore' branch). The
-        // segmentation moved to SEG_QC_SEGMENT -- `SEGMENT` aliased -- so the NEGATIVE
-        // assertions below are the substance: a rendered command carrying any StarDist flag
-        // means the old code path came back.
-        //
-        // No container engine is active under `-profile test`, so this runs
-        // bin/mask_to_geojson.py directly against the real fixture mask. It happens to
-        // succeed where the StarDist version could not, but the assertions read the
-        // rendered .command.sh rather than the outcome either way.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`.
+        // SEG_QC_GEOJSON only converts a mask (segmentation is SEG_QC_SEGMENT, an aliased
+        // SEGMENT that follows params.seg_method), so the negative assertions below are the
+        // substance: any StarDist flag in this command means it segments on its own again.
+        // Runs bin/mask_to_geojson.py on the host; the assertions read .command.sh only.
         tag "stub"
 
         when {
@@ -88,15 +74,13 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered SEG_QC_GEOJSON .command.sh found under the task work dir" },
-                // The one tunable left, and it must equal what EXTRACT_CELL_PROPERTIES gets
-                // (params.simplify_tolerance) or the two GeoJSONs WARP_SEG_QC compares stop
-                // being comparable.
+                // The one tunable left; it must equal EXTRACT_CELL_PROPERTIES' (params.simplify_tolerance)
+                // or the two GeoJSONs WARP_SEG_QC compares stop being comparable.
                 { assert rendered.every { it.contains('--tolerance 1.0') },
                     "rendered command missing --tolerance: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--out P001_mov1.geojson') },
                     "rendered command does not name the GeoJSON after meta.qc_slide: " + rendered.join(' --- ') },
-                // The assertions with teeth: every one of these appeared in this process'
-                // rendered command before the change and must never appear again.
+                // None of these may appear in this process's rendered command.
                 { assert rendered.every { !it.contains('segment_to_geojson.py') },
                     "SEG_QC_GEOJSON is segmenting again: " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('--model-name') && !it.contains('--model-dir') },

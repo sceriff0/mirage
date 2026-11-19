@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Guard: no module hand-writes the versions.yml envelope.
 
-Every process in modules/local/ used to write the heredoc twice — once in script:, once
-in stub: with values replaced by `stub`. Because `-stub` never evaluates a script: block,
-a tool present in one and absent from the other was invisible to the entire blocking CI
-gate. lib/ProcessEnvelope.groovy renders both from one list, so this file's job is to keep
-anyone from re-introducing a hand-written copy.
+lib/ProcessEnvelope.groovy renders the script: and stub: heredocs from one list. Because
+`-stub` never evaluates a script: block, two hand-written copies naming different tools would
+be invisible to the blocking CI gate.
 """
 
 from __future__ import annotations
@@ -20,33 +18,13 @@ MODULES = sorted((ROOT / "modules" / "local").glob("*.nf"))
 
 # The processes this file governs: modules/local only.
 #
-# modules/nf-core/basicpy/main.nf is vendored and is deliberately out of scope. Read
-# 2026-09-02: it has no versions.yml heredoc at all (it emits `topic: versions` value
-# tuples, the nf-core convention) and no size log, so every rule below would be
-# vacuous on it -- and holding vendored code to this repo's envelope is the same
-# mistake ruff.toml's extend-exclude already refuses to make.
+# modules/nf-core/basicpy/main.nf is vendored and out of scope: it emits nf-core
+# `topic: versions` tuples, not a versions.yml heredoc.
 LOCAL_PROCESSES = [p for p in processes().values() if p.path.parent.name == "local"]
 
-# Documented exception -- not an oversight. There is exactly ONE now:
-#
-# segment.nf used to be the second. It hand-wrote both heredocs and they named DISJOINT
-# key sets -- script: reported `python` plus the chosen backend's rows (`deepcell`/
-# `tensorflow` for StarDist), stub: reported `python` plus a bare `seg_method: <name>`,
-# which is not a tool at all. lib/SegBackends.groovy now stores each backend's tools as
-# BARE MODULE NAMES (`versionTools`, same key as lib/WarpBackends.groovy) instead of
-# pre-rendered YAML lines, so both blocks render through ProcessEnvelope from that one
-# list and the three checks below cover it like any other module. Recorded here rather
-# than deleted because "SegBackends stores rendered lines" was the stated reason this
-# file allowed the exception, and that reason is now false.
-#
-# There is no exception left. aggregate_size_logs.nf was the last one: it runs in
-# `container 'bolt3x/mirage-preprocess:1.0.0'` with no Python interpreter, and
-# ProcessEnvelope always prepended a `python:` row, so routing it through versions()
-# would have run `python --version 2>&1` and written the shell's own "command not
-# found" message into a published report as a version number.
-# ProcessEnvelope.versionsBash() renders a `bash:` row instead, so all 28 modules
-# under modules/local/ now go through the class and this check covers every one of
-# them.
+# No module is exempt. Backend modules (segment.nf) pass `backend.versionTools`, bare
+# module names from lib/SegBackends.groovy / lib/WarpBackends.groovy. aggregate_size_logs.nf
+# runs in an image with no Python, so it uses ProcessEnvelope.versionsBash() (a `bash:` row).
 
 
 def test_no_module_hand_writes_a_versions_heredoc():
@@ -66,13 +44,8 @@ CALL_START_RE = re.compile(r"ProcessEnvelope\.(versions|versionsStub)\(")
 
 # A literal tools list, with the mandatory `task.container` third argument:
 # `task.process, ['a', 'b'], task.container`.
-#
-# THE THIRD ARGUMENT HAD TO BE ADDED HERE, not left to the symmetric-non-literal
-# escape hatch below. Without it every 3-arg call became "non-literal", every module
-# took the symmetric exception, and test_script_and_stub_ask_for_the_same_tool_list
-# -- the check this entire file exists for -- silently had nothing left to compare in
-# ANY module. Watched: with the old regex and the migrated modules, that test
-# collected zero literal calls and passed while blind.
+# The third argument must be matched here: otherwise every 3-arg call reads as
+# non-literal and test_script_and_stub_ask_for_the_same_tool_list compares nothing.
 LITERAL_ARGS_RE = re.compile(
     r"^\s*task\.process\s*,\s*(\[\s*(?:'[^']*'\s*(?:,\s*'[^']*'\s*)*)?\])"
     r"\s*(?:,\s*task\.container\s*)?$"
@@ -97,15 +70,9 @@ def _extract_calls(text):
     """Every `ProcessEnvelope.versions(...)` / `ProcessEnvelope.versionsStub(...)` call
     site in `text`, as (method, args_string) pairs.
 
-    Deliberately does NOT filter to only calls matching the literal-list shape: an
-    earlier version of this guard's regex only matched `task.process, [...]` and simply
-    found nothing (script_calls == stub_calls == []) for any other shape -- e.g. a
-    variable holding the list, or (worse) a ternary picking between two lists per
-    params.registration_method, which Task 3 introduces for warp_seg_qc.nf. A ternary
-    matches the trailing literal branch only, producing a false "they match" instead of
-    a skip. Either way the guard that exists specifically to catch a script:/stub:
-    mismatch would pass while blind. So this function returns EVERY call site, parsed or
-    not, and the caller is responsible for failing loudly on the ones it can't parse.
+    Returns every call site, not only those matching the literal-list shape: a variable
+    or a ternary would otherwise be skipped (or match only its trailing literal branch)
+    and the guard would pass while blind. The caller fails on the ones it cannot parse.
     """
     calls = []
     for m in CALL_START_RE.finditer(text):
@@ -148,25 +115,10 @@ def test_versions_calls_are_literal_or_symmetric_between_script_and_stub():
     method call, a ternary) that is textually IDENTICAL -- modulo whitespace -- to its
     counterpart in the same module.
 
-    Why a non-literal expression is allowed at all, when the docstring of
-    _extract_calls above warns a ternary can fool this guard: the risk a ternary poses
-    is picking a DIFFERENT branch in script: than in stub: (or matching the trailing
-    literal branch only, in the regex-based approach this guard used to take). That
-    risk is closed by requiring the two call sites to be the SAME source expression,
-    not merely two expressions that might evaluate the same. That is exactly Task 3's
-    warp_seg_qc.nf shape: `backend` is resolved once per block from the `method` input,
-    and both the script: and stub: blocks pass `backend.versionTools` verbatim.
-
-    IDENTICAL CALL TEXT IS NOT ENOUGH ON ITS OWN, THOUGH. `backend.versionTools` and
-    `backend.versionTools` are the same NAME in both blocks, not proof they are bound to
-    the same VALUE: `backend` is a separate local assigned independently in script: and
-    in stub:, and this function never looks at the assignment. `def backend =
-    WarpBackends.of(method)` in script: paired with `def backend =
-    WarpBackends.of('valis')` in stub: passes this check -- the two ProcessEnvelope call
-    sites are byte-identical -- while silently stubbing the wrong backend's tool list on
-    a tiled run. test_backend_binding_is_identical_between_script_and_stub below closes
-    that residual hole by additionally comparing the `*Backends.of(...)` binding sites
-    themselves, not just where their result is read.
+    A non-literal expression is safe only when both call sites are the same source
+    expression, as in warp_seg_qc.nf, where both blocks pass `backend.versionTools`.
+    Identical call text does not prove `backend` is bound to the same value in both
+    blocks; test_backend_binding_is_identical_between_script_and_stub checks that.
 
     What is NOT allowed: a non-literal expression that appears in only one of the two
     blocks (an unpaired call), or two non-literal expressions that differ at all --
@@ -221,7 +173,7 @@ def test_versions_calls_are_literal_or_symmetric_between_script_and_stub():
 
 
 def test_backend_binding_is_identical_between_script_and_stub():
-    """Closes the hole the symmetric-non-literal exception above leaves open.
+    """`*Backends.of(...)` bindings must be identical in script: and stub:.
 
     A module that resolves a per-method backend once per block (`def backend =
     WarpBackends.of(method)`) and forwards one of its fields
@@ -231,23 +183,15 @@ def test_backend_binding_is_identical_between_script_and_stub():
     same backend in both blocks. `def backend = WarpBackends.of(method)` in
     script: paired with `def backend = WarpBackends.of('valis')` in stub: leaves
     `ProcessEnvelope.versionsStub(task.process, backend.versionTools)` byte-identical
-    to its script: counterpart while silently reporting VALIS's tool list
-    (`valis`/`skimage`/`scipy`) for a stub run of the tiled backend
-    (`skimage`/`scipy`), and the check above cannot see it because it never looks
-    past the call-site text to the binding.
+    to its script: counterpart while reporting the wrong backend's tool list.
 
     This test compares the `*Backends.of(...)` binding call sites themselves --
     split at the module's `stub:` marker so a script: binding is never compared
     against itself -- and fails if a module has bindings in both halves that are
     not textually identical (modulo whitespace).
 
-    `modules/local/segment.nf` is the second module in scope: it binds
-    `backend = SegBackends.of(params.seg_method)` in BOTH halves and forwards
-    `backend.versionTools` to ProcessEnvelope from both. It used to bind only in script:
-    and hand-write its stub heredoc, which is why this docstring previously named it as
-    the reason for scoping to ProcessEnvelope users; that scoping is kept anyway, because
-    a module that binds a backend for some other purpose entirely and never renders
-    versions from it has nothing this test can meaningfully say about.
+    Scoped to modules that render versions through ProcessEnvelope (e.g. segment.nf,
+    which binds `backend = SegBackends.of(params.seg_method)` in both halves).
     """
     mismatches = []
     for nf in MODULES:
@@ -272,7 +216,7 @@ def test_backend_binding_is_identical_between_script_and_stub():
 
 
 def test_script_and_stub_ask_for_the_same_tool_list():
-    """The failure this whole refactor exists to prevent: two lists, one invisible.
+    """script: and stub: must ask for the same tool list.
 
     Literal calls are compared by their parsed tool list. Non-literal calls are not
     re-parsed here -- test_versions_calls_are_literal_or_symmetric_between_script_and_stub
@@ -341,27 +285,13 @@ def _split_top_level_commas(args):
 def test_every_module_records_its_container():
     """Every versions.yml must name the image that produced it.
 
-    Ruling R6 makes the container part of 1.0.0's reproducibility claim, and this
-    repo's tags are content-descriptive (`:preprocess`, `:tiled`) rather than
-    immutable -- so `container:` in versions.yml is the only record of WHICH image
-    a given result came out of. `task.container` is non-null even with no container
-    engine enabled (measured 2026-09-02 on 25.04.7), so there is no environment in
-    which passing it is a no-op.
+    Image tags are content-descriptive rather than immutable, so `container:` in
+    versions.yml is the only record of which image produced a result. `task.container`
+    is non-null even with no container engine enabled.
 
-    Read off the COMMENT-STRIPPED view: this asks "does this call actually run?",
-    and a comment quoting a 3-arg call would otherwise satisfy it while the real
-    call ships two arguments. That mistake was made six times in one day on this
-    repo (2026-09-01) and is recorded in CLAUDE.md.
-
-    A module with ZERO ProcessEnvelope.versions*() calls in a half is not scanned by
-    the loop below at all -- `_VERSIONS_CALL_RE.finditer` simply finds nothing, and an
-    empty result reads exactly like "every call it found was fine". That is a real
-    blind spot, not a hypothetical one: aggregate_size_logs.nf hand-wrote its own
-    versions.yml heredoc (no ProcessEnvelope call, in either half) for as long as this
-    test existed, and it was never once flagged as an offender by the loop below. The
-    coverage check first closes that: every process must have at least one
-    ProcessEnvelope.versions*() call in EACH half, or it is reported here explicitly
-    rather than silently skipped.
+    Read off the comment-stripped view, so a comment quoting a 3-arg call cannot
+    satisfy it. Every process must also have at least one ProcessEnvelope.versions*()
+    call in each half, or the loop below would find nothing and pass.
     """
     offenders = []
     for proc in LOCAL_PROCESSES:
@@ -417,16 +347,10 @@ def _blank_envelope_size_log_calls(text):
 def test_every_size_log_module_uses_the_envelope():
     """A module that emits `size_log` renders BOTH its rows through ProcessEnvelope.
 
-    The failure this closes is the size-log twin of the one the rest of this file
-    closes for versions.yml, and it was worse: all 21 stub blocks wrote the literal
-    `STUB` as the process name, so a stub CSV and a real CSV could not be compared
-    at all, and bin/generate_resource_report.py carried a special case to drop those
-    rows. `-stub` never evaluates `script:`, so nothing in the blocking gate could
-    see the two halves disagree -- and they did: quantify.nf's script row keyed on
-    meta.patient_id while its stub row keyed on meta.id.
+    The size-log twin of the versions.yml rule: `-stub` never evaluates `script:`, so
+    hand-written script and stub rows could disagree (process name, key) unseen.
 
-    Discovery is by `emit: size_log`, not by a hard-coded list of 21 filenames: a
-    new module that emits a size log is covered the day it is written.
+    Discovery is by `emit: size_log`, so a new module that emits a size log is covered.
     """
     offenders = []
     for proc in LOCAL_PROCESSES:
@@ -477,24 +401,12 @@ def test_size_log_and_stub_write_the_same_outfile():
     argument -- must agree, call for call, between a module's script: and stub:
     halves.
 
-    Nothing else enforces this: test_every_size_log_module_uses_the_envelope above
-    only checks that both halves call *some* ProcessEnvelope size-log method, and
-    test_script_and_stub_ask_for_the_same_tool_list is about the tools list argument
-    to versions()/versionsStub(), a completely different pair of methods. A module
-    whose script: writes `"${prefix}.FOO.size.csv"` and whose stub: writes
-    `"${prefix}.BAR.size.csv"` would pass every existing guard in this file while a
-    real run's size log and its stub-mode counterpart land at different filenames --
-    invisible to `-stub`, which never evaluates script: at all (see this file's
-    module docstring).
+    test_every_size_log_module_uses_the_envelope only checks that both halves call some
+    size-log method; a script: writing `"${prefix}.FOO.size.csv"` and a stub: writing
+    `"${prefix}.BAR.size.csv"` would otherwise pass.
 
-    Read off the comment-stripped view (`strip_comments`), not the raw script:/stub:
-    text `Process.script_body`/`stub_body` carry -- a comment quoting a call with a
-    different outFile would otherwise satisfy this the same way CLAUDE.md's
-    "Verification reality" #7 describes for six other guards on 2026-09-01.
-
-    Non-vacuity: at least 20 processes are expected to have a sizeLog call (measured
-    21 on 2026-09-02) -- a collapse to a much smaller count would mean discovery
-    itself broke, not that most modules stopped emitting size logs.
+    Read off the comment-stripped view, so a comment quoting a call cannot satisfy it.
+    Non-vacuity: at least 20 processes are expected to have a sizeLog call.
     """
     offenders = []
     compared = 0

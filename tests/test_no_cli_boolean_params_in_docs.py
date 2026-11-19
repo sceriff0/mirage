@@ -1,25 +1,11 @@
 """No document may show a boolean parameter passed on the command line.
 
-Nextflow 26 hands every `--param` to nf-schema as a **String**. Probed directly with an
-isolated `workflow { println params.dry_run.getClass() }`:
+Nextflow 26 hands every CLI `--param` to nf-schema as a String, so validation fails with
+`* --dry_run (true): Value is [string] but should be [boolean]`. Both the valued form and
+a bare valueless flag fail; only `-params-file` with a JSON boolean, or a profile, works.
+The boolean parameter list is derived from the schema.
 
-    25.04.7   class java.lang.Boolean
-    26.04.6   class java.lang.String
-
-so the real pipeline then fails validation with
-`* --dry_run (true): Value is [string] but should be [boolean]`. This is not a bump-day
-problem: `.github/workflows/ci.yml`'s `nextflow-stub` matrix already includes
-`latest-everything`, which is Nextflow 26 today, and that job sits in the blocking
-`all-tests` gate.
-
-**Both CLI forms fail.** `--dry_run true` fails, and so does a bare valueless `--dry_run` --
-NF26 still delivers a String. The only working forms are `-params-file` with a real JSON
-boolean, or a profile. That applies to all 18 boolean parameters in the schema, not just
-`dry_run`, which is why this guard derives its parameter list from the schema rather than
-hardcoding a name.
-
-A document showing the broken form is a live copy-paste hazard: nothing executes it, so no
-test catches it, and the reader's first run fails on a valid pipeline.
+A document showing the broken form is a copy-paste hazard that no other test catches.
 """
 
 import json
@@ -29,12 +15,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Enumerated from the TRACKED tree (`git ls-files`), then filtered, rather than
-# globbed from the filesystem: a glob would also read untracked scratch files
-# in a worktree, and tests/test_nfmodel.py's FLAT_TREE_SCANNERS exemption --
-# which this guard needs once it reads `.nf` source as flat text -- is defined
-# by exactly that enumeration. The filter is the guard's SCOPE; each clause
-# below records why that part of the tree is operator-facing.
+# Enumerated from the tracked tree (`git ls-files`), not a filesystem glob, so
+# untracked scratch files are ignored; tests/test_nfmodel.py's FLAT_TREE_SCANNERS
+# exemption depends on that enumeration. Each clause below is part of the scope.
 _TRACKED = [
     REPO / rel
     for rel in subprocess.run(
@@ -59,12 +42,8 @@ def _in_scope(path):
     # copy-pastes from.
     if parts[0] == "tests" and rel.suffix in {".md", ".sh"}:
         return True
-    # Widened 2026-09-02: nextflow.config's own comment told the reader to run
-    # `--skip_seg_quality_eval` with a value, forty lines from the comment
-    # explaining that the string "false" is truthy and does the opposite. A
-    # config comment is a document; it was simply out of scope. conf/*.config
-    # and conf/site.config.template -- a distinct extension, and the file
-    # docs/installation.md tells every reader to copy verbatim.
+    # Config comments are documents too: nextflow.config, conf/*.config and
+    # conf/site.config.template (which docs/installation.md says to copy).
     if rel.as_posix() == "nextflow.config":
         return True
     if (
@@ -73,21 +52,12 @@ def _in_scope(path):
         and rel.name.endswith((".config", ".config.template"))
     ):
         return True
-    # Widened 2026-09-03 (final-review fix round, plan 12): a `log.warn` in
-    # workflows/mirage.nf told the operator to "Pass --cleanup_work false" --
-    # the exact broken CLI form this guard exists to catch, just in Groovy
-    # rather than Markdown. Workflow/subworkflow source is operator-facing
-    # prose (log messages) as much as any doc. Read as flat text, comments
-    # included -- this is deliberately NOT a Nextflow parse (see
-    # tests/test_nfmodel.py's FLAT_TREE_SCANNERS).
+    # Workflow/subworkflow log messages are operator-facing prose. Read as flat
+    # text, comments included, not as a Nextflow parse (see FLAT_TREE_SCANNERS).
     if parts[0] in {"workflows", "subworkflows"} and rel.suffix == ".nf":
         return True
-    # DECISION, not an oversight: CHANGELOG.md is NOT scanned. It is a
-    # historical record that quotes PAST commands -- including broken ones --
-    # as part of describing what changed and why (e.g. "Previously
-    # `--embed_masks true --quantify_compartments false` ... exited"); rewriting
-    # those quotes to hide the old broken form would falsify the changelog
-    # entry it documents. A reader copies from a how-to doc, not a changelog.
+    # CHANGELOG.md is not scanned: it quotes past commands, broken ones
+    # included, and rewriting them would falsify the record.
     return False
 
 
@@ -129,18 +99,14 @@ def _boolean_params():
     return names
 
 
-# A line may show the broken form as an explicit counter-example -- docs/usage.md's
-# "Boolean parameters" section does exactly that -- if it says so ON THE SAME LINE. The marker
-# has to be adjacent, not a heading above the block, so it cannot drift away from the line it
-# excuses and quietly start covering a working example.
+# A line may show the broken form as an explicit counter-example (docs/usage.md's
+# "Boolean parameters" section) if the marker is on the same line, so it cannot drift
+# away and start excusing a working example.
 _COUNTEREXAMPLE = re.compile(r"#\s*x\s+fails\b", re.I)
 
-# THE BARE FORM FAILS TOO, and the module docstring above says so: NF26 delivers
-# a valueless `--flag` as the String "true". It is detected only inside a FENCED
-# COMMAND, never in prose, and the distinction is deliberate: these documents
-# name boolean parameters in prose constantly ("`--expanded_quantification`
-# requires `--quantify_compartments`"), and a detector that fired on those would
-# be noise nobody reads. What the reader copies is what is in the code block.
+# The bare form fails too (NF26 delivers a valueless `--flag` as the String
+# "true"). It is detected only inside a command, not in prose, where boolean
+# parameters are named constantly ("`--expanded_quantification` requires ...").
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _TRAILING_COMMENT = re.compile(r"\s+#.*$")
 
@@ -152,11 +118,9 @@ def _command_lines(text, always_in_command):
     .sh, .config or .nf file, every line is a candidate. A candidate is a
     command line only if it contains `nextflow run` or continues one (a
     backslash continuation keeps the command open). So the BARE form is
-    caught only on an actual `nextflow run` line in any file type; a bare
-    `--dry_run` in a config comment or a log message is prose and is left
-    alone, for the same reason the Markdown prose exclusion exists -- the
-    `--flag true|false` form, by contrast, is caught on every line of every
-    scanned file by `_offending_lines`, with or without a command around it.
+    caught only on an actual `nextflow run` line; a bare `--dry_run` in a
+    comment or log message is prose. The `--flag true|false` form is caught on
+    every scanned line by `_offending_lines`.
     """
     in_fence = always_in_command
     continuing = False
@@ -167,7 +131,7 @@ def _command_lines(text, always_in_command):
             continue
         if not in_fence:
             continue
-        # Stripped BEFORE the bare-flag scan on purpose: a shell line ending
+        # Stripped before the bare-flag scan: a shell line ending
         # `--dry_run  # explained below` must still read as bare (no value),
         # not as if the trailing comment were the flag's argument.
         code = _TRAILING_COMMENT.sub("", line)
@@ -310,17 +274,11 @@ def test_no_shell_script_passes_a_boolean_param_on_the_command_line():
     """The docs check above is advisory; a script is EXECUTED, so the same mistake
     there is live rather than misleading.
 
-    benchmarks/submit_arms.sh shipped `--skip_seg_quality_eval false`, which on
-    Nextflow 26 sets the param to the STRING "false" -- truthy -- and so disabled
-    the scorer while reading like it enabled it. Use a profile (`seg_quality`) or
-    -params-file with a real JSON boolean.
+    On Nextflow 26 `--skip_seg_quality_eval false` sets the param to the string
+    "false", which is truthy. Use a profile or -params-file with a JSON boolean.
 
-    SCOPE IS EVERY TRACKED .sh, not one directory. The original version globbed
-    benchmarks/ only; that directory lives on the `benchmarking` branch alone, so
-    on `dev` the glob matched nothing and the assertion passed vacuously -- a
-    guard that cannot fail is not a guard. `git ls-files` is the enumerator
-    because it follows the branch: whatever shell scripts a branch actually
-    ships are the ones checked.
+    Scope is every tracked .sh (`git ls-files`), so each branch checks the
+    scripts it actually ships.
     """
     import re
     import subprocess

@@ -1,30 +1,18 @@
 """Every tool a process reports a version for must exist in the image it runs in.
 
-WHAT A PHANTOM COSTS. lib/ProcessEnvelope.groovy renders each tool as
+lib/ProcessEnvelope.groovy renders each tool as
 
     <name>: $(python -c "import <tool>; print(<tool>.__version__)" 2>/dev/null || echo "unknown")
 
-so a tool no image installs does not fail the task -- it writes the literal string
-`unknown` into versions.yml. bin/generate_qc_report.py's parse_versions_yml is a
-hand-rolled two-level split that never validates what it finds, and renders the value
-verbatim into the report's Process | Tool | Version table. The published provenance record
-then claims the pipeline consulted a tool it never loaded, which is worse than a missing
-row: a missing row invites a question and `unknown` reads like a version-probe hiccup.
+so a tool no image installs does not fail the task: it writes `unknown` into
+versions.yml, and the QC report's Process | Tool | Version table then claims the
+pipeline used a tool it never loaded.
 
-Two instances were live when this guard was written:
-  * lib/SegBackends.groovy gave StarDist versionTools ['deepcell', 'tensorflow'], and no
-    image installs deepcell -- StarDist has nothing to do with DeepCell. tests/
-    test_seg_backends.py asserted the pair verbatim, pinning the phantom in place.
-  * modules/local/convert_image.nf reported 'aicsimageio', which is on
-    test_container_harmonisation.FORBIDDEN and installed nowhere. The name it wanted is
-    bioio.
-
-SCOPE. Three sources, because a process gets its tool list from one of three places:
-a literal list in modules/local/*.nf, lib/SegBackends.groovy's per-backend versionTools
-(SEGMENT), and lib/WarpBackends.groovy's (WARP_SEG_QC). A process whose container is an
-external image (VALIS) is skipped -- there is no containers/<dir>/Dockerfile to check
-against, which is the same boundary test_container_harmonisation._module_container_and_
-scripts() draws and for the same reason.
+Three sources of tool lists: a literal list in modules/local/*.nf,
+lib/SegBackends.groovy's per-backend versionTools (SEGMENT), and
+lib/WarpBackends.groovy's (WARP_SEG_QC). A process on an external image (VALIS) is
+skipped, since there is no containers/<dir>/Dockerfile to check (the same boundary
+test_container_harmonisation._module_container_and_scripts() draws).
 """
 
 import re
@@ -40,8 +28,7 @@ MODULES = REPO / "modules" / "local"
 LIB = REPO / "lib"
 
 # `ProcessEnvelope.versions(task.process, ['a', 'b'], task.container)` and its Stub twin.
-# The third argument is optional in the regex so this guard is indifferent to the arity
-# change plan 04 made -- it is the TOOL LIST that is under assertion, nothing else.
+# The third argument is optional in the regex: only the tool list is under assertion.
 _VERSIONS_CALL = re.compile(
     r"ProcessEnvelope\.versions(?:Stub)?\(\s*task\.process\s*,\s*\[([^\]]*)\]"
 )
@@ -56,10 +43,8 @@ _FIRST_PARTY_IMAGE = re.compile(r"bolt3x/mirage-([a-z0-9]+(?:-[a-z0-9]+)*)[:@]")
 # `python --version`, and the two modules that also pass it in the tools list get a second,
 # harmless row. It is not a package and no image "installs" it.
 #
-# `CellSegmentationEvaluator` is VENDORED source under bin/utils/cse/ (upstream 1.5.19,
-# kept byte-identical), staged onto $PATH by Nextflow like the rest of bin/. pip installs
-# nothing for it -- which is exactly why test_container_harmonisation._third_party_imports
-# derives its local-package set from bin/ rather than hardcoding names.
+# `CellSegmentationEvaluator` is vendored source under bin/utils/cse/, staged onto $PATH
+# by Nextflow like the rest of bin/; pip installs nothing for it.
 NOT_A_DISTRIBUTION = {"python", "CellSegmentationEvaluator"}
 
 
@@ -115,9 +100,8 @@ def _claims():
 def test_the_scan_finds_all_three_sources():
     """A regex that stops matching reports every image as clean.
 
-    plan 04 changed ProcessEnvelope.versions() from two arguments to three; a pattern
-    anchored on the closing paren would have silently matched nothing afterwards, and
-    every assertion below would have passed over an empty set.
+    ProcessEnvelope.versions() takes an optional third argument; a pattern anchored on the
+    closing paren could match nothing, and every assertion below would pass vacuously.
     """
     claims = _claims()
     assert len(claims) >= 8, (

@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Execution counterpart to tests/test_documented_commands_are_runnable.py's
-# static token check.
+# Execution counterpart to tests/test_documented_commands_are_runnable.py's static
+# token check, which never invokes Nextflow and so cannot see what only launch
+# validation catches (an unknown flag, a missing samplesheet, a rejected column).
+# A script, not a pytest: each command is a real `nextflow run` with its own JVM.
 #
-# WHY THIS IS A SEPARATE SCRIPT AND NOT PART OF THAT GUARD
+# `dry_run` makes it cheap: validation runs before any process is instantiated, so
+# each command exits in seconds with no container pulled, whatever profile it names.
+# `dry_run` is a boolean, so it comes from `-params-file params/dry_run.json`
+# (Nextflow 26 delivers every CLI --param as a String).
 #
 # `_verdict()` in the Python file is a STATIC check: it looks for
 # `--outdir`/`-c`/`max_cpus`/`max_memory` substrings and sizing-pinning profile
@@ -66,11 +71,8 @@ launched=0
 while IFS=$'\t' read -r doc_file doc_line reason command; do
     total=$((total + 1))
 
-    # "-" is the emitter's NO_REASON sentinel, not an empty field: bash's read
-    # collapses an actually-empty field between two tabs (tab is IFS
-    # whitespace regardless of what IFS is set to), silently shifting every
-    # field after it -- see tests/test_documented_commands_are_runnable.py's
-    # _NO_REASON for the measurement.
+    # "-" is the emitter's NO_REASON sentinel: bash's read collapses an empty
+    # field between two tabs and shifts every field after it.
     if [[ "$reason" != "-" ]]; then
         echo "SKIP  ${doc_file}:${doc_line}  ($reason)"
         skipped=$((skipped + 1))
@@ -102,11 +104,8 @@ while IFS=$'\t' read -r doc_file doc_line reason command; do
     fi
 done < <(python3 -m tests.test_documented_commands_are_runnable --emit)
 
-# UNCHECKED USED TO MEAN VACUOUS (see tests/resume_check.sh's own note on this
-# exact trap). If `--emit` crashed and printed nothing, the loop above would
-# never execute, `total` would stay 0, and the script would fall straight
-# through to "PASS" having launched nothing. This is the same guard
-# test_every_documented_command_would_launch keeps as `total >= 25`.
+# If `--emit` printed nothing, the loop never ran and this would pass vacuously.
+# Same floor as test_every_documented_command_would_launch.
 if [[ "$total" -lt 25 ]]; then
     echo "FAIL: only $total command(s) were extracted -- the emitter has stopped matching and this scan read almost nothing" >&2
     exit 1

@@ -1,11 +1,7 @@
 """One string-aware model of this repo's Nextflow source.
 
-Seven guards used to carry seven private regex parses of the same files, each
-with a different blind spot -- so "the guard passed" said nothing about
-whether it had read the file. See tests/test_nfmodel.py for the specific
-constructs that defeated the old parses.
-
-Guards assert against this model, never against raw text.
+Guards assert against this model rather than private regex parses of raw
+text. tests/test_nfmodel.py covers the constructs a naive parse gets wrong.
 """
 
 from ._lex import (

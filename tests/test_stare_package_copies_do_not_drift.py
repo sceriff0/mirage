@@ -1,8 +1,7 @@
 """The `stare` package's copies of pipeline helpers cannot drift from the originals.
 
-The STARE package (github.com/sceriff0/stare) must import nothing from the pipeline (it is installed on its own,
-in containers/tiled and, eventually, from its own repository), so it carries COPIES of
-the few helpers its stages reached into ``bin/utils`` for:
+The STARE package (github.com/sceriff0/stare) imports nothing from the pipeline, so it
+carries copies of the few helpers its stages need from ``bin/utils``:
 
   * ``stare/log.py``      <- ``bin/utils/logger.py``     (``configure_logging``, ``get_logger``)
   * ``stare/ome.py``      <- ``bin/utils/ome_io.py``     (``ome_metadata``, ``ome_tiff_writer``)
@@ -13,14 +12,12 @@ the few helpers its stages reached into ``bin/utils`` for:
                              images' scripts read through it -- so the pipeline keeps its
                              own copy rather than importing the package everywhere)
 
-A copy is the thing this repo's guards exist to distrust: two definitions of one rule,
-each free to drift, with the drift surfacing as a header a reader misinterprets rather
-than as a failure. This file makes each copy CHECKED rather than trusted:
+A copy is two definitions of one rule, each free to drift. This file checks each copy:
 
-  1. STATICALLY -- every function/class both files define under the same name has the
+  1. Statically -- every function/class both files define under the same name has the
      same AST, docstrings excluded (the package documents itself in its own words; the
      code must be the same code). ``slide_io`` must be the whole file, byte for byte.
-  2. BEHAVIOURALLY -- for the OME copy, the same array written through both writers
+  2. Behaviourally -- for the OME copy, the same array written through both writers
      with both metadata builders produces the same parsed header (channel names,
      PhysicalSize) and the same pixels, and both pixel-size resolvers agree on a header
      they wrote and on the three error cases.

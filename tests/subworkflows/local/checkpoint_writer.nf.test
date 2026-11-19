@@ -8,12 +8,8 @@ nextflow_workflow {
     tag "subworkflows_local"
     tag "checkpoint_writer"
 
-    // WHY THIS FILE IS NOT `options "-stub"`. There is no process here to stub: the
-    // whole subworkflow is operators, and what is under assertion is the CSV they
-    // produce -- its header, its row content and its ORDER. A stub run would exercise
-    // exactly the same code, so the flag would buy nothing and cost the reader a
-    // question. It IS tagged `stub` so CI's blocking gate collects it, which is the
-    // separate thing that flag does not do.
+    // Not `options "-stub"`: there is no process here, only operators, and the CSV they
+    // produce (header, rows, order) is what is asserted. Tagged `stub` so CI collects it.
 
     test("writes a header and one row per input, sorted, at cleanup_level none") {
 
@@ -56,9 +52,7 @@ nextflow_workflow {
                     assert lines[0] ==
                         'patient_id,id,registered_image,is_reference,channels,pixel_size'
                     assert lines.size() == 3
-                    // P001 precedes P002 despite arriving second -- an explicit
-                    // `sort: false` on the writer would reorder these to arrival order
-                    // (P002, P001) and fail this assertion.
+                    // P001 precedes P002 despite arriving second.
                     assert lines[1].startsWith('P001,')
                     assert lines[2].startsWith('P002,')
                     assert lines[1].contains('/out/P001/registered/P001_s1.ome.tiff')
@@ -93,7 +87,7 @@ nextflow_workflow {
             assertAll(
                 { assert workflow.success },
                 // lib/Layout.groovy owns both the directory and the basename; this
-                // asserts the writer ASKS it rather than composing a path.
+                // asserts the writer asks it rather than composing a path.
                 { assert file(workflow.out.csv[0]).name == 'preprocessed.csv' },
                 { assert file("$outputDir/csv/preprocessed.csv").exists() }
             )
@@ -124,15 +118,11 @@ nextflow_workflow {
         then {
             assertAll(
                 { assert workflow.success },
-                // Not "an empty file" and not "a header-only file": NO file. A manifest
-                // whose rows name artifacts a cleaning level never published is worse
-                // than no manifest, because --start and add_cycle both OPEN what it
-                // names. See Checkpoint.writesAtLevel. Filtering the SOURCE (rather
-                // than wrapping the chain in an `if`) is what makes this hold: an empty
-                // channel into a seeded collectFile writes no file at all -- verified on
-                // NXF_VER=26.04.6 rather than assumed, because a seeded collectFile
-                // emitting a header-only manifest would have been exactly the dangling
-                // manifest this gate exists to prevent.
+                // No file at all, not a header-only one: a manifest naming artifacts a
+                // cleaning level never published is worse than none, because --start
+                // and add_cycle open what it names (Checkpoint.writesAtLevel). The
+                // source is filtered, and an empty channel into a seeded collectFile
+                // writes no file.
                 { assert workflow.out.csv.size() == 0 },
                 { assert !file("$outputDir/csv/registered.csv").exists() }
             )

@@ -1,34 +1,14 @@
-"""Failure policy is a scattered set of literal closures in a file no test can
-execute. Two of them called `log.warn`, which is NOT bound in conf/*.config
-under Nextflow's v1 config parser -- it resolves against ConfigObject, throws
-past the retry budget, and ABORTS the run. The 'ignore' branch was unreachable,
-so the block did the exact opposite of what its comment promised.
+"""errorStrategy closures in conf/modules.config: only bound identifiers, only named policies.
 
-Reproduced 2026-08-25 on the pinned toolchain, both directions:
+An identifier config scope does not bind (e.g. `log` under Nextflow 25's config parser)
+resolves against ConfigObject and throws when the closure runs past its retry budget,
+aborting the run. `manifest.nextflowVersion` accepts 25.04, so this must hold there too.
 
-    NXF_VER=25.04.7  ->  ERROR ~ Unknown method invocation `warn` on
-                         ConfigObject type -- Did you mean? wait      (exit 1)
-    NXF_VER=26.04.6  ->  WARN nextflow.config.parser.v2.ConfigDsl -
-                         SEG_QUALITY_EVAL dropped ...                 (exit 0)
+Two properties are asserted:
 
-Nextflow 26's v2 `ConfigDsl` parser binds `log`; 25.04's does not. That is not
-a reason to keep the call: `manifest.nextflowVersion` is `>=25.04.0`, so this
-pipeline ACCEPTS at launch the very version on which these closures abort. A
-guard that only holds on the newest supported runtime is not a guard.
-
-This is the same silent-resolution trap CLAUDE.md documents for lib/ classes,
-with `log` instead of a class name -- which is why nobody recognised it.
-
-Two properties are asserted here:
-
-  1. No errorStrategy closure names an identifier that config scope does not
-     bind. This is the general form of the defect; `log` was one instance.
-  2. Every errorStrategy closure is one of a small set of NAMED policies,
-     inlined verbatim. conf/*.config cannot see lib/ and NF26's strict parser
-     forbids sharing a helper between withName: blocks (CLAUDE.md), so
-     "extract a policy class" is not available -- naming and pinning the text
-     is. The review's requirement is that 'ignore' stops being a default that
-     nobody chose and becomes a decision someone has to write down.
+  1. No errorStrategy closure names an identifier that config scope does not bind.
+  2. Every errorStrategy closure is one of a small set of named policies, inlined
+     verbatim (conf/*.config cannot share a helper between withName: blocks).
 """
 
 import re
@@ -36,8 +16,7 @@ import re
 from tests.nfmodel import block_extent, strip_comments, with_name_blocks
 
 # Bound inside a process-scope config closure. Everything else resolves against
-# ConfigObject and throws only when the closure RUNS -- which is why this is a
-# static guard and not something a green pipeline run would have caught.
+# ConfigObject and throws only when the closure runs, which a green run does not reach.
 BOUND = {
     "task",
     "params",
@@ -63,11 +42,9 @@ _IDENT = re.compile(r"\b([a-zA-Z_]\w*)\s*\.")
 # comments; values are the exact closure body each name stands for.
 #
 # The matrix is (which failures are worth retrying) x (what happens when the
-# budget runs out). Three of the four cells are occupied; the fourth --
-# selective retry then DROP -- is deliberately absent, because that is the
-# combination that produced this whole finding: a narrow cause selector whose
-# terminal branch was 'ignore' silently discarded every cause outside the
-# selector on attempt 1.
+# budget runs out). The fourth cell, selective retry then drop, is absent: a
+# narrow cause selector ending in 'ignore' silently discards every cause outside
+# the selector on attempt 1.
 CANONICAL = {
     # retry-then-fail: signals are transient, anything else is a real bug.
     "retry-then-fail": "task.exitStatus in ((130..145) + 104) && task.attempt <= 3 "
@@ -138,9 +115,8 @@ def test_no_error_strategy_closure_calls_an_unbound_identifier():
 
 
 def test_every_error_strategy_is_one_of_the_named_policies():
-    """Failure policy used to be ad-hoc literal closures, two of which were
-    wrong and both of which hid it. A named policy set, inlined verbatim
-    (conf/*.config cannot share a helper -- see CLAUDE.md), and nothing else."""
+    """Every errorStrategy closure is one of the named policies, inlined verbatim
+    (conf/*.config cannot share a helper)."""
     allowed = {_normalise(v) for v in CANONICAL.values()}
     offenders = []
     for selector, line, _code, text in _error_strategy_closures():
@@ -159,16 +135,10 @@ def test_no_policy_selects_on_cause_and_then_drops():
 
     A closure that both narrows on `task.exitStatus` and terminates in
     'ignore' discards every cause outside its selector on attempt 1 without
-    saying so. conf/modules.config:177 was exactly that shape, it covered
-    WARP_SEG_QC, and reg_qc=2 is the default -- so a broken warp_seg_qc.py
-    produced exit 0 with no *_seg_qc.json at all (verified 2026-08-25).
+    saying so: a failed default-on QC task would give exit 0 and no output.
     """
-    # `exitStatus` is read off the CODE view and `'ignore'` off the TEXT view,
-    # each from the only view that can answer it. Read both off one view and
-    # the guard is wrong in one direction or the other: on the text view an
-    # ordinary "(exit ${task.exitStatus})" inside a quoted message counts as a
-    # cause selector, and on the code view `'ignore'` is blanked to spaces and
-    # nothing is ever reported.
+    # `exitStatus` is read off the code view (a quoted "(exit ${task.exitStatus})" is
+    # not a selector) and `'ignore'` off the text view (the code view blanks it).
     offenders = [
         f"conf/modules.config:{line} withName: '{selector}' selects on "
         f"task.exitStatus and terminates in 'ignore'"

@@ -1,13 +1,9 @@
 """``bin/convert_image.py:read_image_bioio`` must stop materialising the whole slide.
 
-PERF-PLAN section 1 measured this site: ``img.data`` decodes the entire slide into RAM,
-and the squeeze/transpose that follows allocates a second full-size copy, so peak is
-roughly twice the *decompressed* slide while ``conf/modules.config`` sizes the task's
-memory from the *compressed* input. A 6 GB CZI that decompresses to 20 GB gets 48 GB.
-
-``bioio.BioImage`` exposes ``dask_data`` -- a dask array with the same shape and
-dimension order as ``.data`` (verified against bioio 3.5.0's ``bio_image.py``). This
-file pins the read half of the fix:
+``img.data`` decodes the whole slide and the squeeze/transpose makes a second copy,
+so peak is about twice the decompressed slide, while the task's memory is sized from
+the compressed input. ``BioImage.dask_data`` has the same shape and dimension order.
+This file pins the read half:
 
 1. ``read_image_bioio`` reads ``img.dask_data``. ``img.data`` is never touched -- the
    fake below raises if it is, so this is a behavioural assertion, not a grep.
@@ -21,19 +17,11 @@ file pins the read half of the fix:
    (``warn_on_pixel_size_mismatch`` has to tell them apart).
 5. ``channel_names_from_file`` and ``original_dims`` are still in the returned metadata.
 
-WHY A FAKE ``bioio`` MODULE RATHER THAN THE REAL ONE: ``.github/workflows/ci.yml``'s
-python-tests job does not install ``bioio`` (it is a ~5-plugin JVM-adjacent stack that
-only ``containers/convert`` carries), and a test that ``importorskip``s it would be
-decorative -- it would never run in the gate. ``read_image_bioio`` imports ``BioImage``
-*inside the function*, so injecting ``sys.modules["bioio"]`` exercises the real
-production function against a controlled ``BioImage``. (The technique was borrowed from
-the ``basicpy`` stub in the since-deleted ``tests/test_preprocess_lazy_read.py``; nothing
-else in ``tests/`` injects a module this way today, so it is described here rather than
-cross-referenced.) ``dask`` *is* installed in
-CI (pinned in ci.yml next to the imaging stack) so the fake hands back a real dask
-array and the laziness assertions are real. It is imported here UNCONDITIONALLY, not
-via ``pytest.importorskip``: if that pin is ever dropped this file must fail the gate
-rather than quietly disappear from it.
+A fake ``bioio`` module stands in because CI does not install bioio (only
+``containers/convert`` does), and an ``importorskip`` would never run in the gate.
+``read_image_bioio`` imports ``BioImage`` inside the function, so injecting
+``sys.modules["bioio"]`` drives the real function. ``dask`` is installed in CI and
+imported unconditionally, so dropping it fails the gate instead of skipping.
 """
 
 from __future__ import annotations

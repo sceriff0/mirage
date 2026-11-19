@@ -1,11 +1,6 @@
 """CHANGELOG.md must be shaped like a released project's changelog.
 
-On 2026-09-02 it had TWO sections claiming version 1.0.0: `## [Unreleased]`
-(~850 lines, everything that will actually ship) and `## [1.0.0] - 2026-07-29`
-(the earlier snapshot), with a link definition for only one of them. A reader
-looking up "what is in 1.0.0" would find the older, smaller list.
-
-Four properties, each of which was violated or at risk:
+Four properties:
 
 * every `## [X.Y.Z]` heading appears once -- two sections for one version means
   one of them is wrong and nothing says which;

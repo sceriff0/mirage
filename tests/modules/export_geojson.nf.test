@@ -104,9 +104,8 @@ nextflow_process {
     test("Should render the doubled --pixel_size and the compartments contours flag - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
-        // tag-"stub" case that reaches the rendered command. Gates the doubled
-        // --pixel_size (once from the script: block, once from conf/modules.config's
-        // ext.args, argparse last-wins) under CI's blocking `--tag stub` gate.
+        // tag-"stub" case that reaches the rendered command, including the doubled
+        // --pixel_size (script: and ext.args, argparse last-wins).
         tag "stub"
 
         when {
@@ -131,9 +130,8 @@ nextflow_process {
 
             assertAll(
                 { assert rendered.size() >= 1 },
-                // Rendered TWICE by design: once in script:, once from ext.args, argparse
-                // last-wins (export_geojson.nf:45-57). Pin that both are the same value; a
-                // drift between them is the bug this guards.
+                // Rendered twice by design (script: and ext.args, argparse last-wins); both must
+                // carry the same value.
                 { assert rendered.every { (it =~ /--pixel_size 0\.325/).count == 2 },
                     "expected exactly two identical --pixel_size 0.325 occurrences: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--nucleus_contours_json') }, rendered.join(' --- ') },

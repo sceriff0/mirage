@@ -1,27 +1,8 @@
 {
-    "_comment_io": "=== Input/Output ===",
     "input": "/path/to/samplesheet.csv",
     "outdir": "/path/to/results",
     "start": "registration",
     "stop": "registration",
 
-    "_comment_reg_common": "=== Registration (Common) ===",
-    "registration_method": "tiled",
-    "nuclear_markers": ["DAPI", "CELLTOX"],
-    "skip_registration_qc": false,
-    "qc_scale_factor": 0.25,
-
-    "_comment_reg_valis": "=== Registration (VALIS, with registration_method valis) === valis-wsi 1.2.0 at its defaults: there are no VALIS registration settings.",
-
-    "_comment_output": "=== Image Output / Pyramid ===",
-    "tilex": 512,
-    "pyramid_resolutions": 8,
-    "pyramid_scale": 2,
-    "compression": "zstd",
-
-    "_comment_resources": "=== Resource Limits === NOT SET ON PURPOSE (R4). max_cpus/max_memory have no default and are required by nextflow_schema.json; they are per-SITE, not per-run, so they belong in your own -c site.config (copied from conf/site.config.template), never in a -params-file. A -params-file value overrides -c, so a resource block here would silently defeat any site.config you layer on top of this preset.",
-
-    "_comment_trace": "=== Tracing ===",
-    "enable_trace": true,
-    "trace_dir": ".trace"
+    "_comment_resources": "max_cpus, max_memory and max_time are not set here: they are per site and belong in your -c site.config (from conf/site.config.template). A -params-file value overrides -c, so setting them here would defeat it."
 }

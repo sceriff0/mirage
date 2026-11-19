@@ -1,5 +1,5 @@
-"""Six failure paths that no test previously reached, each covered directly against the
-real production function whose `raise` is under test.
+"""Six failure paths, each covered directly against the real production function whose
+`raise` is under test.
 
   - ``bin/utils/tiled_io.py:28``  (``nuclear_channel``)   -- out-of-range ``--nuclear-index``
   - ``bin/utils/tiled_io.py:175`` (``read_decimated``)     -- out-of-range ``--nuclear-index``
@@ -8,14 +8,10 @@ real production function whose `raise` is under test.
   - ``bin/utils/image_utils.py:115`` (``normalize_image_dimensions``) -- 4-D array
   - ``bin/utils/fov_tiling.py:254`` (``split_image_into_fovs``)       -- 3-D array
 
-The two ``tiled_io.py`` cases are DELIBERATELY separate tests, not one parametrized test
-or a shared helper. They are the same check copy-pasted into two functions
-(``nuclear_channel`` and ``read_decimated``) -- an identical third copy lives in
-``bin/tiled_reg_tile.py:40`` and is already covered by
+The two ``tiled_io.py`` cases are separate tests because the same check is copied into
+two functions (``nuclear_channel`` and ``read_decimated``); each copy needs its own
+coverage. A third copy in ``bin/tiled_reg_tile.py`` is covered by
 ``tests/test_tiled_reg_tile_lazy.py::test_nuclear_index_out_of_range_raises_same_message``.
-A single test asserting "the check exists somewhere in tiled_io.py" would leave exactly
-the false impression this task exists to correct: that all copies are guarded when only
-one was ever exercised.
 """
 
 from __future__ import annotations
@@ -56,11 +52,8 @@ def test_tiled_io_nuclear_channel_rejects_out_of_range_index():
 
 
 # ---------------------------------------------------------------------------
-# bin/utils/tiled_io.py:175 -- read_decimated's SEPARATE copy of the same check.
-# A single test file covering only nuclear_channel would leave this copy unexercised;
-# it is a different function with a different call site (``bin/tiled_coarse.py``,
-# ``bin/utils/qc.py``, ``bin/generate_preprocess_qc.py``), not a wrapper over the one
-# above.
+# bin/utils/tiled_io.py:175 -- read_decimated's separate copy of the same check, with
+# its own callers (``bin/utils/qc.py``, ``bin/generate_preprocess_qc.py``).
 # ---------------------------------------------------------------------------
 class _FakeLazyView:
     """Stand-in for open_lazy's (C, H, W) view. read_decimated reads ``.shape`` before

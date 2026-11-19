@@ -3,20 +3,14 @@
 There is exactly ONE front-end, reached through ``estimate_rigid`` / ``estimate_anchor``: an
 FFT NCC rotation sweep refined at the thumbnail, with a scikit-image ORB fallback and a loud
 refusal (github.com/sceriff0/stare tests/test_coarse_anchor.py holds the hard-case and fallback tests).
-It replaced DISK + LightGlue on 2026-09-27. The three classical CPU alternatives and the
-``estimate_affine`` dispatch table deleted for v1.0.0 stay deleted -- the ORB of the fallback
-is a different, internal shape (``_orb_fallback``), not the old selectable front-end --
-and ``test_the_deleted_frontends_are_really_gone`` below is what stops one coming back
-without a decision.
+The fallback's ORB is internal (``_orb_fallback``), not a selectable front-end;
+``test_the_deleted_frontends_are_really_gone`` stops a selectable one coming back.
 
 Nothing here skips: the anchor needs no torch (the STARE image, containers/stare, has none),
 and the suite step's MIRAGE_STRICT_SKIPS floor fails CI on any unexpected skip.
 
-Import note: coarse_align.py does ``from logger import get_logger`` at module scope (an
-unqualified import resolved against ``bin/utils`` on sys.path directly, the same convention
-tests/test_coarse_align.py and tests/test_tiled_coarse_thumbnail.py already use) -- so this
-module is imported the same way those sibling test files do, rather than via
-``bin.utils.coarse_align``, which would fail that inner import when this file is run alone.
+Import note: coarse_align.py does ``from logger import get_logger``, so ``bin/utils`` is put
+on sys.path directly, not imported as ``bin.utils.coarse_align``.
 
 Fixture note: the roll signs below are ``(-7, +5)``: M0 maps mov onto ref, so a moving image
 rolled by (+5 x, -7 y) is recovered as a (-5, +7) translation.
@@ -71,8 +65,8 @@ def rect_pair():
 
 
 def test_the_deleted_frontends_are_really_gone():
-    """A one-value dispatch table is dead config. These three were deleted for v1.0.0;
-    this fails if one is reintroduced without a decision."""
+    """A one-value dispatch table is dead config; this fails if one of the three
+    deleted front-ends is reintroduced."""
     import coarse_align
 
     for gone in (

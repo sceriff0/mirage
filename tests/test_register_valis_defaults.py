@@ -3,19 +3,16 @@
 (Its other mode, `reg_valis_mode hires`, is VALIS's own high-resolution example; it is pinned
 by tests/test_register_valis_modes.py. This file pins the default.)
 
-Ruling 2026-11-05: MIRAGE's VALIS mode is the benchmark's ``valis120`` call --
+MIRAGE's VALIS mode is the benchmark's ``valis120`` call --
 ``Valis(src, dst, img_list=..., reference_img_f=...)``, ``register()``, every slide warped in
-the reference frame. The tuned 1.0.0 configuration (tiers, SuperPoint/SuperGlue, keypoint cap,
-micro-registration, ``align_to_reference=True``) is archived at ``archive/valis-mirage-tuned``.
+the reference frame.
 
-The one deviation is the registration CHANNEL. VALIS 1.2.0's default fluorescence processing
-is ``{"channel": "dapi", "adaptive_eq": True}`` (registration.py:66), and
-``SlideReader.get_channel_index`` (slide_io.py:1074-1099) upper-cases the slide's channel names
-and takes ``difflib.get_close_matches("DAPI", names)[0]``; with no close match it warns and
-uses index 0, and a close-but-wrong name ("DAPI_X") is taken with only a warning. An ``int``
-is returned unchanged. [Read this session from the valis-wsi 1.2.0 wheel on PyPI.] The
-pipeline's conversion always writes the nuclear channel FIRST under the samplesheet's name, so
-the name match picks the right channel only by accident; REGISTER passes index 0 instead.
+The one deviation is the registration channel. VALIS 1.2.0's default fluorescence processing
+is ``{"channel": "dapi", "adaptive_eq": True}``, and ``SlideReader.get_channel_index``
+upper-cases the slide's channel names and takes ``difflib.get_close_matches("DAPI", names)[0]``;
+with no close match it warns and uses index 0, and a close-but-wrong name ("DAPI_X") is taken
+with only a warning. An ``int`` is returned unchanged. The pipeline's conversion always writes
+the nuclear channel first, so REGISTER passes index 0 rather than rely on the name match.
 
 bin/register.py imports valis at module scope and CI has no valis, so the structural checks
 read its AST. The behavioural check against VALIS's real ``get_channel_index`` runs wherever

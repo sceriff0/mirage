@@ -8,16 +8,13 @@ by accident:
    the module, the copy stops being "the nf-core module" and its MIRAGE-NOTES.md stops
    being true.
 
-2. **`ext.args` is empty on purpose.** mirage's previous in-process call was
-   `BaSiC(get_darkfield=True, smoothness_flatfield=1)`; the ruling is to run upstream's
-   defaults instead and NOT to reproduce those parameters. That is a decision, so it is
-   pinned, because the shape of it -- an empty string in a config file -- looks exactly
-   like an oversight to the next reader.
+2. **`ext.args` is empty on purpose**: BaSiC runs at upstream's defaults. An empty
+   string in a config file looks like an oversight, so it is pinned.
 
    Two flags in particular must not come back:
 
    * `--darkfield`. Adding it restores an additive darkfield model that the shipped
-     configuration deliberately does not have. That is a change to the correction, not a
+     configuration does not have. That is a change to the correction, not a
      tuning knob -- AND it disarms a safety check: see
      `test_the_darkfield_flag_has_not_come_back` below.
    * `--no_autotune`. Its name is INVERTED. Upstream declares it
@@ -25,11 +22,6 @@ by accident:
      `if not args.no_autotune:` -- so NOT passing it SKIPS autotune (the intended
      behaviour) and PASSING it ENABLES autotune. A maintainer reading the flag name and
      "helpfully" adding it to turn autotune off would turn it ON.
-
-These assertions could not fail before the module was vendored, so they are falsified by
-MUTATION rather than by a literal red-then-green: putting `--darkfield` or
-`--no_autotune` back into the `withName: 'BASICPY'` block fails
-`test_basicpy_ext_args_carries_no_argument_at_all` and the two flag-specific tests.
 """
 
 from __future__ import annotations
@@ -102,19 +94,11 @@ def test_the_darkfield_flag_has_not_come_back():
     divided out and the additive offset stays in the data. Adding the flag changes what
     the pipeline computes, not how well it computes it.
 
-    IT ALSO DISARMS THE SWAP GUARD, which is the part a maintainer flipping this will not
-    expect. `bin/apply_basic_profiles.py:_read_profile_stack` refuses a non-positive
-    flatfield, and that single check is what catches a dfp/ffp pair passed the wrong way
-    round: at upstream defaults the darkfield is ALL ZEROS, so a swap presents an
-    all-zero flatfield and is rejected before any division
-    (`tests/test_apply_basic_profiles.py::test_swapping_the_two_profiles_is_caught_at_the_shipped_defaults`
-    is explicit that it holds "at the shipped defaults"). Enable darkfield and the
-    darkfield is no longer zero, so a swapped pair can present two plausible, strictly
-    positive profiles: the correction runs to completion on the wrong arithmetic and
-    writes silently wrong pixels instead of failing. Whoever enables `--darkfield` owes a
-    replacement guard that does not depend on one profile being zero. Recorded in the
-    same terms in `modules/nf-core/basicpy/MIRAGE-NOTES.md`,
-    `bin/apply_basic_profiles.py` and `docs/basic_illumination.md`.
+    It also disarms the swap guard. `bin/apply_basic_profiles.py:_read_profile_stack`
+    refuses a non-positive flatfield; at upstream defaults the darkfield is all zeros, so
+    a dfp/ffp swap presents an all-zero flatfield and is rejected. With darkfield on, a
+    swapped pair can be two plausible positive profiles and the output is silently
+    wrong. Enabling `--darkfield` needs a replacement guard.
     """
     assert "--darkfield" not in _basicpy_block()
     assert "-df" not in _ext_args_value()

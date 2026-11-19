@@ -5,21 +5,11 @@ three-process illumination path (TILE_FOR_BASIC -> BASICPY -> APPLY_PROFILES). B
 the slide through ``bin/utils/tiled_io.py:open_lazy`` and read it **one tile at a time**;
 neither ever holds a channel, let alone the ``(C, H, W)`` stack.
 
-WHAT THIS FILE USED TO ASSERT, AND WHY THAT WAS NOT ENOUGH. Its previous version pinned
-"one CHANNEL at a time" and measured the peak by the size of each individual read handed
-back through the lazy view. Two things hid behind that:
-
-* On the read side it was satisfied by a whole-plane read, because a whole plane *was* the
-  unit. Both scripts now read a tile, so the bound is tighter by the tile-to-plane ratio.
-* On the WRITE side it measured nothing at all. ``apply_basic_profiles`` accumulated every
-  corrected channel into a list, ``np.stack``-ed it, then clipped and cast the stack with
-  the list still referenced -- roughly ``8 * C * H * W`` bytes, about 115 GB on an
-  8-channel 40000x30000 slide. Every read that fed that accumulation was a single channel,
-  so every assertion in this file passed while the process peaked at six times the slide.
-  A read-side spy cannot see a write-side accumulation. That is why
-  ``test_apply_basic_profiles_streams_its_write`` and
-  ``test_apply_basic_profiles_does_not_return_the_assembled_slide`` exist below: they pin
-  the shape of the write, not the size of the reads.
+A read-side spy cannot see a write-side accumulation (stacking every corrected channel
+before writing would peak at several times the slide), so
+``test_apply_basic_profiles_streams_its_write`` and
+``test_apply_basic_profiles_does_not_return_the_assembled_slide`` pin the shape of the
+write separately.
 
 Four properties, per script:
 
@@ -31,27 +21,18 @@ Four properties, per script:
    merely by the shape of the index expression.
 3. **The peak does not grow with the channel count**, and
 4. **the peak does not grow with the slide size** -- the O(C) -> O(1) and O(H*W) -> O(1)
-   claims stated as assertions. (4) is the one the ``conf/modules.config`` memory formulas
-   are derived from, and it is the one a revert to a whole-plane read fails even if it
-   were written to look per-tile.
+   claims stated as assertions. (4) is what the ``conf/modules.config`` memory formulas
+   are derived from.
 
-A caveat these tests deliberately do NOT cover: peak PROCESS memory also depends on how
-much the TIFF reader decodes to satisfy a region read, which is a property of the input
-file's layout rather than of this code. That is exactly why every producer ahead of a
-lazy reader in this repo has to write TILED: an untiled producer makes tifffile's zarr
-view report ``chunks=(1, H, W)``, so a region read decodes a WHOLE PLANE and slices it --
-measured, a 2048px region of a 6000px striped plane peaked at 76.7 MiB against 16.0 MiB
-for the same read on a tiled one. ``CONVERT_IMAGE`` used to write untiled and no longer
-does (``bab9507``, ``bin/convert_image.py``'s ``CONVERT_TIFF_TILE``); the guard that now
-holds that line is ``tests/test_convert_streaming_write.py::test_the_write_is_tiled``, and
-``conf/modules.config:209-218`` records the mechanism and the measurement. The spy here
-measures what the code ASKED FOR and received, which is what the code controls -- not
-what the reader decodes to satisfy it.
+Not covered: peak process memory also depends on how much the TIFF reader decodes to
+satisfy a region read. On an untiled file tifffile's zarr view reports
+``chunks=(1, H, W)``, so a region read decodes a whole plane; that is why every producer
+ahead of a lazy reader writes tiled
+(``tests/test_convert_streaming_write.py::test_the_write_is_tiled``). The spy measures
+what the code asked for and received.
 
-The spy calls ``np.asarray`` on what it passes through. That is not an extra
-materialisation the production code would not have done: both scripts call
-``np.asarray`` on the very next line. It is the measurement instrument, and it measures
-the quantity the claim is about.
+The spy calls ``np.asarray`` on what it passes through; both scripts do the same on the
+next line, so it adds no materialisation.
 """
 
 from __future__ import annotations
@@ -210,11 +191,8 @@ def _assert_region_reads(spy, slide_shape, max_bytes, expected_reads, where):
 def test_tile_for_basic_reads_one_fov_at_a_time(tmp_path, monkeypatch):
     """TILE_FOR_BASIC reads one pseudo-FOV at a time through ``open_lazy``.
 
-    Exactly ``len(profile_channels) * n_tiles`` reads: one per tile written, and not one
-    more. An earlier version made ``len(profile_channels) + 1`` whole-PLANE reads -- the
-    extra one being a whole channel read and split purely to learn the tile grid, then
-    discarded. ``fov_tiling.fov_positions`` now returns that geometry without touching the
-    image, which is why the count is exact rather than "plus one".
+    Exactly ``len(profile_channels) * n_tiles`` reads: one per tile written.
+    ``fov_tiling.fov_positions`` returns the grid without touching the image.
     """
     slide, names, stack = _slide(tmp_path, 4)
     spies, eager = _install_spies(monkeypatch, tile_for_basic, slide)
@@ -318,10 +296,8 @@ def test_apply_basic_profiles_reads_one_write_tile_at_a_time(tmp_path, monkeypat
     """APPLY_PROFILES reads one output write-tile's region at a time -- including for the
     nuclear/fiducial channel it does not correct, which is carried through untouched.
 
-    ``WRITE_TILE`` is patched below the fixture's size on purpose. At its shipped 2048 a
-    300px test slide is smaller than a single tile, so every channel would be read whole
-    and this test would pass without exercising the tiling at all -- which is exactly how
-    its predecessor passed while the write side accumulated the entire slide.
+    ``WRITE_TILE`` is patched below the fixture's size: at its shipped 2048 a 300px test
+    slide is one tile, and the tiling would not be exercised.
     """
     monkeypatch.setattr(apply_basic_profiles, "WRITE_TILE", 64)
     slide, sidecar, ffp, dfp, names, stack, manifest = _tiled(tmp_path, 4)
@@ -417,12 +393,9 @@ def test_apply_basic_profiles_peak_read_is_independent_of_slide_size(
 def test_apply_basic_profiles_streams_its_write(tmp_path, monkeypatch):
     """The write side, which no read-side spy can see.
 
-    The regression this guards is not hypothetical -- it is what the code did until the
-    streaming rewrite: build every corrected channel, ``np.stack`` them, and hand
-    ``tifffile`` one slide-sized array. Passing an ndarray instead of an iterator is the
-    single observable signature of that, so it is asserted directly. ``shape=`` and
-    ``dtype=`` must accompany the iterator: without them ``tifffile`` cannot size the
-    output and would have to buffer.
+    Stacking every corrected channel and handing ``tifffile`` one slide-sized array shows up
+    as an ndarray instead of an iterator, so that is asserted directly. ``shape=`` and
+    ``dtype=`` must accompany the iterator, or ``tifffile`` would have to buffer.
     """
     seen = {}
     original_write = tifffile.TiffWriter.write
@@ -459,9 +432,8 @@ def test_apply_basic_profiles_streams_its_write(tmp_path, monkeypatch):
 def test_apply_basic_profiles_does_not_return_the_assembled_slide(tmp_path):
     """The function returns the output PATH, not the pixels.
 
-    Returning the assembled array is how the accumulation would come back by the front
-    door: every caller would then hold a slide-sized object regardless of how carefully
-    the write was streamed.
+    Returning the assembled array would make every caller hold a slide-sized object
+    however the write was streamed.
     """
     slide, sidecar, ffp, dfp, names, stack, manifest = _tiled(tmp_path, 3)
     result = apply_basic_profiles.apply_basic_profiles(
@@ -481,8 +453,7 @@ def test_the_sidecar_the_two_halves_share_is_what_pins_them_to_the_same_slide(tm
 
     Both tests read the slide through the sidecar TILE_FOR_BASIC wrote. If that sidecar
     ever stopped describing the same channel set, the per-channel read counts asserted
-    above would drift for a reason that has nothing to do with laziness, and the two
-    tests would start disagreeing with each other silently.
+    above would drift for a reason unrelated to laziness.
     """
     slide, sidecar, ffp, dfp, names, stack, manifest = _tiled(tmp_path, 4)
     written = json.loads(sidecar.read_text())

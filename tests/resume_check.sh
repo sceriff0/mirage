@@ -2,22 +2,14 @@
 # Behavioural counterpart to tests/test_resume_determinism.py: does an identical
 # rerun actually reuse the cache?
 #
-# WHY THIS IS A SCRIPT AND NOT PART OF THE BLOCKING GATE
+# Not in the blocking gate: it measures an outcome, and an arrival-order regression
+# can be intermittent, so a pass proves little. tests/test_resume_determinism.py
+# checks the ordering mechanism instead. Run this after touching a fan-in, a
+# collectFile, or anything a process script reads.
 #
-# It measures an OUTCOME, and the regression it looks for is intermittent: the
-# groupTuple arrival-order bug this suite was built around showed up in roughly one
-# run in four, so a single pass proves little and even N passes only bound the
-# probability. tests/test_resume_determinism.py asserts the ORDERING MECHANISM is
-# present instead, which cannot pass by luck -- that is the check CI gates on.
-# This script is what you run after touching a fan-in, a collectFile, or anything a
-# process script reads, and it is how the numbers in
-# docs/superpowers/specs/2026-08-10-resume-determinism-design.md were produced.
-#
-# Expected: every run reports CACHED=26 RESUBMITTED=2, and the 2 are exactly
-# GENERATE_QC_REPORT and AGGREGATE_SIZE_LOGS -- both declared `cache = false` in
-# conf/modules.config because their inputs are collectFile() results, which are
-# rewritten to a fresh work/tmp/<hash>/ every run and so can never cache under
-# Nextflow's default path+size+mtime hashing.
+# Expected: every resume re-runs only GENERATE_QC_REPORT and AGGREGATE_SIZE_LOGS,
+# both `cache = false` because their inputs are collectFile() results, rewritten to
+# a fresh work/tmp/<hash>/ every run.
 #
 # Usage: tests/resume_check.sh [runs]     (default 3)
 
@@ -32,12 +24,7 @@ cleanup() { rm -rf "$(dirname "$WORK")" "$(dirname "$OUT")"; }
 trap cleanup EXIT
 
 echo "baseline run..."
-# UNCHECKED USED TO MEAN VACUOUS. A failed baseline (e.g. no `nextflow` on PATH,
-# or a crash before any process runs) previously fell straight through into the
-# resume loop with an EMPTY log: `names` derived from a log that was never
-# produced is empty, the per-name loop below never executes, `status` never
-# leaves 0, and the script prints "OK" having checked nothing. Reproduced with a
-# fake `nextflow` that `exit 1`s: CACHED=0 RESUBMITTED=0 [] ... OK ... exit 0.
+# A failed baseline must stop here: an empty log would make the checks below vacuous.
 nextflow -q run . -profile test -stub -w "$WORK" --outdir "$OUT" >/dev/null \
     || { echo "FAIL: baseline run did not complete" >&2; exit 1; }
 
@@ -45,20 +32,14 @@ status=0
 for i in $(seq 1 "$RUNS"); do
     log=$(nextflow run . -profile test -stub -w "$WORK" --outdir "$OUT" -resume -ansi-log false 2>&1) \
         || { echo "FAIL: resume $i did not complete" >&2; echo "$log" >&2; exit 1; }
-    # `|| cached=0`, not `|| true`: `grep -c` exits 1 to mean ZERO MATCHES, which
-    # here is data rather than an error -- a resume that cached nothing is exactly
-    # what this script is looking for. Written as the assignment it actually is, so
-    # that the file contains no `|| true` for a reader to have to classify.
+    # `grep -c` exits 1 on zero matches, which is data here, not an error.
     cached=$(grep -c 'Cached process'   <<<"$log") || cached=0
     rerun=$(grep -c 'Submitted process' <<<"$log") || rerun=0
     names=$(grep 'Submitted process' <<<"$log" | sed 's/.*> //' | sed 's/ (.*//' | sed 's/.*://' | sort -u | tr '\n' ' ')
     echo "resume $i: CACHED=$cached RESUBMITTED=$rerun  [$names]"
 
-    # A resume that completed but cached NOTHING is not a pass by omission: this
-    # pipeline's stub run always has cacheable processes upstream of the two
-    # declared-uncacheable reports, so CACHED=0 on a successful resume means the
-    # cache was never consulted (e.g. a fresh -w, or a hash that changes every
-    # run) rather than that nothing needed re-running.
+    # The stub run always has cacheable processes, so CACHED=0 means the cache was
+    # never consulted (a fresh -w, or a hash that changes every run).
     if [[ "$cached" -eq 0 ]]; then
         echo "  FAIL: resume $i cached nothing (CACHED=0). A successful resume of" >&2
         echo "        this pipeline can never report CACHED=0 -- either the work" >&2

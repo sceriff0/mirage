@@ -8,7 +8,7 @@ Stages are ``native`` / ``rigid`` / ``refined`` — no destructive micro composi
 stage is a first-class, independently reachable transform.
 
 The final test drives the *real* warper through the *real* scorer, proving reg_qc=2 works for the
-tiled method before any registration code exists.
+tiled method.
 """
 
 from __future__ import annotations

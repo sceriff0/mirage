@@ -51,10 +51,8 @@ FALLBACK_RE = re.compile(r"params\.([A-Za-z_][A-Za-z0-9_]*)\s*\?:")
 
 # Files scanned for `params.x ?: <literal>` fallbacks.
 #
-# `lib/*.groovy` is in the list because parameter reads move there: SegBackends holds
-# the per-backend defaults SEGMENT's script block used to inline, including
-# `params.instanseg_model_dir ?: "$PWD/.instanseg_cache"`. A fallback that escaped the
-# scan by being one directory over would be exactly the drift this test exists to catch.
+# `lib/*.groovy` is included because parameter reads live there too (e.g. SegBackends'
+# `params.instanseg_model_dir ?: "$PWD/.instanseg_cache"`).
 SCANNED_GLOBS = [
     "main.nf",
     "modules/local/*.nf",
@@ -190,40 +188,20 @@ def test_no_duplicate_param_defaults():
 #     `preprocess_qc_scale_factor` when it's `generate_preprocess_qc.py` --
 #     genuinely unambiguous once you know which script is being invoked, even
 #     though the bare flag name collides.
-#   - a flag-only map (the same shape the original version of this check
-#     shipped with), used as a fallback when no invoking script could be
+#   - a flag-only map, used as a fallback when no invoking script could be
 #     identified for a given occurrence.
 #
-# A flag whose name happens to equal a params key (e.g. `--pyramid-resolutions`
-# / `pyramid_resolutions`) is *also* covered by the direct form, so the
-# straight name-equality check that shipped before this exists purely as the
-# LAST-resort fallback, below both derived maps -- it's still correct when it
-# fires, just not the primary authority. Full precedence: per-script map ->
-# flag-only map -> name-equality. A flag like `bin/warp_seg_qc.py`'s
-# `--method` is never sourced from `params.*`: `modules/local/warp_seg_qc.nf`
-# dispatches it via `lib/WarpBackends.groovy`, keyed on the `method` INPUT --
-# the valis backend omits the flag, relying on the Python default, and the
-# tiled backend passes the literal `--method tiled` -- it stays out of scope
-# by design, permanently, not just until someone wires it -- and is counted
-# as such (see the `no_correspondence` bucket in
-# `find_argparse_default_sites`), not silently dropped.
-#
-# (`segment_to_geojson.py`'s `--tolerance` was this section's example until
-# Task 6 (arch-1-8) wired `--tolerance ${params.simplify_tolerance}` into
-# `conf/modules.config`'s `SEG_QC_GEOJSON` ext.args -- it now resolves via the
-# flag-only map into the `matched` bucket instead, which is exactly the
-# mechanism this comment is illustrating. Swapped the example for one that
-# cannot be resolved by any config wiring, so it does not rot the same way a
-# second time.)
+# Name-equality between flag and params key (e.g. `--pyramid-resolutions` /
+# `pyramid_resolutions`) is the last-resort fallback. Precedence: per-script
+# map -> flag-only map -> name-equality. A flag never sourced from `params.*`
+# (e.g. `bin/warp_seg_qc.py`'s `--method`, dispatched by
+# `lib/WarpBackends.groovy` on the `method` input) is out of scope and is
+# counted in the `no_correspondence` bucket, not dropped.
 
-# Deliberate divergences between a bin/*.py argparse default and the
-# nextflow.config default its flag resolves to (via the derived map or the
-# name-equality fallback). Keyed by "<file>:<flag>". Every entry here is a
-# documented, intentional standalone-use fallback (verified against the
-# script's own help text/docstring) -- not a placeholder for a fix deferred
-# out of scope. A divergence that is simply a bug gets fixed, not allowlisted
-# (see bin/segment_cellsam.py's --block-size, which the derived map caught
-# and was fixed rather than exempted).
+# Intentional divergences between a bin/*.py argparse default and the
+# nextflow.config default its flag resolves to. Keyed by "<file>:<flag>".
+# Each entry is a documented standalone-use fallback; a divergence that is
+# simply a bug gets fixed, not allowlisted.
 ARGPARSE_DEFAULT_ALLOWLIST = {
     "seg_quality_eval.py:--max-pixels": {
         "reason": (
@@ -414,25 +392,10 @@ ARGPARSE_DEFAULT_ALLOWLIST = {
         ),
     },
 }
-# NOTE: `mask_to_geojson.py:--tolerance` is deliberately NOT here either. An earlier
-# version of this allowlist exempted it as a "flag-name coincidence, not a real
-# correspondence" -- wrong on both counts: it IS the same Douglas-Peucker quantity as
-# segment_to_geojson.py's --tolerance, not a coincidence (segment_to_geojson.py:74-76
-# passes its own --tolerance value straight into mask_to_feature_collection()'s
-# simplify_tolerance), and the cited "+0.5 corner-of-pixel offset" justification
-# (bin/mask_to_geojson.py:36-43, whose rule is owned by bin/utils/pixel_convention.py)
-# is about contour OFFSET, an unrelated concern, not
-# simplification tolerance -- it does not support keeping a divergent default. Per this
-# file's own policy ("a divergence that is simply a bug gets fixed, not allowlisted"),
-# bin/mask_to_geojson.py's --tolerance default was changed 0.5 -> 1.0 to match its
-# sibling instead of being exempted.
-# NOTE: `segment.py:--model-name` and `segment_to_geojson.py:--model-name`
-# are deliberately NOT here. Both are `required=True` with no `default=` at
-# all, so their comparison against `segmentation_model` was a moot,
-# unreachable-default artifact, not a real divergence -- `find_argparse_
-# default_sites` now excludes every `required=True` add_argument() call from
-# comparison entirely (see the `required` bucket below), so these two simply
-# never reach a point where they'd need an exemption.
+# `mask_to_geojson.py:--tolerance` is not exempt: it is the same Douglas-Peucker
+# tolerance as segment_to_geojson.py's, so its default must match.
+# `segment.py:--model-name` and `segment_to_geojson.py:--model-name` need no entry:
+# both are `required=True`, which is excluded from comparison.
 
 
 def _config_value_to_python(text: str):
@@ -457,8 +420,8 @@ def _normalize_flag(flag: str) -> str:
 # A CLI flag immediately followed by one-or-more consecutive `${...}`
 # interpolations, e.g. `--fov_size ${params.preproc_tile_size}` or
 # `--n-tiles ${params.seg_n_tiles_y} ${params.seg_n_tiles_x}` (two
-# interpolations -- a composite flag this check deliberately does not
-# resolve; see `build_flag_param_maps`).
+# interpolations -- a composite flag this check does not resolve; see
+# `build_flag_param_maps`).
 _FLAG_INTERP_RE = re.compile(r"--([A-Za-z0-9][A-Za-z0-9_-]*)((?:\s+\$\{[^}]*\})+)")
 # A single `${...}` interpolation's content, only when it is one bare token
 # (a dotted `params.key` reference or a plain variable name) with no
@@ -532,8 +495,8 @@ def build_flag_param_maps() -> tuple[dict[tuple[str, str], str], dict[str, str]]
     flag's spelling.
 
     Scans `modules/local/*.nf` and `conf/modules.config` for exactly two
-    shapes (this is deliberately NOT a general expression evaluator -- it
-    resolves at most one level):
+    shapes (not a general expression evaluator; it resolves at most one
+    level):
 
       - direct:      `--flag ${params.key}`
       - def-aliased: `def var = params.key`  ...  `--flag ${var}`
@@ -803,7 +766,7 @@ def test_no_duplicate_bin_argparse_defaults():
     statically compared and are skipped. Flags with no correspondence at all
     are genuinely out of scope. All three of these, plus the required-and-
     excluded case, are counted, not silently dropped -- the warning this
-    test always emits reports FIVE numbers (checked via either derived map;
+    test always emits reports five numbers (checked via either derived map;
     checked via name-equality; skipped as non-literal; excluded as
     required=True; no correspondence found) whose sum is every argparse flag
     this function examined, so no flag can fall out of the accounting
@@ -890,18 +853,10 @@ def test_seg_qc_pairing_and_radius_factor_match_bin_defaults():
 
     `warp_seg_qc.py`'s `--pairing` and `--match-radius-factor` resolve (via
     `build_flag_param_maps`) to `nextflow.config`'s `seg_qc_pairing` and
-    `seg_qc_match_radius_factor`, but their argparse `default=` is a NAME
-    (`cp.DEFAULT_PAIRING`, `DEFAULT_MATCH_RADIUS_FACTOR`), not a literal --
-    `ast.literal_eval` can't evaluate a name, so `find_argparse_default_sites()`
-    files both under `skipped` and the comparison in
-    `test_no_duplicate_bin_argparse_defaults` silently never runs for them (that
-    test's own warning message says so under "skipped"). Nothing today would
-    fail if `nextflow.config` said `seg_qc_match_radius_factor = 1.2` while
-    `bin/warp_seg_qc.py`'s `DEFAULT_MATCH_RADIUS_FACTOR` stayed `1.5`.
-
-    This test runs the actual Python constants (rather than statically parsing
-    them) and compares them directly against `nextflow.config`'s declared
-    defaults, closing the gap in both directions.
+    `seg_qc_match_radius_factor`, but their argparse `default=` is a name
+    (`cp.DEFAULT_PAIRING`, `DEFAULT_MATCH_RADIUS_FACTOR`), which `ast.literal_eval`
+    cannot evaluate, so they land in `skipped`. This test imports the actual
+    constants and compares them with `nextflow.config`'s declared defaults.
     """
     import sys
 

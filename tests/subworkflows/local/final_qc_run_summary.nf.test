@@ -1,27 +1,11 @@
 /*
- * buildManifest / buildRunSummary — the run_summary.json content builders pulled out
- * of FINAL_QC's ch_run_summary .map{} closure (subworkflows/local/final_qc.nf).
+ * buildManifest / buildRunSummary: the run_summary.json content builders used by
+ * FINAL_QC's ch_run_summary closure (subworkflows/local/final_qc.nf). GENERATE_QC_REPORT's
+ * stub never exposes run_summary.json to a workflow-level test, so these call the
+ * builders directly.
  *
- * Task 4's review found that NOTHING in the whole suite inspects run_summary.json,
- * despite byte-identity being this branch's headline constraint and
- * tests/testdata/sample_run_summary.json existing as a fixture: GENERATE_QC_REPORT's
- * stub (modules/local/generate_qc_report.nf) never copies run_summary.json anywhere a
- * workflow-level nf-test could inspect its content, so every claim about that file
- * rested on a manual diff in a report. These tests call the Groovy that actually
- * builds it directly, the same way tiled_adapter_group_size.nf.test pins
- * countTileRows/requireTilesCount.
- *
- * buildRunSummary takes params/pipeline-info/timestamp as explicit arguments (rather
- * than reading params./workflow.manifest itself) specifically so it is callable here
- * with no live params{}/workflow binding -- see its doc comment. Passing a fixed
- * timestamp string also means "excluding run.timestamp" needs no special-casing: the
- * test controls that value directly and simply asserts it came through unchanged.
- *
- * The linear and add_cycle cases below are chosen to be the one place
- * `channels` (channels_count's exact, post-nuclear-drop count) and
- * `declared_channels` (the samplesheet's raw union, feeding the manifest) provably
- * differ -- see input_check.nf.test's matching case and CsvUtils.groovy's docs on
- * both functions.
+ * buildRunSummary takes params/pipeline-info/timestamp as arguments so it is callable
+ * with no live params or workflow binding; the test fixes the timestamp itself.
  */
 nextflow_function {
 
@@ -116,9 +100,8 @@ nextflow_function {
 
         then {
             assert function.success
-            // Content assertion excluding nothing but what we ourselves fixed as an
-            // input (the timestamp) -- every other field of run_summary.json is
-            // pinned exactly, both totals and per-patient.
+            // Every field of run_summary.json is pinned exactly, totals and
+            // per-patient; the timestamp is our own input.
             assert function.result == [
                 pipeline: [name: 'mirage', version: '1.0.0'],
                 run: [

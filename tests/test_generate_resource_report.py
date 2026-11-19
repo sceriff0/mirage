@@ -26,13 +26,8 @@ def test_parse_bytes():
 
 
 def test_parse_bytes_inert_set_condition_is_behavior_preserving():
-    """Regression test for the inert-set-condition bug: `and` bound tighter
-    than `or` in the buggy `s in {"0", "-"} and s == "-"`, which reduces, for
-    every value of s, to exactly `s == "-"`. A bare "0" is a genuine
-    zero-byte reading (peak_rss/peak_vmem/rchar/wchar can legitimately be 0)
-    and must keep falling through to float("0") == 0.0 — only "-"
-    (not-run/cached) and empty are "missing", matching parse_duration's and
-    parse_percent's identical guard clause."""
+    """A bare "0" is a genuine zero-byte reading; only "-" (not-run/cached)
+    and empty are missing, as in parse_duration and parse_percent."""
     grr = _load()
     assert grr.parse_bytes("0") == 0.0
     assert grr.parse_bytes("-") is None
@@ -80,8 +75,7 @@ def test_parse_size_log(tmp_path):
         "process,sample_id,filename,bytes\n"
         "MIRAGE:PRE:CONVERT_IMAGE,P001,a.tiff,100\n"
         "MIRAGE:PRE:CONVERT_IMAGE,P001,b.tiff,50\n"
-        # A stub row: the REAL process name, zero bytes. The literal `STUB` this
-        # test used to carry can no longer be written by any module.
+        # A stub row: the real process name, zero bytes.
         "MIRAGE:PRE:SPLIT_CHANNELS,P001,stub,0\n"
     )
     m = grr.parse_size_log(p)
@@ -262,14 +256,9 @@ def test_cli_writes_report(tmp_path):
 
 
 def test_cli_exits_nonzero_on_a_header_only_trace(tmp_path):
-    """A header-only trace.txt (the file EXISTS, so the entry script's own
-    existence check passes and this script is invoked, but Nextflow wrote
-    zero task rows -- e.g. a run that was killed before its first task
-    started) used to exit 0 and print the 'not available' page as though
-    nothing was wrong. The entry script's exit-code branch already logs a
-    warning for a non-zero exit; this makes that branch reachable for a real
-    'we found the file but it is empty' failure rather than papering over it
-    with a false success line."""
+    """A header-only trace.txt (a run killed before its first task) exits
+    non-zero, so the entry script's warning branch fires instead of a false
+    success."""
     trace = tmp_path / "trace.txt"
     trace.write_text(
         "task_id\tprocess\ttag\tname\tstatus\texit\tsubmit\tstart\tcomplete\t"
@@ -319,10 +308,8 @@ def test_cli_missing_inputs_is_graceful(tmp_path):
 
 
 def test_build_html_drops_a_zero_byte_matched_input_from_the_scatter():
-    """Behaviour change, recorded deliberately. The Resource-vs-Input-Size TABLE
-    showed a zero-byte matched row with an empty ratio cell; the scatter that
-    replaces it cannot place a zero on a log axis, so it drops the point and says
-    how many it dropped."""
+    """The scatter cannot place a zero on a log axis, so it drops the point and
+    says how many it dropped."""
     grr = _load()
     trace_rows = [
         {
@@ -348,11 +335,9 @@ def test_build_html_drops_a_zero_byte_matched_input_from_the_scatter():
 
 
 def test_build_html_escapes_a_hostile_process_and_tag_in_the_panels():
-    """Unchanged in intent, changed in setup. The tag used to reach the report
-    through three tables and now reaches it only through the scatter's tooltip,
-    so the fixture needs a matching size-log entry -- without one the panel is
-    empty, the tag is rendered nowhere, and the escaping assertion would pass
-    vacuously."""
+    """The tag reaches the report only through the scatter's tooltip, so the
+    fixture needs a matching size-log entry or the escaping assertion would
+    pass vacuously."""
     grr = _load()
     trace_rows = [
         {
@@ -383,9 +368,8 @@ def test_build_html_escapes_a_hostile_process_and_tag_in_the_panels():
 
 
 def test_build_html_escapes_a_hostile_process_name_in_the_failure_panel():
-    """The per-task Retries & Failures table is gone, so a raw status/exit string
-    is no longer rendered at all -- but the PROCESS name still reaches the
-    failure panel's labels and tooltips and must still be escaped there."""
+    """The process name reaches the failure panel's labels and tooltips and
+    must be escaped there."""
     grr = _load()
     trace_rows = [
         {
@@ -412,9 +396,7 @@ def test_build_html_escapes_a_hostile_process_name_in_the_failure_panel():
 
 
 def test_run_totals_reports_the_peak_single_task_cpu():
-    """%CPU used to live in the per-process rollup table. That table is gone, and
-    the number is worth keeping, so it moved into Run Totals rather than being
-    dropped along with its container."""
+    """Run Totals reports the peak single-task %CPU."""
     grr = _load()
     trace_rows = [
         {
@@ -725,9 +707,8 @@ def test_size_vs_runtime_plots_one_point_per_joinable_task():
 
 
 def test_size_vs_runtime_drops_a_zero_byte_input_from_the_log_axis():
-    """A log axis cannot place zero. The table this panel replaces rendered a
-    zero-byte matched row with an empty ratio cell; the scatter drops it and says
-    so, rather than parking it at an arbitrary x."""
+    """A log axis cannot place zero: the scatter drops the point and says so,
+    rather than parking it at an arbitrary x."""
     grr = _load()
     joined = [
         _joined("A", "P001", 0, 10.0),
@@ -764,9 +745,8 @@ def test_size_vs_runtime_escapes_a_hostile_process_name():
 
 
 # ---------------------------------------------------------------------------
-# Fix round 1: +-inf/nan must not crash a panel and must not render as the
-# literal string "nan"/"inf" -- they must be treated like a missing value
-# (skipped, and counted in a caption where the panel already has one).
+# +-inf/nan are treated like a missing value: skipped (and counted in a caption
+# where the panel has one), never rendered as "nan"/"inf" and never a crash.
 # ---------------------------------------------------------------------------
 
 _NONFINITE = [float("inf"), float("-inf"), float("nan")]
@@ -894,9 +874,8 @@ def _trace_row(proc, tag, rt, rss, mem, exit_code="0"):
 
 
 def test_the_report_is_plots_not_tables():
-    """The whole point of this phase. One table survives -- Run Totals -- and
-    every data table is replaced by a panel. A count is used rather than a
-    substring so that reintroducing any table fails here."""
+    """One table survives (Run Totals); every other view is a panel. A count,
+    not a substring, so reintroducing any table fails here."""
     grr = _load()
     trace_rows = [
         _trace_row("MIRAGE:A:CONVERT", "P001", 600.0, 3 * GB, 8 * GB),
@@ -928,20 +907,13 @@ MB = 1024**2
 
 
 # ---------------------------------------------------------------------------
-# Final-fix wave (2026-09-02): I1 (legend ranked + capped, not first-appearance
-# and unbounded), M2 (drop-count note when everything is dropped), M3 (Run
-# Totals %CPU guard + parse_percent rejects non-finite), M4 (wall-time % is
-# share of the run total, not of the longest bar).
+# Legend ranking and capping, drop-count notes, non-finite %CPU, wall-time share.
 # ---------------------------------------------------------------------------
 
 
 def test_size_vs_runtime_legend_ranked_by_point_count_not_first_appearance():
-    """`order` used to be built by first appearance, so on a real trace a
-    504-point early process took a legend slot ahead of a 17,921-point process
-    that appears later -- exactly the defect measured against
-    traces/tiled_run/trace.txt. Rank by point count instead, and push anything
-    past `top_processes` into one explicit grey 'other' row rather than
-    leaving it unlegended."""
+    """The legend is ranked by point count, not first appearance, and anything
+    past `top_processes` goes into one explicit grey 'other' row."""
     grr = _load()
     joined = []
     for i in range(8):
@@ -1048,9 +1020,8 @@ def test_run_totals_peak_cpu_guards_against_non_finite():
 
 
 def test_walltime_bars_percentage_is_share_of_total_not_longest():
-    """The top bar's percentage used to be v/vmax, so it always read 100% --
-    the share of the longest process, not of the run. It must be the share of
-    the run's total wall-time instead."""
+    """Each bar's percentage is its share of the run's total wall-time, not of
+    the longest bar (which would always read 100%)."""
     grr = _load()
     roll = [_roll_row("A", 300.0), _roll_row("B", 100.0)]
     svg = grr.walltime_bars_svg(roll)

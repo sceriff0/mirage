@@ -1,26 +1,7 @@
 """The FOV grid arithmetic in ``bin/utils/fov_tiling.py``.
 
-Was ``tests/test_preprocess_channel_skip.py``, which covered two separate things
-against the now-deleted ``bin/preprocess.py``: the FOV grid count, and the
-nuclear/fiducial skip decision made by ``_process_single_channel_from_stack``.
-
-The skip half moved with the code it tested. The in-process BaSiC path is gone --
-illumination correction runs through nf-core's BASICPY (``TILE_FOR_BASIC`` ->
-``BASICPY`` -> ``APPLY_PROFILES``) -- and the skip decision is now made once, in
-``bin/tile_for_basic.py``, through the same ``utils.metadata.is_nuclear`` rule. It is
-covered there, against the live code, by
-``tests/test_tile_for_basic.py::test_the_configured_fiducial_is_excluded_from_the_fit``,
-``::test_skip_nuclear_off_corrects_every_channel`` and
-``::test_a_celltox_only_panel_still_produces_a_readable_stack``, and on the applying
-side by ``tests/test_apply_basic_profiles.py::test_a_celltox_fiducial_is_passed_through_untouched``.
-Keeping a second copy here would have meant monkeypatching a function that no longer
-exists, i.e. a test that passes without exercising anything.
-
-What survives is the grid count, because the tiling itself survived the backend swap:
-``count_fovs`` is plain ``ceil(size / fov)``, and these are the values the pre-removal
-formula produced at overlap=0 (the ``--overlap`` knob is long gone; it only ever changed
-the FOV *count* used for fitting, never the extraction, which was always
-non-overlapping).
+``count_fovs`` is plain ``ceil(size / fov)``, non-overlapping. The nuclear/fiducial
+skip decision is tested in ``tests/test_tile_for_basic.py``.
 """
 
 import pytest

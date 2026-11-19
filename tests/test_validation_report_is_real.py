@@ -1,25 +1,17 @@
 """The committed format-validation report must be evidence, not a placeholder.
 
-RULING R3 trades the vendor FIXTURES for this file. That trade only holds while
-the file is a real measurement of a real run -- a template, or a report whose
-rows all failed, is strictly worse than an honest "untested", because it reads
-as coverage.
+The vendor formats cannot be synthesised, so this report stands in for fixtures.
+A template, or a report whose rows all failed, reads as coverage it is not.
 
-So: it must name the commit it was produced from, and it must carry a row for
-every vendor format the pipeline claims. What it must NOT do is assert every row
-is OK: a recorded failure is a finding, and a guard that forbade it would create
-a reason to delete the row instead of fixing the reader.
+It must name the commit it was produced from and carry a row for every vendor
+format the pipeline claims. It need not have every row OK: a recorded failure is
+a finding.
 
-PENDING IS A LEGAL, EXPLICIT STATE. Task 13's cluster kit needs a cluster and
-private images that this repository's CI never has, so this phase ships with
-the kit built and the evidence outstanding rather than either omitting the page
-(the exit-state table names it) or faking a run that never happened. The report
-declares that state with the literal marker `kit-validated: pending` -- present,
-it relaxes only the checks that need a real run to have happened (the commit
-SHA, the probe container, at least one successful row) and ADDS a check that the
-pending page cannot itself fake a success. It never relaxes the checks that hold
-regardless of whether the kit has run: every vendor format must still have a
-row, and the template's placeholder path must still never appear.
+Pending is an explicit state: the cluster kit needs a cluster and private images
+CI does not have. The marker `kit-validated: pending` relaxes only the checks that
+need a real run (commit SHA, probe container, one successful row) and adds a check
+that the pending page fakes no success. Every vendor format must still have a row,
+and the template's placeholder path must never appear.
 """
 
 from __future__ import annotations
@@ -37,9 +29,8 @@ REPORT = ROOT / "docs" / "validation" / "format_validation.md"
 VENDOR_FORMATS = (".czi", ".nd2", ".lif", ".ndpi", ".svs")
 
 # The exact string the pending page carries instead of a real measurement.
-# tests/cluster/validate_formats.sh's OWN output never contains this string --
-# it always writes a real `pipeline commit: `<sha>`` header -- so its presence
-# is unambiguous evidence that no cluster run has landed yet.
+# tests/cluster/validate_formats.sh's own output never contains it (it writes a
+# real `pipeline commit: `<sha>`` header), so its presence means no run has landed.
 PENDING_MARKER = "kit-validated: pending"
 
 
@@ -58,9 +49,7 @@ def _is_pending(text: str) -> bool:
 
 
 def test_the_report_declares_a_real_run_or_an_explicit_pending_state():
-    """Never silently neither. A file that is not the template, not a real run,
-    and not marked pending is the one shape this guard cannot tell apart from a
-    hand-edited fragment -- so it must be exactly one of the two named states."""
+    """The report is exactly one of the two named states: a real run, or pending."""
     text = _text()
     has_real_commit = re.search(r"pipeline commit:\s*`[0-9a-f]{40}`", text) is not None
     assert _is_pending(text) or has_real_commit, (
@@ -71,8 +60,7 @@ def test_the_report_declares_a_real_run_or_an_explicit_pending_state():
 
 
 def test_the_report_names_the_commit_it_was_produced_from():
-    """Without a SHA the report cannot be tied to a tree, and a report that
-    outlives the code it measured is a claim, not evidence."""
+    """Without a SHA the report cannot be tied to the tree it measured."""
     text = _text()
     if _is_pending(text):
         pytest.skip("pending state: no cluster run has been recorded yet")
@@ -83,8 +71,8 @@ def test_the_report_names_the_commit_it_was_produced_from():
 
 
 def test_the_report_names_the_container_the_probe_ran_in():
-    """`.svs` needs the Bio-Formats jars baked into the image (RULING R2). Which
-    image produced these numbers is part of the measurement."""
+    """`.svs` needs the Bio-Formats jars baked into the image, so which image
+    produced these numbers is part of the measurement."""
     text = _text()
     if _is_pending(text):
         pytest.skip("pending state: no cluster run has been recorded yet")
@@ -93,9 +81,8 @@ def test_the_report_names_the_container_the_probe_ran_in():
 
 @pytest.mark.parametrize("suffix", VENDOR_FORMATS)
 def test_every_vendor_format_has_a_row(suffix):
-    """Holds in BOTH states: the pending page must still list every format it is
-    promising to validate, so dropping a format silently (pending or not) is
-    caught the same way."""
+    """Holds in both states: every promised format is listed, so a dropped format
+    is caught."""
     text = _text()
     assert suffix in text, (
         f"the report has no row for {suffix}. That is one of the five formats the "
@@ -115,9 +102,8 @@ def test_the_report_is_not_the_template():
 
 
 def test_the_report_records_at_least_one_successful_conversion():
-    """A report of nothing but failures is a real outcome and is allowed to be
-    committed -- but it must not be mistaken for coverage, so at least one row has
-    to be an actual success before this counts as validation."""
+    """A report of nothing but failures may be committed, but at least one row must
+    succeed before it counts as validation."""
     text = _text()
     if _is_pending(text):
         pytest.skip("pending state: no cluster run has been recorded yet")
@@ -128,10 +114,8 @@ def test_the_report_records_at_least_one_successful_conversion():
 
 
 def test_the_pending_report_does_not_fake_a_successful_row():
-    """The one check the pending state ADDS rather than relaxes: `| OK |` is the
-    exact string validate_formats.sh's probe writes for a real success, and its
-    presence on a page that has not run the kit would read as coverage that never
-    happened -- precisely what this whole guard exists to prevent."""
+    """The check the pending state adds: `| OK |` is the string validate_formats.sh
+    writes for a real success, so a pending page must not carry it."""
     text = _text()
     if not _is_pending(text):
         pytest.skip("real report: OK rows are expected once the kit has run")

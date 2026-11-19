@@ -1,26 +1,17 @@
 """Equivalence tests for the per-label median in compute_compartment_intensities.
 
-The median computation has gone through two rewrites. First, from a per-pixel
-pandas DataFrame + groupby (one row per foreground pixel — O(image size), a
-WSI-scale memory blowup) to scipy.ndimage.labeled_comprehension operating
-directly on the existing label/value arrays (bounded memory, but still one
-Python callback per label). Second — the fast path this branch adds — to
-`_median_per_label_from_sorted`: a composite-key sort of (label, value) pairs
-that reads each compartment's median directly off contiguous sorted runs, no
-per-label callback at all. That fast path only handles the uint16 dtype the
-pipeline actually produces (it composes a `(label << 16) | value` sort key that
-needs 16 spare bits); any other dtype falls back to
-`scipy.ndimage.labeled_comprehension`, which stays in the module for exactly
-that case. This test asserts the fast path is numerically IDENTICAL to both
-prior implementations:
+The uint16 fast path, `_median_per_label_from_sorted`, sorts a composite
+`(label << 16) | value` key and reads each compartment's median off contiguous
+sorted runs, with no per-label callback. Any other dtype falls back to
+`scipy.ndimage.labeled_comprehension`. Both are checked to be numerically
+identical to:
 
-  1. against an independent per-label np.median reference, and
-  2. against a verbatim copy of the OLD per-pixel-DataFrame groupby-median logic,
-     on randomized synthetic images (seeded with np.random.default_rng(0)).
+  1. an independent per-label np.median reference, and
+  2. a copy of a per-pixel-DataFrame groupby-median implementation,
+     on seeded random synthetic images.
 
-Empty-label and even-count (median-of-two-middles) semantics are covered
-explicitly, since those are exactly the cases where a naive rewrite could
-silently diverge.
+Empty-label and even-count (median-of-two-middles) cases are covered
+explicitly.
 """
 
 import importlib.util
@@ -39,12 +30,11 @@ compute_compartment_intensities = quantify.compute_compartment_intensities
 
 
 def _old_compute_compartment_intensities(cell_mask, nuclei_mask, channel, channel_name):
-    """Verbatim copy of the OLD per-pixel-DataFrame median algorithm (golden reference).
+    """Per-pixel-DataFrame median algorithm, kept as a golden reference.
 
-    This mirrors exactly what compute_compartment_intensities did before the
-    labeled_comprehension rewrite: build one row per foreground pixel in a pandas
-    DataFrame, then groupby(label).median(), with Nucleus/Cytoplasm compartments
-    reindexed onto valid_labels and NaN (missing/empty group) filled with 0.0.
+    One row per foreground pixel in a pandas DataFrame, then
+    groupby(label).median(), with Nucleus/Cytoplasm compartments reindexed onto
+    valid_labels.
     """
     cell_mask = np.ascontiguousarray(cell_mask.squeeze())
     channel = channel.squeeze()
@@ -145,17 +135,9 @@ def test_even_count_label_averages_two_middles():
 
 
 def test_empty_compartment_is_nan_not_zero():
-    # CONTRACT CHANGED, deliberately. This test previously asserted 0.0, pinning the older
-    # `.reindex(valid_labels).fillna(0.0)` behaviour. 0.0 makes "this cell has no nucleus"
-    # indistinguishable from "this cell's nucleus was measured and is dark", and downstream
-    # gating reads the second; nothing can separate them afterwards. The consumer already
-    # documents the opposite policy -- bin/export_geojson.py:78 preserves NaN as "missing" and
-    # omits such measurements from the GeoJSON rather than writing an invalid bare NaN literal.
-    #
-    # The assertions that did NOT depend on the default are kept unchanged below, because they
-    # are what proves the compartments are still partitioned correctly.
-    # See tests/test_absent_compartment_is_nan.py for the full contract, including the case
-    # this change exists to separate: a measured-but-dark compartment still reports 0.0.
+    # NaN, not 0.0: 0.0 would make "this cell has no nucleus" indistinguishable from
+    # "its nucleus was measured and is dark". bin/export_geojson.py treats NaN as missing.
+    # Full contract in tests/test_absent_compartment_is_nan.py.
     cell_mask = np.array([[1, 1, 1], [1, 1, 1]])
     nuclei_mask = np.zeros_like(cell_mask)  # no nucleus anywhere
     channel = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
@@ -234,19 +216,10 @@ def test_no_per_pixel_dataframe_in_source():
     """Sanity: the median branch builds no per-pixel DataFrame, and its hot (uint16) path
     invokes no per-label Python callback.
 
-    This test used to assert `"labeled_comprehension" in median_block` -- true under the
-    labeled_comprehension-only implementation this file's other tests were written against.
-    That assertion is now the WRONG invariant to pin: `labeled_comprehension` deliberately
-    still appears in this function, as the non-uint16 fallback required because the
-    composite-key sort is only lexicographic while values fit 16 bits (see
-    test_non_uint16_fallback_matches_fast_path). Asserting its absence would be false, and
-    asserting its presence would no longer prove anything about the hot path -- it would pass
-    even if the fast path silently kept calling it too.
-
-    So this rewrite isolates the fast (uint16) branch specifically -- from its `if` guard to
-    the `else:` that introduces the fallback -- and asserts THAT slice uses the new vectorised
-    helper and contains no labeled_comprehension call, which is the actual invariant this
-    test was always meant to protect: the hot path does no per-label Python-level work.
+    `labeled_comprehension` still appears in the function as the non-uint16 fallback (the
+    composite-key sort is only valid while values fit 16 bits), so the check isolates the
+    uint16 branch, from its `if` guard to the fallback's `else:`, and asserts that slice
+    uses the vectorised helper and no labeled_comprehension.
     """
     import inspect
 
@@ -275,14 +248,12 @@ def test_golden_old_vs_new_random_uint16_full_range():
     """Fast-path (uint16) equivalence, 40 trials: irregular label sets, cells with no nuclear
     overlap (forcing the NaN branch), the full uint16 intensity range, and both odd and even
     per-label pixel counts (median tie-break vs. a single middle element). Assert at
-    rtol=0, atol=0, NaN-aware. This is the equivalence check run during the audit (40/40 pass)
-    that the task brief requires stay passing.
+    rtol=0, atol=0, NaN-aware.
 
     Unlike the two golden tests above (float64 channels, which never take the composite-key
-    sort), this one uses a genuine uint16 channel so it actually exercises the fast path being
-    added -- and cross-checks every value against BOTH the old per-pixel-DataFrame golden and
-    an independent boolean-mask + np.median reference computed fresh per label, so a bug that
-    happened to agree with one reference cannot hide from the other.
+    sort), this one uses a uint16 channel so it exercises the fast path, and cross-checks
+    every value against both the per-pixel-DataFrame golden and an independent per-label
+    np.median reference.
     """
     rng = np.random.default_rng(7)
     n_trials = 40
@@ -333,7 +304,7 @@ def test_golden_old_vs_new_random_uint16_full_range():
                     continue
                 saw_even = saw_even or count % 2 == 0
                 saw_odd = saw_odd or count % 2 == 1
-                # rtol=0, atol=0: bit-identical to the old per-pixel-DataFrame algorithm...
+                # rtol=0, atol=0: bit-identical to the per-pixel-DataFrame golden...
                 assert new_vals[i] == old_vals[i], (comp, lab, new_vals[i], old_vals[i])
                 # ...and to an independent reference computed fresh from the raw pixels.
                 assert new_vals[i] == np.median(flat_val[sel])
@@ -346,11 +317,9 @@ def test_golden_old_vs_new_random_uint16_full_range():
 
 
 def test_non_uint16_fallback_matches_fast_path():
-    """The required guard: only a uint16 channel takes the composite-key fast path; anything
-    else must fall back to labeled_comprehension. That fallback must produce IDENTICAL values
-    to the fast path on the same underlying data -- otherwise it is silently wrong rather than
-    merely slower. This keeps the fallback branch reachable AND numerically pinned, so it
-    cannot bit-rot into dead code (see "Required guard" in the task brief).
+    """Only a uint16 channel takes the composite-key fast path; anything else falls back to
+    labeled_comprehension, which must produce identical values on the same data. Keeps the
+    fallback reachable and numerically pinned.
     """
     rng = np.random.default_rng(11)
     cell_mask = rng.integers(0, 6, size=(20, 25))

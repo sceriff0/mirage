@@ -1,32 +1,16 @@
 """No tracked file may carry the author placeholder.
 
-WHAT THIS IS FOR. Eight author-placeholder markers (the MARKER constant below;
-spelled in two halves everywhere in this file so the scan cannot find itself --
-which it did, in CI, the first time) survived into a 1.0.0 tree, across
-six files: LICENSE, CITATION.cff (twice), README.md (twice), mkdocs.yml (twice)
-and nextflow.config. A placeholder in a LICENSE is not a cosmetic defect -- it is
-a licence with no grantor -- and one in CITATION.cff propagates into every
-citation manager and into the Zenodo record for the tagged release. None of them
-had a check, so each was found by reading.
+A placeholder in LICENSE is a licence with no grantor, and one in CITATION.cff
+propagates into citation managers and the Zenodo record.
 
-WHY `git ls-files` AND NOT A GLOB. The enumerator has to be the set of files that
-SHIP. A `Path.rglob('*')` over the working tree walks .venv-bench/, valis_lib/,
-tests/testdata/ and every __pycache__ -- thousands of files nobody publishes -- and
-would either be unbearably slow or acquire an exclusion list that is itself a place
-for a real file to hide. `git ls-files` is the shipped set, by definition, and it
-needs no exclusions.
+Files come from `git ls-files`, the shipped set, rather than a glob that would walk
+virtualenvs, test data and caches and need an exclusion list.
 
-WHY THE MARKER IS BUILT AT RUNTIME. This file is itself tracked. Written out
-literally, the string below would match this module and the guard would need an
-exemption for itself -- and a guard with a self-exemption is one refactor away from
-exempting everything. Concatenating two fragments means the bytes of this file
-never contain the marker, so no exemption exists to widen.
+The MARKER constant is built from two fragments at import time, so this tracked
+file never contains it and needs no self-exemption.
 
-SCOPE NOTE: `TODO(release)` is DELIBERATELY NOT MATCHED. CITATION.cff carries one,
-for the DOI, and it is legitimately open until the tagged release is archived. The
-two markers mean different things and only one of them is this file's business;
-test_the_release_marker_is_not_matched pins that distinction so a later "tidy the
-regex" cannot quietly promote it.
+`TODO(release)` is not matched: CITATION.cff carries one for the DOI, open until the
+tagged release is archived. test_the_release_marker_is_not_matched pins that.
 """
 
 import subprocess
@@ -34,8 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Assembled at import time so this module's own bytes never contain it. See the
-# docstring: a self-exempting guard is one refactor away from exempting everything.
+# Assembled at import time so this module's own bytes never contain it.
 MARKER = "TODO" + "(author)"
 
 
@@ -56,8 +39,7 @@ def _offenders():
 
     Read as BYTES. `git ls-files` includes PNGs and a favicon; decoding them as
     text would either raise or need a suffix allowlist, and a suffix allowlist is
-    the same "a real file can hide behind it" hazard the enumerator was chosen to
-    avoid. A byte search over a binary is meaningless but harmless.
+    a place for a real file to hide. A byte search over a binary is harmless.
     """
     needle = MARKER.encode()
     hits = []
@@ -94,8 +76,8 @@ def test_no_tracked_file_carries_the_author_placeholder():
 
 
 def test_the_scan_reads_the_whole_shipped_tree():
-    """A 'must not find' scan passes perfectly over an empty set. This is what
-    makes the check above mean something: the enumerator really enumerates."""
+    """A 'must not find' scan passes over an empty set, so the enumerator must
+    really enumerate."""
     tracked = _tracked_files()
     assert len(tracked) >= 300, (
         f"`git ls-files` returned only {len(tracked)} path(s) from {ROOT}. The "

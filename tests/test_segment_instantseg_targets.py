@@ -1,27 +1,14 @@
-"""InstanSeg returned the SAME mask for nuclei and cells, silently.
+"""InstanSeg must never return the same mask for nuclei and cells.
 
-`_extract_2d_masks` reduced InstanSeg's labelled output to a (nuclei, cell)
-pair. When the output carried a single label map -- which is what
-`--target nuclei` and `--target cells` produce by construction -- it returned
-`single, single`, and the module docstring called that "contract-preserving".
+`_extract_2d_masks` reduces InstanSeg's labelled output to a (nuclei, cell)
+pair. A single label map (what `--target nuclei` and `--target cells` produce)
+must raise rather than be returned as `single, single`: downstream,
+Cytoplasm = Cell - Nucleus, so an identical pair zeroes every cytoplasmic
+column in measurements.csv with nothing to say why.
 
-It preserves the FILE contract (both `_nuclei_mask.tif` and `_cell_mask.tif`
-get written) and destroys the DATA contract. Downstream,
-Cytoplasm = Cell - Nucleus, so an identical pair makes the cytoplasm empty for
-every cell in the slide: every cytoplasmic column in measurements.csv is zero
-and nothing anywhere says why. There is no output that looks wrong.
-
-Scope, checked rather than assumed: nextflow.config:284 defaults
-`seg_instantseg_target` to 'all_outputs', so the DEFAULT path was never
-affected -- only a run that explicitly asks for one target. That is why this
-is a hard failure now rather than a config change: no shipped path relied on
-the replication.
-
-The degenerate `all_outputs` case raises too, deviating from the plan text,
-which kept a warn-and-replicate branch for it. The warning does not make the
-answer less wrong -- it lands in a container log nobody reads, while the
-zeroed cytoplasm reaches the published measurements.csv. If a model cannot
-produce two masks, the run should say so at the point it finds out.
+The default `seg_instantseg_target` is 'all_outputs', so no shipped path relies
+on replication. A degenerate `all_outputs` output raises too: a warning would
+land in a container log while the zeroed cytoplasm is published.
 """
 
 import numpy as np
@@ -33,8 +20,7 @@ SINGLE_MASK_TARGETS = ["nuclei", "cells"]
 
 def _two_channel(y=8, x=8):
     """A (2, Y, X) output: index 0 = nuclei, index 1 = cells. The cell labels
-    are deliberately a DIFFERENT array, so a test that passes because both
-    happen to be equal cannot happen here."""
+    are a different array, so a test cannot pass because both are equal."""
     nuclei = np.zeros((y, x), dtype=np.int32)
     nuclei[2:4, 2:4] = 1
     cells = np.zeros((y, x), dtype=np.int32)
@@ -77,7 +63,7 @@ def test_an_explicit_single_target_refuses_rather_than_replicating(target, shape
 @pytest.mark.parametrize("shape", [(8, 8), (1, 8, 8), (1, 1, 8, 8)])
 def test_a_degenerate_all_outputs_refuses_too(shape):
     """A model that cannot produce two masks must not be allowed to pretend it
-    did. This is the branch that used to warn and replicate."""
+    did."""
     arr = np.zeros(shape, dtype=np.int32)
     arr[..., 2:4, 2:4] = 1
     with pytest.raises(ValueError) as exc:
@@ -86,21 +72,17 @@ def test_a_degenerate_all_outputs_refuses_too(shape):
 
 
 def test_an_unexpected_shape_still_raises_its_own_error():
-    """The pre-existing guard, kept: a 4D array that does not reduce is a
-    different failure from a single mask and must not be folded into it."""
+    """A 4D array that does not reduce is a different failure from a single
+    mask and must not be folded into it."""
     with pytest.raises(ValueError, match="Unexpected InstanSeg output shape"):
         _extract_2d_masks(np.zeros((3, 4, 8, 8), dtype=np.int32), "all_outputs")
 
 
 def test_the_schema_enum_cannot_offer_a_target_the_reader_refuses():
     """Schema and reader are two statements of the same rule, in two languages,
-    with nothing tying them together. Without this they drift the moment one is
-    edited -- and the drift is invisible, because the schema's job is to REFUSE
-    values, so an over-wide enum simply lets a launch through to fail later
-    inside a segmentation task on the cluster.
-
-    Narrowing the enum is what moves that failure to launch time; this asserts
-    the narrowing is still there.
+    with nothing else tying them together. An over-wide enum lets a launch
+    through to fail later inside a segmentation task; the narrow enum moves that
+    failure to launch time.
     """
     import json
     from pathlib import Path

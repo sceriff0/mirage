@@ -1,20 +1,8 @@
 /*
- * Characterisation tests for the pipeline's parameter-enum validation.
+ * Parameter-enum validation (nextflow_schema.json via nf-schema).
  *
- * One test per enum check that used to live in lib/ParamUtils.groovy
- * (validateStart, the enum half of validateStop, validateRegistrationMethod,
- * validateRegQc, validateMicroReg, validateSegMethod). Those checks now come
- * from nextflow_schema.json via nf-schema's validateParameters().
- *
- * These tests passed BEFORE that migration (hand-rolled Groovy) and must keep
- * passing AFTER it (JSON Schema). That is the point: a schema that silently
- * stops validating is indistinguishable from a working one unless something
- * asserts that bad input is still rejected BY NAME.
- *
- * Each test asserts two things:
- *   1. the run fails, and
- *   2. the operator-facing error names the offending parameter, so the message
- *      is actionable rather than a bare stack trace.
+ * A schema that stops validating looks like a working one, so each test asserts
+ * that bad input fails the run and that the error names the offending parameter.
  */
 
 nextflow_pipeline {
@@ -138,9 +126,8 @@ nextflow_pipeline {
         }
     }
 
-    // The tuned VALIS settings were removed 2026-11-05 (valis-wsi 1.2.0 at its defaults). A
-    // run that still passes one must be REFUSED, never silently run at the defaults while the
-    // caller believes the setting applied: validation.logging.unrecognisedParams = 'error'.
+    // A retired VALIS setting must be refused (unrecognisedParams = 'error'), not silently
+    // ignored while the caller believes it applied.
     test("Should reject a retired VALIS setting (--memory_mode) and name the parameter") {
         tag "stub"
         options "-stub"
@@ -163,10 +150,8 @@ nextflow_pipeline {
         }
     }
 
-    // STARE's cost tiers were removed 2026-11-04. reg_tiled_mode is in validation.ignoreParams
-    // so nf-schema lets it through, and ParamUtils.checkRetiredParams (before
-    // validateParameters) refuses it, naming the retired row's knob values to set instead --
-    // an old `low` must never silently run the high values.
+    // reg_tiled_mode (retired STARE tiers) passes nf-schema via ignoreParams and is refused by
+    // ParamUtils.checkRetiredParams, which names the knob values to set instead.
     test("Should refuse a retired --reg_tiled_mode low and name the knobs to set instead") {
         tag "stub"
         options "-stub"
@@ -191,10 +176,7 @@ nextflow_pipeline {
         }
     }
 
-    /*
-     * Valid values must still be accepted — without this, a validator that
-     * rejects EVERYTHING would satisfy all six tests above.
-     */
+    // Valid values must be accepted, or a validator rejecting everything would pass the above.
     test("Should accept the valid ends of every enum - stub") {
         tag "stub"
         options "-stub"
@@ -218,13 +200,9 @@ nextflow_pipeline {
     }
 
     /*
-     * A -params-file delivers JSON, and JSON can carry the STRING "false" where
-     * a boolean switch is expected. Every non-empty String is truthy in Groovy,
-     * so `if (!params.skip_preprocess_qc)` used to evaluate FALSE and silently
-     * turn the switch ON — the preprocessing QC was skipped by a params file
-     * that literally said "false". The parameter schema types this as a boolean,
-     * so the mistyped value is now rejected at launch by name instead of
-     * quietly changing what the pipeline does.
+     * JSON can carry the string "false" for a boolean switch, and any non-empty
+     * String is truthy in Groovy. The schema types the switch as boolean, so the
+     * mistyped value must be rejected at launch by name.
      */
     test("Should reject a -params-file boolean delivered as the string 'false'") {
         tag "stub"
@@ -251,11 +229,8 @@ nextflow_pipeline {
     }
 
     /*
-     * --start/--stop resolve to three booleans that gate both the step calls and
-     * what each step contributes to the QC artifact stream. A partial run must
-     * still produce a report, containing only the steps that actually ran: if the
-     * gate and the contribution ever disagreed, the report would either go missing
-     * or reference a step that never executed.
+     * --start/--stop gate both the step calls and each step's QC contribution. A
+     * partial run must still produce a report listing only the steps that ran.
      */
     test("Should still report when only part of the pipeline runs - stub") {
         tag "stub"

@@ -55,22 +55,10 @@ nextflow_process {
 
     test("Should render --registration-tre, not --valis-summary - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"`. That is the whole point of the case:
-        // `-stub` never evaluates a `script:` block, so no stub run can observe a rendered
-        // command at all. The TRE rename this pins lives in exactly the two places `-stub`
-        // cannot see — the `--valis-summary` -> `--registration-tre` flag in `script:`, and
-        // the `stageAs: 'valis_summary/*'` -> `'registration_tre/*'` input directive — and
-        // a stub diff would have reported "identical" through the entire change. (Task 4
-        // hit the same blind spot with `${task.process}` in register.nf's script block,
-        // where the stub writes the literal STUB.)
-        //
-        // GENERATE_QC_REPORT is safe to run for real without a container on any host:
-        // bin/generate_qc_report.py is stdlib-only Python and Nextflow stages bin/ onto
-        // $PATH. Even so, the assertions read the rendered .command.sh / .command.run
-        // rather than process outcome, so the case holds whether the script itself
-        // succeeds or fails for unrelated environmental reasons. Same shape as
-        // tests/modules/convert_image.nf.test's rendered-command case (99bca24).
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`, so only a
+        // rendered-command case sees the `--registration-tre` flag and the
+        // `stageAs: 'registration_tre/*'` directive. bin/generate_qc_report.py is stdlib-only,
+        // but the assertions read .command.sh / .command.run rather than the outcome.
         tag "stub"
 
         when {
@@ -117,36 +105,26 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered GENERATE_QC_REPORT .command.sh found under the task work dir" },
-                // The assertion with teeth: the exact flag+value substring of the rendered
-                // command. Against the pre-rename module this reads
-                // `--valis-summary valis_summary/` and both of these fail.
+                // The exact flag+value substring of the rendered command.
                 { assert rendered.every { it.contains('--registration-tre registration_tre/') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('--valis-summary') },
                     "rendered command still carries the VALIS-specific flag: " + rendered.join(' --- ') },
-                // Same blind spot, one artifact kind later: `--seg-residuals` and its
-                // `stageAs: 'seg_residuals/*'` directive were added in the seg_residuals
-                // fix and are likewise invisible to any `-stub` run. Pinned here so a
-                // misspelling of either leaves no gate red.
+                // `--seg-residuals` and its `stageAs: 'seg_residuals/*'` directive are likewise
+                // invisible to `-stub`.
                 { assert rendered.every { it.contains('--seg-residuals seg_residuals/') },
                     "rendered command: " + rendered.join(' --- ') },
-                // `--versions` OUTLIVED the report section it fed. bin/generate_qc_report.py
-                // no longer renders a Software Versions table, but copy_data still writes
-                // collated_versions.yml into the published mirage_qc_data_*/ bundle -- so
-                // dropping the flag would silently delete a published artifact, and no stub
-                // run would notice: `-stub` never evaluates a script: block, and the stub
-                // block here only touches an empty html file.
+                // `--versions` feeds no report section, but copy_data still writes
+                // collated_versions.yml into the published mirage_qc_data_*/ bundle, so dropping the
+                // flag would silently delete a published artifact.
                 { assert rendered.every { it.contains('--versions ') },
                     "the collated versions.yml is no longer passed to the report: " +
                         rendered.join(' --- ') },
-                // Same blind spot for the seg-QC JSONs, which now feed the per-stage
-                // cell-displacement plots rather than a flattened metric table.
+                // The seg-QC JSONs, which feed the per-stage cell-displacement plots.
                 { assert rendered.every { it.contains('--seg-qc seg_qc/') },
                     "rendered command: " + rendered.join(' --- ') },
-                // The other half `-stub` cannot see: the `stageAs:` directive, which decides
-                // both what the script finds on disk and the folder name inside the published
-                // mirage_qc_data_*/ bundle. It appears in the staging script, not in
-                // .command.sh, so it needs its own assertion.
+                // The `stageAs:` directive decides what the script finds on disk and the folder name
+                // in the published bundle. It appears in the staging script, not in .command.sh.
                 { assert staged.size() >= 1,
                     "no GENERATE_QC_REPORT .command.run found under the task work dir" },
                 { assert staged.every { it.contains('registration_tre/') },

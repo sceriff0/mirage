@@ -1,32 +1,12 @@
 /*
- * TILED_ADAPTER fan-in group size -- end-to-end functional check.
+ * TILED_ADAPTER fan-in: two patients run the per-tile fan-out concurrently and both
+ * still produce a manifest end to end, i.e. every slide's control points reach
+ * TILED_SOLVE.
  *
- * subworkflows/local/adapters/tiled_adapter.nf:94-97 used to gather every tile's control
- * point with a bare `.groupTuple(by: 0)` -- no size hint -- so no slide's TILED_SOLVE could
- * start until every tile of every slide of every patient had finished. The gather now keys
- * with groupKey(slideKey(meta), meta.tiles_count) (tiled_adapter.nf:110) so a slide's group
- * can close as soon as its own tiles have arrived. See tiled_adapter_group_size.nf.test for the
- * requireTilesCount()/countTileRows()/requirePositiveTileCount() function tests (the guard
- * behind that groupKey call and the count it is sized with).
- *
- * This test is a regression/functional-equivalence check for the "Done when" requirement that
- * the set of control points reaching TILED_SOLVE per slide is unchanged: two patients run the
- * per-tile fan-out concurrently and both still produce a manifest end to end.
- *
- * IMPORTANT -- what this test does NOT cover: line 110's specific groupKey(...) call is not
- * exercised by this test at all, in either direction. Reverting it to the pre-fix bare
- * `slideKey(meta)` string would pass this test unchanged, for two compounding reasons: (1)
- * TILED_COARSE's stub always emits exactly one tile row regardless of input, so every group in
- * this test has size 1, and a bare key behaves identically to a sized-1 groupKey when there is
- * only one item per key; and (2), more fundamentally, groupKey(k, n) and a bare key k always
- * produce IDENTICAL emitted values -- they differ only in WHEN the group closes (sized: as soon
- * as n items arrive; bare: only once the whole upstream channel closes), which is not something
- * any assertion on emitted values can observe, ever, regardless of stub tile counts. This test
- * exists to guard output identity, not the groupKey wiring; the groupKey call itself is only
- * covered by direct code inspection (this file's diff) plus the correctness tests on the count
- * it is sized with (tiled_adapter_group_size.nf.test, tile_count_probe.nf.test) -- a wrong count
- * is the actual failure mode with teeth (hangs the gather, or truncates the control points
- * TILED_SOLVE fits its mesh from), unlike the key's bare-vs-sized form.
+ * Not covered: the sized groupKey wiring. A bare key would pass unchanged, because the
+ * stub emits one tile per slide and a sized and a bare key emit identical values (they
+ * differ only in when the group closes). The count it is sized with is tested in
+ * tiled_adapter_group_size.nf.test and tile_count_probe.nf.test.
  */
 nextflow_workflow {
 
@@ -79,9 +59,8 @@ nextflow_workflow {
         then {
             assertAll(
                 { assert workflow.success },
-                // One manifest per moving slide (the reference passes through unregistered) --
-                // the fan-in gather still reaches every slide's TILED_SOLVE with its control
-                // points, exactly as before this task's change.
+                // One manifest per moving slide (the reference passes through
+                // unregistered).
                 { assert workflow.out.transform_by_slide.size() == 2 },
                 { def patient_ids = workflow.out.transform_by_slide.collect { it[0].patient_id }.toSorted()
                   assert patient_ids == ['P001', 'P002'] },

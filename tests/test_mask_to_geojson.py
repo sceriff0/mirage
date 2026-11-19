@@ -1,5 +1,5 @@
-"""Tests for bin/mask_to_geojson.py — label mask -> cell GeoJSON (the glue between
-segment.py's cell_mask.tif and warp_seg_qc's warp input)."""
+"""Tests for bin/mask_to_geojson.py: label mask -> cell GeoJSON (segment.py's
+cell_mask.tif to warp_seg_qc's warp input)."""
 
 from __future__ import annotations
 
@@ -56,9 +56,8 @@ def test_polygons_land_on_the_pixels_they_came_from():
     """Centroid and bounding box must be exact; area is allowed the marching-squares bias.
 
     The contour runs through pixel centres at the corners, so a 6x6 block encloses 30.5 px^2
-    rather than 36 — a fixed geometric consequence of tracing an iso-line, not a placement
-    error. What must not drift is *where* the polygon is, which is what the QC's centroid
-    residual and per-pair IoU are read off.
+    rather than 36, a consequence of tracing an iso-line. What must not drift is where the
+    polygon is, which the QC's centroid residual and per-pair IoU are read off.
     """
     m = _two_square_mask()
     ps = cp.from_feature_collection(mask_to_geojson.mask_to_feature_collection(m))
@@ -66,9 +65,8 @@ def test_polygons_land_on_the_pixels_they_came_from():
     bbox = cp.feature_bboxes(ps)
 
     order = np.argsort(cent[:, 0])
-    # Coordinates are pixel-CENTRE based: the block m[2:8, 2:8] covers centres 2..7, so its
-    # traced outline runs 1.5..7.5. Everything downstream (warp, centroid residual) inherits
-    # this convention from here.
+    # Coordinates are pixel-centre based: m[2:8, 2:8] covers centres 2..7, so its outline
+    # runs 1.5..7.5. The warp and centroid residual inherit this convention.
     assert cent[order].ravel() == pytest.approx([4.5, 4.5, 14.5, 14.5])
     assert bbox[order].ravel() == pytest.approx(
         [1.5, 1.5, 7.5, 7.5, 11.5, 11.5, 17.5, 17.5]

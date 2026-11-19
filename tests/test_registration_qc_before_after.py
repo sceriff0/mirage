@@ -1,14 +1,11 @@
 """The registration QC figure shows BEFORE and AFTER, on the reference canvas.
 
-``GENERATE_REGISTRATION_QC`` used to render one composite — reference + registered
-— which shows what registration *produced* and not what it *corrected*. This file
-pins the two properties that make the added "before" panel honest:
+A before panel shows what registration corrected, not only what it produced.
+Two properties keep it honest:
 
-1. The native (pre-registration) moving slide is placed on the REFERENCE canvas by
-   pad-or-crop at the origin, never by rescaling. Rescaling a differently-sized
-   native image to the reference's shape silently removes the scale component of
-   the misalignment, which makes the "before" panel understate the error and
-   registration look better than it was.
+1. The native (pre-registration) moving slide is placed on the reference canvas by
+   pad-or-crop at the origin, never by rescaling, which would hide the scale part of
+   the misalignment and make registration look better than it was.
 2. The two panels are one image with a deterministic layout, so the published
    ``*_QC_RGB*`` names keep meaning one artifact per moving slide.
 """
@@ -41,13 +38,9 @@ import qc  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 CLI = REPO / "bin" / "generate_registration_qc.py"
 
-# The ResolutionUnit enum moved: it is a MODULE-level `tifffile.RESUNIT` in current
-# tifffile (2025.5.10, the version requirements/constraints.txt pins and CI installs),
-# and only a `tifffile.TIFF.RESUNIT` attribute in older ones (2023.4.12, what a local
-# venv may still hold). Reading it off `TIFF` alone made these assertions raise
-# `AttributeError: '_TIFF' object has no attribute 'RESUNIT'` in CI while passing
-# locally. The value itself is stable across both: RESUNIT.MICROMETER == 5 (standard
-# TIFF defines only 1-3; tifffile extends it with 4 = mm and 5 = um, following DNG).
+# ResolutionUnit is module-level `tifffile.RESUNIT` in current tifffile and only
+# `tifffile.TIFF.RESUNIT` in older ones. RESUNIT.MICROMETER == 5 in both (tifffile
+# extends TIFF's 1-3 with 4 = mm and 5 = um).
 RESUNIT = getattr(tifffile, "RESUNIT", None) or tifffile.TIFF.RESUNIT
 assert int(RESUNIT.MICROMETER) == 5
 
@@ -72,8 +65,8 @@ def test_larger_moving_image_is_cropped_not_rescaled():
     out = qc.compose_on_reference_canvas(ref, mov)
 
     assert out.shape == (4, 5)
-    # Cropped at the origin: every value is the SAME value the input had at that
-    # coordinate. A rescale would have produced interpolated values instead.
+    # Cropped at the origin: every value equals the input's at that coordinate;
+    # a rescale would interpolate.
     assert np.array_equal(out, mov[:4, :5])
 
 
@@ -119,14 +112,9 @@ def test_render_before_after_puts_registered_on_the_right_and_native_on_the_left
     A native and a registered plane that differ must therefore produce panels
     whose red channels differ, while their green channels are identical.
 
-    ``native`` is a constant-zero plane and ``registered`` is a plane with real
-    variance, NOT a second constant. ``create_nuclear_overlay`` autoscales each
-    plane independently with a min-max stretch, and a min-max stretch of ANY
-    constant-valued plane collapses to all-zero regardless of the constant's
-    value (``(x - x) / eps == 0`` everywhere) -- so two different constants
-    would produce identical (all-zero) red channels and the panels would be
-    indistinguishable for a reason that has nothing to do with
-    ``render_before_after`` itself.
+    ``registered`` has real variance, not a second constant: the min-max stretch in
+    ``create_nuclear_overlay`` collapses any constant plane to all-zero, so two
+    constants would give identical red channels.
     """
     ref = _plane(1, 16, 16)
     native = np.zeros((16, 16), dtype=np.uint16)
@@ -164,8 +152,7 @@ def test_render_before_after_marks_the_panel_boundary_in_blue():
 
 def test_render_before_after_without_a_native_is_a_single_panel():
     """The script stays runnable by hand against a pair of images. With no
-    native there is no 'before' to draw, and the output degenerates to exactly
-    the one-panel composite this process produced before the change."""
+    native there is no 'before' to draw, and the output is the one-panel composite."""
     ref = _plane(1, 12, 14)
     registered = _plane(3, 12, 14)
 
@@ -176,8 +163,8 @@ def test_render_before_after_without_a_native_is_a_single_panel():
 
 
 def test_render_before_after_pads_a_smaller_native_onto_the_reference_canvas():
-    """The panels must be the same height and width even when the native slide
-    is a different size — that is what compose_on_reference_canvas is for."""
+    """The panels have the same height and width even when the native slide
+    is a different size (compose_on_reference_canvas)."""
     ref = _plane(1, 20, 24)
     native = _plane(2, 11, 13)  # smaller in both axes
     registered = _plane(3, 20, 24)
@@ -190,12 +177,8 @@ def test_render_before_after_pads_a_smaller_native_onto_the_reference_canvas():
 def test_render_before_after_warns_when_the_registered_plane_is_off_canvas(caplog):
     """A registered slide is supposed to already be on the reference canvas.
 
-    Routing the REGISTERED plane through ``compose_on_reference_canvas`` (which the
-    native panel needs) means one that is not gets silently pad-or-cropped, where
-    ``create_nuclear_overlay`` used to raise ``ValueError("Shape mismatch...")``.
-    Drawing it is right -- a QC figure that refuses to render tells its reader
-    nothing -- but the discrepancy is a registration-output defect and must be said
-    out loud, naming BOTH shapes so the reader can tell which way it went.
+    One that is not is pad-or-cropped onto it and still drawn, but the mismatch is a
+    registration-output defect, so a warning names both shapes.
     """
     ref = _plane(1, 20, 24)
     native = _plane(2, 11, 13)
@@ -210,8 +193,7 @@ def test_render_before_after_warns_when_the_registered_plane_is_off_canvas(caplo
 
 
 def test_render_before_after_is_silent_when_only_the_native_differs(caplog):
-    """The native plane differing from the reference IS the normal case -- warning on
-    it would train a reader to ignore the warning above."""
+    """The native plane differing from the reference is the normal case, so no warning."""
     ref = _plane(1, 20, 24)
     native = _plane(2, 11, 13)
     registered = _plane(3, 20, 24)
@@ -248,8 +230,7 @@ def test_cyx_to_bgr_reorders_for_opencv():
 
 def _write_triplet(tmp_path, h=48, w=40):
     """A reference, a native moving slide and its registered counterpart, all
-    OME-TIFF with the nuclear marker deliberately NOT at channel 0 so the test
-    exercises pick_nuclear_index rather than the channel-0 fallback."""
+    OME-TIFF with the nuclear marker not at channel 0, to exercise pick_nuclear_index."""
     sys.path.insert(0, UTILS_DIR)
     from ome_io import write_ome_tiff
 
@@ -449,10 +430,8 @@ def test_cli_pixel_size_um_stamps_both_qc_tiffs(tmp_path):
     assert fullres_resolution == pytest.approx(1.0 / pixel_size_um, rel=1e-3)
     assert preview_resolution == pytest.approx(scale_factor / pixel_size_um, rel=1e-3)
 
-    # A resolution TAG alone is not a usable scale bar in the tools this figure is opened
-    # in: ImageJ reads its scale off the ImageDescription's `unit=` line, and an OME-XML
-    # reader reads PhysicalSizeX/Y, neither of which is the XResolution/ResolutionUnit tag
-    # checked above.
+    # A resolution tag alone is not a usable scale bar: ImageJ reads the ImageDescription's
+    # `unit=` line and an OME-XML reader reads PhysicalSizeX/Y.
     with tifffile.TiffFile(str(outdir / "registered_QC_RGB_fullres.tif")) as tf:
         description = tf.pages[0].tags["ImageDescription"].value
     assert "unit=um" in description
@@ -464,11 +443,8 @@ def test_cli_pixel_size_um_stamps_both_qc_tiffs(tmp_path):
     assert float(match.group(1)) == pytest.approx(
         pixel_size_um / scale_factor, rel=1e-3
     )
-    # A bare PhysicalSizeX is not a scale: OME's default unit is um, but a reader that
-    # honours the attribute reads whatever PhysicalSizeXUnit says, so a number written
-    # without its unit is one ome_io._MICRON change away from silently meaning nm.
-    # ome_io.ome_metadata writes the pair together (bin/utils/ome_io.py:262-266); this
-    # pins that BOTH halves reach the file.
+    # A PhysicalSizeX without its PhysicalSizeXUnit is not a scale; ome_io.ome_metadata
+    # writes the pair together, and this checks both reach the file.
     assert 'PhysicalSizeXUnit="\u00b5m"' in ome_xml, (
         f"no PhysicalSizeXUnit in OME-XML: {ome_xml}"
     )
@@ -501,10 +477,8 @@ def test_cli_without_pixel_size_um_leaves_output_unstamped(tmp_path):
 
     assert r.returncode == 0, r.stderr
 
-    # tifffile always writes an XResolution tag (it defaults to (1, 1) /
-    # RESUNIT.NONE when no resolution is given); the thing pixel_size_um
-    # controls is whether that tag is STAMPED WITH A MICROMETER SCALE, so the
-    # "unstamped" assertion is on the unit, not on the tag's mere presence.
+    # tifffile always writes an XResolution tag (default (1, 1) / RESUNIT.NONE), so
+    # "unstamped" is asserted on the unit, not on the tag's presence.
     with tifffile.TiffFile(str(outdir / "registered_QC_RGB.tif")) as tf:
         assert tf.pages[0].tags["ResolutionUnit"].value != RESUNIT.MICROMETER
         assert "PhysicalSizeX" not in tf.ome_metadata
@@ -514,11 +488,8 @@ def test_cli_without_pixel_size_um_leaves_output_unstamped(tmp_path):
 
 
 def test_create_registration_qc_stamps_resolution_on_both_tiffs_when_given(tmp_path):
-    """Folded requirement: pixel_size_um stamps XResolution/ResolutionUnit on BOTH
-    the fullres and the downsampled composite, and the two differ by exactly the
-    scale_factor -- the downsampled preview covers the same tissue in fewer, larger
-    pixels, so its pixel size in microns is larger and its resolution (pixels/um)
-    is smaller."""
+    """pixel_size_um stamps XResolution/ResolutionUnit on both the fullres and the
+    downsampled composite, and the two differ by exactly scale_factor."""
     p = _write_triplet(tmp_path)
     out = tmp_path / "P001_mov1_QC_RGB.tif"
     scale_factor = 0.5
@@ -564,11 +535,8 @@ def test_create_registration_qc_stamps_resolution_on_both_tiffs_when_given(tmp_p
     assert float(match.group(1)) == pytest.approx(
         pixel_size_um / scale_factor, rel=1e-3
     )
-    # A bare PhysicalSizeX is not a scale: OME's default unit is um, but a reader that
-    # honours the attribute reads whatever PhysicalSizeXUnit says, so a number written
-    # without its unit is one ome_io._MICRON change away from silently meaning nm.
-    # ome_io.ome_metadata writes the pair together (bin/utils/ome_io.py:262-266); this
-    # pins that BOTH halves reach the file.
+    # A PhysicalSizeX without its PhysicalSizeXUnit is not a scale; ome_io.ome_metadata
+    # writes the pair together, and this checks both reach the file.
     assert 'PhysicalSizeXUnit="\u00b5m"' in ome_xml, (
         f"no PhysicalSizeXUnit in OME-XML: {ome_xml}"
     )
@@ -578,10 +546,9 @@ def test_create_registration_qc_stamps_resolution_on_both_tiffs_when_given(tmp_p
 
 
 def test_create_registration_qc_without_pixel_size_um_leaves_output_unstamped(tmp_path):
-    """``pixel_size_um=None`` (the default) must write exactly what this function
-    wrote before the parameter existed. tifffile always writes SOME XResolution
-    tag (defaulting to (1, 1) / RESUNIT.NONE), so "unstamped" means no explicit
-    resolution kwargs reached write_tiff, not that the tag is absent."""
+    """``pixel_size_um=None`` (the default) stamps no scale. tifffile always writes
+    some XResolution tag (default (1, 1) / RESUNIT.NONE), so "unstamped" means no
+    explicit resolution kwargs reached write_tiff, not that the tag is absent."""
     p = _write_triplet(tmp_path)
     out = tmp_path / "P001_mov1_QC_RGB.tif"
 
@@ -612,9 +579,9 @@ def test_create_registration_qc_without_pixel_size_um_leaves_output_unstamped(tm
 def test_a_fullres_composite_too_large_for_a_classic_tiff_is_written_as_bigtiff(
     tmp_path, monkeypatch
 ):
-    """An ImageJ TIFF cannot be BigTIFF, so a whole-slide composite overflowed its 32-bit
-    offsets (``'I' format requires 0 <= number <= 4294967295``) and failed the run. Above
-    the payload threshold the same pixels and scale are written as an OME BigTIFF."""
+    """An ImageJ TIFF cannot be BigTIFF, so a whole-slide composite would overflow its
+    32-bit offsets. Above the payload threshold the same pixels and scale are written as
+    an OME BigTIFF."""
     p = _write_triplet(tmp_path)
 
     def _fullres(name, threshold):

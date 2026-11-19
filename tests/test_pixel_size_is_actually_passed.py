@@ -14,19 +14,9 @@ default that made the omission invisible. So this guard checks both halves, stat
   1. no `bin/*.py` may carry a hardcoded pixel-size default in its argparse, and
   2. every module whose script calls one of those consumers must pass the flag.
 
-Static, not behavioural, on purpose. `-stub` never evaluates a `script:` block, so a stub
-run cannot see a rendered command; and the rendered-command nf-test pattern used
-elsewhere in this suite could not be made to FAIL for this case when the fix was backed
-out (it kept reporting the flag present), so it would have been a guard that proves
-nothing -- the exact failure mode CLAUDE.md's "watch every new guard fail" rule is about.
-
-Reads `tests/nfmodel`, never a private regex over the raw file. The first draft of this
-guard did use one, and passed with the fix removed: the module still mentioned
-`--pixel_size` in the COMMENT explaining why the flag matters, and a raw substring search
-cannot tell a comment from an invocation. `strip_comments` is the right view here rather
-than `strip_comments_and_strings`, because the flag under assertion lives inside the
-script block's quoted shell text -- blanking strings would blank the very thing being
-checked.
+Static because `-stub` never renders a `script:` block. Reads `tests/nfmodel`'s
+`strip_comments` view: a comment naming the flag is not an invocation, and the flag itself
+lives in the script block's quoted shell text, which must be kept.
 """
 
 from __future__ import annotations

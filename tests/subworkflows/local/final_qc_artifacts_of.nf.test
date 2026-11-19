@@ -1,21 +1,12 @@
 /*
- * artifactsOf() -- the eight `artifactsOf(ch_artifacts, '<kind>')` call sites inside
- * FINAL_QC's `main:` (subworkflows/local/final_qc.nf) are a second, textually separate
- * copy of the artifact-kind vocabulary from ParamUtils.knownArtifactKinds(). The `ch_artifacts.subscribe`
- * guard (see final_qc.nf.test's "unknown artifact kind" tests) only validates tags flowing
- * IN through the channel; it says nothing about the literal `kind` string handed to
- * artifactsOf() itself. A typo there (e.g. 'seg_qcc') would match nothing, silently empty
- * that report slot, and every existing test would stay green -- the same failure class the
- * subscribe guard was added to prevent, from the other side.
+ * artifactsOf(): FINAL_QC's `artifactsOf(ch_artifacts, '<kind>')` call sites are a
+ * second copy of ParamUtils.knownArtifactKinds(). The subscribe guard validates only
+ * the tags flowing in; a typo in a literal `kind` here (e.g. 'seg_qcc') would silently
+ * empty that report slot. These tests call artifactsOf() directly.
  *
- * These tests call artifactsOf() directly, the same way final_qc_run_summary.nf.test calls
- * buildManifest/buildRunSummary directly.
- *
- * input[2] is the consumed-kind Set. It is a mandatory third argument, not file-level
- * state and not a defaulted one: FINAL_QC's `main:` owns one Set per run and threads it
- * through every call, so "a kind nobody reads" stays detectable without a mutable
- * constant living in lib/ for the whole JVM. Passing a throwaway Set here is what a
- * caller in isolation does.
+ * input[2] is the consumed-kind Set, a mandatory argument: FINAL_QC owns one Set per
+ * run and threads it through every call, so "a kind nobody reads" stays detectable
+ * without mutable state in lib/. A throwaway Set is what an isolated caller passes.
  */
 nextflow_function {
 

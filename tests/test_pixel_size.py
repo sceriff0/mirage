@@ -1,10 +1,8 @@
 """Tests for bin/utils/pixel_size.py — the one pixel-size rule.
 
-`params.pixel_size` owns every µm conversion in the pipeline. These tests pin the two
-halves of that ownership: reading what an image *claims* its scale is, and saying so
-when it disagrees with what the run was configured with. Neither half may change a
-number — the warning exists precisely so that the configured value can stay
-authoritative without being silent about it.
+`params.pixel_size` owns every µm conversion in the pipeline. These tests cover reading
+the scale an image claims, and warning when it disagrees with the configured one.
+Neither changes a number: the configured value stays authoritative.
 """
 
 from __future__ import annotations
@@ -41,9 +39,8 @@ def test_reads_physical_size_in_um(tmp_path):
 def test_unit_is_honoured_not_assumed(tmp_path):
     """A value without its unit is a number, not a scale.
 
-    OME writers do use nm; reading 212.5 nm as 212.5 µm would be a 1000x error that
-    reads as a plausible pixel size for a downsampled overview, so it would not look
-    obviously wrong anywhere downstream.
+    OME writers do use nm; reading 212.5 nm as 212.5 µm is a 1000x error that still
+    looks like a plausible overview pixel size.
     """
     p = _write_ome(
         tmp_path / "nm.ome.tif",
@@ -124,9 +121,8 @@ def test_one_axis_disagreeing_is_enough(caplog):
 def test_never_returns_a_scale_to_use():
     """The signature is the guard: a caller cannot accidentally prefer the metadata.
 
-    This is what keeps `params.pixel_size` the single owner. A function that returned
-    "the resolved pixel size" would invite exactly the drift this module exists to make
-    visible.
+    This keeps `params.pixel_size` the single owner; a function returning "the resolved
+    pixel size" would invite drift.
     """
     assert ps.warn_on_pixel_size_mismatch(
         0.1, 0.325, source="x", logger=logging.getLogger()

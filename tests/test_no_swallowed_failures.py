@@ -1,55 +1,20 @@
 #!/usr/bin/env python3
 """Guard: nothing in this repository ends a command with `|| true`.
 
-THE REGISTER, AND WHY IT IS A TEST RATHER THAN A LIST IN A DOCUMENT. The CI redesign
-(2026-09-01) enumerated every `|| true` in the tree and gave each a disposition. An
-enumeration written once is a snapshot; the next `|| true` is added by someone who
-never read it. So the register is enforced here instead, and the file it is enforced
-over is discovered rather than listed.
+`|| true` makes a failed command report success, so a check passes while proving
+nothing. The rule is enforced here over discovered files rather than kept as a list.
 
-`|| true` is the *visible* way a check passes while proving nothing:
-`nf-core lint --dir . || true` ran in CI for months over a command that could not
-lint this repository at all (see .nf-core.yml's header for the version-by-version
-measurement), and nobody could tell, because the job was green either way.
+Where the exit status carries data (`grep -c` exits 1 for zero matches), write the
+assignment (`n=$(...) || n=0`). Beware `A && B || true`: it also swallows a failed `B`.
 
-WHAT WAS DONE WITH THE FIVE THAT EXISTED, so this file reads as a record and not as
-a rule with no history:
+Scope: every `run:` body in `.github/workflows/**` and `.github/actions/**` (via
+`tests/ci_actions.py`), every tracked shell script, `.readthedocs.yaml`, every
+Nextflow process `script:`/`stub:` body (via `tests/nfmodel`), every
+`containers/*/Dockerfile`, and the `Makefile`.
+`test_the_scan_covers_the_build_files` probes the last two.
 
-  * `ci.yml`'s `nf-core lint --dir . || true`  -- the JOB was deleted (Phase 7).
-  * `check_profiles_parse.sh`'s
-    `[ "$moved" = 1 ] && mv ... || true`       -- rewritten to an `if`. That is the
-    classic `A && B || C` trap: the `|| true` was there to stop the `&&` returning 1
-    when the file was never moved, and it swallowed a FAILED `mv` at the same time.
-  * `resume_check.sh`'s `cached=$(grep -c ... || true)`  -- rewritten `|| cached=0`.
-  * `_test-suite.yml`'s `n=$(... | grep -ci ... || true)` -- rewritten `|| n=0`.
-    Both of those are the "nonzero means ZERO MATCHES" idiom with the real assertion
-    on the next line; nothing was being swallowed, and writing them as the
-    assignments they are means no reader has to classify a `|| true` again.
-  * `.readthedocs.yaml`'s `git fetch --unshallow || true`  -- rewritten to ask git
-    whether the clone is shallow. This one was on NO version of the register: it was
-    found by re-running the scan against the tree instead of trusting the list, which
-    is the entire reason this file exists.
-
-SCOPE. Every `run:` body in `.github/workflows/**` and `.github/actions/**`
-(resolved through `tests/ci_actions.py`, never a private parse), every tracked shell
-script (`*.sh` and the SLURM job scripts, `*.sbatch`), `.readthedocs.yaml`, every Nextflow process `script:`/`stub:` body (via
-`tests/nfmodel`, never a private regex), **every `containers/*/Dockerfile`**, and the
-`Makefile`.
-
-THE LAST TWO WERE ADDED IN FIX ROUND 1, AND THE OMISSION IS THE POINT. The first
-version of this file scanned the four scopes above and stopped -- in the same commit
-series that moved build-time verification INTO `RUN` lines across all eleven
-Dockerfiles, on the release path. A reviewer appended `RUN echo scope-probe || true`
-to `containers/merge/Dockerfile` and a `|| true` recipe line to the `Makefile` and
-this file stayed green, 49/4. The file class where the next swallowed failure will
-land had just been created by the same work, and the guard could not see it. Both
-probes are reproduced in `test_the_scan_covers_the_build_files` below, so the gap
-cannot silently reopen.
-
-COMMENT-BLIND, in the direction that matters. Comments here can only make the scan
-report MORE, never less -- a `#` line explaining a removed `|| true` necessarily
-quotes it -- so they are stripped, including trailing ones, and the docstring above
-is why: this file's own prose would otherwise fail it.
+Shell comments, whole-line and trailing, are stripped: a comment explaining a removed
+`|| true` quotes it.
 """
 
 from __future__ import annotations
@@ -71,12 +36,9 @@ from tests.nfmodel import processes, strip_comments  # noqa: E402
 
 NEEDLE = "|| true"
 
-# The ONE remaining occurrence, with its reason. BY (path, the exact command), so an
-# exemption cannot silently cover a second one added to the same file later.
-#
-# Keep this dict as close to empty as the tree allows. An entry is a debt, not a
-# licence: it has to name the command, and test_the_allowlist_has_no_dead_entries
-# below deletes it the moment the command changes.
+# Allowed occurrences, keyed by (path, exact command) so an exemption cannot cover a
+# second one added to the same file. Keep it as close to empty as possible;
+# test_the_allowlist_has_no_dead_entries fails once the command changes.
 ALLOWED: dict[tuple[str, str], str] = {
     (
         "modules/local/register.nf",
@@ -100,10 +62,8 @@ ALLOWED: dict[tuple[str, str], str] = {
     ),
 }
 
-# Non-vacuity floors. A "must not find" scan over an empty set is the failure this
-# whole redesign is about, and every one of these scopes has a plausible way to go
-# quietly empty: a resolver that stops resolving, a `git ls-files` filter that
-# matches nothing, a model that stops finding processes.
+# Non-vacuity floors: a "must not find" scan over an empty set passes. Each scope can
+# go quietly empty (a resolver, a `git ls-files` filter, the process model).
 MIN_CI_COMMAND_LINES = 100
 MIN_SHELL_SCRIPTS = 3
 MIN_PROCESSES = 15
@@ -116,8 +76,7 @@ MIN_BUILD_FILES = 12
 def _tracked(*patterns: str) -> list[Path]:
     """Tracked files matching `patterns`, via `git ls-files`.
 
-    Tracked rather than globbed, deliberately: `.gitignore` covers per-worktree
-    scratch (`tests/testdata/`, `.nf-test/`, virtualenvs), and a glob would scan
+    Tracked rather than globbed: `.gitignore` covers per-worktree scratch (`tests/testdata/`, `.nf-test/`, virtualenvs), and a glob would scan
     those and report a `|| true` nobody committed.
     """
     out = subprocess.run(
@@ -143,9 +102,8 @@ def _build_files() -> list[Path]:
 
     Both are shell: a Dockerfile `RUN` body is `/bin/sh -c`, and a Makefile recipe
     line is a shell command whose exit status Make reads. `|| true` swallows a
-    failure in either exactly as it does in a workflow step -- and since Phase 6
-    each Dockerfile ends in `RUN bash /usr/local/bin/mirage-smoke.sh`, which runs on
-    the release path.
+    failure in either exactly as it does in a workflow step. Each Dockerfile ends in
+    `RUN bash /usr/local/bin/mirage-smoke.sh`, which runs on the release path.
     """
     return _tracked("containers/*/Dockerfile", "Makefile")
 
@@ -187,8 +145,7 @@ def _all_hits() -> list[tuple[str, str]]:
 
 
 def test_the_scan_actually_read_something():
-    """Every floor below has a way of going quietly to zero, and a zero-answer scan
-    is exactly what this file is written against."""
+    """Each scope must be non-empty: a scan over nothing finds nothing."""
     ci_text = "\n".join(
         ci_actions.run_scripts(path) for path in ci_actions.scanned_files()
     )
@@ -214,12 +171,9 @@ def test_the_scan_actually_read_something():
 
 
 def test_the_scan_is_comment_blind():
-    """Proved rather than claimed, because the opposite has happened here twice.
+    """Comments, whole-line and trailing, are ignored; real commands are still seen.
 
-    A trailing comment on a real command line is the shape that got past a guard on
-    2026-09-01: `true  # bash tests/cleanup_work.sh` still matched a whole-file text
-    search. Both halves are checked here on synthetic input, so this file cannot
-    quietly regain either blind spot.
+    Checked on synthetic input, including a `#` inside a quoted string.
     """
     assert NEEDLE not in _clean("# nf-core lint --dir . || true")
     assert NEEDLE not in _clean("echo hello  # this used to be `foo || true`")
@@ -252,13 +206,10 @@ def test_nothing_swallows_a_failure_with_or_true():
     ["containers/merge/Dockerfile", "Makefile"],
 )
 def test_the_scan_covers_the_build_files(rel):
-    """The two files a reviewer probed and this scan did not read.
+    """A `|| true` appended to a Dockerfile or the Makefile is reported.
 
-    This is not a restatement of the scope constant: it appends the reviewer's EXACT
-    probe to a real file on disk, asserts the scan reports it, and restores the file.
-    A scope list can be right and the reader that consumes it wrong -- which is what
-    happened: `_all_hits` simply had no branch for either path, and the constant that
-    would have said so did not exist yet.
+    Appends a probe to a real file on disk, asserts the scan reports it, and restores
+    the file. This checks the reader (`_all_hits`), not just the scope constant.
     """
     path = REPO / rel
     assert path.is_file(), f"{rel} is gone; this probe is checking nothing"
@@ -285,8 +236,7 @@ def test_the_scan_covers_the_build_files(rel):
     "entry", sorted(ALLOWED), ids=[f"{w}:{c[:40]}" for w, c in sorted(ALLOWED)]
 )
 def test_the_allowlist_has_no_dead_entries(entry):
-    """An exemption that exempts nothing is a licence nobody is using and the next
-    reader will trust. This repository has had three of those in one file at once."""
+    """An exemption that exempts nothing reads as a reviewed decision; it must go."""
     assert entry in _all_hits(), (
         f"ALLOWED entry {entry} matches no `|| true` in the tree any more. Either the "
         "command was rewritten -- in which case delete the entry in the same commit -- "

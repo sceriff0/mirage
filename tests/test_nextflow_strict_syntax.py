@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """Guards for Nextflow 26's strict (v2) parser.
 
-Nextflow 26 makes the v2 syntax parser the only parser. It is far stricter than
-the Groovy-derived v1 one, and several constructs this repo relied on are simply
-rejected — config parsing aborts before a single process is instantiated, so a
-violation is a hard `ERROR ~ Config parsing failed`, not a warning.
-
-Reproduce the current parser's verdict on this tree at any time with:
+Nextflow 26 uses only the v2 syntax parser, which rejects several constructs
+the v1 parser accepted; a violation aborts config parsing with
+`ERROR ~ Config parsing failed`. Reproduce the parser's verdict with:
 
     NXF_SYNTAX_PARSER=v2 nextflow -q run . -profile test -stub
 
-The rules below are the ones that bit. Each is its own test function so a
-failure names the rule that broke rather than "strict syntax is unhappy";
-later rules for the `.nf` sources are appended to this same file.
-
-Plain pytest, no pipeline runtime and no Nextflow install required — all paths
-are derived from `__file__`, per this repo's other guard tests (see
-test_layout.py, test_ci_stack_pinned.py).
+Each rule is its own test function so a failure names the rule that broke.
+Plain pytest; no Nextflow install required.
 """
 
 from __future__ import annotations
@@ -29,23 +21,19 @@ CONF_DIR = ROOT / "conf"
 
 # A function declaration at the top level of a config file. Under the strict
 # parser this is `Unexpected input: '('`, reported against the open paren.
-#
-# Matched with a leading `\s*` rather than anchored hard at column 0: an
-# indented declaration is just as illegal, and matching only column 0 would
-# make the guard silently miss one.
+# Leading `\s*`, not column 0: an indented declaration is just as illegal.
 _CONFIG_DEF_FUNCTION_RE = re.compile(r"^\s*def\s+\w+\s*\(")
 
 
 def _config_files() -> list[Path]:
-    """Every parsed config file. `conf/site.config.template` is deliberately not
-    matched by the glob — it is a template to copy, never included."""
+    """Every parsed config file. `conf/site.config.template` is not matched:
+    it is a template to copy, never included."""
     return sorted(CONF_DIR.glob("*.config"))
 
 
 def test_config_files_are_present_to_scan():
-    """A sweep over an empty file list passes vacuously. This is the guard on
-    the guard: if the glob ever stops finding conf/modules.config, the rule
-    below is not checking anything and this fails instead."""
+    """Fail if the glob stops finding conf/modules.config, so the rule below
+    cannot pass vacuously over an empty file list."""
     files = _config_files()
     assert files, f"no conf/*.config files found under {CONF_DIR}"
     assert CONF_DIR / "modules.config" in files, (
@@ -86,12 +74,9 @@ def test_rule_1_no_top_level_def_functions_in_config():
 # ---------------------------------------------------------------------------
 # Rules 2-5 — the `.nf` sources.
 #
-# Rule 1 above scans `conf/*.config`. Everything below scans the workflow
-# sources instead: `main.nf` plus every `*.nf` under workflows/, subworkflows/
-# and modules/. `bin/`, `lib/*.groovy` and the nf-test suite are deliberately
-# out of scope — `lib/` is plain Groovy compiled by Nextflow's own classloader
-# and is verified to parse unchanged under v2, and `*.nf.test` files are read by
-# nf-test's own parser, not Nextflow's.
+# These scan `main.nf` plus every `*.nf` under workflows/, subworkflows/ and
+# modules/. Out of scope: `lib/` (plain Groovy, parses unchanged under v2) and
+# `*.nf.test` (read by nf-test's own parser).
 # ---------------------------------------------------------------------------
 
 _NF_SOURCE_DIRS = ("workflows", "subworkflows", "modules")
@@ -110,8 +95,8 @@ def _nf_files() -> list[Path]:
 
 
 def test_nf_files_are_present_to_scan():
-    """Guard on the guards: the four sweeps below pass vacuously over an empty
-    file list. If the globs stop finding the known sources, fail here instead."""
+    """Fail if the globs stop finding the known sources, so the sweeps below
+    cannot pass vacuously."""
     files = _nf_files()
     rel = {str(f.relative_to(ROOT)) for f in files}
     assert ROOT / "main.nf" in files, "main.nf missing from the scanned set"
@@ -205,10 +190,8 @@ def _has_top_level_comma(text: str) -> bool:
 def test_rule_3_no_two_argument_assert():
     """Rule 3 — `assert expr, "message"` is not valid strict syntax.
 
-    v2 keeps single-argument `assert` but drops the two-argument form. Both of
-    this repo's uses are checkpoint-schema drift guards where the message *is*
-    the guard, so the fix is an explicit conditional that throws with the same
-    message verbatim:
+    v2 keeps single-argument `assert` but drops the two-argument form. Where
+    the message matters, use an explicit conditional that throws it:
 
         if (!(cond)) { throw new IllegalStateException("<same message>") }
 
@@ -246,10 +229,8 @@ def test_rule_3_no_two_argument_assert():
 # Rule 4 — no bare top-level assignment in a subworkflow.
 # ---------------------------------------------------------------------------
 
-# Anchored hard at column 0 and to SCREAMING_CASE, which is what a script-level
-# pseudo-constant looks like in this repo. `(?!=)` keeps `FOO == bar` out; there
-# is no such line today, but a comparison at column 0 is not an assignment and
-# must not be reported as one.
+# Anchored at column 0 and to SCREAMING_CASE (a script-level pseudo-constant).
+# `(?!=)` keeps a comparison such as `FOO == bar` out.
 _BARE_TOP_LEVEL_ASSIGN_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\s*=(?!=)")
 
 
@@ -258,11 +239,9 @@ def test_rule_4_no_bare_top_level_assignment_in_subworkflows():
     statement, and the strict parser allows only declarations there
     (`Statements cannot be mixed with script declarations`).
 
-    The two offenders carried a comment explaining that they *had* to be bare:
-    a script-level `def` is scoped to the file's implicit `run()` method and so
-    is invisible to functions in the same file. Both constraints are real, so
-    the fix cannot be a local `def` — it has to remove the need for file-level
-    state. See subworkflows/local/final_qc.nf.
+    A script-level `def` is not a fix either: it is scoped to the file's
+    implicit `run()` method and invisible to functions in the same file. Remove
+    the need for file-level state instead (see subworkflows/local/final_qc.nf).
     """
     offenders: list[str] = []
     for path in sorted((ROOT / "subworkflows").rglob("*.nf")):
@@ -281,11 +260,8 @@ def test_rule_4_no_bare_top_level_assignment_in_subworkflows():
 # Rule 5 — no top-level `workflow.onComplete` / `workflow.onError`.
 # ---------------------------------------------------------------------------
 
-# Anchored at column 0, NOT `^\s*`: a handler registered from INSIDE a
-# `workflow { }` block is legal under v2 and is precisely the fix, so it is
-# indented and must not be flagged. A top-level statement is at column 0 by
-# construction — nothing in this repo indents one — and an indented top-level
-# statement would be rejected by the parser with the same message anyway.
+# Anchored at column 0, not `^\s*`: a handler registered inside a
+# `workflow { }` block is legal under v2 (it is the fix) and is indented.
 _TOP_LEVEL_HANDLER_RE = re.compile(r"^workflow\.on(Complete|Error)\b")
 
 

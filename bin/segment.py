@@ -422,7 +422,7 @@ def parse_args():
         "--image",
         type=str,
         required=True,
-        help="Path to multichannel OME-TIFF image (e.g., registered image from VALIS)",
+        help="Path to multichannel OME-TIFF image (e.g., the registered image)",
     )
 
     parser.add_argument(

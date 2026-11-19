@@ -1,40 +1,26 @@
 """subworkflows/local/checkpoint_writer.nf is the only subworkflow that writes a manifest.
 
-The same five-step chain -- filter on Checkpoint.writesAtLevel, map through
-Checkpoint.row, collectFile with the step's name, seed, sort and storeDir --
-appeared four times verbatim, in preprocess.nf, registered_checkpoint.nf,
-segmentation.nf and postprocessed_checkpoint.nf. Three of the four carried the
-SAME eight-line "sort: true is load-bearing" comment word for word.
+The chain -- filter on Checkpoint.writesAtLevel, map through Checkpoint.row, collectFile
+with the step's name, seed, sort and storeDir -- lives there once. A copy that loses the
+gate writes a manifest naming unpublished artifacts (which --start and add_cycle then
+open); one that loses the sort is non-deterministic; one that loses the seed has no
+header and misparses under splitCsv(header: true).
 
-Four copies of one mechanism is four chances for one of them to lose the cleanup
-gate, or the sort, or the seed -- and each loss is silent. Without the gate, a
-run at a cleaning level writes a manifest whose rows name artifacts that were
-never published, and --start and add_cycle both OPEN what it names. Without the
-sort, two runs of the same commit produce different files. Without the seed, the
-manifest has no header and every reader's splitCsv(header: true) misparses it.
-
-TWO PROPERTIES, ASSERTED SEPARATELY, because they can break independently:
+Two properties, asserted separately because they break independently:
 
 1. Only checkpoint_writer.nf may hold a `collectFile(` whose `storeDir:` is
    Layout.checkpointDir. A second one is a second writer.
 2. Only checkpoint_writer.nf, among subworkflows/, may read
-   `params.cleanup_level`. That is the GATE. A caller reading it again is either
-   a second gate that can disagree, or -- worse -- the same gate applied twice,
-   which reads as defence in depth and is actually two places to forget.
+   `params.cleanup_level`: that is the gate, and a second reader is a second gate
+   that can disagree.
 
-`params.outdir` is deliberately NOT part of this rule, and the reason is worth
-recording. The row builders MUST call
-`Layout.publishedPath(params.outdir, <pid>, '<kind>', file)` with params.outdir
-and the kind as LITERAL arguments, because tests/test_layout.py's static scan
-matches exactly that shape -- a variable there is invisible to it, and the guard
-would silently stop covering the checkpoint a `--start registration` run reads.
-So params.outdir is read at every row builder by design.
+`params.outdir` is not part of this rule: the row builders must call
+`Layout.publishedPath(params.outdir, <pid>, '<kind>', file)` with literal arguments,
+because tests/test_layout.py's static scan matches exactly that shape.
 
-The model is queried through tests.nfmodel rather than a private regex: this file
-constructs paths to Nextflow source, so tests/test_nfmodel.py requires it, and
-the string-preserving view is the correct one here because every needle
-(`storeDir: Layout.checkpointDir`, `params.cleanup_level`) is code rather than a
-quoted literal, while a COMMENT naming either must not count.
+Source is read through tests.nfmodel (tests/test_nfmodel.py requires it), on the
+string-preserving comment-stripped view: the needles are code, and a comment naming
+one must not count.
 """
 
 from __future__ import annotations
@@ -77,7 +63,7 @@ def test_the_scan_actually_reads_subworkflows():
 
 
 def test_the_writer_really_writes():
-    """The sole exemption must be load-bearing. If checkpoint_writer.nf stopped
+    """The sole exemption must be real. If checkpoint_writer.nf stopped
     holding the collectFile, every 'no writer here' answer below would be
     vacuously true and the pipeline would write no manifests at all."""
     body = strip_comments(THE_WRITER.read_text())
@@ -132,11 +118,8 @@ def test_only_checkpoint_writer_reads_the_cleanup_level():
 
 
 def test_the_comment_stripped_view_is_what_is_read():
-    """The failure mode CLAUDE.md records six instances of, in one day: a guard
-    satisfied (or, for a negative rule like this one, wrongly tripped) by a
-    COMMENT. Here the needle is code, so a comment mentioning params.cleanup_level
-    -- and preprocess.nf's history is full of such comments -- must not count as a
-    read."""
+    """A comment mentioning params.cleanup_level or the checkpoint collectFile must
+    not count as code."""
     sample = "\n".join(
         [
             "workflow X {",

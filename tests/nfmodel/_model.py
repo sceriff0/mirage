@@ -5,9 +5,8 @@ Guards assert against this model, never against raw text. `processes()` and
 comment/string-stripped text produced by `strip_comments_and_strings` --
 never off the raw source -- so a comment that merely *mentions* a process
 name or a `withName: 'X' {` selector cannot be counted as the real thing.
-`script:`/`stub:` bodies are the one deliberate exception: they are sliced
-from the RAW text, because the reason to read them is usually to inspect the
-rendered command, and the stripped view has blanked every string in it.
+`script:`/`stub:` bodies are the exception: they are sliced from the raw
+text, because the stripped view has blanked every string in the command.
 """
 
 import re
@@ -53,8 +52,8 @@ class WithNameBlock:
 
 def nf_files(dirs: Sequence[str] = _DEFAULT_DIRS, root: Path = REPO_ROOT) -> List[Path]:
     """Every .nf file under `dirs`, recursively (`rglob`) and sorted for a
-    deterministic order. A non-recursive `glob('*.nf')` misses e.g. a nested
-    `modules/local/sub/*.nf` -- this is the enumerator that used to be wrong."""
+    deterministic order. A non-recursive `glob('*.nf')` would miss a nested
+    `modules/local/sub/*.nf`."""
     out: List[Path] = []
     for d in dirs:
         out.extend(sorted((root / d).rglob("*.nf")))
@@ -63,10 +62,8 @@ def nf_files(dirs: Sequence[str] = _DEFAULT_DIRS, root: Path = REPO_ROOT) -> Lis
 
 def nf_test_files(root: Path = REPO_ROOT) -> List[Path]:
     """Every nf-test file under `tests/`, recursively and sorted for a
-    deterministic order. A guard scanning `tests/**/*.nf.test` on its own
-    (a raw `Path.glob`) is itself an undiscoverable private parse of Nextflow
-    source by `test_nfmodel.py`'s own `_discover_nf_source_readers` rule --
-    this is the one place that enumeration happens."""
+    deterministic order. Guards use this instead of their own
+    `Path.glob`, which `test_nfmodel.py` would flag as a private parse."""
     return sorted((root / "tests").rglob("*.nf.test"))
 
 
@@ -225,12 +222,10 @@ class NfTestCase:
     reads_command_sh: bool
 
 
-# nf-test accepts both quote styles everywhere, so every one of these matches
-# `['"]` and backreferences the opening quote. `-stub-run` is Nextflow's
-# documented primary spelling and `-stub` its alias: a case written the primary
-# way used to model as `stub_option=False`, i.e. as a RENDERED case, which is
-# how a stub-only case could satisfy the rendered-coverage rule in
-# test_process_nf_test_coverage.py while rendering nothing.
+# nf-test accepts both quote styles, so each pattern matches `['"]` and
+# backreferences the opening quote. Both `-stub-run` (the primary spelling)
+# and its alias `-stub` mark a stub case; missing either would count a
+# stub-only case as rendered.
 _NF_TEST_CASE_RE = re.compile(
     r"""\btest\s*\(\s*(?P<q>["'])(?P<name>.*?)(?P=q)\s*\)\s*\{"""
 )

@@ -1,6 +1,6 @@
 """Tests for bin/preflight_scale.py -- the pre-flight metadata-only scale scan.
 
-Four outcomes, one per row of the brief's table:
+Four outcomes:
 
     pixel_size    metadata       result
     ----------    -----------    ------------------------------------------------

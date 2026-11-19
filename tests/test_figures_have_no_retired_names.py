@@ -2,17 +2,11 @@
 
 `tests/test_figures_match_the_pipeline.py` resolves the names a figure writes
 against the pipeline, so it catches a name that never existed or was renamed.
-It cannot catch the opposite drift: a name that still resolves (`SEGMENT` is
-still a process) sitting in a sentence that describes a world that is gone.
-The ten `ORB` mentions in registration-schematic.html were exactly that -- the
-front-end symbol was deleted from `bin/utils/coarse_align.py`, so no name check
-had anything to fail on, and the figure went on telling reviewers the coarse
-step is ORB + cross-check matching.
+It cannot catch a retired name in a sentence describing something that is gone
+(e.g. an `ORB` coarse front-end after the symbol was deleted).
 
-NARROW ON PURPOSE, and this is not caution -- it is the same ruling
-`tests/test_ashlar_backend_removed.py` records in its own docstring: "a blanket
-grep would delete them". Two ASHLAR sentences in this set are CORRECT and must
-survive:
+Patterns are narrow because some mentions are correct. Two ASHLAR sentences
+must survive:
   * pipeline-schematic.html -- mcmicro applies BaSiC profiles inside ASHLAR's
     mosaic step, which mirage has no counterpart for.
   * registration-schematic.html -- STARE's phase-correlation kernel mirrors
@@ -20,18 +14,11 @@ survive:
 So `ashlar` is forbidden only where it reads as a SELECTABLE BACKEND (a
 `registration_method` value, a process name, an adapter name), never as a word.
 
-Every pattern below is paired with the file:line that proves the thing is gone,
-because an entry whose subject still exists forbids a name the pipeline uses.
+Every pattern is paired with the file:line that proves the thing is gone.
 
-This is a NEGATIVE rule ("must not appear"), and it reads RAW text
-(`path.read_text()`), never `_prose()`. That is the opposite treatment from
-`tests/test_figures_match_the_pipeline.py`'s POSITIVE checks, which read
-`_prose()` (comments stripped) so that commented-out markup cannot satisfy a
-claim the figure never actually makes. Here the risk runs the other way: a
-retired name hidden inside `<!-- ... -->` is still a retired name sitting in
-the file, and a trailing comment making the guard comment-blind is exactly the
-failure mode CLAUDE.md's "Verification reality" #7 catalogues -- a positive
-and a negative rule need opposite treatment.
+This is a negative rule, so it reads raw text (`path.read_text()`), comments
+included: a retired name inside `<!-- ... -->` is still in the file. The positive
+checks in test_figures_match_the_pipeline.py read comment-stripped `_prose()`.
 """
 
 from __future__ import annotations
@@ -73,13 +60,9 @@ RETIRED = {
         "the reader stack is bioio/tifffile/bioio-bioformats",
         "bin/utils/ome_io.py READERS",
     ),
-    # anhir/acrobat: claiming-context only, same reasoning and same day as the
-    # landmark pattern below. The bare word forbade a figure from saying, in
-    # its own honest-limits panel, "no ANHIR or ACROBAT landmark TRE was
-    # measured" as hard as it forbade a false "evaluated on ANHIR" -- a
-    # negation and a claim are not the same risk. Narrowed to an affirmative
-    # verb/preposition ahead of the dataset name on the same line, mirroring
-    # the trigger-then-target order the landmark pattern already uses.
+    # anhir/acrobat only in a claiming context (an affirmative verb before the
+    # dataset name on the same line), so a figure may still say no landmark TRE
+    # was measured on them.
     r"(?:measured\s+on|evaluated\s+on|validated\s+against|scored\s+on|"
     r"benchmarked?\s+on|results\s+on)[^<\n]{0,25}(?:anhir|acrobat)": (
         "the ANHIR/ACROBAT landmark harness is deleted -- no figure may claim "
@@ -120,18 +103,13 @@ RETIRED = {
     ),
 }
 
-# Shrink-only debt allowlist, same shape and same rule as
-# tests/test_figures_match_the_pipeline.py's STALE_FIGURES: an entry is a debt,
-# not a permission, and `test_the_allowlist_only_shrinks` fails once an entry
-# stops matching. Do NOT add a figure here to make it pass.
+# Shrink-only debt allowlist, like STALE_FIGURES in test_figures_match_the_pipeline.py:
+# `test_the_allowlist_only_shrinks` fails once an entry stops matching. Do not add to it.
 ALLOW = {}
 
 _COMPILED = {re.compile(p, re.I): v for p, v in RETIRED.items()}
 
-# Non-vacuity, checked at import time rather than inside a test: an empty
-# RETIRED would make every test below pass by iterating over nothing, and
-# that must be caught before any test body runs, not discovered later as a
-# suspiciously-green run.
+# Checked at import time: an empty RETIRED would make every test pass vacuously.
 assert RETIRED, "RETIRED is empty -- every check below would pass vacuously"
 
 
@@ -168,10 +146,8 @@ def test_no_figure_names_a_retired_backend_or_frontend():
 def test_the_patterns_still_match_something_somewhere():
     """A negative rule over a set that never matched proves nothing.
 
-    Every pattern here was measured against this figure set on 2026-09-02 and at
-    least four of them had live hits. If ALL of them stop matching -- including
-    inside the allow-listed files -- the extractor has broken and every assertion
-    above is looping over nothing.
+    If no pattern matches anywhere, allow-listed files included, the extractor has
+    broken and every assertion above is looping over nothing.
     """
     matched = set()
     for path in _figures():

@@ -65,13 +65,9 @@ def _name(path: Path) -> str:
         return "stare:" + path.relative_to(PACKAGE_SRC).as_posix()
 
 
-# CLAUDE.md's "Verification reality" item 7: a POSITIVE text-matching guard ("does this
-# file still write pixels?") is satisfied by a `write_tiff(`/`tifffile.imwrite(` sitting
-# in a comment, keeping a dead PIXEL_WRITERS entry alive. `ci_actions.strip_line_comment`
-# is the one quote-aware `#`-stripper this repo shares for exactly that, rather than a
-# private `split("#")` that would truncate a quoted `#` (e.g. inside a path or f-string).
-# `tests/test_layout.py`'s own stripper (the nfmodel helper `strip_comments_and_strings`)
-# is Groovy/Nextflow-shaped (`//` and `/* */`) and wrong for this file's Python `#` comments.
+# Comments are stripped before counting, or a `write_tiff(` in a comment would keep a dead
+# PIXEL_WRITERS entry alive. `ci_actions.strip_line_comment` is the shared quote-aware `#`
+# stripper (a plain `split("#")` would truncate a quoted `#`).
 ci_actions = importlib.import_module("ci_actions")
 
 
@@ -82,9 +78,8 @@ def _strip_comments(text: str) -> str:
 
 # file -> (number of pixel-writing call sites, what it writes)
 #
-# Keyed by file and COUNT rather than by line number: line numbers drift under unrelated edits
-# (see tests/test_compartment_mode_routing.py's re-pinning history), while a count still fails
-# the moment a writer is added or removed.
+# Keyed by file and count rather than line number: line numbers drift under unrelated edits,
+# while a count still fails the moment a writer is added or removed.
 PIXEL_WRITERS = {
     "bin/apply_basic_profiles.py": (
         1,
@@ -102,14 +97,9 @@ PIXEL_WRITERS = {
     ),
     # the STARE stitch stage; bin/tiled_stitch.py is a shim over it
     "stare:stare/stages/stitch.py": (1, "the STARE registered slide"),
-    # The seam itself. The regex counts BOTH a def line and a call line whenever they share
-    # a name -- `def ome_tiff_writer(` and `def write_ome_tiff(` each match their own pattern
-    # too, not just their call sites -- so this is 3 def lines (ome_tiff_writer, write_ome_tiff,
-    # write_tiff) plus the 3 real tifffile calls they wrap (TiffWriter(...), the
-    # ome_tiff_writer(...) call inside write_ome_tiff, and the tifffile.imwrite(...) call
-    # inside write_tiff): 6, measured with _writer_sites("bin/utils/ome_io.py") rather than
-    # assumed. This is the ONLY file allowed to name tifffile's writers at all; see
-    # tests/test_ome_io_is_the_only_writer.py.
+    # The seam itself. The regex also counts def lines that share a writer's name: 3 defs
+    # (ome_tiff_writer, write_ome_tiff, write_tiff) plus the 3 calls they wrap = 6. The only
+    # file allowed to name tifffile's writers (tests/test_ome_io_is_the_only_writer.py).
     "bin/utils/ome_io.py": (
         6,
         "the seam: every TIFF this pipeline writes goes through here",
@@ -134,30 +124,21 @@ MULTI_CHANNEL_WRITERS = (
     "stare:stare/stages/stitch.py",
 )
 
-# ... and the one that DELEGATES the flag. bin/convert_image.py hands its stack to
-# ome_io.write_ome_tiff, which sets photometric="minisblack" itself. Naming the delegation
-# rather than dropping the file is what keeps the property covered: without the second
-# assertion below, moving the flag into the seam would have silently removed
-# convert_image.py from this check with nothing put in its place.
+# ... and the one that delegates the flag: bin/convert_image.py hands its stack to
+# ome_io.write_ome_tiff, which sets photometric="minisblack" itself. Declared so the
+# property stays covered for convert_image.py.
 DELEGATED_MULTI_CHANNEL_WRITERS = {
     "bin/convert_image.py": "bin/utils/ome_io.py",
 }
 
-#: Every route by which a file under bin/ writes pixels. Before bin/utils/ome_io.py
-#: existed this was `tifffile.imwrite(` and `TiffWriter(` alone, because those were the
-#: only routes there were; ten scripts called them directly. They are now reachable from
-#: exactly one file, and the other twelve writers call one of ome_io's three entry
-#: points. Both halves are matched here so that the INVENTORY -- which file writes what,
-#: and how many times -- survives the seam rather than collapsing to a single row.
+#: Every route by which a file under bin/ writes pixels: tifffile's own writers (reachable
+#: only from ome_io) and ome_io's three entry points, so the inventory of which file writes
+#: what survives the seam.
 #:
-#: `TiffWriter(` and the ome_io entry points are receiver-agnostic substrings on purpose
-#: -- they never required a `tifffile.` prefix. `imwrite(` alone would be too loose (it
-#: would sweep up cv2.imwrite and any other `.imwrite` method), so the ALIAS a file's own
-#: `import tifffile [as X]` binds is resolved per file with `_tifffile_module_aliases`
-#: below and substituted in -- not a hardcoded `tifffile.` or `tf.` -- so
-#: `import tifffile as tf; tf.imwrite(...)` is counted the same as
-#: `tifffile.imwrite(...)`. Missed until a reviewer's probe file proved the untampered
-#: `tifffile\.imwrite\(` alternative let an aliased call through uncounted.
+#: `TiffWriter(` and the ome_io entry points are receiver-agnostic substrings. `imwrite(`
+#: alone would also match cv2.imwrite, so each file's own `import tifffile [as X]` alias is
+#: resolved by `_tifffile_module_aliases` and substituted in, counting
+#: `import tifffile as tf; tf.imwrite(...)` the same as `tifffile.imwrite(...)`.
 _WRITE_CALL_STATIC = r"TiffWriter\(|write_tiff\(|write_ome_tiff\(|ome_tiff_writer\("
 
 
@@ -239,7 +220,7 @@ def test_the_number_of_writers_per_file_is_unchanged(rel):
 
 @pytest.mark.parametrize("rel", MULTI_CHANNEL_WRITERS)
 def test_every_multi_channel_writer_sets_photometric_minisblack(rel):
-    """PERF-PLAN.md Wave 0.3: the precondition the whole per-page read strategy rests on.
+    """The precondition the per-page read strategy rests on.
 
     Without `photometric="minisblack"`, tifffile stores a (C, H, W) array as ONE page with C
     samples, and both `key=` and `pages[i]` then raise IndexError. Every "read the page, not the
@@ -258,13 +239,9 @@ def test_a_delegating_multi_channel_writer_has_an_owner_that_sets_the_flag(rel, 
     """The delegation must be real in both directions: the caller must not set the flag
     (or it is not delegating), and the owner must.
 
-    The owner-side check matches the KWARG shape (a trailing comma; both real call sites
-    in ome_io.py have another keyword after ``photometric=`` so this is structural, not a
-    style guess) rather than the bare ``photometric="minisblack"`` substring. ome_io.py's
-    own module docstring names that bare string in prose while explaining the rule, and a
-    text-matching guard checked against the bare substring is satisfied by that prose even
-    when the real kwarg is changed to something else -- watched failing this way before
-    being narrowed.
+    The owner-side check matches the kwarg shape (with a trailing comma; both call sites in
+    ome_io.py have another keyword after it) rather than the bare substring, which ome_io.py's
+    module docstring also contains in prose.
     """
     assert 'photometric="minisblack"' not in _resolve(rel).read_text(), (
         f"{rel} sets photometric itself, so it is not delegating -- move it back into "
@@ -279,8 +256,7 @@ def test_a_delegating_multi_channel_writer_has_an_owner_that_sets_the_flag(rel, 
 def test_minisblack_really_is_what_makes_pages_addressable(tmp_path):
     """Pin the REASON for the rule, so it cannot decay into a style preference.
 
-    This is PERF-PLAN's blocker #2, reproduced: the rule is not cosmetic, and a reader that
-    assumes one page per channel is broken by its absence.
+    A reader that assumes one page per channel is broken by its absence.
     """
     np = pytest.importorskip("numpy")
     tifffile = pytest.importorskip("tifffile")
@@ -309,7 +285,7 @@ def test_minisblack_really_is_what_makes_pages_addressable(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The inconsistency the inventory exposed
+# Label-mask writers
 # ---------------------------------------------------------------------------
 
 MASK_WRITERS = (
@@ -323,8 +299,7 @@ MASK_WRITERS = (
 def test_every_mask_writer_compresses(rel):
     """Label masks are long runs of identical integers; compression is close to free.
 
-    PERF-PLAN measures an uncompressed uint32 label mask against zstd-3 at 6.7x the write time,
-    8.4x the read time, and vastly larger. There is no trade-off to weigh.
+    An uncompressed uint32 mask is slower to write and read and far larger.
     """
     assert 'compression="zlib"' in _resolve(rel).read_text(), (
         f"{rel} writes a label mask without compression"
@@ -335,10 +310,9 @@ def test_every_mask_writer_compresses(rel):
 def test_every_mask_writer_sets_bigtiff(rel):
     """The same masks, written by three files, must not disagree about the 4 GB ceiling.
 
-    A 40000x40000 uint32 mask is 6.4 GB before compression. `tiled_stitch.py:118` states the
-    rule: classic TIFF's 32-bit offsets overflow past 4 GB. Compression usually keeps a label
-    mask under it -- usually is not a contract, and a mask with many labels and little run
-    structure is exactly the case that compresses worst AND is largest.
+    A 40000x40000 uint32 mask is 6.4 GB before compression, and classic TIFF's 32-bit offsets
+    overflow past 4 GB. Compression usually keeps a mask under it, but not for a mask with many
+    labels and little run structure.
     """
     assert "bigtiff=True" in _resolve(rel).read_text(), (
         f"{rel} writes a full-resolution label mask without bigtiff, while its siblings set it"
@@ -346,7 +320,7 @@ def test_every_mask_writer_sets_bigtiff(rel):
 
 
 # ---------------------------------------------------------------------------
-# The tile/iterator contract — the one this seam did not know about
+# The tile/iterator contract
 # ---------------------------------------------------------------------------
 #
 # tifffile's iterator mode is TILE-wise, not plane-wise, whenever `tile=` is set: it
@@ -354,15 +328,9 @@ def test_every_mask_writer_sets_bigtiff(rel):
 # one exceeds a single tile. So a writer that passes BOTH `tile=` AND a generator must
 # feed that generator TILES.
 #
-# convert_image.py fed it whole planes. Nothing caught it, in three separate places:
-# this seam checks photometric/compression/bigtiff but not the data argument;
-# test_convert_streaming_write.py's fixtures are 24x20, smaller than one 2048 tile, so
-# tifffile PADDED them and the tiled-write test passed; and `-stub` never runs the
-# script at all. It failed on the first real slide (30552 x 32072), at CONVERT_IMAGE,
-# after the scheduler had granted the task its memory.
-#
-# Every generator fed to a tiled write is declared here with what it yields. A new one
-# has to be added deliberately, which is the moment to ask whether it yields tiles.
+# A plane generator passes on fixtures smaller than one tile (tifffile pads them) and
+# fails only on a real slide. Every generator fed to a tiled write is declared here with
+# what it yields, so a new one prompts the question of whether it yields tiles.
 TILE_FED_GENERATORS = {
     "_iter_tiles": "bin/utils/ome_io.py -- wraps _iter_planes and re-slices each plane",
     "_tiles": "bin/apply_basic_profiles.py -- channel-major, tile-major",

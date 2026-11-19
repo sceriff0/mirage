@@ -1,33 +1,16 @@
 """containers/README.md's image table must agree with the Dockerfiles it describes.
 
-Three of its eleven base-image cells were wrong at once on 2026-09-02, and each was wrong
-in a way a reader would act on:
+Base images are what this file checks: the one column that can be verified mechanically
+(a wrong one can, e.g., document a torch version without a CVE fix). Process lists are not
+checked here; docs/resources.md carries the per-image process table.
 
-  * `cellsam` was documented as pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime. The real
-    base is 2.6.0-cuda12.4-cudnn9-runtime, and the Dockerfile's own header explains why --
-    torch 2.6.0 is the first release carrying the CVE-2025-32434 fix, which matters because
-    cellSAM downloads model weights and torch.load is on that path. The README documented
-    the vulnerable version.
-  * `instanseg` was documented as 2.5.1-cuda11.8, and its own Dockerfile LABEL said
-    "PyTorch 2.5.1 + CUDA 12.4". Three numbers, two of them wrong, in two places.
-  * `merge` was documented with a PyTorch base. It is FROM cdgatenbee/valis-wsi:1.0.0 --
-    the same upstream VALIS image REGISTER runs in, which is the whole reason it can share
-    that image's libvips build.
+The comparison is tag and name, digest stripped: every FROM carries an @sha256: digest
+(tests/test_base_images_are_digest_pinned.py), and the README keeps digests in its own
+column.
 
-BASE IMAGES ARE WHAT THIS FILE CHECKS. They are the one column that can be verified
-mechanically, and the one that misled three ways at once. Process lists are corrected by
-hand in the same commit and are not machine-checked here: docs/resources.md already carries
-a per-image process table, and duplicating that comparison would put two guards on one fact.
-
-THE COMPARISON IS TAG-AND-NAME, DIGEST STRIPPED. Every FROM carries an @sha256: digest
-(ruling R6, tests/test_base_images_are_digest_pinned.py). Requiring the README to repeat a
-64-character digest in a table cell would make it unreadable AND put the digest in two
-places; the published-digest column at the bottom of the README is where digests live.
-
-COMMENT-STRIPPED ON PURPOSE (Verification reality item 7). _from_ref strips full-line `#`
-comments before matching FROM, and _mapping_rows only reads lines that actually start with
-`|` inside the "## Image mapping" section -- a comment mentioning a stale base image cannot
-satisfy either check the way a trailing-comment loophole satisfied other guards in this repo.
+_from_ref strips full-line `#` comments before matching FROM, and _mapping_rows reads only
+lines starting with `|` inside the "## Image mapping" section, so a comment naming a stale
+base image cannot satisfy either check.
 """
 
 import re
@@ -119,13 +102,8 @@ def test_the_documented_base_image_matches_the_dockerfile(container):
 
 
 def test_the_readme_does_not_claim_the_retired_descriptive_tag_scheme():
-    """Two blockquotes made OPPOSITE claims about what the tag means.
-
-    One said "a content-descriptive tag (e.g. preprocess, convert_bioformats_2, tiled) --
-    not a release version"; the next said "The tag is the pipeline version from
-    manifest.version". The second is true. The first describes the retired
-    one-repository-many-tags layout, and leaving it made the directory's own documentation
-    the reason someone might publish a mutable name again.
+    """The README must say the tag is the pipeline version (manifest.version), not a
+    content-descriptive tag, which describes the retired single-repository layout.
     """
     text = README.read_text()
     assert "convert_bioformats_2`) — not a release version" not in text, (
@@ -136,8 +114,7 @@ def test_the_readme_does_not_claim_the_retired_descriptive_tag_scheme():
 
 
 def test_the_readme_says_every_image_installs_procps():
-    """It used to name three. After 2026-09-02 every image does (eleven then; seventeen since
-    2026-11-05: containers/valis in, valis100 out), and every smoke.sh asserts it."""
+    """The README says every image installs procps, which every smoke.sh asserts."""
     text = README.read_text()
     assert "all seventeen install it explicitly" in text, (
         "containers/README.md's procps section still names a subset of images. Every image "

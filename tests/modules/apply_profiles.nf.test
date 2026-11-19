@@ -37,9 +37,7 @@ nextflow_process {
                 { assert process.out.preprocessed },
                 { assert process.out.versions },
                 { assert process.out.size_log },
-                // The same artifact the removed in-process PREPROCESS published, so the `preprocessed`
-                // checkpoint row and every downstream consumer are unchanged by the
-                // backend swap.
+                // The artifact the `preprocessed` checkpoint row and downstream consumers read.
                 { assert process.out.preprocessed.get(0).get(1).endsWith('_corrected.ome.tif') },
                 { assert process.out.preprocessed.get(0).get(0).patient_id == 'P001' },
                 { assert process.out.preprocessed.get(0).get(0).channels == ['DAPI', 'PANCK', 'SMA'] }
@@ -49,12 +47,9 @@ nextflow_process {
 
     test("Should pass the sidecar and both profiles to the script - rendered command") {
 
-        // Tagged `stub` for CI's gate but NOT run with `options "-stub"` -- `-stub` never
-        // evaluates a `script:` block, and what is under assertion here is the rendered
-        // invocation. In particular the DARKFIELD must still be handed over even though
-        // the shipped BASICPY configuration estimates none: the module writes an all-zero
-        // *-dfp.ome.tif and bin/apply_basic_profiles.py reports the correction as
-        // flatfield-only on that basis. Dropping the flag would lose that distinction.
+        // `stub` tag but no `options "-stub"`: the rendered invocation is the subject. The
+        // darkfield is passed even though the shipped BASICPY estimates none: the all-zero
+        // *-dfp.ome.tif is how bin/apply_basic_profiles.py reports flatfield-only correction.
         tag "stub"
 
         when {
@@ -91,18 +86,11 @@ nextflow_process {
                     "no rendered APPLY_PROFILES .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--sidecar model_config_min.json') },
                     "rendered command does not bind --sidecar to the sidecar: " + rendered.join(' --- ') },
-                // BOUND TO, not merely PRESENT. Asserting only that `--flatfield` and
-                // `--darkfield` appear leaves the two paths free to swap -- in this
-                // module's script: block or in the .map that feeds it -- with the whole
-                // suite still green, because every Python-level test passes the profiles
-                // by keyword and never sees the CLI binding. That is exactly the error
-                // tests/modules/basicpy.nf.test warns about: divide by the darkfield and
-                // subtract the flatfield, silently, on every pixel.
-                //
+                // Bound to, not merely present: the two paths could swap in script: or in the feeding
+                // .map with every Python test still green (they pass profiles by keyword).
                 // The input tuple is (meta, ome_tiff, sidecar, darkfield, flatfield), so
-                // sample_DAPI.tif is the DARKfield here and sample_DAPI_intensity.csv the
-                // FLATfield. The fixtures are deliberately two DIFFERENT files: with one
-                // file passed twice, a swap is unobservable.
+                // sample_DAPI.tif is the darkfield and sample_DAPI_intensity.csv the flatfield. They
+                // are two different files so a swap is observable.
                 { assert rendered.every { it.contains('--flatfield sample_DAPI_intensity.csv') },
                     "--flatfield is not bound to the flatfield input: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--darkfield sample_DAPI.tif') },

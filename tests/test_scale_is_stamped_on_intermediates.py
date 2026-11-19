@@ -1,10 +1,7 @@
 """The pipeline's intermediates must carry a scale.
 
-`SPLIT_CHANNELS` and `TILED_STITCH` both used to write their outputs with no scale of
-any kind — no OME header, no resolution tags — so every file between registration and
-the published pyramid claimed 1 px = 1 unit. That is why `MERGE_AND_PYRAMID` and
-`EXPORT_GEOJSON` have nothing to read and must take `params.pixel_size` on faith: the
-information was not withheld from them, it was destroyed upstream.
+`SPLIT_CHANNELS` and `TILED_STITCH` write an OME header and resolution tags, so files
+between registration and the published pyramid do not claim 1 px = 1 unit.
 
 These tests pin the stamp. They are about the *tags*, not about any µm value changing:
 `params.pixel_size` remains the one owner of every measurement conversion.
@@ -84,7 +81,7 @@ def test_split_channels_warns_when_the_input_disagrees(tmp_path, caplog):
 
 
 def test_tiled_stitch_stamps_the_configured_scale(tmp_path):
-    """The STARE path's own writer, which dropped the scale on the whole slide."""
+    """The STARE path's own writer stamps the scale on the whole slide."""
     pytest.importorskip("scipy")
     pytest.importorskip("zarr")
     import tiled_stitch

@@ -1,11 +1,8 @@
 """A string-aware character walk over Nextflow/Groovy source.
 
-Moved here verbatim from tests/test_layout.py's private `_skip_non_code`,
-`_strip_comments_and_strings` and `_block_extent` (dropping the leading
-underscore -- they are now public). See tests/test_nfmodel.py for the
-specific constructs -- a `stageAs: 'ref/*'` glob that a naive `/\\*.*?\\*/`
-regex reads as an open block comment, a `{` inside a comment mis-balancing a
-naive brace count -- that defeated the private regex parses this replaces.
+tests/test_nfmodel.py covers the constructs a naive regex gets wrong, such as
+a `stageAs: 'ref/*'` glob read as an open block comment, or a `{` inside a
+comment mis-balancing a brace count.
 """
 
 import re
@@ -53,12 +50,8 @@ def block_extent(text: str, start: int) -> int:
     and string literals, so a stray `{`/`}` inside either cannot mis-balance
     the walk.
 
-    A naive character-by-character brace count treats a `{` inside an
-    ordinary line comment (e.g. "note the closure syntax is { x -> ...") as
-    real nesting, which makes the walk run past the block's own closing brace
-    and silently borrow the NEXT block's publishDir. conf/modules.config has
-    three places that mention publishDir in prose; this is why the walk must
-    be comment-aware rather than merely finding *some* balanced brace span.
+    A naive brace count treats a `{` inside a comment as real nesting, runs
+    past the block's own closing brace and borrows the next block's publishDir.
     """
     n = len(text)
     depth, i = 1, start
@@ -76,15 +69,11 @@ def block_extent(text: str, start: int) -> int:
 
 
 def _strip(text: str, *, blank_strings: bool) -> str:
-    """The one walk both stripping views project from. Both need the exact
-    same answer to "where does a comment start" and "where does a string
-    start" -- that shared answer is `skip_non_code`. The only thing that
-    differs between the two public views is what happens to a string
-    literal's span once `skip_non_code` has located it: view A
+    """The one walk both stripping views share, via `skip_non_code`.
+
+    The views differ only in what they do with a string literal's span: view A
     (`strip_comments_and_strings`) blanks it like a comment; view B
-    (`strip_comments`) keeps it verbatim. Neither view re-derives the
-    comment/string boundary logic -- that would be exactly the private,
-    forkable Nextflow-source parse this module exists to replace.
+    (`strip_comments`) keeps it verbatim.
     """
     out = []
     i, n = 0, len(text)
@@ -109,11 +98,8 @@ def strip_comments_and_strings(text: str) -> str:
     (preserving newlines), so a `re.M`-anchored search over the result cannot
     match text that only appears in a comment or inside a string literal.
 
-    Comments are the concrete failure this exists to prevent: a block that
-    merely *mentions* `publishDir` in a `// TODO: decide a publishDir for
-    this one later` comment previously satisfied `"publishDir" in block` -- a
-    substring check with no idea what a comment is -- and was silently
-    counted as routed.
+    So a block that only mentions `publishDir` in a comment does not satisfy
+    `"publishDir" in block`.
     """
     return _strip(text, blank_strings=True)
 
@@ -122,16 +108,9 @@ def strip_comments(text: str) -> str:
     """Blank `//`/`/* */` comments only, keeping every string literal's
     contents -- quotes included -- verbatim.
 
-    A guard that needs to see what is *inside* a string literal (a quoted
-    filename or a quoted argument, e.g. `collectFile(name:
-    'collated_versions.yml', sort: true)`) cannot use
-    `strip_comments_and_strings`: that view blanks string contents on
-    purpose, so the guard's own target text would vanish along with any
-    comment mention of it, and the check would either match nothing forever
-    (a permanent false failure) or, if it captures a group from inside the
-    quotes, match nothing and go silently blind. This view still needs to be
-    string-*aware* -- a `stageAs: 'ref/*'` glob's `/*` must not be misread as
-    an opening block comment -- it just does not blank what it finds inside
-    the quotes.
+    For guards that read text inside a string literal (e.g. `collectFile(name:
+    'collated_versions.yml', sort: true)`), which `strip_comments_and_strings`
+    would blank. Still string-aware, so a `stageAs: 'ref/*'` glob's `/*` is not
+    read as an opening block comment.
     """
     return _strip(text, blank_strings=False)

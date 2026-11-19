@@ -55,10 +55,9 @@ def test_a_misaligned_pair_scores_a_large_residual():
 def test_benchmark_shows_registration_reduced_the_residual():
     """The end-to-end accuracy claim, on synthetic ground truth: STARE lowers the TRE.
 
-    The only case in this file that runs a REGISTRATION rather than just scoring one. It
-    needed torch/kornia while COARSE was DISK + LightGlue; the NCC anchor needs neither
-    (2026-09-27). The ORB oracle this module measures with is deliberately classical and
-    independent of the registration -- see the note in reg_benchmark.py.
+    The only case in this file that runs a registration rather than just scoring one. The
+    ORB oracle it measures with is classical and independent of the registration (see the
+    note in reg_benchmark.py).
     """
     from tiled_pipeline import register_slide
 

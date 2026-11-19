@@ -8,9 +8,7 @@ test_container_harmonisation.PINNED_EXCEPTIONS). The next best property is
 checkable and checked here: every package named in BOTH files is pinned to the
 SAME version, and the packages that make the suite meaningful are present.
 
-The Dockerfile is parsed with test_container_harmonisation's own parser, never
-a private regex -- seven guards in this repo once carried seven private parses
-of these files and each had a different blind spot.
+The Dockerfile is parsed with test_container_harmonisation's own parser.
 """
 
 from __future__ import annotations
@@ -25,14 +23,9 @@ ROOT = Path(__file__).resolve().parent.parent
 FORMAT_REQS = ROOT / "requirements" / "format-tests.txt"
 DOCKERFILE = ROOT / "containers" / "convert" / "Dockerfile"
 
-# h5py is pinned in THREE requirements/ files, not just format-tests.txt above:
-# requirements/ci.txt and requirements/testdata.txt both gained an h5py==3.11.0 pin
-# in the same phase (the fixture generator writes an HDF5 slide -- see each file's
-# own comment). Neither could go through requirements/constraints.txt --
-# containers/convert is the ONLY image that installs h5py since plan 06's regqc
-# cleanup, and constraints.txt only constrains packages more than one image
-# installs -- so each is a second HAND-WRITTEN copy of the same version, exactly
-# what a drift guard exists to catch. Only format-tests.txt had one.
+# h5py is also pinned by hand in requirements/ci.txt and requirements/testdata.txt (the
+# fixture generator writes an HDF5 slide). It cannot go through constraints.txt, which
+# only holds packages more than one image installs, so each copy is checked here.
 OTHER_H5PY_PINS = {
     "requirements/ci.txt": ROOT / "requirements" / "ci.txt",
     "requirements/testdata.txt": ROOT / "requirements" / "testdata.txt",
@@ -99,9 +92,8 @@ def test_every_shared_package_is_pinned_to_the_same_version():
 
 @pytest.mark.parametrize("label", sorted(OTHER_H5PY_PINS), ids=sorted(OTHER_H5PY_PINS))
 def test_h5py_stays_in_step_everywhere_else_it_is_pinned_by_hand(label):
-    """format-tests.txt is not the only file that copied containers/convert's h5py
-    pin by hand -- requirements/ci.txt and requirements/testdata.txt did too, and
-    neither drift was guarded until now."""
+    """requirements/ci.txt and requirements/testdata.txt pin containers/convert's
+    h5py by hand too."""
     reqs_path = OTHER_H5PY_PINS[label]
     assert reqs_path.is_file(), f"{reqs_path} is missing"
     mine = _pins(reqs_path.read_text())
@@ -115,8 +107,7 @@ def test_h5py_stays_in_step_everywhere_else_it_is_pinned_by_hand(label):
 
 
 def test_the_overlap_is_not_empty():
-    """A negative rule over an empty intersection passes over nothing -- and this
-    one would, silently, the day the Dockerfile stops pinning inline."""
+    """A negative rule over an empty intersection would pass over nothing."""
     shared = set(format_test_pins()) & set(convert_image_pins())
     assert len(shared) >= 6, (
         f"only {sorted(shared)} appear in both files. Either the Dockerfile moved its "

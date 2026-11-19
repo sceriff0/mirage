@@ -7,10 +7,8 @@ nextflow_process {
     tag "modules"
     tag "modules_local"
     tag "segment"
-    // Deliberately NOT tagged "stub": this test needs `-profile test,singularity`
-    // (Nextflow rejects a duplicate `-profile` flag), so it cannot run under
-    // CI's `nf-test test --tag stub --profile test` sweep (that always passes
-    // a bare "test" profile, container-free -- see .github/workflows/ci.yml).
+    // Not tagged "stub": it needs `-profile test,singularity`, and Nextflow rejects a
+    // duplicate `-profile`, so CI's `--tag stub --profile test` sweep cannot run it.
     // Run explicitly:
     //   DEEPCELL_ACCESS_TOKEN=dummy-token-value nf-test test \
     //     tests/modules/segment_deepcell_token.nf.test --profile test,singularity
@@ -18,21 +16,11 @@ nextflow_process {
 
     test("Should forward DEEPCELL_ACCESS_TOKEN by name only under Singularity - stub") {
 
-        // Regression guard for the Singularity containerOptions branch in
-        // conf/modules.config's `withName: 'SEGMENT'` block, which used to
-        // interpolate the secret's VALUE into containerOptions
-        // (`--env DEEPCELL_ACCESS_TOKEN=${System.getenv(...)}`), writing it in
-        // clear text into the work dir's `.command.run` -- group-readable on a
-        // typical shared HPC filesystem and retained across `-resume`. The fix
-        // forwards by name only (singularity.envWhitelist in nextflow.config's
-        // `singularity` profile), matching the Docker branch one line above,
-        // which already forwarded by name (`-e VAR`).
-        //
-        // Requires DEEPCELL_ACCESS_TOKEN set in the environment invoking
-        // `nf-test` (not settable from within this DSL -- Nextflow's child
-        // process inherits it from whatever shell launched nf-test) and
-        // seg_method='cellsam', or the branch that leaked the value is never
-        // reached and this test would assert nothing.
+        // The Singularity containerOptions branch of `withName: 'SEGMENT'` must forward the
+        // secret by name (singularity.envWhitelist), never interpolate its value into
+        // .command.run, which is group-readable on a shared filesystem and kept across -resume.
+        // Needs DEEPCELL_ACCESS_TOKEN in the environment launching nf-test and
+        // seg_method='cellsam', or the branch is never reached and this asserts nothing.
 
         options "-stub -c ${projectDir}/tests/modules/segment_deepcell_token_singularity.config"
 
@@ -62,9 +50,8 @@ nextflow_process {
                 "DEEPCELL_ACCESS_TOKEN=dummy-token-value nf-test test " +
                 "tests/modules/segment_deepcell_token.nf.test --profile test,singularity"
 
-            // The task fails afterwards (no real singularity binary here / in
-            // CI to actually exec), but .command.run is written to the work
-            // dir before that -- which is all this test needs.
+            // The task fails afterwards (no singularity binary to exec), but .command.run is
+            // written before that, which is all this test needs.
             def commandRunFiles = new File(new File(outputDir).parentFile, 'work')
                 .listFiles()
                 .collectMany { shard -> shard.listFiles()?.toList() ?: [] }
@@ -77,21 +64,15 @@ nextflow_process {
 
             assertAll(
                 { assert commandRunText.contains('singularity exec') },
-                // The actual property under test: the secret's VALUE must never
-                // be serialised to disk. NOT `!commandRunText.contains('DEEPCELL_ACCESS_TOKEN=')`
-                // -- Nextflow's own envWhitelist plumbing legitimately renders
-                // `SINGULARITYENV_DEEPCELL_ACCESS_TOKEN="$DEEPCELL_ACCESS_TOKEN"`
-                // (a shell variable *reference*, resolved from the environment
-                // at run time), which contains that substring even when safe.
+                // The secret's value must never be written to disk. Not a check for
+                // 'DEEPCELL_ACCESS_TOKEN=': envWhitelist legitimately renders
+                // `SINGULARITYENV_DEEPCELL_ACCESS_TOKEN="$DEEPCELL_ACCESS_TOKEN"`, a shell reference.
                 { assert !commandRunText.contains(tokenValue) },
-                // Forwarded by name (like Docker's `-e VAR`): Nextflow's
-                // singularity.envWhitelist plumbing is present and reads the
-                // value from the shell environment at run time, never from a
-                // baked-in literal.
+                // Forwarded by name, like Docker's `-e VAR`: the value is read from the shell
+                // environment at run time.
                 { assert commandRunText.contains('SINGULARITYENV_DEEPCELL_ACCESS_TOKEN="$DEEPCELL_ACCESS_TOKEN"') },
-                // No leftover value-interpolation from containerOptions itself
-                // (the old vulnerable pattern: `--env DEEPCELL_ACCESS_TOKEN=<value>`
-                // immediately after the flag, no SINGULARITYENV_ prefix).
+                // No value interpolation from containerOptions (`--env DEEPCELL_ACCESS_TOKEN=<value>`
+                // without the SINGULARITYENV_ prefix).
                 { assert !commandRunText.contains("--env DEEPCELL_ACCESS_TOKEN=") }
             )
         }

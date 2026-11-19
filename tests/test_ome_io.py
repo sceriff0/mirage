@@ -1,17 +1,10 @@
 """Unit tests for bin/utils/ome_io.py -- the pipeline's one image I/O module.
 
-WHY THE IMPORTS BELOW LOOK LIKE THIS. `ome_io` is a bin/utils module, and the
-convention every bin/ script follows is `sys.path.insert(0, .../bin/utils)`
-followed by a flat `from ome_io import ...`. Both inserts are needed here (bin
-for `from bin import ...` style helpers elsewhere, bin/utils for the flat
-sibling imports ome_io itself performs), matching tests/test_tiled_io.py.
+Both bin and bin/utils go on sys.path: bin/utils for the flat sibling imports
+ome_io itself performs, matching tests/test_tiled_io.py.
 
-WHAT IS DELIBERATELY NOT TESTED HERE. `bioio`, `bioio-bioformats` and `h5py`
-are installed in NO CI environment (requirements/ci.txt installs none of the
-three), so every test in this file must run without them. That is exactly why
-ome_io imports all three lazily, inside functions: importing this module must
-never require them. Plan 07 writes the format-specific tests on synthesised
-fixtures; this file tests ome_io itself.
+`bioio`, `bioio-bioformats` and `h5py` are not installed in CI, so every test
+here runs without them; ome_io imports all three lazily, inside functions.
 """
 
 from __future__ import annotations
@@ -77,9 +70,8 @@ def test_the_dispatch_is_case_insensitive():
 
 
 def test_an_unclaimed_suffix_raises_and_names_it():
-    """The whole point of replacing convert_image.get_file_format's silent
-    `return "bioio"` fall-through: a .png used to be handed to BioImage and
-    failed several frames deep, naming the wrong problem."""
+    """An unknown suffix fails here, naming it, rather than being handed to
+    BioImage and failing several frames deep."""
     with pytest.raises(ome_io.UnsupportedFormatError) as exc:
         ome_io.detect_reader("/x/thumbnail.png")
     message = str(exc.value)
@@ -107,9 +99,9 @@ def test_require_reader_accepts_a_reader_whose_modules_are_installed():
 
 
 def test_require_reader_names_the_missing_plugin():
-    """`.svs` routes to bioio-bioformats, which containers/convert installs in
-    phase 06 and nothing installs before it. The failure has to say the plugin's
-    name, not `ModuleNotFoundError: bioio_bioformats` several frames deep."""
+    """`.svs` routes to bioio-bioformats, which only containers/convert installs.
+    The failure has to say the plugin's name, not
+    `ModuleNotFoundError: bioio_bioformats` several frames deep."""
     if ome_io._module_is_importable("bioio_bioformats"):
         pytest.skip("bioio-bioformats is installed here; nothing to assert")
     with pytest.raises(ImportError) as exc:
@@ -123,15 +115,15 @@ def test_require_reader_rejects_an_unknown_reader_name():
 
 
 # ---------------------------------------------------------------------------
-# ome_metadata -- the dict four scripts used to rebuild independently
+# ome_metadata -- the shared OME metadata dict
 # ---------------------------------------------------------------------------
 
 
 def test_ome_metadata_key_order_is_the_shape_tifffile_serialises():
     """Key ORDER is asserted, not just contents. tifffile builds the OME-XML by
     walking this dict, so a reordering changes the attribute order in the header
-    of every file this pipeline writes -- which is a diff in a published artifact
-    for no behavioural reason. Pinned to the order convert_image.py used."""
+    of every file this pipeline writes, a diff in a published artifact for no
+    behavioural reason."""
     md = ome_io.ome_metadata(["DAPI", "CD3"], 0.325)
     assert list(md) == [
         "axes",
@@ -212,11 +204,9 @@ def test_write_ome_tiff_round_trips_pixels_channels_scale_and_dtype(tmp_path):
 
 
 def test_write_ome_tiff_writes_tiled_at_the_requested_tile(tmp_path):
-    """A striped write makes every downstream region read decode a whole plane --
-    the measurement in CONVERT_TIFF_TILE's comment. Checked on the TIFF tags AND
-    on the zarr chunk shape the pipeline's own reader (tiled_io.open_lazy) sees,
-    because the tags could in principle be present without the zarr view
-    honouring them."""
+    """A striped write makes every downstream region read decode a whole plane.
+    Checked on the TIFF tags and on the zarr chunk shape tiled_io.open_lazy sees,
+    since the tags could be present without the zarr view honouring them."""
     zarr = pytest.importorskip("zarr")
     data = _stack(c=2, h=40, w=40)
     out = tmp_path / "tiled.ome.tif"
@@ -365,9 +355,8 @@ def test_write_ome_tiff_never_materialises_a_lazy_stack(tmp_path):
 
 
 def test_write_tiff_forwards_its_kwargs_verbatim(tmp_path):
-    """write_tiff sets NO defaults of its own. Every migrated call site keeps the
-    exact keyword arguments it used to pass tifffile.imwrite, so the migration is
-    behaviour-preserving by construction."""
+    """write_tiff sets no defaults of its own: call sites pass tifffile.imwrite's
+    keyword arguments through unchanged."""
     mask = np.arange(256, dtype=np.uint32).reshape(16, 16)
     out = tmp_path / "mask.tif"
 
@@ -384,8 +373,8 @@ def test_write_tiff_forwards_its_kwargs_verbatim(tmp_path):
 
 def test_write_tiff_does_not_force_bigtiff(tmp_path):
     """An imagej=True write (bin/utils/qc.py's composite) is INCOMPATIBLE with
-    BigTIFF -- tifffile refuses the combination. A default of bigtiff=True here
-    would have broken that call site the day it was migrated."""
+    BigTIFF (tifffile refuses the combination), so bigtiff=True must not be a
+    default."""
     rgb = np.zeros((3, 8, 8), dtype=np.uint8)
     out = tmp_path / "composite.tif"
     ome_io.write_tiff(
@@ -429,7 +418,7 @@ def test_read_info_reports_shape_dtype_channels_scale_and_reader(tmp_path):
 def test_read_info_delegates_the_scale_to_pixel_size_py(tmp_path, monkeypatch):
     """bin/utils/pixel_size.py is the read-side owner of the OME PhysicalSize rule
     -- units, the absent-attribute default, the non-positive rejection. read_info
-    must ASK it, not re-derive it, or there are two rules again."""
+    must call it, not re-derive it."""
     import pixel_size
 
     path, _ = _written(tmp_path)
@@ -550,7 +539,7 @@ def test_parse_ndpis_resolves_entries_against_the_real_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Fix round 1, item 1 -- the S->C (samples->channels) remap for interleaved RGB
+# The S->C (samples->channels) remap for interleaved RGB
 # ---------------------------------------------------------------------------
 
 
@@ -584,8 +573,8 @@ class _FakeBioImage:
 
 def test_read_info_remaps_interleaved_rgb_samples_to_channels(tmp_path, monkeypatch):
     """bioio reports an interleaved RGB TIFF as TCZYXS with C=1, S=3 -- three SAMPLES of
-    one channel, not three channels. Per the master contract, read_info must remap S
-    onto shape_cyx's C axis (shape_cyx=(3, Y, X)), not report (1, X, 3) nonsense, and
+    one channel, not three channels. read_info must remap S onto shape_cyx's C axis
+    (shape_cyx=(3, Y, X)), not report (1, X, 3), and
     default channel names to R/G/B (S==3) when the file names none."""
     rng = np.random.default_rng(3)
     array = rng.integers(0, 255, size=(1, 1, 1, 5, 7, 3)).astype(np.uint8)
@@ -633,8 +622,7 @@ def test_read_info_leaves_an_ordinary_multichannel_file_unremapped(
     tmp_path, monkeypatch
 ):
     """C=4, S=1 (S absent from the axis order) is an ordinary multichannel file -- no
-    samples axis to remap, so shape_cyx/channels/channels_are_samples must be exactly
-    what they were before this fix existed."""
+    samples axis to remap, so shape_cyx/channels/channels_are_samples are unchanged."""
     rng = np.random.default_rng(5)
     array = rng.integers(0, 4000, size=(4, 1, 1, 6, 9)).astype(np.uint16)
     fake = _FakeBioImage(
@@ -664,7 +652,7 @@ def test_read_plane_still_selects_by_channel_when_there_is_no_samples_axis(
 
 
 # ---------------------------------------------------------------------------
-# Fix round 1, item 2 -- the pyramid chain, exercised three levels deep
+# The pyramid chain, exercised three levels deep
 # ---------------------------------------------------------------------------
 
 

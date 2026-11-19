@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """Static guards for the segmentation backend seam.
 
-`SEGMENT` dispatches three genuinely different segmenters. That choice used to be
-re-decided in four places -- a nested `container` ternary, an `if/else if/else` over
-three near-duplicate script blocks, a per-backend block of flag construction, and
-`conf/modules.config` -- so a fourth backend, or a retired one, had to be tracked down
-in all four. `lib/SegBackends.groovy` is now the single table, and this test pins the
-properties that make it safe to be single:
+`SEGMENT` dispatches three different segmenters through one table,
+`lib/SegBackends.groovy`. This test pins the properties that make one table safe:
 
   * every backend names a container, an entry point and its own tool list for
-    versions.yml -- as BARE MODULE NAMES, not rendered YAML, so segment.nf's script:
+    versions.yml -- as bare module names, not rendered YAML, so segment.nf's script:
     and stub: blocks can both render it through lib/ProcessEnvelope.groovy;
   * the entry points exist and are tracked EXECUTABLE (Nextflow stages `bin/` onto
     $PATH and execs them by name -- a 100644 script fails at runtime with exit 126,
@@ -34,11 +30,8 @@ SEGMENT_NF = ROOT / "modules" / "local" / "segment.nf"
 
 # The backends the pipeline ships, and the image each MUST use. Written out rather
 # than parsed so a silent retag (the class of change that turns a reproducible run
-# into an unreproducible one) shows up as a test diff.
-# stardist's tools were ("deepcell", "tensorflow") until 2026-09-02. deepcell was a
-# phantom -- no image installs it -- and this very assertion is what kept it in place, so
-# the fix had to move both. See
-# tests/test_version_tools_are_importable_in_their_image.py.
+# into an unreproducible one) shows up as a test diff. Tool names must be importable
+# in their image (tests/test_version_tools_are_importable_in_their_image.py).
 EXPECTED = {
     "stardist": (
         "bolt3x/mirage-stardist:1.0.0",
@@ -101,10 +94,9 @@ def test_versions_rows_stay_backend_specific():
 
     Exact ORDERED equality, not containment: `torch` is named by both instantseg and
     cellsam, so a containment check would still pass if the two lists were merged into
-    one shared list and handed to all three backends -- which is precisely the mistake
-    this test exists to refuse, since stardist loads no torch at all and reporting a
-    torch version for a StarDist run is a fabricated provenance record. Exactly one
-    backend runs per task, so the repeated `torch` entry is not a duplicate to dedupe.
+    one shared list and handed to all three backends; stardist loads no torch, so that
+    would fabricate provenance. Exactly one backend runs per task, so the repeated
+    `torch` entry is not a duplicate to dedupe.
     """
     blocks = _backend_blocks()
     for method, (_container, _entrypoint, versions) in EXPECTED.items():
@@ -116,12 +108,8 @@ def test_versions_rows_stay_backend_specific():
 def test_backends_declare_tool_names_not_rendered_yaml():
     """The rendering belongs to lib/ProcessEnvelope.groovy, and only there.
 
-    This table used to hand-write six probe strings of exactly the form
-    ProcessEnvelope.probe() renders. Because they were pre-rendered YAML lines, they
-    could not be reused by segment.nf's stub: block (a stub reports no real versions),
-    so that block hand-wrote a DIFFERENT set of keys and `-stub` -- the whole blocking
-    CI gate -- could never see the two disagree. Storing bare module names is what makes
-    one list serve both blocks, so a reintroduced probe string here is the regression.
+    Storing bare module names lets one list serve both segment.nf's script: and stub:
+    blocks; a pre-rendered probe string here could not be reused by the stub block.
     """
     text = BACKENDS_GROOVY.read_text()
     assert "python -c" not in text, (
@@ -138,11 +126,9 @@ def test_segment_renders_both_blocks_from_the_one_backend_list():
     """segment.nf's script: and stub: must each render versions.yml from
     `backend.versionTools`, and nothing else.
 
-    tests/test_versions_envelope.py proves this generically for every module (identical
-    ProcessEnvelope call text, identical `*Backends.of(...)` binding in both halves).
-    This case names segment.nf specifically because it was the LAST holdout and the
-    single clearest live instance of the divergence: script: reported the backend's real
-    tools while stub: reported a bare `seg_method: <name>` that is not a tool at all.
+    tests/test_versions_envelope.py proves this generically for every module; this case
+    names segment.nf because its stub: block must not report a bare `seg_method: <name>`
+    instead of the backend's tools.
     """
     text = SEGMENT_NF.read_text()
     assert "END_VERSIONS" not in text, (
@@ -202,7 +188,7 @@ def test_entrypoints_exist_and_are_tracked_executable():
 
 
 def test_segment_has_an_ext_args_entry_covering_every_backend():
-    """SEGMENT had no `ext.args` at all, so `task.ext.args ?: ''` was always empty."""
+    """SEGMENT has an `ext.args` entry, so `task.ext.args ?: ''` is not always empty."""
     text = MODULES_CONFIG.read_text()
     start = text.find("withName: 'SEGMENT' {")
     assert start != -1, "no withName: 'SEGMENT' block in conf/modules.config"
@@ -219,7 +205,7 @@ def test_segment_has_an_ext_args_entry_covering_every_backend():
 def test_segment_process_body_is_backend_agnostic():
     """One script block, and no parameter reads other than the dispatch key.
 
-    The whole point of the table is that the process stops re-deciding the backend.
+    The table means the process does not re-decide the backend.
     A reintroduced `if (params.seg_method == ...)` in the script, or a new
     `params.seg_<tunable>` read, is that decision leaking back out of the seam --
     tunables belong in conf/modules.config's ext.args.

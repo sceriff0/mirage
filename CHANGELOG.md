@@ -7,1519 +7,426 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
+### Upgrading from 1.0.0
 
-- **STARE has no cost tiers any more: `reg_tiled_mode` is gone, and so is
-  `lib/RegPresets.groovy`.** STARE runs one default configuration, the former `high` row, now
-  the plain defaults of its four knobs in `nextflow.config`: `reg_tiled_tile` 2048,
-  `reg_tiled_halo` 256, `reg_tiled_out_tile` 1024, `reg_tiled_coarse_max_dim` 1024. A default
-  run is unchanged: the same rendered commands and the same memory requests at attempt 1
-  (TILED_COARSE 2 GB, TILED_REG_TILE 4 GB, TILED_SOLVE 2 GB with `--max-disp 256`,
-  TILED_STITCH 4 GB; measured from a stub trace before and after). Each knob can now be set
-  directly, without `custom`. With VALIS already tier-free (valis-wsi 1.2.0 at its defaults),
-  `RegPresets` held nothing and is deleted, `conf/modules.config` no longer inlines a tier
-  table, and `ParamUtils.validateRegPresets` is `validateStareKnobs`: the per-knob-override
-  check had nothing left to check, and only COARSE's 256 px floor remains.
-  `tests/test_reg_presets_inlined_in_config.py` (which pinned the inlined copies to the table)
-  is replaced by `tests/test_stare_has_no_tiers.py`. A run that still passes `reg_tiled_mode`
-  (command line, `-params-file`, profile) is **refused at launch** when the value is `medium`,
-  `low` or `custom`, with the four knob values of the retired row in the message (medium
-  1024/192/768/1024, low 512/128/512/512), so an old `--reg_tiled_mode low` cannot silently
-  run the high values. `high` only logs a warning, since it is what runs anyway.
-
-### Changed
-
-- **STARE is pinned to stare-registration v1.3.0 (was v1.2.1)**, the version the manuscript and
-  the benchmark ran. 1.3.0 adds an optional `--prep` (default `none`) and a `mosaic` stage; the
-  default COARSE/REG_TILE path is unchanged. The `containers/stare` image must be rebuilt.
-- **STARE (`tiled`) is the default registration method (was `valis`).** It is the method
-  used for the cohort and the one the manuscript describes as the default. VALIS stays
-  available with `--registration_method valis`. The `full_pipeline` and `registration_only`
-  presets follow the default. `conf/test.config` pins `valis`, so the stub snapshots do not
-  move; the `shipped_defaults_test` profile runs the STARE default.
-- **VALIS registration runs valis-wsi 1.2.0 at its defaults, and has no settings any more.**
-  `REGISTER` now makes the benchmark's `valis120` call: `Valis()` given the patient's slides
-  and the reference only, `register()` at VALIS's own sizes (rigid 512 px, non-rigid 2048 px),
-  `align_to_reference` at its default `False`, VALIS's own detector and matcher, no
-  micro-registration, every slide warped in the reference frame. The one non-default argument
-  is the registration channel: the nuclear channel is passed by index 0 instead of VALIS's
-  fuzzy name match on `"dapi"`, which a decoy name such as `DAPI_x` could win. **Removed:**
-  `memory_mode`, `reg_valis_max_processed_dim`, `reg_valis_max_non_rigid_dim`,
-  `reg_valis_max_keypoints`, `reg_micro_reg`, `reg_micro_reg_fraction`, `reg_max_image_dim`,
-  and the `tma` profile. Passing any of them is now refused at launch as an unrecognised
-  parameter. The Bio-Formats JVM heap is a fixed 10 GB at every attempt (VALIS's own value;
-  `reg_jvm_heap_gb` still overrides it), and `register.py` starts the JVM through
-  `slide_io.init_jvm` because 1.2.0's `registration.init_jvm` ignores the size it is given.
-  The pyramid-level -1 reader clamp stays: the defect is still in 1.2.0. Staged registration QC
-  scores `native`, `rigid` and `non_rigid` (there is no micro stage). Results are not comparable
-  with registrations made by the old configuration, which is archived at the git tag
-  `archive/valis-mirage-tuned`.
-- **The registration benchmark's `valis_mirage` row is retired** (with its eight
-  `valis_mirage_<tier>_m<depth>` runs) and its image `containers/valis100`, together with the
-  tuned VALIS configuration it ran. The row and image are at the git tag
-  `archive/regbench-valis-mirage` (benchmarking 0090a1c8); the pipeline configuration at
-  `archive/valis-mirage-tuned`.
-- **The registration benchmark keeps only what the 261105 manuscripts report; the rest is
-  archived, not deleted.** The active run list is the 11 reported runs
-  (`variants.REPORTED_RUNS`: `stare`, `stare_local4`, `valis120`, `valis120_hires`,
-  DeeperHistReg's four HR runs, `ashlar`, `affine_ashlar`, `palom`); the other 88 runs of the
-  design (STARE's tier x stride x level cross, ASHLAR's factorial, DeeperHistReg's
-  default-parameter runs) stay in `variants.RUNS` with `active=False`
-  (`variants.ARCHIVED_RUNS`). HyReCo, MCMICRO, PhenoCycler and Rashid move from
-  `regbench.PUBLIC` to `regbench.ARCHIVED_PUBLIC`; HyReCo's case writer, download scripts and
-  landmark scorer, the CPU-count cross (`cross-runs`, `cpu-scaling`) and six figure functions
-  no figure of the paper uses are moved with `git mv` into `benchmarks/archive/`, which is
-  neither run, linted nor collected (its README lists every item and how to restore it). The
-  pre-archive tree is the tag `archive/integrate-benchmarking-pre-prune-2026-11-06`.
-- **New image `bolt3x/mirage-valis:1.0.0` (`containers/valis`) for `REGISTER` and
-  `WARP_SEG_QC`'s VALIS path.** It is upstream's `cdgatenbee/valis-wsi:1.2.0`, digest-pinned,
-  with only the four fixes a non-root user needs under Apptainer (Python under a 0700 `/root`,
-  the Bio-Formats jar and the weights where another user finds them, a writable
-  `bf_formats.txt`). No Python package is added or moved. Both processes run with
-  `--writable-tmpfs` under Singularity/Apptainer. **The image must be published
-  (`containers.yml` workflow_dispatch) before a real VALIS run.**
-- **`TILED_SOLVE` asks 2 GB on its first attempt (was 1 GB).** The slide-wide solve peaked at
-  0.19-1.20 GB per round pair on the regbench cohort, so a cohort-sized solve used to OOM once
-  and pass only on the 2 GB retry.
-- **StarDist is the default segmentation backend, with its trained model fetched from the
-  Hugging Face Hub.** `seg_method` defaults to `stardist` (was `instantseg`), and
-  `segmentation_model` defaults to `hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df`.
-  This is the model used for the cohort runs. `bin/segment.py` downloads its `config.json`,
-  `thresholds.json` and `weights_best.h5` on first use, into `segmentation_model_dir` when set
-  and into the task directory otherwise. A copy already in `segmentation_model_dir` is used
-  without network access, which is the route for air-gapped clusters. `HF_ENDPOINT` selects a
-  mirror. The reference must name a 40-hex commit: a branch such as `@main` is refused,
-  because the weights behind it can change. A plain `segmentation_model` name still means a
-  folder under `segmentation_model_dir` or a StarDist built-in. `conf/test.config` keeps the
-  built-in `2D_versatile_fluo`, so CI does not run the shipped weights.
-- **`reg_tiled_stride` defaults to 64 (was 128).** STARE's vector lattice is twice as fine
-  on each axis: one displacement vector every 64 px from a 128 px window. That is four
-  times the vectors per tile for `TILED_REG_TILE` and `TILED_SOLVE` to process, on windows
-  holding fewer nuclei. REG_TILE's first pass captures +-stride px, so the anchor error a
-  tile can recover is halved to +-64 px. Memory is unchanged at the `high` tier (the read
-  margin is `max(halo, 3 * stride)`). Pass `reg_tiled_stride: 128` to keep the old lattice.
-- **STARE is pinned to v1.2.1, whose COARSE stage no longer fails a slide it cannot anchor
-  with confidence.** A slide whose anchor passes its gates is unchanged. When neither the
-  NCC sweep nor the ORB fallback passes, `TILED_COARSE` checks every candidate at full
-  resolution on up to 8 small nuclear patches. A confirmed candidate is used as trusted,
-  with its measured offset removed; otherwise the stage continues with the best guess, logs
-  `UNVERIFIED ANCHOR` naming both slides, and writes `coarse_trusted: false` into the M0
-  JSON (`coarse_probe` holds the per-candidate counts). An unverified slide can come out
-  mis-registered with exit 0, so check its registration QC. Only a blank nuclear plane is
-  still refused. `bolt3x/mirage-stare:1.0.0` is republished with it: delete a cached
-  Singularity `.img` so it is pulled again.
+- **The defaults changed.** Registration is STARE (`registration_method = 'tiled'`, was
+  `valis`), segmentation is StarDist (`seg_method = 'stardist'`, was `instantseg`),
+  `skip_preprocessing` is `true` (BaSiC correction is opt-in) and `cleanup_level` is `'none'`
+  (was `'final'`). Pin the old values in a params file or profile to keep 1.0.0 behaviour.
+- **Registration results are not comparable with 1.0.0**, for either backend: VALIS runs
+  valis-wsi 1.2.0 at its own defaults, and STARE is a new method version (below).
+- **Several parameters are gone and are refused at launch** if still set: `memory_mode`,
+  `reg_valis_max_processed_dim`, `reg_valis_max_non_rigid_dim`, `reg_valis_max_keypoints`,
+  `reg_micro_reg`, `reg_micro_reg_fraction`, `reg_max_image_dim`, `reg_tiled_solver`,
+  `reg_tiled_gate_tre`, `reg_tiled_max_error`, `reg_tiled_upsample` and `reg_tiled_mode`. The
+  `tma` profile is gone.
+- **Two images must be published or pulled again before a real run**:
+  `bolt3x/mirage-valis:1.0.0` (new) and `bolt3x/mirage-stare:1.0.0` (replaces
+  `bolt3x/mirage-tiled`). Delete a cached Singularity `.img` so it is pulled again.
+- **Point FlowPath >= 0.10.0 at output from this version** (see `cells.geojson` below).
 
 ### Added
 
-- Two supplementary figure scripts, wired into `benchmarks/figures/make_figures.sh`: `fig_by_case_round.py` (Supplementary Fig. S6, target `by_case_round`: Dice and centroid distance per method by case and by moving round, with `by_case_round_medians.csv`) and `fig_seg_backends.py` (Supplementary Fig. S7, target `seg_backends`: one region segmented by each backend from its published GeoJSON, and the pairwise Dice of their whole-cell masks).
-- **`reg_valis_mode`: VALIS gets exactly two options, `default` and `hires`, both VALIS's
-  own.** `default` (the default) is unchanged: `register()` at valis-wsi 1.2.0's defaults,
-  the same rendered command. `hires` is valis-wsi 1.2.0's high-resolution example
-  (`docs/examples.rst`), as shipped and as the benchmark's `valis120_hires` row runs it:
-  `micro_rigid_registrar_cls=MicroRigidRegistrar` in `Valis(...)`, `register()`, then
-  `register_micro(max_non_rigid_registration_dim_px=floor(0.25 × the smallest slide's
-  longest side))`. The registration channel (index 0) and the `crop="reference"` warp are
-  the same as at `default`; the channel is also passed to `register_micro`, which would
-  otherwise pick its own by VALIS's name match on "dapi". VALIS 1.2.0's known micro-pass
-  defect is NOT fixed (ruling 2026-11-05). `REGISTER` asks **128 GB** on its first attempt
-  under `hires` (128 → 256 → 512 → 1024 GB; `default` keeps 64 → 512): measured peak RSS
-  on the 8-case regbench cohort at 4 CPUs was median 81.7 / max 106.4 GB for hires
-  against 31.6 / 51.4 GB for the default. Staged registration QC (`reg_qc = 2`) gets its
-  `micro` stage back under `hires`: the checkpoint is taken after `register()` and before
-  `register_micro()` (and corrected if `register_micro` was a no-op, as on slides under
-  8192 px a side), so `non_rigid` is the pre-micro field and `micro` the final one, and
-  `WARP_SEG_QC` records `micro_reg: 2`; the pre-micro VALIS error summary is saved as
-  `*_summary_premicro.csv` for the QC report.
+- **`reg_valis_mode`**: `default` (valis-wsi 1.2.0's defaults) or `hires` (valis-wsi 1.2.0's
+  high-resolution example: `MicroRigidRegistrar`, then `register_micro` at a quarter of the
+  smallest slide's longest side). `REGISTER` asks 128 GB on its first attempt under `hires`
+  (128 → 256 → 512 → 1024 GB). Under `hires`, staged registration QC (`reg_qc = 2`) scores a
+  `micro` stage again and the pre-micro error summary is saved as `*_summary_premicro.csv`.
 - **A samplesheet that gives one patient the same non-nuclear channel on two slides is
-  now refused at launch.** `CsvUtils.validateInputSemantics` (the one launch-time
-  samplesheet validator, called from `workflows/mirage.nf` before any process is
-  instantiated) rejects it naming the patient, the channel, both rows with their image
-  paths, and the remedy. The reason it cannot be left to run: `resolveKeptChannelsPerSlide`
-  keeps each marker name exactly once per patient, so one of the two acquisitions was
-  silently dropped and which one survived was decided by reference-first samplesheet
-  order. **Nuclear markers are the deliberate exception** — `DAPI`/`CELLTOX` are the
-  registration fiducial and are expected on every slide — so the check consults
-  `MarkerUtils.isNuclear` and only fires for the rest. A name repeated *within* one
-  slide's own `channels` cell is refused too, nuclear or not, which nothing checked
-  before. Comparison is trimmed and case-insensitive, the same normalisation the
-  keep-set uses. Covered by `tests/lib_probe.nf`'s `checkDuplicateChannelRefusal()` and
-  a `tests/main.nf.test` case that asserts zero tasks entered the trace.
-  **The check applies at every `--start`, checkpoint CSVs included** — a
-  `csv/preprocessed.csv` / `registered.csv` / `segmented.csv` written before this rule
-  that now trips it was already dropping one of the two acquisitions silently, and the
-  fix is to re-run the earlier step from a corrected samplesheet, not to edit the
-  checkpoint.
-- **Per-cell QC keys (`QC: ...`) and the two processes that produce them.** Every
-  exported cell now carries `QC: Total intensity` (cell-level: the sum of every
-  non-nuclear marker's `Cell: Median`, NaN-skipped) plus, per moving imaging
-  round with non-nuclear markers, `QC: Nuclear retention: [...]`, `QC:
-  Registration displacement µm: [...]` and `QC: Registration Dice: [...]`
-  (round-level: the trailing `[marker, ...]` names exactly the markers a
-  failing round should blank). **`NUCLEAR_RETENTION`** (`modules/local/nuclear_retention.nf`
-  + `bin/nuclear_retention.py`) measures each moving slide's nuclear-channel
-  median per cell, against `quantify.compute_compartment_intensities` — the
-  same function `merged_quant.csv`'s own nuclear medians come from — and
-  publishes an intermediate `<id>_nuclear_retention.csv` per slide (gated the
-  same as `QUANTIFY`, under `quantify/`). It assumes the moving slide is a
-  re-stained round of the SAME section as the reference (cyclic IF); the value
-  is meaningless on serial sections. **`CELL_QC`** (`modules/local/cell_qc.nf`
-  + `bin/cell_qc.py`) is the per-patient process that adds every `QC: ...`
-  column, using the retention CSVs above and the residual displacement/Dice
-  join (see below); it republishes `quantification/merged_quant.csv` and also
-  writes `quantification/<patient_id>_round_qc.csv` (the same values, long and
-  tidy: `label, round_id, markers, nuclear_retention, nuclear_retention_raw
-  (the un-normalised ratio, round_qc.csv only), displacement_px,
-  displacement_um, dice`) and `quantification/<patient_id>_rounds.json` (the
-  round manifest: `round_id`, `is_reference`, `markers`). All three are a
-  **FINAL** kind and survive `--cleanup_level final`. Registration
-  displacement/Dice are present only under `--reg_qc 2` (the default); a
-  round with no non-nuclear markers, and the reference round itself, get no
-  round-level keys. **NaN always means "no evidence", never "good"** and is
-  omitted from `cells.geojson` exactly like a NaN marker. Vocabulary lives in
-  one place, `bin/utils/measurements.py` (`QC_PREFIX`, `MORPH_PREFIX`,
-  `QC_CELL_METRICS`, `QC_ROUND_METRICS`); guarded by
-  `tests/test_qc_key_contract.py`, `tests/test_cell_qc.py`,
-  `tests/test_nuclear_retention.py`. See `docs/outputs.md`, "Per-cell QC".
+  refused at launch**, naming the patient, the channel, both rows and the remedy. Before, one
+  of the two acquisitions was silently dropped. Nuclear markers (`DAPI`, `CELLTOX`) are
+  expected on every slide and are exempt. A name repeated within one slide's `channels` cell
+  is refused too. Comparison is trimmed and case-insensitive. The check applies at every
+  `--start`; a checkpoint CSV that trips it was already losing data, so re-run the earlier
+  step from a corrected samplesheet.
+- **Per-cell QC keys** in `merged_quant.csv`, `cells.geojson` and the SpatialData table:
+  `QC: Total intensity` per cell, and per moving imaging round `QC: Nuclear retention: [...]`,
+  `QC: Registration displacement µm: [...]` and `QC: Registration Dice: [...]`, where the
+  trailing list names the markers a failing round should blank. Two new processes produce
+  them: `NUCLEAR_RETENTION` (per moving slide, publishes `<id>_nuclear_retention.csv` under
+  `quantify/`; meaningful only for re-stained rounds of the same section) and `CELL_QC` (per
+  patient, also writes `quantification/<patient_id>_round_qc.csv` and
+  `quantification/<patient_id>_rounds.json`). All three quantification files survive
+  `--cleanup_level final`. Registration displacement and Dice need `--reg_qc 2` (the default).
+  NaN always means "no evidence", never "good", and is omitted from `cells.geojson`. See
+  `docs/outputs.md`, "Per-cell QC".
+- **`reg_tiled_stride`** (default 64) and **`reg_tiled_max_disp`** (default: the halo) for
+  STARE's vector lattice and range gate.
 
 ### Changed
 
-- **DRAPE is renamed back to STARE** (Scalable Tile-parallel Alignment by Robust
-  Estimation), 2026-09-30. Same method and code as DRAPE 2.0.0 (vector lattice + robust
-  DCT-PLS SOLVE); only the name changes. The package is `stare-registration` **3.0.0**
-  in `packages/stare` (import `stare`, CLI `stare {coarse,reg-tile,solve,stitch,register}`;
-  no `drape` alias), `RegPresets.DRAPE` is `RegPresets.STARE`, and the image is
-  `bolt3x/mirage-stare:1.0.0` (build context `containers/stare`). **Unchanged:**
-  `registration_method='tiled'`, every `reg_tiled_*` parameter and the `TILED_*`
-  processes. The 0.1.x `stare-registration` (TRE gate, legacy/robust solvers) remains
-  retired; the entries below record the interim name DRAPE.
-
-- **DRAPE Phase 5e fixes** (`research/drape-step-support-oa-2026-09-27.md`). STITCH's inverse
-  map iterates each point's fixed point to a 1e-3 px step (cap 50) instead of a fixed 3 steps,
-  and logs the achieved step, warning when the cap is hit (at L = 0.45, |F| ≈ 90 px: 9.2 px
-  error before, 3e-4 px after). SOLVE's h-block buffer ring is chosen per slide from the
-  imprint-corrected lag-1 noise correlation of the plain block-CV residuals (ring above 0.2,
-  refused when it would choose a flat field, s >= 1e5; new report keys `residual_lag1_rho`,
-  `cv_buffer`). COARSE's 3° sweep step at σ = 1 px is
-  kept, now backed by a measured step-vs-blur table and a test; the sweep is described as
-  *globally* normalised cross-correlation.
-
-- **STARE is renamed DRAPE** (Distributed Robust Alignment by Piecewise Estimation). The
-  package moved from `packages/stare` to `packages/drape` and is now `drape-registration`
-  2.0.0 (import `drape`, CLI `drape {coarse,reg-tile,solve,stitch,register}`); there is no
-  `stare` alias. `lib/RegPresets.STARE`/`stare()` are `RegPresets.DRAPE`/`drape()`,
-  `tests/stare_shims.py` is `tests/drape_shims.py`, and the docs say "DRAPE (formerly
-  STARE)". **Unchanged, on purpose:** `registration_method='tiled'`, every `reg_tiled_*`
-  parameter, the `TILED_*` process names, the `bin/tiled_*.py` shims (now over `drape`), and
-  the benchmark arm ids and data columns (`stare_high`, `stare_*_px`), which name results
-  already computed on the `benchmarking` branch. Entries below this one keep the name the
-  method had when they were written.
-
-- **The tiled backend's image is `bolt3x/mirage-drape:1.0.0`, and it is slim.** Built from
-  `containers/drape` (was `containers/tiled`, image `bolt3x/mirage-tiled:1.0.0`): the same
-  `python:3.11-slim` digest, `procps`, `requirements/drape.txt` (was `tiled.txt`) and the
-  `drape` package — no torch, no kornia, no libGL, no baked DISK/LightGlue weights, which
-  served only the COARSE front-end retired on 2026-09-27. Its smoke test fails the build if
-  torch is importable. Every `TILED_*` process and `WARP_SEG_QC`'s tiled backend use it.
-  `requirements/kornia.txt` is deleted; `requirements/torch-cpu.txt` is now CI-only (the
-  VALIS matcher tests import torch). **The image must be published before a
-  `registration_method='tiled'` run can pull it.**
-
-- **STARE SOLVE/ESTIMATE audit fixes** (`research/drape-step-support-2026-09-27.md`). The
-  robust scale of a residual vector's norm is now the Rayleigh one (`median |r| / 1.1774`;
-  Huber 2.448σ and bisquare 5.06σ from χ²₂) — the 1-D `1.4826 × MAD` made Huber down-weight
-  ~67 % of clean data, now 5 %. The smoothing selection is honestly labelled `block_cv`
-  (true h-block CV with a buffer ring is implemented, `CV_BUFFER`, but off: measured lag-1
-  error correlation 0.01–0.07 and +50 % field error with it). The σ re-solve reuses the
-  first `s`. `coverage_1sigma` and the new `rms_error_over_rms_sigma` are scored on folds
-  disjoint from the σ calibration. The fold certificate reads the cubic interpolant, and the
-  re-index reports its fixed-point residual (`reindex_residual_px`). REG_TILE fits its
-  3-point Gaussian after subtracting the local correlation minimum, computes sharpness on
-  absolute values, and records a per-tile `gauss_fallback_rate` in the control JSON.
-
-- **STARE v2: REG_TILE measures a grid of window vectors and SOLVE is `dctpls` only — the
-  old STARE surface is removed.** Each tile now emits one displacement vector per
-  `reg_tiled_stride` px (default 128; window 2 × stride) on a slide-global lattice
-  (`stare.vector_grid`), and SOLVE lays every tile's vectors on that lattice, drops those at
-  or beyond the range gate (`reg_tiled_max_disp`, default the halo), and solves them with
-  robust affine + robust DCT-PLS, per-vector σ calibrated by peak ratio, writing a cubic
-  B-spline mesh (`stare.solve.solve_dctpls`). There is no TRE dead zone and no
-  correlation-error gate. **Removed:** the `legacy` and `robust` solvers, the
-  one-control-point-per-tile solve path, and the parameters `reg_tiled_solver`,
-  `reg_tiled_gate_tre`, `reg_tiled_max_error` and `reg_tiled_upsample` (the last also leaves
-  `RegPresets.STARE`, whose rows now own four knobs); the matching `stare solve`
-  (`--gate-tre`, `--max-error`, `--solver`), `stare reg-tile` (`--upsample`) and
-  `stare register` flags are gone, and passing any of them is an argparse error. A run that
-  still sets one of those params is rejected by schema validation at launch. **Old control
-  files cannot be re-solved:** SOLVE refuses a control JSON without `vectors`/`lattice`
-  (written by a pre-v2 REG_TILE), naming the tiles — re-run REG_TILE (a `-resume` after the
-  upgrade does, since the task script changed). `stare.pipeline.register_slide` runs the same
-  vector-grid + dctpls method in process (`stride=` replaces `gate_tre=`/`upsample=`).
-  **Benchmarks:** the STARE arms are `reg_tiled_mode` {low, medium, high} ×
-  `reg_tiled_stride` {64, 128, 256} (arms `tiled_<tier>_s<stride>`), replacing × the gate;
-  the 9-run `solver_cross` (`arm_kind=registration_solver`) and the sweep's `solver_robust`
-  delta grid are deleted, and the sweep's tiled grid crosses the stride too. The
-  head-to-head against old STARE uses the arm results already computed on the
-  `benchmarking` branch. `--changed solve` now selects every STARE row.
-
-- **STARE's COARSE anchor is an NCC rotation sweep, not DISK + LightGlue.** `stare/coarse_align.py`
-  sweeps rotation over 0-360 deg in 3 deg steps on a 256 px tissue-masked thumbnail (FFT
-  cross-correlation), refines the two best distinct angles +-3 deg at `reg_tiled_coarse_max_dim`,
-  and takes sub-pixel translation from `phase_cross_correlation`. It is accepted only at peak
-  NCC >= 0.3 and best/second-distinct ratio >= 1.15; otherwise a scikit-image ORB + RANSAC
-  fallback runs, and if that is not trustworthy either **the task fails** naming both slides
-  and the scores instead of emitting an unverifiable M0. On the scout's hard cases (80 % nuclei
-  turnover, 25 % tissue loss, gamma 0.6, rotations 0/37/178/-95/133 deg) it recovers 10/10
-  (within 0.25 deg and 1.5 px at 1024 px; within the tests' 1 deg / 3 px at 512 px), where
-  DISK+LightGlue got 2/10 on the same 512 px pairs. Peak RSS of
-  the whole stage is 0.25-0.43 GB (was ~32 GB at 2048 px), so `TILED_COARSE` asks 2 GB and
-  `coarse_max_dim` is now a refine resolution: `high`/`medium` 1024, `low` 512. The M0 JSON
-  gains `coarse_method`, `coarse_peak_ncc`, `coarse_peak_ratio`, `coarse_angle_deg`;
-  `n_inliers` is 0 for the sweep and `coarse_tre` is its quantisation bound. torch/kornia are
-  no longer imported; the tiled image still carries them until it is rebuilt.
-- **`cells.geojson` measurements: morphology under `MORPH: ` names, `QC: ` columns
-  carried through.** `bin/export_geojson.py::build_measurements` now writes
-  `MORPH: Area µm²`, `MORPH: Eccentricity`, etc. (was the bare display name) using the
-  single vocabulary in `bin/utils/measurements.py::MORPH_EXPORT`, and appends every
-  `QC: ...` column of the per-patient table as its own measurement (NaN omitted),
-  ordered after markers and before the `MORPH:` block. Incidental: the area value's
-  display rounding changed from 3 to 4 decimal places (now the same `round(..., 4)`
-  every other measurement uses) — not a unit or scale change, just more digits shown.
-  `bin/export_spatialdata.py::build_table` puts `QC: ...` columns in `obs` verbatim;
-  `parse_measurement_key` returns them unparsed rather than matching them against the
-  marker-compartment-statistic grammar. **Requires FlowPath ≥ 0.10.0** — an older
-  FlowPath reads a `QC: ...` key as a phantom marker (summed into its own total
-  intensity) and `MORPH: Area µm²` defeats its `area` prefix lookup, so a saved
-  `area` filter range stops applying; there is no dual naming on the mirage side,
-  so the FlowPath upgrade must land before pointing it at output from this
-  pipeline version.
-- **`warp_seg_qc`'s per-cell residual CSV (`*_reg_residuals.csv`, written at
-  `--reg_qc 2`) gains an `iou` column**: `moving, ref_x, ref_y, residual_px, iou,
-  stage` (was without `iou`). It is the per-pair IoU `score_stage` already
-  computed at the final stage, now written out so `CELL_QC` can derive `QC:
-  Registration Dice: [...]` (`2·IoU / (1 + IoU)`) without re-deriving the pairing.
-  A CSV from before this change (no `iou` column) is read fine; Dice comes back
-  NaN while displacement is still reported. The join that pairs a residual row to
-  a cell (`bin/utils/reg_residuals.py::join_one`) moved out of
-  `export_spatialdata.py` so `CELL_QC` and `EXPORT_SPATIALDATA` share the exact
-  same spatial join and can never pair a QC nucleus to different cells.
-- **`MERGE_QUANT_CSVS` no longer publishes `quantification/merged_quant.csv`.**
-  `CELL_QC` republishes the same table, augmented with the `QC: ...` columns,
-  under the identical filename; publishing both would race writing one path.
-  Every downstream reader (`EXPORT_GEOJSON`, `EXPORT_SPATIALDATA`, the
-  `postprocessed` checkpoint) is unaffected — they read the file by path, and
-  the path is unchanged.
-- **`reg_micro_reg` defaults to `2` again** (micro-rigid + micro non-rigid), previously `1`
-  (micro-rigid only). A VALIS run now performs the `register_micro()` pass unless it opts out
-  with `reg_micro_reg = 1`; expect REGISTER to take longer and use more memory. Every
-  restatement moved together (`nextflow_schema.json`, `docs/parameters.md`, the
-  `params/*.json` presets, `bin/register.py`'s signature/argparse/help, the figures),
-  held by `tests/test_micro_reg_default_is_two.py`. `conf/test.config` keeps its `0` pin.
-- **`REGISTER` memory now starts at 64 GB and doubles per attempt, for at most four
-  attempts: 64 → 128 → 256 → 512 GB** (was `300 GB × attempt` with the retry count
-  inherited). `maxRetries = 3` is pinned in the process's own `withName:` block, so a
-  profile's generic `maxRetries` no longer changes the ramp. Each rung is clamped by
-  `process.resourceLimits` (`params.max_memory`), so a site ceiling below 512 GB caps
-  the later attempts. The `tma` profile's `64 GB × attempt` override is unchanged.
-
-- **`skip_preprocessing` defaults to `true`**: a default run converts every slide to the
-  standardised OME-TIFF and goes straight to registration; BaSiC illumination correction is
-  now opt-in (`"skip_preprocessing": false` in a params file or profile — never on the CLI).
-  `csv/preprocessed.csv` then records the converted image, and the `BASICPY` image is not
-  pulled. `conf/test.config` pins `false` so the suite keeps covering the correction path;
-  the `shipped_defaults_test` stub run covers the new default. The benchmark sweep's
-  `baseline:` follows (`benchmarking` branch), and its `skip_preprocessing: [false, true]`
-  axis still prices the whole stage — it now varies OFF a skipping baseline.
-- **The incremental cyclic-IF mode (`add_cycle`) now lives on the `dev` branch only.**
-  This branch carries no `--mode add_cycle`, no `prior_outdir`, no `EXTRACT_MASK_SERIES`
-  and no `docs/add_cycle.md`; `mode` stays as a parameter with the single value
-  `standard` so `qc/run_summary.json`'s `run.mode` field is unchanged. `embed_masks` is
-  unaffected. The shared plumbing add_cycle was built on (`REGISTER_PATIENT`,
-  `QUANTIFY_MARKERS`, `ASSEMBLE_EXPORT`, `POSTPROCESSED_CHECKPOINT`) stays, and the
-  comments that explain *why* it is shared still name add_cycle as the reason.
-- **`cleanup_level` defaults to `'none'`** (it was `'final'` since 2026-08-25). A run's
-  output is re-enterable by `--start` without opting in; `'final'` is now the opt-in
-  cleaning level, with the same publish gates. `conf/test.config` keeps its explicit
-  `'none'` pin.
-- **The `tma` profile pins the Bio-Formats JVM heap flat at 16 GiB** (`reg_jvm_heap_gb`)
-  instead of `register.nf`'s `32 + 16 × attempt` ramp, which would hand Java most of a
-  small request, and sizes `REGISTER` at `64 GB × attempt` (was 32).
+- **STARE (`registration_method = 'tiled'`) is the default registration method.** VALIS
+  stays available with `--registration_method valis`. The `full_pipeline` and
+  `registration_only` presets follow the default.
+- **STARE is an external package**, `stare-registration` v1.3.0 from
+  github.com/sceriff0/stare, pinned in `requirements/stare.txt`. Its image is
+  `bolt3x/mirage-stare:1.0.0` (built from `containers/stare`), which carries no torch, kornia
+  or learned-matcher weights. `registration_method = 'tiled'`, the `reg_tiled_*` parameters
+  and the `TILED_*` process names are unchanged.
+- **STARE's registration method changed.**
+  - REG_TILE measures one displacement vector every `reg_tiled_stride` px (window
+    2 × stride) on a slide-global lattice; SOLVE drops vectors beyond `reg_tiled_max_disp` and
+    fits robust affine + robust DCT-PLS, writing a cubic B-spline mesh. The `legacy` and
+    `robust` solvers and the TRE gate are removed. SOLVE refuses a control JSON written by a
+    1.0.0 REG_TILE; re-run REG_TILE (a `-resume` after upgrading does).
+  - COARSE anchors each slide with a normalised cross-correlation rotation sweep on a
+    tissue-masked thumbnail, with an ORB + RANSAC fallback, instead of DISK + LightGlue. Its
+    peak memory is well under 1 GB. When neither passes its gates, COARSE checks every
+    candidate at full resolution on small nuclear patches; if none is confirmed it continues
+    with the best guess, logs `UNVERIFIED ANCHOR` naming both slides and writes
+    `coarse_trusted: false` into the M0 JSON. Such a slide can come out mis-registered with
+    exit 0, so check its registration QC. Only a blank nuclear plane is refused. The M0 JSON
+    gains `coarse_method`, `coarse_peak_ncc`, `coarse_peak_ratio`, `coarse_angle_deg` and
+    `coarse_probe`.
+  - STARE has one configuration, no cost tiers: `reg_tiled_tile` 2048, `reg_tiled_halo` 256,
+    `reg_tiled_out_tile` 1024, `reg_tiled_coarse_max_dim` 1024, each settable directly. A
+    `reg_tiled_mode` of `medium`, `low` or `custom` is refused at launch with the retired
+    row's values in the message (medium 1024/192/768/1024, low 512/128/512/512); `high` only
+    logs a warning, since it is what runs anyway.
+  - The default lattice (`reg_tiled_stride` 64) gives four times as many vectors per tile as
+    stride 128 and halves the anchor error a tile can recover to ±64 px. Pass
+    `reg_tiled_stride: 128` for the coarser lattice.
+  - Memory at attempt 1: `TILED_COARSE` 2 GB, `TILED_REG_TILE` 4 GB, `TILED_SOLVE` 2 GB,
+    `TILED_STITCH` 4 GB.
+- **VALIS runs valis-wsi 1.2.0 at its defaults and has no tuning settings.** `REGISTER`
+  passes the patient's slides and reference, registers at VALIS's own sizes (rigid 512 px,
+  non-rigid 2048 px) with its own detector and matcher, no micro-registration, and warps
+  every slide in the reference frame. The one non-default argument is the registration
+  channel: the nuclear channel by index 0, not VALIS's name match on `"dapi"`. The
+  Bio-Formats JVM heap is a fixed 10 GB (`reg_jvm_heap_gb` still overrides it). Staged
+  registration QC scores `native`, `rigid` and `non_rigid` at `default`. The old tuned
+  configuration is archived at the git tag `archive/valis-mirage-tuned`.
+- **New image `bolt3x/mirage-valis:1.0.0`** for `REGISTER` and `WARP_SEG_QC`'s VALIS path:
+  upstream `cdgatenbee/valis-wsi:1.2.0`, digest-pinned, with only the fixes a non-root user
+  needs under Apptainer. Both processes run with `--writable-tmpfs` under
+  Singularity/Apptainer. Publish it (`containers.yml` workflow_dispatch) before a real VALIS
+  run.
+- **`REGISTER` memory starts at 64 GB and doubles per attempt, at most four attempts
+  (64 → 128 → 256 → 512 GB)**, clamped by `max_memory`. A profile's generic `maxRetries` does
+  not change this ramp.
+- **StarDist is the default segmentation backend**, with the trained model
+  `hf://DSUnit/stardist@68b94406104bb069a58b64f4c890375c7f2f15df` fetched from the Hugging
+  Face Hub on first use (into `segmentation_model_dir` when set, otherwise the task
+  directory). A copy already in `segmentation_model_dir` is used without network access,
+  which is the route for air-gapped clusters; `HF_ENDPOINT` selects a mirror. The reference
+  must name a 40-hex commit; a branch such as `@main` is refused. A plain
+  `segmentation_model` name still means a folder under `segmentation_model_dir` or a StarDist
+  built-in.
+- **`skip_preprocessing` defaults to `true`**: a default run converts every slide to
+  OME-TIFF and goes straight to registration. BaSiC correction is opt-in
+  (`"skip_preprocessing": false` in a params file or profile, not on the CLI).
+  `csv/preprocessed.csv` then records the converted image.
+- **`cleanup_level` defaults to `'none'`**: a run's output is re-enterable by `--start`
+  without opting in. `'final'` is the opt-in cleaning level, with the same publish gates.
+- **`cells.geojson` measurements**: morphology is named `MORPH: Area µm²`,
+  `MORPH: Eccentricity`, etc. (was the bare name), and every `QC: ...` column is carried
+  through, after markers and before `MORPH:`. Area shows 4 decimal places (was 3); the value
+  is unchanged. The SpatialData table carries `QC: ...` columns in `obs` verbatim.
+  **Requires FlowPath >= 0.10.0**: an older FlowPath reads a `QC:` key as a phantom marker
+  and misses `MORPH: Area µm²` in its `area` lookup, and there is no dual naming on the
+  pipeline side.
+- **`*_reg_residuals.csv` (written at `--reg_qc 2`) gains an `iou` column**:
+  `moving, ref_x, ref_y, residual_px, iou, stage`. A CSV without it still reads; Dice then
+  comes back NaN.
+- **`quantification/merged_quant.csv` is published by `CELL_QC`**, with the `QC: ...`
+  columns added, at the same path as before.
 
 ### Fixed
 
-- **`REGISTER` OOM on small inputs: the peak was SuperGlue matching, not pixels.** Five
-  ~2800 px TMA cores climbed the 32/64/96/128 GB ramp and died at "Matching images 0/10"
-  on every attempt (2026-09-10), because VALIS 1.0.0 keeps 20000 keypoints per image
-  (quadratic SuperGlue cost) and matches every pair at once on `cpu_count() - 1` threads
-  — the node's cores, not the task's. `register.py --cpus` (passed `task.cpus` by
-  `register.nf`) now bounds every VALIS thread pool to the allocation. The keypoint count
-  gained one home (`MAX_KEYPOINTS` in `bin/utils/valis_config.py`, applied before the
-  preset matchers are built so SuperPoint and SuperGlue agree) and a parameter,
-  **`reg_valis_max_keypoints`** (null = VALIS's 20000, so results remain comparable with
-  earlier runs; the `tma` profile pins 2000; the presets' old `num_features: 5000` had never
-  reached VALIS). **The larger term was autograd**: VALIS never
-  calls `torch.no_grad()`, so every SuperGlue attention layer's activations and
-  SuperPoint's conv activations on each 2048 px image were retained per pair — four
-  pairs in flight still exceeded 64 GB with the first two fixes alone. The SuperPoint /
-  SuperGlue methods are now wrapped in `torch.no_grad()` on the class (grad mode is
-  thread-local, so a global switch would miss VALIS's joblib threads). Guarded by
-  `tests/test_valis_matching_bounds.py` and a rendered-command case in
-  `tests/modules/register.nf.test`.
-
 - **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,
-  `max_forks` or `queue_size` was silently ignored.** Each drives a scalar evaluated while
-  `nextflow.config` is parsed (`cleanup`, `trace.*`, `executor.queueSize`,
-  `process.maxForks`), which is before any `-c` file is merged, so the param changed and
-  the setting did not — `nextflow config` printed the pin, the run honoured the old value.
-  The run is now **refused at launch** with the route named
-  (`ParamUtils.validateFrozenConfig`); `-params-file`, the CLI and profiles all work.
-- **A profile pin of `concurrency` / `max_forks` / `queue_size` never arrived either**:
-  the `executor.queueSize` / `process.maxForks` scalars sat above `profiles {}`. They and the
-  four per-process `maxForks` caps (formerly in `conf/modules.config`, also frozen) now sit in
-  a concurrency block after the profiles.
+  `max_forks` or `queue_size` was silently ignored.** Such a run is now refused at launch,
+  naming the route; `-params-file`, the CLI and profiles all work.
+- **A profile pin of `concurrency`, `max_forks` or `queue_size` did not take effect.** It does
+  now.
 - **`-profile slurm` ran with no resource ceiling** on the documented
-  `-profile slurm,singularity -c site.config` route: the profile shadowed the top-level
-  `resourceLimits` closure with a plain map that froze to `[cpus:null, memory:null]`. The
-  map is gone; the closure applies.
-- **A cleaning `--cleanup_level` left seven empty intermediate directories per patient**
-  (`publishDir` creates its target before `saveAs` runs). `main.nf`'s `onComplete` now
-  prunes empty directories under `--outdir` at those levels.
-
-Guarded by `tests/test_frozen_config_params.py` (position and coverage, discovered from the
-config), `tests/frozen_config_pin.sh` (the refusal and both working routes, run) and an
-extra case in `tests/cleanup_work.sh`.
+  `-profile slurm,singularity -c site.config` route. The `max_*` ceiling now applies.
+- **`--cleanup_level final` left seven empty intermediate directories per patient.** They are
+  removed at the end of the run.
 
 ## [1.0.0] - 2026-09-08
 
 ### Migration — read before comparing any output across this release
 
-Seven changes alter what a run produces or what its outputs MEAN, and every one of
-them is silent from the consumer's side. The first six are collected, each with what
-changed and what to do about it, in
-[`docs/_archive/migration-2026-08-24.md`](docs/_archive/migration-2026-08-24.md); the seventh landed
-after that doc and is detailed inline below:
+Seven changes alter what a run produces or what its outputs mean, and every one of them is
+silent from the consumer's side. The first six are detailed in
+[`docs/_archive/migration-2026-08-24.md`](docs/_archive/migration-2026-08-24.md):
 
-1. **Darkfield correction is gone** — nf-core `BASICPY` runs at
-   `get_darkfield=False`; the deleted in-house path used `True`. Corrected pixel
-   values are not comparable across this release.
-2. **NaN measurements are omitted, not written as `0.0`** — a cell with no
-   nuclear overlap carries fewer keys than its neighbours. This does NOT crash
-   `qupath-extension-flowpath` (its lookup null-checks) and does not change which
-   cells a gate calls positive; what moves is every percentile-derived threshold,
-   because the artificial zeros have left the distribution.
-3. **STARE meshes differ, by design** — two new control-point gates reject points
-   the previous code accepted. Registration output is not bit-comparable.
-4. **Checkpoint CSVs carry an `id` column** — an existing `--prior_outdir`, or an
-   existing tree used with `--start`, now fails loudly at launch instead of
-   silently re-deriving an identity that may differ.
-5. **A run publishes final outputs only and deletes its work directory** —
-   `cleanup_level` defaults to `'final'` and `cleanup_work` to `true`. No
-   checkpoint manifest is written at a cleaning level. Pass
-   `--cleanup_level none` on any run whose output will be re-entered.
+1. **Darkfield correction is gone** — nf-core `BASICPY` runs at `get_darkfield=False`; the
+   earlier in-house path used `True`. Corrected pixel values are not comparable across this
+   release.
+2. **NaN measurements are omitted, not written as `0.0`** — a cell with no nuclear overlap
+   carries fewer keys than its neighbours. FlowPath handles this and gates call the same
+   cells positive, but every percentile-derived threshold moves, because the artificial zeros
+   have left the distribution.
+3. **STARE meshes differ, by design** — two new control-point gates reject points the
+   previous code accepted. Registration output is not bit-comparable.
+4. **Checkpoint CSVs carry an `id` column** — an existing `--prior_outdir`, or an existing
+   tree used with `--start`, now fails at launch instead of re-deriving an identity that may
+   differ.
+5. **A run publishes final outputs only and deletes its work directory** — `cleanup_level`
+   defaults to `'final'` and `cleanup_work` to `true`. No checkpoint manifest is written at a
+   cleaning level. Pass `--cleanup_level none` on any run whose output will be re-entered.
 6. **Two invocations that used to be accepted now fail at launch** —
-   `--seg_instantseg_target cells|nuclei` (they produce one mask, which was
-   silently replicated into both outputs and zeroed every cytoplasmic
-   measurement), and an OME header whose `PhysicalSizeXUnit` `PREFLIGHT_SCALE`
-   does not recognise, which under the `'auto'` default (item 7) hard-fails before
-   any heavy work is staged (a recognised non-µm unit is now converted rather than
-   read as µm — an `nm` header was a 1000× scale error).
-7. **`pixel_size` now defaults to `'auto'`** — it was `null`, and `ParamUtils`
-   forced the operator to assert a scale before a run could start at all. `'auto'`
-   reads each image's own OME `PhysicalSizeX`, so a run that previously refused to
-   start at launch may now proceed — and will use the FILE's scale, which may
-   differ from whatever the operator would have typed. A new `PREFLIGHT_SCALE`
-   step resolves (and, for `auto`, verifies) every input slide's scale before any
-   heavy work starts: it hard-fails when `auto` cannot resolve a slide (absent or
-   uninterpretable OME metadata), and warns — never fails — when a supplied number
-   disagrees with the file, cannot be confirmed against it, or when slides in one
-   run resolve to genuinely different scales. Every checkpoint manifest now also
-   carries a `pixel_size` column; a checkpoint written by an earlier version is
-   REFUSED on re-entry with a "this checkpoint predates scale tracking" error — the
-   remedy is to re-run the step that wrote it. Measurements are unchanged for any
-   run that already passed an explicit `--pixel_size`.
+   `--seg_instantseg_target cells|nuclei` (it produced one mask, replicated into both outputs,
+   which zeroed every cytoplasmic measurement), and an OME header whose `PhysicalSizeXUnit`
+   is not recognised. A recognised non-µm unit is now converted rather than read as µm (an
+   `nm` header was a 1000× scale error).
+7. **`pixel_size` defaults to `'auto'`** (was `null`, which forced an explicit value).
+   `'auto'` reads each image's own OME `PhysicalSizeX`, so a run that previously refused to
+   start may now proceed using the file's scale. `PREFLIGHT_SCALE` resolves every slide's
+   scale before heavy work starts: it fails when `auto` cannot resolve a slide, and warns
+   (never fails) when a supplied number disagrees with the file, cannot be confirmed, or when
+   slides in one run resolve to different scales. Every checkpoint manifest carries a
+   `pixel_size` column; a checkpoint written by an earlier version is refused on re-entry
+   ("this checkpoint predates scale tracking"): re-run the step that wrote it. Measurements
+   are unchanged for a run that already passed an explicit `--pixel_size`.
 
 ### Added
-- **`-profile tma`** — a data-shape profile for tissue-microarray input that pins
-  `memory_mode = 'custom'` and `reg_valis_max_non_rigid_dim = 1024` (the `medium` tier's
-  size), so it composes with a site profile (`-profile slurm,ieo,tma`). Needed
-  because VALIS 1.0.0–1.2.0 cannot register a slide whose full resolution is no larger
-  than its non-rigid size (see the pyramid-level −1 entry under Fixed) and TMA cores are
-  typically 2000–3000 px on the long side. Safe for cores of 2048 px or more. It also
-  overrides `REGISTER`'s memory to 32 GB × attempt (from the whole-slide 300 GB), which
-  is what a SLURM queue would otherwise wait for; the JVM heap follows `task.memory`.
-- **`PREFLIGHT_SCALE` process** (`modules/local/preflight_scale.nf` /
-  `bin/preflight_scale.py`), run once over every input slide before any heavy work
-  is staged (`subworkflows/local/input_check.nf`). It reads only OME metadata —
-  never pixel data — resolves what `--pixel_size` will actually use for each
-  slide, and records the result into `meta.pixel_size` so downstream consumers
-  that have no image of their own to read a scale from (`EXPORT_GEOJSON`,
-  `EXPORT_SPATIALDATA`, `SEG_QUALITY_EVAL`, InstantSeg) no longer see the literal
-  unresolved string `'auto'`. Fails loudly, naming every offending slide, when
-  `auto` cannot resolve one; warns, naming both numbers, when a supplied number
-  disagrees with a file's own metadata or cannot be confirmed against it; and
-  warns, naming every distinct value and the slides carrying it, when slides in
-  one run resolve to genuinely different scales — a legitimate mixed-magnification
-  cohort is never refused, only surfaced. See the migration note above.
-- **STARE's COARSE anchor is DISK + LightGlue**, the learned matcher VALIS and the ACROBAT
-  winners use, and it is the only front-end. An interim development iteration of this same
-  Unreleased cycle added a `reg_tiled_frontend` parameter selecting among four front-ends
-  (a classical corner detector, SIFT, Fourier-Mellin and DISK+LightGlue); that parameter is
-  **removed** and never shipped. A dispatch table with one live value is dead config, and the
-  three classical alternatives were not the method the paper describes. There is nothing to
-  migrate — the parameter does not exist in any release — but if you scripted it against a
-  development checkout, drop it: the schema now refuses it.
-  **Consequence, and it is not cosmetic:** DISK is a U-Net, so COARSE's peak memory is now
-  linear in thumbnail AREA (`GB ≈ 1.1 + 7.3 × Mpx`; 3.03 GB at 512 px, 8.78 GB at 1024 px,
-  measured on the pinned stack) rather than nearly flat. Two things follow, both landed here:
-  the `reg_tiled_coarse_max_dim` tier column moves down one step to **2048 / 1024 / 512**
-  (4096 px would need ~123 GB, above `TILED_COARSE`'s whole retry ceiling), and
-  `TILED_COARSE`'s memory request is now DERIVED from the resolved bound instead of a flat
-  8 GB ramp — ~48 GB at the shipped `high` tier, ~5 GB at `low`. **Resume note:**
-  `TILED_COARSE`'s rendered command and its `--max-dim` value both change, so the first
-  `-resume` after upgrading past this change re-runs STARE's whole COARSE-and-downstream
-  registration chain. A one-time cost, not a per-run one.
-- **`torch` + `kornia` and the DISK/LightGlue weights ship inside `bolt3x/mirage-tiled`.**
-  COARSE's learned matcher needs no profile, no second image and no download at
-  first use: `containers/tiled` installs `torch==2.3.1` (CPU wheel, from
-  `download.pytorch.org/whl/cpu`) and `kornia==0.7.3`, and BAKES both pretrained checkpoints
-  (`depth-save.pth`, `disk_lightglue_v0-1_arxiv-pth`) into `TORCH_HOME=/opt/torch` at build
-  time, world-readable. That matters because kornia otherwise fetches them from the network on
-  FIRST USE into `$HOME/.cache/torch` — and the target cluster has a read-only `$HOME` and is
-  documented as air-gapped (`docs/usage.md`), so the first real run would have failed the same
-  way the VALIS JVM cache did. This is a container-only fix; a `git pull` cannot repair a
-  missing checkpoint. The image keeps its JVM-free/libvips-free/CUDA-free property; it is no
-  longer torch-free, and that earlier leanness claim is deliberately retired.
-  An interim development iteration put torch+kornia in a SEPARATE optional
-  `bolt3x/mirage-stare-ml` image selected by a `stare_ml` profile. Both are **removed**, and
-  neither ever shipped: `.github/workflows/build-images.yml` pushes only on
-  `release:published`/`workflow_dispatch`, so that image was built by every push to `main` and
-  published by none — `-profile stare_ml` failed on image pull for anyone who had not manually
-  dispatched its build. One image that always works beats two where the second does not exist.
-  **If you scripted `-profile stare_ml`, drop it**: it is no longer a valid profile name and
-  Nextflow will refuse the run.
-- **Published-output change:** two new registration artifacts are now published under
-  `<outdir>/<patient_id>/registered/`, for external benchmarks that need them:
-  `registered/transform/preprocessed/data/<patient_id>_registrar.pickle` (the VALIS registrar,
-  REGISTER's own `registrar` emit — previously produced but never written to the published
-  tree) and `registered/controls/<patient_id>_<channels>_<ix>_<iy>_ctrl.json` (STARE's
-  per-tile control-point JSON: the only on-disk record of the per-tile `error`/`ref_fg`/
-  `mov_fg` values behind the tiled path's accept/reject gate). **Metadata-pressure note:** the
-  control-JSON file COUNT scales as (slide/tile)², not linearly — `--reg_tiled_mode low` (a
-  larger tile size) is not simply "fewer, bigger files" the way it is for other STARE
-  intermediates; on a 20480² slide it is on the order of ~100 files at the shipped `high` tier
-  vs. an estimated ~1600 at `low`. Each file is still only a few hundred bytes, so total bytes
-  stay negligible (tens of KB per slide), but the file *count* is what pressures a networked
-  filesystem's metadata server (Lustre/GPFS), not disk usage.
-- **A new `segmentation` step, carved out of `postprocessing`.** `SEGMENT`,
-  `EXTRACT_CELL_PROPERTIES` and `EXTRACT_NUCLEI_PROPERTIES` (the latter under
-  `--quantify_compartments`) moved from `subworkflows/local/postprocess.nf` into their
-  own `subworkflows/local/segmentation.nf`, with a resumable checkpoint
-  (`Layout.SEGMENTED` / `Checkpoint.columns('segmented')`). `--start`/`--stop` now
-  accept `segmentation` between `registration` and `postprocessing`
-  (`ParamUtils.STEP_ORDER` and `nextflow_schema.json`'s `start`/`stop` enums both
-  updated). Only `nucleus_contours` is recorded as the empty string when
-  `--quantify_compartments` is false (see `lib/Checkpoint.groovy`'s EMPTY VALUES
-  note) — `nuclei_mask` is always populated, since `SEGMENT` always produces it and
-  `postprocess.nf`'s mask join depends on that being true unconditionally. The
-  checkpoint schema stays fixed across that param setting either way.
-  `--start postprocessing`'s samplesheet must now additionally carry `cell_mask` and
-  `nuclei_mask` columns (`ParamUtils.STEPS`'s `postprocessing` entry — both are
-  dereferenced unconditionally by `segmentation.nf`'s `READ_SEGMENTED_CHECKPOINT`),
-  so a plain `registered.csv` fails validation loudly instead of dying deep inside
-  `segmentation.nf` with "Argument of `file` function cannot be null".
-  **Published-output change:** `csv/segmented.csv` is a new published file, one row
-  per registered slide. `csv/preprocessed.csv`, `csv/registered.csv` and
-  `csv/postprocessed.csv` are byte-identical to before this change. At
-  `--start postprocessing`, `csv/postprocessed.csv`'s `cell_mask` column now
-  correctly names a path under the PRIOR run's `--outdir` (wherever segmentation
-  actually ran), not this run's — a new cross-outdir dependency in that manifest,
-  unlike every other column in it.
-- **`lib/Layout.groovy` gained `publishedOrAsIs`/`isUnderTaskDir`.** A channel that can
-  carry either a fresh task-directory output (this run) or an already-published path
-  read back from an earlier checkpoint (`--start segmentation`'s `INPUT_CHECK`,
-  `--start postprocessing`'s `READ_SEGMENTED_CHECKPOINT`) needs `Layout.publishedPath`
-  applied only in the first case — in the second, the file is already correct and
-  reconstructing it against this run's `--outdir` mis-records it (wrong outdir, and
-  for a one-level producer subdirectory like `registered_slides/`, potentially the
-  wrong kind too). `isUnderTaskDir` checks the immediate parent and grandparent,
-  which covers every producer-subdirectory depth this pipeline's `publishDir` blocks
-  use. `Layout.passthroughPath` now delegates to `publishedOrAsIs` rather than
-  duplicating the same check.
-- **`lib/Checkpoint.groovy`** — the checkpoint CSV's column list, header and row builder
-  now have one owner. The three writers ask for the header instead of restating it, and
-  `Checkpoint.row()` orders values by the declared column list and throws on a missing or
-  unknown column. No published header, column or path changes.
-- **`tests/lib_probe.nf`** — a unit-test surface for `lib/*.groovy`. nf-test's assertion
-  context cannot see `lib/` classes, so the assertions live in a pipeline script, run by
-  CI's `nextflow-stub` job and by `tests/lib_probe.nf.test`.
-- **`nuclear_markers`** parameter (default `['DAPI', 'CELLTOX']`) — an ordered preference list
-  naming the nuclear/fiducial channel. The first marker present (resolved from channel metadata,
-  never the filename) is moved to channel 0 by `CONVERT_IMAGE`. Fails fast if none is present
+
+- **`-profile tma`** for tissue-microarray input: pins `memory_mode = 'custom'` and
+  `reg_valis_max_non_rigid_dim = 1024`, composes with a site profile
+  (`-profile slurm,ieo,tma`), and sizes `REGISTER` at 32 GB × attempt. Needed because VALIS
+  cannot register a slide whose full resolution is no larger than its non-rigid size; safe
+  for cores of 2048 px or more.
+- **`PREFLIGHT_SCALE`**, run once over every input slide before heavy work. It reads only OME
+  metadata, resolves the scale `--pixel_size` will use per slide, and records it in the meta
+  map so `EXPORT_GEOJSON`, `EXPORT_SPATIALDATA`, `SEG_QUALITY_EVAL` and InstanSeg see a
+  number, not `'auto'`. A legitimate mixed-magnification cohort is never refused, only
+  reported. See the migration note above.
+- **STARE's COARSE anchor is DISK + LightGlue**, the only front-end. Its peak memory grows
+  with thumbnail area, so the `reg_tiled_coarse_max_dim` tiers are 2048 / 1024 / 512 and
+  `TILED_COARSE`'s memory request is derived from that bound (about 48 GB at `high`, 5 GB at
+  `low`). The first `-resume` after upgrading re-runs STARE's COARSE-and-downstream chain.
+  The development-only `reg_tiled_frontend` parameter and `stare_ml` profile never shipped;
+  if a script used either, drop it (the schema and Nextflow refuse them).
+- **`torch`, `kornia` and the DISK/LightGlue weights ship inside `bolt3x/mirage-tiled`**, so
+  COARSE needs no profile, second image or download at first use (the target cluster has a
+  read-only `$HOME` and no network).
+- **Two new published registration artifacts** under `<outdir>/<patient_id>/registered/`:
+  `transform/preprocessed/data/<patient_id>_registrar.pickle` (the VALIS registrar) and
+  `controls/<patient_id>_<channels>_<ix>_<iy>_ctrl.json` (STARE's per-tile control points).
+  The control-JSON count scales as (slide/tile)²: about 100 files per 20480² slide at `high`,
+  about 1600 at `low`. Total bytes are negligible, but the file count can load a networked
+  filesystem's metadata server.
+- **A new `segmentation` step** between `registration` and `postprocessing`, with its own
+  resumable checkpoint, `csv/segmented.csv` (one row per registered slide). `--start` /
+  `--stop` accept `segmentation`. `--start postprocessing` now needs `cell_mask` and
+  `nuclei_mask` columns, so a plain `registered.csv` fails validation at launch. At
+  `--start postprocessing`, `csv/postprocessed.csv`'s `cell_mask` column names a path under
+  the prior run's `--outdir`. The other checkpoint CSVs are unchanged.
+- **`nuclear_markers`** (default `['DAPI', 'CELLTOX']`): an ordered preference list naming the
+  nuclear/fiducial channel. The first marker present (from channel metadata, never the
+  filename) is moved to channel 0 by `CONVERT_IMAGE`; the run fails if none is present
   (single-channel images excepted).
-- **An `--mode add_cycle` run now writes `csv/registered.csv` into its `--outdir`.** It never did
-  before — only the linear `REGISTRATION` path wrote that checkpoint, so an `add_cycle` run's
-  `--outdir` could never itself serve as a second `add_cycle`'s `--prior_outdir`. Chaining two
-  `add_cycle` runs is still **not** supported: `csv/postprocessed.csv` is still not written
-  (`add_cycle` has no `POSTPROCESSING` step), and `ParamUtils.validateAddCycle` requires both
-  checkpoints to be present.
-- **Two new supplementary figures.** `docs/figures/coarse-schematic.html` (S5) walks the DISK +
-  LightGlue coarse front-end that replaced the four-way `reg_tiled_frontend` dispatch above;
-  `docs/figures/accuracy-schematic.html` (S6) distinguishes what each of the pipeline's accuracy
-  measures actually measures (intrinsic TRE, the residual-confidence gate, the reconciliation
-  scatter) so a reviewer stops conflating them. The set is now six files, mutually linked via a
-  shared `figset` nav.
-- **`tests/test_figures_have_no_retired_names.py`** — a NEGATIVE guard: no figure may say a
-  backend, front-end or harness the pipeline retired (the ten stale `ORB` mentions in
-  `registration-schematic.html` were the motivating case — `ORB` still parsed as a real word, so
-  no *positive* name check had anything to fail on). Reads raw text, not the comment-stripped
-  `_prose()` the positive checks use, so a retired name hidden in an HTML comment still fails it.
-- **`tests/test_figures_match_the_pipeline.py` gained a fourth claim class**: figure prose is
-  checked against `RegBackends.methods()` so the shipped registration-backend names (currently
-  `valis`, `tiled`) are exactly what the figure set advertises — no deleted backend lingering in
-  prose, no shipped backend the figures never mention.
-- **A samplesheet with a mistyped or extra column now warns, naming it.**
-  `validateInputCSV` only ever asserted the *required* columns were present and said
-  nothing about the rest, so `channles` sitting beside a missing `channels` failed
-  later, elsewhere, on a null. Rejecting unknown columns outright would be wrong — a
-  `csv/registered.csv` read back by `--start segmentation` legitimately carries `id`
-  and `pixel_size` beyond that step's four required columns — so
-  `CsvUtils.unknownColumns` (known set = `ParamUtils.requiredColumnsForStep(step)` ∪
-  `Checkpoint.STEPS.collectMany { it.columns }`) reports the extras and
-  `workflows/mirage.nf` warns once, by name, on **both** the linear `--start`/`--stop`
-  path and the `--mode add_cycle` path (the latter added in a review follow-up — it
-  shares the same `validateInputCSV` call but had no warning at all until then). A
-  legitimate checkpoint header warns about nothing.
-- **The format matrix, and the cluster kit that validates the formats CI cannot
-  synthesise.** `tests/integration/formats/` now exercises pyramidal OME-TIFF,
-  BigTIFF, interleaved RGB, 8-bit, float32, HDF5 and NDPI/NDPIS on real bytes in
-  their own `format-tests` CI job (`requirements/format-tests.txt`, pinned to
-  `containers/convert`'s own reader stack -- it cannot coexist with the harmonised
-  set). `.czi`, `.nd2`, `.lif`, `.ndpi` and `.svs` cannot be synthesised at all
-  (RULING R3: no vendor fixture may be committed), so `tests/cluster/` ships a kit -- a
-  samplesheet template, a probe script run inside the convert container, and a
-  driver -- an operator runs by hand against private images to produce
-  `docs/validation/format_validation.md`, the evidence committed in place of the
-  data. That page ships with this phase in an explicit `kit-validated: pending`
-  state; `tests/test_validation_report_is_real.py` guards it in both states -- it
-  must never regress to the template or to a page claiming success no run
-  produced, and once a real run lands it must name the commit, the probe
-  container, and carry at least one successful row for one of the five vendor
-  formats.
-- **Three corrected `ome_io` return values, found by the synthesised fixtures.**
-  `read_info` on an interleaved-RGB plain TIFF (`YXS`) now reports
-  `shape_cyx=(3, Y, X)` with `channels_are_samples=True` on the tifffile path too
-  (it reported `(Y, X, S)` -- a channel count that was the image height);
-  `read_info` on an `.ndpi` now carries the pixel size from its
-  `XResolution`/`ResolutionUnit` tags (it reported `None`); and `read_plane`'s
-  tifffile branch selects a SAMPLE when `channels_are_samples`, on both the lazy
-  and eager paths, deriving the axis from `series.axes` (`read_plane(rgb, 1)`
-  returned a `(Y, S)` slice). No shipped behaviour changes: the pipeline's only
-  `read_info`/`read_plane` consumer reads planar OME-TIFFs that `CONVERT_IMAGE`
-  has already normalised -- but `ome_io` is a frozen shared interface, so its
-  corrected contract is recorded here.
+- **An `--mode add_cycle` run writes `csv/registered.csv` into its `--outdir`.** Chaining two
+  `add_cycle` runs is still not supported (`csv/postprocessed.csv` is not written).
+- **Two new supplementary figures**: `docs/figures/coarse-schematic.html` (S5, the coarse
+  front-end) and `docs/figures/accuracy-schematic.html` (S6, what each accuracy measure
+  measures).
+- **A samplesheet with a mistyped or extra column warns, naming it**, on both the linear and
+  `add_cycle` paths. A legitimate checkpoint header warns about nothing.
+- **Format coverage**: pyramidal OME-TIFF, BigTIFF, interleaved RGB, 8-bit, float32, HDF5 and
+  NDPI/NDPIS are tested on real bytes. For `.czi`, `.nd2`, `.lif`, `.ndpi` and `.svs`, which
+  cannot be synthesised, `tests/cluster/` ships a kit an operator runs against private images
+  to produce `docs/validation/format_validation.md`.
+- **Corrected image-reading results**: an interleaved-RGB plain TIFF reports
+  `shape_cyx=(3, Y, X)`, an `.ndpi` carries its pixel size, and reading one channel of an RGB
+  image selects a sample. The pipeline's own reads were unaffected.
 
 ### Changed
-- **The VALIS tiers use one size for both stages: `high` 2048, `medium` 1024, `low` 512 px.**
-  The non-rigid column was 4096 / 4096 / 1024 and the feature-matching column 2048 / 1024 /
-  256, so `high` ran its non-rigid stage at twice its matching size. **Registration output
-  changes for every VALIS run that used a tier**: `high`'s displacement fields are now
-  estimated at 2048 px instead of 4096, `medium`'s at 1024, `low`'s at 512 (and `low`'s
-  feature matching rises from 256 to 512 px). Outputs are not bit-comparable across this
-  change; `custom` runs that set both knobs explicitly are unaffected. Every prose copy of
-  the table (register.py, nextflow.config, docs/parameters.md, the registration figure) is
-  held to `MEMORY_PRESETS` by `tests/test_valis_tier_sizes.py`. Note this does NOT lift the
-  pyramid-level −1 limit above: the source size VALIS needs still scales with the tissue-mask
-  term, so the preflight and the `tma` profile remain necessary for small slides.
-- **The resource report is plots, not tables.** The per-process rollup,
-  resource-vs-input-size, top-10-by-RSS, top-10-by-runtime and per-task
-  retry/failure tables are replaced by four hand-rolled SVG panels: wall-time by
-  process, memory headroom (requested `memory` vs observed `peak_rss` — the
-  trace column the report never read), the reserved GB·hours lost to failures
-  and retries, and input size against runtime on log-log axes. Run Totals
-  survives as the one remaining table and gains the peak single-task %CPU. Two
-  behaviour changes: a zero-byte matched input is dropped from the scatter (a
-  log axis cannot place a zero) and the panel states how many were dropped, and
-  a per-task status/exit string is no longer rendered. The script remains
-  standard-library only, now guarded.
-- **The HTML QC report is plots, not tables.** `bin/generate_qc_report.py` renders
-  per-stage registration-error distributions (STARE per-tile TRE, accepted tiles
-  only; warp-seg cell displacement, one point per slide), a log-log feature-TRE vs
-  cell-displacement scatter with the 3× divergence band drawn as two diagonals, and
-  a per-cell residual distribution — replacing the per-slide TRE tables, the
-  flattened warp-seg metric table, the reconciliation verdict table and the 500-row
-  head-of-CSV residual dump. All hand-rolled inline SVG; the script remains
-  stdlib-only and is now guarded as such.
-- **The Software Versions and Sample Manifest sections are gone from the report.**
-  Both content sources are unchanged and still published:
-  `qc/mirage_qc_data_<timestamp>/collated_versions.yml` and `run_summary.json`
-  (whose `manifest` block `final_qc.nf` still builds). `--versions` and
-  `--run-summary` are still passed to the script, which still copies both into the
-  data bundle — the rendering was cut, not the artifact.
-- **`pixel_size` default: `null` → `'auto'`.** It used to have no shipped default —
-  `ParamUtils.validatePixelSize` forced an operator to assert a positive number of
-  micrometres per pixel, or pass `'auto'` explicitly, before a run could start.
-  `'auto'` is now the default: it reads `PhysicalSizeX` from each image's own OME
-  header via the new `PREFLIGHT_SCALE` process (entry above). `conf/test.config` and
-  `conf/test_full.config` still pin an explicit number, because the synthetic test
-  fixtures carry no OME `PhysicalSize` and `'auto'` would (correctly) refuse them.
-  Every checkpoint manifest (`lib/Checkpoint.groovy`'s per-step schema) now also
-  carries a `pixel_size` column recording the resolved value; a checkpoint CSV
-  written before this change has no such column and is REFUSED on re-entry
-  (`--start`, `--prior_outdir`) with a "this checkpoint predates scale tracking"
-  error rather than silently falling back to `params.pixel_size` — the remedy is to
-  re-run the step that wrote the checkpoint.
-- **`reg_tiled_dapi_index` → `reg_tiled_nuclear_index`, default `0` → `null`.** `null`
-  resolves the index from the slide's own channel metadata via
-  `MarkerUtils.nuclearIndex`, matching how `SEGMENT`'s CellSAM backend already resolves
-  it (`lib/SegBackends.groovy`); an integer overrides. `TILED_COARSE` and
-  `TILED_REG_TILE` fail loudly, naming the configured markers, when no nuclear channel
-  is present. The Python flag is now `--nuclear-index`, with `--dapi-index` kept as a
-  deprecated alias so hand-run commands still work. `tiled_io.dapi_channel` is renamed
-  `nuclear_channel`. **Breaking for anyone passing `--reg_tiled_dapi_index` on the
-  command line or in a params file** — rename it.
-- `bin/tiled_coarse.py`'s range check was `index >= min(C_ref, C_mov)`, which a
-  negative index passes before silently reading the *last* channel through Python's
-  wraparound. Now `0 <= index < min(...)`.
 
-- **The tiled (STARE) steps now reserve memory derived from the parameter that sets it,
-  instead of a flat constant.** Every tiled process was designed so its peak is a function of
-  a *parameter* rather than of the slide (`tiled_adapter.nf`'s header). Measured peak RSS on
-  this codebase confirms the design holds — `TILED_COARSE` 1.97 GB, `TILED_REG_TILE` 1.33 GB,
-  `TILED_SOLVE` 0.03 GB, `TILED_STITCH` 1.42 GB, all on an 8192² pair, and flat in slide size
-  because each task reads a bounded window through lazy zarr regions. But the *reservations*
-  were constants, so the guarantee was only a comment: raising `reg_tiled_tile` or
-  `reg_tiled_out_tile` grew the need while the request stayed at 8 GB, and the overrun
-  surfaced as a SIGKILL rather than a validation error. `conf/modules.config` now derives both
-  from the measured cost line (`REG_TILE ≈ 0.4 GB + 0.10 GB/Mpx` of `(tile + 2·halo)²`;
-  `STITCH ≈ 0.6 GB + 0.17 GB/Mpx` of `out_tile²`), doubled, with a 4 GB floor. Shipped defaults
-  now ask **4 GB instead of 8 GB** for both, while `--reg_tiled_tile 4096` reserves 6 GB and
-  `--reg_tiled_out_tile 4096` reserves 7 GB (verified against `-with-trace`). `TILED_SOLVE`
-  drops **4 GB → 1 GB**: it was reserving ~120× its measured 33 MB peak for a 0.11 s reduction
-  over a few hundred bytes of JSON per tile. `TILED_COARSE` is deliberately left on its
-  doubling ramp — unlike the other three, part of its peak is the source plane's zarr chunk,
-  which is slide-dependent and cannot be bounded from a parameter.
-  - Both helpers are **self-contained by necessity**, not by preference. A top-level `def` in
-    `conf/modules.config` can be called *from* a resource closure (as `starDistCommonFlags()`
-    is from `ext.args`), but inside that invocation it cannot call *another* top-level `def` —
-    the body resolves against the closure's delegate, not the config script. Factoring the
-    shared arithmetic into one `tiledWindowGb(px, base, slope)` helper parsed fine and then
-    aborted every task with `Unknown method invocation 'tiledWindowGb' on _parse_closure5
-    type`. This is the same class of trap as "conf/*.config cannot see lib/*.groovy", and it
-    is equally invisible until a real submission: **`-stub` does not exercise these closures.**
-- **The tiled size parameters are validated up front.** `reg_tiled_tile`, `reg_tiled_halo`,
-  `reg_tiled_out_tile`, `reg_tiled_upsample`, `reg_tiled_dapi_index` and `reg_tiled_gate_tre`
-  had no `minimum` and no `ParamUtils` check, so nonsense values failed deep inside a container
-  or not at all. `reg_tiled_out_tile` additionally now carries `multipleOf: 16`: tifffile
-  rejects any other tile shape, so `--reg_tiled_out_tile 1000` used to run `TILED_COARSE`,
-  every `TILED_REG_TILE` and `TILED_SOLVE` before dying in the final `TILED_STITCH` with
-  `ValueError: invalid tile shape`. It is now caught by `validateParameters()` before any
-  process is instantiated.
-- **The registration method's intrinsic TRE is no longer named after VALIS.** Both backends
-  estimate a target registration error from their own registration — VALIS a feature-distance
-  `*_summary.csv`, STARE a `*_tre.json` — but the QC pipeline called the slot `valis_summary`
-  end to end. It is now `registration_tre`: the adapters emit `intrinsic_tre`, `REGISTRATION`
-  emits `registration_tre`, and that is the artifact kind `FINAL_QC` recognises.
-  **Published-output change:** the folder inside the `qc/mirage_qc_data_*/` report bundle that
-  holds these raw artifacts is renamed `valis_summary/` -> `registration_tre/`. Nothing else
-  about the published tree changes — no path, filename or checkpoint-CSV column moves.
-  `GENERATE_QC_REPORT`'s `--valis-summary` flag is likewise now `--registration-tre` (an
-  internal process-to-script interface; the parameter surface is unchanged).
-- **`nuclear_markers` is now honoured by every consumer**, not only `CONVERT_IMAGE`:
-  `SPLIT_CHANNELS`/`split_multichannel.py`, `SEGMENT`, `SEG_QC_GEOJSON`, and `CsvUtils`'
-  samplesheet validation and channel counting all resolve the nuclear/fiducial channel from the
-  same rule now, so it genuinely drives both cell segmentation and the registration fiducial.
-  **Behaviour change under the shipped default `['DAPI', 'CELLTOX']`:** a samplesheet with a
-  channel whose name *contains* `CELLTOX` (case-insensitive) now has that channel dropped from
-  non-reference slides, exactly as `DAPI` always was. On an affected run, `add_cycle`'s
-  double-written `merged_quant.csv` becomes a single correct file, and the redundant per-cycle
-  fiducial disappears from `*_quant.csv`. Users who want the old behaviour should set
-  `--nuclear_markers DAPI`.
-- **`--nuclear_markers` now accepts a comma/space-separated string as well as a list**, so
-  `--nuclear_markers CELLTOX` works on the command line (`nextflow_schema.json` type widened to
-  `["array", "string"]`).
-- **`SEG_QC_GEOJSON` (the `reg_qc=2` GeoJSON registration-QC path) now passes
-  `--tolerance ${simplify_tolerance}` to `segment_to_geojson.py`.** Previously it passed no
-  tolerance at all, so its contours were simplified at the script's own default (`0.5`) while
-  `EXTRACT_CELL_PROPERTIES` — the GeoJSON `WARP_SEG_QC` compares this one against — used the
-  configured `simplify_tolerance` (`1.0`). The two GeoJSONs `WARP_SEG_QC` diffs were therefore
-  simplified at different tolerances. **Behaviour change:** `reg_qc=2` registration-QC scores
-  (dice/displacement) from before this change are **not comparable** to scores computed after
-  it, on any run using the GeoJSON path. Also factored the StarDist flags SEGMENT and
-  SEG_QC_GEOJSON both need (model, tiling, cell-expansion distance, pmin/pmax, prob-threshold)
-  into one shared definition (`conf/modules.config`'s `starDistCommonFlags()`), which had
-  drifted apart into two hand-built copies; `--nuclear-markers` stays built in
-  `seg_qc_geojson.nf`'s script block (unchanged behaviour — see that file's comment for why it
-  could not move alongside the rest). **`--expand-distance` is now wired to
-  `params.seg_expand_distance` for `SEG_QC_GEOJSON` too** (it previously always used
-  `segment_to_geojson.py`'s Python default, `10`, regardless of `--seg_expand_distance`) —
-  behaviourally a no-op under the shipped default (both are `10`), but an operator overriding
-  `--seg_expand_distance` now gets consistent expansion between `SEGMENT` and `SEG_QC_GEOJSON`
-  instead of the same "compared at different settings" defect `--tolerance` had.
-- **`reg_micro_reg` now defaults to `2`** (maximum: micro-rigid + micro non-rigid), previously `0`.
-  Registrations run the full micro-registration by default — a quality-over-speed change
-  (micro-registration can add ~30–120 min per registration).
-- **`--seg_method` with an unrecognised value now fails fast** instead of silently running
-  StarDist.
-- **`params/full_pipeline.json` now sets `"seg_method": "stardist"`.** The file already set
-  `segmentation_model`, `segmentation_model_dir`, `seg_n_tiles_x`, `seg_n_tiles_y`, `seg_pmin`
-  and `seg_pmax` — all StarDist-only flags — but `nextflow.config` defaults `seg_method` to
-  `instantseg`, so a run launched with `-params-file params/full_pipeline.json` silently
-  discarded all six values and segmented with InstanSeg instead. Launching from this preset
-  now runs StarDist: a different backend, container, and set of `versions.yml`/mask outputs
-  than before this fix. Anyone relying on the file's prior (InstanSeg) behaviour must now pass
-  `--seg_method instantseg` explicitly.
-- **`<outdir>/size_logs/versions.yml`'s single key changed** to
-  `MIRAGE:FINAL_QC:AGGREGATE_SIZE_LOGS` (diagnostic string only; no functional effect).
-- **`--quantify_compartments`/`--expanded_quantification`/`--embed_masks` are now
-  resolved once (`ParamUtils.compartmentMode`) and threaded down as an argument**,
-  the same seam `--registration_method` already has, replacing a ternary that used to
-  be copied verbatim between `postprocess.nf` and `add_cycle.nf` plus several
-  independent raw reads across `segmentation.nf`/`postprocess.nf`/`add_cycle.nf`/
-  `assemble_export.nf`. No published-output change — behaviour verified
-  byte-identical across the full stub scenario matrix.
-  **Behaviour change: `ParamUtils.validateCompartmentQuant` now also rejects
-  `--embed_masks true` unless BOTH `--quantify_compartments` and
-  `--expanded_quantification` are also true.** Previously `--embed_masks true
-  --quantify_compartments false` (or with `--expanded_quantification false`) exited
-  `0` and silently published a pyramid OME-TIFF with **no** mask series
-  (`assemble_export.nf`'s `embed_masks` gate is `embed_masks && quantify_compartments
-  && expanded_quantification`), a gap only discovered later when that `--outdir` was
-  handed to `mode='add_cycle'` as `--prior_outdir` and `EXTRACT_MASK_SERIES` found no
-  `Image:1` to reuse. A launch that used to succeed under that combination now fails
-  fast with a clear error instead. **To recover:** either drop `--embed_masks` (if you
-  do not need the mask series in the pyramid), or set both
-  `--quantify_compartments true --expanded_quantification true` alongside it.
-- **`SPLIT_CHANNELS` and `QUANTIFY` now publish per patient.**
-  **Published-output change:** `<outdir>/split_channels/<marker>.tiff` moves to
-  `<outdir>/<patient_id>/split_channels/<marker>.tiff`, and
-  `<outdir>/quantify/<patient>_<marker>_quant.csv` moves to
-  `<outdir>/<patient_id>/quantify/`. Both processes previously had no `publishDir` of
-  their own and inherited a run-level, patient-unaware default. Because
-  `split_multichannel.py` names its outputs by sanitised channel name alone, **two
-  patients sharing a marker published to the same path and the second silently
-  overwrote the first** on every multi-patient run. Nothing in the pipeline reads the
-  published copies, so the run stayed green and the loss was invisible. No checkpoint
-  CSV column, no other published path, and no GeoJSON measurement key changes.
-- **`add_cycle`-only: `SPLIT_PRIOR_PYRAMID` now publishes to its own leaf.**
-  **Published-output change:** `<outdir>/<patient_id>/split_channels/prior/<marker>.tiff`
-  is new; nothing at `<outdir>/<patient_id>/split_channels/<marker>.tiff` moves.
-  `subworkflows/local/add_cycle.nf` includes `SPLIT_CHANNELS` a second time as
-  `SPLIT_PRIOR_PYRAMID` (re-splitting the prior run's pyramid so its channels can be
-  deduped against the new cycle's). Nextflow's `withName:` selector matches an alias
-  against both its own name and the process' original declared name, so
-  `withName: 'SPLIT_CHANNELS'` was routing **both** invocations to the same
-  `<pid>/split_channels/` directory — whichever finished last silently overwrote the
-  other's file for any marker name the two shared. This is a **published-artifact**
-  collision only: the in-memory channel deduplication `add_cycle.nf` already does
-  before building the pyramid (new-cycle channel wins, `DAPI` always protected — see
-  `docs/add_cycle.md`'s Marker collisions section) reads each task's staged output
-  directly and was never affected. Pre-existing since `add_cycle.nf:40` first aliased
-  the include; not introduced by this branch.
-- **`EXTRACT_MASK_SERIES` (the `--mode add_cycle` mask-reuse step) now publishes per
-  patient too.** **Published-output change:** `<outdir>/extract_mask_series/cell_mask.tif`
-  and `.../nuclei_mask.tif` move to `<outdir>/<patient_id>/segmentation/`. This process
-  had the identical unprefixed-filename defect `SPLIT_CHANNELS` had: on a two-patient
-  `add_cycle` run it published exactly two files total — one `cell_mask.tif`, one
-  `nuclei_mask.tif` — for both patients combined, the second silently overwriting the
-  first. It shares the `segmentation` leaf with `SEGMENT`'s own masks; this is safe
-  because `--mode add_cycle` requires a fresh `--outdir` distinct from `--prior_outdir`
-  (`ParamUtils.validateAddCycle`), so `<pid>/segmentation/` is never occupied by anything
-  else in that run.
-- **The fall-through `publishDir` default is now a guard.** A process with no explicit
-  `publishDir` publishes to `<outdir>/_UNROUTED_PUBLISH/<process>` instead of to a
-  plausible-looking run-level directory, and `tests/test_layout.py` fails the build if
-  any process reaches it.
-  **Published-output change:** `<outdir>/tiled_coarse/` and `<outdir>/tiled_reg_tile/`
-  (the STARE tiled-registration fan-out's per-tile anchor JSON, tile-plan CSV, and
-  per-tile control-point JSON — `reg_tiled_fanout=true` only) are no longer published at
-  all; both processes were already relying on the same unrouted default this change
-  closes off, and their content is purely intermediate — `TILED_SOLVE` consumes it and
-  is the one that publishes the durable artifacts: the registration manifest, and the
-  `*_tre.json` whose `"tiles"` records (see `bin/utils/tre_report.py`) carry the same
-  per-tile diagnostic information forward. Both got an explicit
-  `publishDir = [ enabled: false ]` so this is a declared decision, not a silent gap.
-- **Every module's `versions.yml` (`script:` and `stub:`) now renders from one tool list**
-  (`lib/ProcessEnvelope.groovy`) instead of two hand-written, independently-maintained
-  heredocs. `modules/local/segment.nf` is no longer the exception it started as: rather
-  than holding each backend's version rows PRE-RENDERED, `lib/SegBackends.groovy` now
-  stores them as bare module names (`versionTools`, the same key `lib/WarpBackends.groovy`
-  uses) and `segment.nf`'s two blocks render from that one list like every other module's.
-  That leaves 23 of the 24 `modules/local/*.nf` files routed through `ProcessEnvelope`,
-  with `aggregate_size_logs.nf` the sole documented exception — it runs in
-  `ubuntu:22.04`, has no Python interpreter, and reports a `bash:` row that
-  `ProcessEnvelope`'s automatic `python:` row would falsify. No published `versions.yml` content
-  changes on a stub run; on a **real** run, the same two modules — `extract_mask_series.nf`
-  and `merge_and_pyramid.nf` — pick up two deltas each: they now probe `python` instead of
-  `python3` for their version rows (both run on an image where `python` exists; `python3`
-  was inconsistent authoring, not a deliberate choice), and their probes now fail soft
-  (`|| echo "unknown"`) instead of erroring the task if a tool's import fails — a fallback
-  their hand-written `python3` heredocs never had.
-- **`WARP_SEG_QC_TILED` is merged into `WARP_SEG_QC`.** One process now serves both
-  registration backends, with container, flags, stage list, version rows and stub extras
-  coming from `lib/WarpBackends.groovy` — the same shape `SEGMENT` already uses for its
-  three segmentation backends. The two processes shared ~77% of their bodies.
-  **`<outdir>/size_logs/input_sizes.csv` row change (not a new published file):** the
-  tiled path's `process` column now reads `WARP_SEG_QC` instead of
-  `WARP_SEG_QC_TILED` — the per-task `<prefix>.*.size.csv` this aggregates from is
-  never itself published (`WARP_SEG_QC`'s `publishDir` pattern is `*_seg_qc.json`
-  only). The `*_seg_qc.json` and `*_reg_residuals.csv` filenames, contents and
-  locations are unchanged. `params.registration_method` is still read exactly once
-  for DISPATCH, in `subworkflows/local/registration.nf`; `WARP_SEG_QC`'s
-  `--jvm-heap-gb 8` (VALIS-only) is resolved from the `method` process input via
-  `lib/WarpBackends.groovy`, not from the param, so the two can never disagree.
-- **The blocking `nf-test test --tag stub` job is sharded four ways** (a
-  `shard-strategy round-robin` matrix in `_test-suite.yml`'s `nf-test-stub` job),
-  cutting that leg's wall time from roughly 30 minutes to roughly 9.
-- **`ruff format` in check mode is now also blocking**, in the same `_test-suite.yml`
-  `ruff` job that already runs `ruff check`, after the whole tree was normalised to
-  its output in one commit (133 files). See `tests/README.md`'s CI Jobs section.
-- **`versions.yml` from every process now records `container:`** — the image the
-  task ran in (`stub` under `-stub`) — via `lib/ProcessEnvelope.groovy`'s shared
-  `versions()`/`versionsStub()` rendering.
-- **Stub-mode `*.size.csv` rows carry the real process name instead of the literal
-  `STUB`**; `sample_id` for `QUANTIFY` is now `patient_id` in both halves.
-- **`bin/generate_resource_report.py`'s `parse_size_log` rejects a size log whose
-  header is not `process,sample_id,filename,bytes`** — one owner,
-  `ProcessEnvelope.SIZE_LOG_COLUMNS`.
-- **The measured byte set moved** for `REGISTER` (everything under `ref/` +
-  `input_*/`), `PREFLIGHT_SCALE` (`input_*/*`), `MERGE_AND_PYRAMID` (sum of
-  `channels/*`, no longer the directory inode) and `WARP_SEG_QC` (real bytes, was
-  hard-coded 0) — size-vs-runtime plots are not comparable across this change.
-- **`bin/utils/ome_io.py` is the one image I/O seam.** Every `bin/` TIFF write goes
-  through `write_tiff`/`write_ome_tiff`/`ome_tiff_writer`; format dispatch goes
-  through `detect_reader`/`require_reader`. An unclaimed samplesheet extension now
-  fails at launch with `UnsupportedFormatError` naming the suffix — it used to fall
-  through to `bioio` and fail several frames inside `BioImage`, naming a problem
-  that was not the problem. `.svs`/`.qptiff`/`.vsi`/`.scn`/`.mrxs`/`.bif`/`.ims` are
-  declared Bio-Formats routes that raise a named `ImportError` until
-  `bioio-bioformats` is installed in the convert image (plan 06).
-- **`CONVERT_IMAGE`'s `versions.yml` now records `bioio`** where it recorded
-  `aicsimageio`.
-- **`APPLY_PROFILES`'s OME-XML header attribute order moved onto `ome_metadata`'s**
-  — the order `convert_image` already used. Pixels and values are unchanged, but a
-  byte-diff against a pre-change preprocessed slide's header will differ, and
-  `-resume` across the change will miss for that step.
-- **`subworkflows/local/checkpoint_writer.nf` (`CHECKPOINT_WRITER`) is the one
-  checkpoint-CSV writer**, and the only reader of `params.cleanup_level` under
-  `subworkflows/`; `registered_checkpoint.nf` is folded into `register_patient.nf`
-  and deleted. `Checkpoint.requireColumns` now runs at every checkpoint reader.
-- **`lib/RegBackends.groovy` is the one table of what a registration backend is**;
-  the three decision sites (the adapter, the seg-QC join, and the add_cycle gate)
-  route through it.
-- **`expand_labels_tiled` has one owner, `bin/utils/segment_io.py`** — both
-  `segment.py` and `segment_cellsam.py` import it rather than carrying their own
-  copy.
-- **Registration QC is a before/after pair.** `GENERATE_REGISTRATION_QC` now
-  receives the moving slide's native, pre-registration image alongside the
-  registered one and renders two composites side by side on the reference
-  canvas: *Before* (reference + native) and *After* (reference + registered),
-  separated by a blue band. Differing dimensions are reconciled by pad-or-crop
-  at the origin, never by rescaling, so the "before" panel cannot understate the
-  error it exists to show. Published names are unchanged
-  (`*_QC_RGB.{png,tif}`, `*_QC_RGB_fullres.tif`) — the figure is twice as wide,
-  not differently named. Applies at every `reg_qc >= 1`, on both the linear path
-  and `--mode add_cycle`. `GENERATE_REGISTRATION_QC`'s input tuple grows from
-  three elements to four — `[meta, registered, native, reference]`, with `native`
-  staged under its own `native/` subdirectory — so any caller invoking the
-  process directly must now supply the native image; the two existing call sites
-  (`subworkflows/local/registration.nf`, `subworkflows/local/add_cycle.nf`) join
-  it in on `meta.id`. `bin/generate_registration_qc.py` gains `--native`;
-  omitting it renders the previous single panel, so the script stays usable by
-  hand. `GENERATE_REGISTRATION_QC`'s memory tier is now keyed on all three
-  inputs' combined size, not two. Both the fullres composite and the preview
-  TIFF now carry a stamped pixel size (ImageJ `unit=um` metadata on the former,
-  OME `PhysicalSizeX/Y` in µm on the latter via `bin/generate_registration_qc.py
-  --pixel-size-um`), so a viewer's scale bar on either output is real.
-- **Every `FROM` in `containers/`, and both external runtime images the pipeline pulls
-  (`cdgatenbee/valis-wsi`, `labsyspharm/basicpy-docker-mcmicro`), are pinned by content
-  digest** (R6) — the basicpy digest lives in `conf/modules.config`'s
-  `withName: 'BASICPY'` block; the vendored `modules/nf-core/basicpy` module itself is
-  untouched.
-- **`AGGREGATE_SIZE_LOGS` now runs in `bolt3x/mirage-preprocess`**, replacing a bare
-  `ubuntu:22.04` container.
-- **Every first-party image now installs `procps`.**
-- **`containers/regqc` is stripped to what `GENERATE_REGISTRATION_QC` actually
-  executes** — TensorFlow, StarDist, Miniconda and `bftools` are gone. Dead installs
-  were removed across the other images too, and StarDist's accelerators
-  (`gputools`/`edt`) are pinned.
-- **`containers/convert` installs `bioio-bioformats`, with the Bio-Formats jars baked
-  at build time and the JVM cache redirected off a read-only `$HOME`** on the
-  pipeline's own read path (R2) — `.svs`/`.qptiff`/`.vsi`/`.scn`/`.mrxs`/`.bif`/`.ims`
-  now convert offline.
-- **`requirements/spatialdata.txt` is locked to exact versions resolved on
-  linux/amd64.**
-- **All 11 first-party images carry OCI provenance labels.**
-- **`containers/README.md` is rewritten and pinned to the Dockerfiles by a guard.**
-- **The container-requirements guards now derive from module-scope imports plus a
-  positive `REQUIRED_RUNTIME_IMPORTS` table** — the 16-entry unreachable-import
-  allowlist is gone — and a reverse rule now forbids installing what nothing reaches.
-- **`docs/figures/` rewritten to match the current pipeline**: two registration backends (VALIS,
-  tiled/STARE) instead of three, the DISK + LightGlue coarse front-end, the QC report's
-  plots-first rework, and the registration-QC two-panel (native + registered) overlay. The
-  parameter defaults, pipeline names and registration-method words each figure states are now
-  drift-checked against `nextflow.config`, the pipeline source and `RegBackends.methods()`
-  respectively — see the guards listed under Added.
-- **`tests/test_no_cli_boolean_params_in_docs.py` now scans `docs/figures/*.html`**, not just
-  prose docs, so a figure can no longer show the CLI-rejected `--dry_run true` form.
+- **The VALIS tiers use one size for both stages: `high` 2048, `medium` 1024, `low` 512 px**
+  (non-rigid was 4096 / 4096 / 1024, matching 2048 / 1024 / 256). Registration output changes
+  for every VALIS run that used a tier; `custom` runs that set both sizes are unaffected.
+- **The resource report is plots, not tables**: wall time by process, memory headroom
+  (requested vs peak RSS), reserved GB·hours lost to failures and retries, and input size
+  against runtime. Run Totals remains as a table and gains peak single-task %CPU. A
+  zero-byte input is dropped from the log-log scatter (the panel says how many), and the
+  per-task status table is gone.
+- **The HTML QC report is plots, not tables**: per-stage registration-error distributions, a
+  feature-TRE vs cell-displacement scatter with its 3× divergence band, and a per-cell
+  residual distribution.
+- **The Software Versions and Sample Manifest sections are gone from the report.** Their
+  sources are still published: `qc/mirage_qc_data_<timestamp>/collated_versions.yml` and
+  `run_summary.json`.
+- **`pixel_size` default: `null` → `'auto'`** (see Migration item 7). `conf/test.config` and
+  `conf/test_full.config` pin a number because the synthetic fixtures carry no OME
+  `PhysicalSize`.
+- **`reg_tiled_dapi_index` → `reg_tiled_nuclear_index`, default `0` → `null`.** `null`
+  resolves the index from the slide's channel metadata; an integer overrides. `TILED_COARSE`
+  and `TILED_REG_TILE` fail, naming the configured markers, when no nuclear channel is
+  present. **Breaking**: rename the parameter in commands and params files. A negative index
+  is now rejected instead of reading the last channel.
+- **STARE memory requests follow the parameters that set them**: `TILED_REG_TILE` and
+  `TILED_STITCH` ask 4 GB at the defaults (was 8 GB) and more when `reg_tiled_tile` or
+  `reg_tiled_out_tile` is raised; `TILED_SOLVE` asks 1 GB (was 4 GB).
+- **The STARE size parameters are validated at launch.** `reg_tiled_out_tile` must be a
+  multiple of 16; any other value used to fail only in the final `TILED_STITCH`.
+- **The registration method's intrinsic TRE is no longer named after VALIS.** In the
+  `qc/mirage_qc_data_*/` bundle, `valis_summary/` is renamed `registration_tre/`.
+- **`nuclear_markers` is honoured by every consumer** (`SPLIT_CHANNELS`, `SEGMENT`,
+  `SEG_QC_GEOJSON`, samplesheet validation and channel counting). Under the default
+  `['DAPI', 'CELLTOX']`, a channel whose name contains `CELLTOX` is now dropped from
+  non-reference slides, as `DAPI` always was. Set `--nuclear_markers DAPI` for the old
+  behaviour.
+- **`--nuclear_markers` accepts a comma/space-separated string**, so
+  `--nuclear_markers CELLTOX` works on the command line.
+- **`reg_qc=2` registration QC simplifies contours at `simplify_tolerance` and expands cells
+  by `seg_expand_distance`**, the same settings as the cells it is compared against. Scores
+  from before this change are not comparable.
+- **`reg_micro_reg` defaults to `2`** (micro-rigid + micro non-rigid, was `0`). Expect
+  ~30–120 min more per registration.
+- **`--seg_method` with an unrecognised value fails** instead of running StarDist.
+- **`params/full_pipeline.json` sets `"seg_method": "stardist"`**, so its StarDist settings
+  are used. Pass `--seg_method instantseg` for the previous behaviour.
+- **`<outdir>/size_logs/versions.yml`'s key is `MIRAGE:FINAL_QC:AGGREGATE_SIZE_LOGS`.**
+- **`--embed_masks true` requires both `--quantify_compartments` and
+  `--expanded_quantification`.** It used to exit 0 and publish a pyramid with no mask series.
+  Drop `--embed_masks`, or set both.
+- **`SPLIT_CHANNELS` and `QUANTIFY` publish per patient**:
+  `<outdir>/<patient_id>/split_channels/<marker>.tiff` and
+  `<outdir>/<patient_id>/quantify/`. Before, two patients sharing a marker overwrote each
+  other's published file.
+- **`add_cycle`: `SPLIT_PRIOR_PYRAMID` publishes to
+  `<outdir>/<patient_id>/split_channels/prior/`**, so it no longer overwrites the new
+  cycle's split channels.
+- **`EXTRACT_MASK_SERIES` (`add_cycle`) publishes to `<outdir>/<patient_id>/segmentation/`**
+  (was `<outdir>/extract_mask_series/`, where patients overwrote each other).
+- **A process with no explicit `publishDir` publishes to `<outdir>/_UNROUTED_PUBLISH/`.**
+  `<outdir>/tiled_coarse/` and `<outdir>/tiled_reg_tile/` are no longer published; their
+  diagnostics are carried in the `*_tre.json` and manifest `TILED_SOLVE` publishes.
+- **`versions.yml`** is rendered the same way for every process and records the `container:`
+  the task ran in. On a real run, `extract_mask_series` and `merge_and_pyramid` probe
+  `python` (was `python3`) and report `unknown` instead of failing when a probe import fails.
+- **`WARP_SEG_QC_TILED` is merged into `WARP_SEG_QC`.** In
+  `<outdir>/size_logs/input_sizes.csv` the tiled path's `process` column reads `WARP_SEG_QC`.
+  The `*_seg_qc.json` and `*_reg_residuals.csv` outputs are unchanged.
+- **Stub-mode size-log rows carry the real process name**, and `QUANTIFY`'s `sample_id` is the
+  patient id.
+- **The measured byte set changed** for `REGISTER`, `PREFLIGHT_SCALE`, `MERGE_AND_PYRAMID` and
+  `WARP_SEG_QC`, so size-vs-runtime plots are not comparable across this release.
+- **An unsupported samplesheet extension fails at launch** with `UnsupportedFormatError`
+  naming the suffix. `.svs`/`.qptiff`/`.vsi`/`.scn`/`.mrxs`/`.bif`/`.ims` convert through
+  Bio-Formats.
+- **`CONVERT_IMAGE`'s `versions.yml` records `bioio`** (was `aicsimageio`).
+- **`APPLY_PROFILES` writes OME-XML attributes in `convert_image`'s order.** Pixels are
+  unchanged, but the header bytes differ and `-resume` across the upgrade re-runs that step.
+- **Registration QC is a before/after pair**: the composite shows reference + native next to
+  reference + registered, reconciled by pad-or-crop, never rescaling. File names are
+  unchanged; the figure is twice as wide. Both TIFF outputs carry a real pixel size. Anyone
+  calling `GENERATE_REGISTRATION_QC` directly must pass the native image as a fourth input.
+- **Every container base image and both external runtime images
+  (`cdgatenbee/valis-wsi`, `labsyspharm/basicpy-docker-mcmicro`) are pinned by digest.**
+- **`AGGREGATE_SIZE_LOGS` runs in `bolt3x/mirage-preprocess`** (was `ubuntu:22.04`); every
+  first-party image installs `procps`; `containers/regqc` carries only what
+  `GENERATE_REGISTRATION_QC` runs; StarDist's `gputools`/`edt` are pinned; all first-party
+  images carry OCI provenance labels.
+- **`containers/convert` installs `bioio-bioformats`** with the Bio-Formats jars baked in and
+  the JVM cache moved off a read-only `$HOME`, so `.svs`/`.qptiff`/`.vsi`/`.scn`/`.mrxs`/
+  `.bif`/`.ims` convert offline.
+- **`requirements/spatialdata.txt` is locked to exact versions.**
+- **`docs/figures/` matches the current pipeline**: two registration backends, the
+  DISK + LightGlue coarse front-end, the plots-first QC report and the two-panel registration
+  QC.
 
 ### Fixed
-- **VALIS registration of small-format slides (TMA cores) died with "JVM is not running"
-  after the whole rigid stage, blamed on micro-registration.** Root cause, reproduced with
-  VALIS's own geometry code: `prep_images_for_large_non_rigid_registration` picks the
-  pyramid level to read as `np.where(level_max < needed)[0][0] - 1`, which is **-1** for
-  any slide whose full resolution is smaller than the source size the non-rigid stage
-  needs. `slide2vips(-1)` then sizes its tile grid from `slide_dimensions[-1]` (Python's
-  negative index: the smallest level, silently), Bio-Formats rejects `setResolution(-1)`,
-  the tile reader swallows the exception and leaves `tile` unbound, and the resulting
-  `UnboundLocalError: local variable 'tile' referenced before assignment` reaches
-  `Valis.register()`'s catch-all, which kills the JVM and **returns `(None, None, None)`
-  instead of raising**. VALIS's own clamp ("not all images are this large. Setting
-  `max_non_rigid_registration_dim_px` to 2720") does not prevent it: the source size it
-  then needs is `processed × s` with `s` scaling the reference frame — or, with
-  `create_masks=True`, the smaller tissue-mask box — up to the clamped value, so the
-  smallest slide is always short (2721 vs 2720 without a mask, 4096 vs 2720 with a mask
-  covering 60 % of the frame). Unchanged upstream at 1.2.0. Three pipeline-side changes,
-  none of which patches VALIS: (1) `REGISTER` now **refuses at start**, before the JVM
-  and the rigid stage, when any slide's full resolution is no larger than the non-rigid
-  size, naming the slides and the two remedies (`bin/utils/valis_preflight.py`); (2)
-  `register()` returning `None` is now raised as the failure it is, pointing at the
-  swallowed traceback on stdout, instead of being logged as "Initial registration
-  completed"; (3) the dead-JVM banner and `--max-non-rigid-dim`'s help, the schema and
-  `docs/parameters.md` no longer say the clamp is benign or that `--micro-reg 0` is the
-  cure. The one-line upstream fix is `max(closest_img_levels[0] - 1, 0)`.
-- **`cleanup_level` set in a profile or a `-c` site config was silently ignored by
-  the publish gates.** Each intermediate `publishDir` gated on a plain
-  `enabled: params.cleanup_level == 'none'` boolean, which Nextflow evaluates at the
-  line it appears on — and `nextflow.config` includes `conf/modules.config` before it
-  declares `profiles {}`, and before any `-c` file is merged. The gates therefore
-  froze against the shipped `'final'`, while the resolved config still printed the
-  pinned `'none'`. Measured on a stub run: a `params { cleanup_level = 'none' }` pin
-  passed via `-c site.config` (the operator route README.md documents) published
-  **32** files, the same as `'final'`; only the CLI flag or a `-params-file` gave
-  **64**. Since `none` is what makes `--start <step>` and `add_cycle` re-entry
-  possible, a site config that pinned it produced a tree with no intermediates and
-  no checkpoint manifest, after the full run. The gate is now the same predicate
-  inside each entry's `saveAs:` closure, which is resolved per file at publish time
-  against the final merged params; the published layout at either level is
-  byte-for-byte unchanged (`64` / `32` files, same paths). Guarded statically by
-  `tests/test_cleanup_publish_gates.py` (an `enabled:` gate in either form now
-  fails) and behaviourally by the new `tests/cleanup_level_pin.sh` — three stub runs
-  through the test profile's own pin, a `-c` pin, and a `-c` override — which has
-  its own step in the blocking suite. `-profile test` alone now publishes the full
-  tree, which is what `conf/test.config`'s comment always said it did.
-- **The resource report is found where Nextflow wrote it.** `main.nf` resolved
-  `trace_dir` against the JVM's working directory while Nextflow resolves
-  `trace.file` against the launch directory; when a wrapper or an `sbatch` that
-  changes directory made those differ, the report was generated from an empty
-  trace and announced as a success. It is now resolved through
-  `lib/ResourceReport.groovy`, and when no trace is found the run logs a warning
-  **naming the path it looked for and whether tracing was on**, and writes no
-  page at all — an empty report that says "not available" is worse than no
-  report, because it looks like one.
-- **The release workflow built a release from three different commits.**
-  `.github/workflows/release.yml` gated on a bare `actions/checkout` (`github.ref`),
-  tagged `ref: main` regardless, and gave `artifacts`, `publish-images` and
-  `verify-config` `needs: [validate, test]` rather than `needs: bump-and-tag` — so on a
-  `workflow_dispatch` the tarball and the ten container images were built **in parallel
-  with** the version bump, from the un-bumped tree. `mirage-v1.0.0.tar.gz` would have
-  shipped a `nextflow.config` still reading the previous version. `validate` now
-  resolves the ref that will be tagged and pins it to a SHA, every gate job checks out
-  that SHA, `bump-and-tag` refuses to tag if `main` moved underneath the gate, and the
-  archive and images are built from the created tag (`build-images.yml` gained a `ref`
-  input, because a reusable workflow checks out the *caller's* ref).
-  `tests/test_release_workflow_graph.py` asserts the graph.
-- **The release gate claimed parity with CI and ran 5 of its 13 blocking checks.**
-  Absent were the whole nf-test stub suite, `ruff check .`, the DEEPCELL token-leak
-  guard *and* its collection assertion, `tests/lib_probe.nf` (the only unit-test
-  surface `lib/*.groovy` has), `tests/check_profiles_parse.sh`,
-  `tests/check_param_consistency.py`, `tests/cleanup_work.sh` and the shipped-defaults
-  stub run — so a release could ship a broken `lib/` class, a leaking token, a profile
-  that will not parse or a param/schema mismatch, and be green. The gate is now five
-  jobs mirroring ci.yml's blocking `all-tests` set, its Nextflow leg carries the same
-  `['25.04.0', 'latest-everything']` matrix (it was `latest-everything` only, so the job
-  blocking a version tag never exercised the `>=25.04.0` minimum the manifest promises),
-  and it provisions the nf-schema plugin explicitly like every Nextflow job in ci.yml.
-- **`pip install -r requirements.txt || true` removed from CI's blocking gate.**
-  Unpinned, swallowing total failure, and resolving numpy 2.x ahead of the line that
-  pins it back. It never worked on the 3.10 leg at all — `deepcell-types` declares
-  `requires-python >=3.11`, so pip resolved nothing and installed nothing. `pyyaml` was
-  declared **only** there while `tests/test_ci_job_hygiene.py` `importorskip`s it at
-  module scope, so it is now installed explicitly; it had survived transitively via
-  dask. `.github/workflows/ci.yml` and `release.yml` now install identical
-  environments.
-- **`tests/test_ci_stack_pinned.py` had two scope holes.** Its presence check was
-  per-FILE, so deleting `numpy` and `tifffile` from ci.yml's *blocking* imaging line
-  left it green — five sibling jobs in the same file carry those pins to generate test
-  data. It is now per-JOB, via a structural `yaml.safe_load` of the `jobs:` block. It
-  was also blind to `-r`: `pip install -r <file>` yields no package tokens, so the
-  "==-pinned" rule passed while a file installed guarded packages unpinned.
-- **`all-tests` treated `skipped` as a pass**, and `nf-test-real` carried
-  `continue-on-error: true` on top of already being absent from `needs:` — 129 real
-  cases showed a green tick whatever they did. Both removed.
-- **Three `DAPI` hardcodes removed; the nuclear/fiducial channel is now resolved the
-  same way everywhere.** `params.nuclear_markers` was already the declared source of
-  truth (`lib/MarkerUtils.groovy`, `bin/utils/metadata.py`), but three sites still
-  spelled `DAPI` themselves:
-  - `bin/utils/qc.py`'s `create_registration_qc` picked the overlay channel with
-    `"DAPI" in ch.upper()`. `GENERATE_REGISTRATION_QC` was never handed
-    `nuclear_markers` at all, so the resolver could not be used even in principle. It
-    now receives `--nuclear-markers` (same `MarkerUtils.markerList` normalisation
-    `SPLIT_CHANNELS` uses) and resolves via `metadata.pick_nuclear_index`. The old
-    code was correct only by coincidence — it fell back to channel 0, which
-    `CONVERT_IMAGE` reserves for the nuclear channel — so the visible symptom was a
-    `No DAPI channel found ... Falling back to channel 0` warning on every slide of a
-    CellTox panel, and the latent one was picking the wrong channel had that promotion
-    invariant ever changed. `create_dapi_overlay` is renamed `create_nuclear_overlay`.
-  - `bin/register.py`'s `--reference-markers` defaulted to `["DAPI", "SMA"]`, a
-    cohort-specific pair matched against the **filename** — which the rest of the
-    pipeline forbids (channel identity comes from metadata). The default is now `None`;
-    with neither `--reference` nor `--reference-markers`, the alphabetically first
-    slide is used. Unreachable from the pipeline either way: `modules/local/register.nf`
-    always passes `--reference`.
-  - STARE's channel index was the fixed param `reg_tiled_dapi_index = 0`, restating an
-    invariant `CONVERT_IMAGE` already guarantees under one marker's name.
 
-- **A scale disagreement between an image and `params.pixel_size` was silent.**
-  `params.pixel_size` is the single owner of every µm conversion in the pipeline — the
-  measurements in `cells.geojson`, the published pyramid's `PhysicalSize`, InstantSeg's
-  rescaling — but nothing ever compared it against what the input images themselves
-  claimed. A cohort scanned at a different objective was converted, registered,
-  segmented and quantified at the configured scale with nothing said, and the symptom
-  surfaced in QuPath: the sibling `qupath-extension-flowpath` warns about a scale it
-  can see but cannot explain. `docs/parameters.md` additionally documented the opposite
-  of the truth ("the real value is read from the input OME metadata and **preserved**
-  through the pipeline"), which is corrected here.
-  - The rule now lives in one place, `bin/utils/pixel_size.py`. `CONVERT_IMAGE` and
-    `PREPROCESS` logged `[SCALE MISMATCH]` naming both numbers and the percentage apart
-    when an input's OME `PhysicalSize` differs from the configured value by more than
-    1%. Ownership is unchanged by design: `warn_on_pixel_size_mismatch` returns a
-    bool, never a scale, so no caller can start preferring the metadata and become a
-    second owner. **No published number changes.** (`PREPROCESS` was later deleted and
-    its illumination-correction role replaced by nf-core's `BASICPY`, entry below;
-    `CONVERT_IMAGE` still logs this warning.)
-  - `bin/preprocess.py` had its own OME-XML walk with its own hardcoded `0.325`
-    fallback, so a run with `--pixel_size` set to anything else silently fell back to
-    a number nothing in the run had asked for. It was switched to the shared reader,
-    falling back to the configured value, before the file itself was deleted entirely
-    (entry below).
-  - `bin/convert_image.py`'s readers returned `PIXEL_SIZE_UM` where a file said
-    nothing, making "detected" and "absent" indistinguishable. They return `None`; the
-    fallback is applied once, at the point the two values are compared.
-  - **`SPLIT_CHANNELS` and `TILED_STITCH` wrote their outputs with no scale at all** —
-    a bare `imwrite`, no resolution tags, no OME header — so every file between
-    registration and the pyramid claimed 1 px = 1 unit and `MERGE_AND_PYRAMID` had
-    nothing to read even in principle. Both now stamp the configured scale as standard
-    TIFF resolution tags (not an OME header: that would be a second, channel-less
-    source of channel names for `SPLIT_CHANNELS` to find).
-  - Guarded in both directions. `tests/test_pixel_size_is_passed.py` fails if a `bin/`
-    script that accepts a scale is not handed one (it would silently use its argparse
-    default — a second owner), resolving `SEGMENT`'s backend through
-    `lib/SegBackends.groovy` rather than by name. `tests/modules/split_channels.nf.test`
-    asserts the *rendered* `--pixel-size 0.325`, tagged `stub` but deliberately without
-    `options "-stub"`, since `-stub` never evaluates a `script:` block.
-- **`cells.geojson` now carries the segmentation `label` as a measurement.** It was the
-  one identity column `cells_data.csv` kept and the GeoJSON dropped: `label` is in
-  `MORPHOLOGY_COLS`, which `merge_quant_csvs.reorder_columns` uses to *group* columns
-  (they all stay in the CSV) but which `export_geojson` uses to *exclude* from the
-  measurement array. The two published artefacts were therefore joinable only by
-  position — and position is wrong whenever a cell has a NaN centroid, since that row
-  stays in the CSV and never becomes a feature (`export_geojson()`'s `skipped`
-  counter), silently and undetectably from the artefacts alone. `bin/join_flowpath.py`
-  already warned about exactly this ("Add the label measurement to the GeoJSON export
-  to make this exact") and fell back to a centroid join, whose correctness depends on
-  `--pixel-size` being right; the exact label join is now the reachable path. Costs
-  nothing downstream: FlowPath's `DetectionIngest.MORPHOLOGY_PREFIXES` already filters
-  `label` out of the marker panel, and `CellIndex` already resolves a measurement named
-  `label`.
-- **A `nextflow.extension.GroupKey` leaked out of `groupTuple()` and travelled as a
-  channel key, silently dropping registration QC on roughly half of contended runs.**
-  `subworkflows/local/registration.nf` passed the object `groupTuple()` emits straight on
-  as the patient id, into `REGISTER`'s `val(patient_id)` and back out on its outputs.
-  `GroupKey` delegates `hashCode()` to the String it wraps but its `equals()` is
-  **asymmetric** (measured on Nextflow 25.04.7): `groupKey('P001', 2).equals('P001')` is
-  true, `'P001'.equals(groupKey('P001', 2))` is false, and both hash to 2430945. Equal
-  hashes put the two in the same `HashMap` bucket and `HashMap` compares
-  `queryKey.equals(storedKey)`, so the lookup succeeds in exactly one direction —
-  and `CombineOp.emit()` stores each side of a `combine(by:)` in such a map, so whichever
-  side arrives FIRST decides the stored key type. In `subworkflows/local/seg_qc.nf`'s
-  VALIS warp fan-in: GeoJSON first, the key is stored as a String and the later `GroupKey`
-  lookup hits; transform first, the key is stored as a `GroupKey` and the later String
-  lookup **misses**, `WARP_SEG_QC` is started but never receives an input tuple, and the
-  patient's whole registration QC (`*_seg_qc.json`) is silently absent from a run that
-  exits 0. Idle, `conf/test.config`'s `max_cpus = 2` fixes the arrival order and the safe
-  side always won (12/12 green), which is how this survived; under CPU contention it
-  dropped 14 of 24 runs, every one exiting 0. Fixed at the source — the groupKey is a
-  streaming size hint and has no business leaving its own `groupTuple()` — so `seg_qc.nf`,
-  `conf/modules.config` and `warp_seg_qc.nf` are untouched: no `errorStrategy` change, no
-  retry, the metrics output stays mandatory. After the fix the contended configuration is
-  24/24 and the sequential one 12/12. `tests/test_group_key_unwrapped.py` fails if any
-  `groupKey()` ever escapes its `groupTuple()` again. **`-resume` is unaffected and
-  existing work directories stay valid:** `GroupKey` implements `CacheFunnel` and funnels
-  its wrapped target, so task hashes were never sensitive to the wrapper.
-- **`REGISTER` wrote its staging file list to a fixed `/tmp/files_to_copy.txt`.** The
-  process is per-patient with concurrent forks, and under Singularity `/tmp` is
-  host-bind-mounted by default, so two concurrent `REGISTER` tasks on one node could share
-  that one file and each stage the other's slide list. (Never observed under Docker, where
-  each task gets its own `/tmp`.) All three references now use a plain task-relative
-  filename, so the list lives inside the task's own work directory; `cp -Ln`,
-  `xargs -P ${task.cpus}` and the `find -L` expression are unchanged. Covered by a
-  rendered-command nf-test rather than a stub one, since `-stub` never evaluates a
-  `script:` block and cannot see this class of fix.
-- **The `reg_qc=2` registration QC now segments with the run's own segmenter, and at
-  stock defaults it runs at all.** `SEG_QC_GEOJSON` ran StarDist itself
-  (`bin/segment_to_geojson.py` + `starDistCommonFlags()`), making it the one segmenter
-  in the pipeline that ignored `params.seg_method`. Two consequences, both live:
-  at the shipped default (`seg_method='instantseg'`) the QC scored cells found by a
-  *different* segmenter than the one whose masks the run ships; and because
-  `segmentation_model_dir` defaults to null while `segmentation_model` is not a StarDist
-  built-in, the process raised `FileNotFoundError` — swallowed by the QC block's
-  `errorStrategy` `'ignore'` branch, so a stock run (where `reg_qc = 2` is the DEFAULT)
-  silently produced **no registration QC at all** and still exited 0. Only
-  `conf/test.config` escaped it, by overriding `segmentation_model` to a real built-in.
-  `subworkflows/local/seg_qc.nf` now segments the native slides with `SEGMENT` itself,
-  aliased `SEG_QC_SEGMENT`, so the backend follows `--seg_method` by construction;
-  `SEG_QC_GEOJSON` keeps only the label-image → polygon half, via `bin/mask_to_geojson.py`
-  (now tracked executable — it is invoked by name for the first time).
-  `bin/segment_to_geojson.py` is deleted.
-  **Not a scoring change for a fixed backend.** The deleted script's last act was to call
-  the same `mask_to_feature_collection()` on the same in-memory `cell_mask`; the only new
-  step is a lossless zlib-TIFF round trip, pinned by
-  `tests/test_seg_qc_geojson_equivalence.py`. **Two things do change on purpose:** the
-  default run now segments with InstanSeg rather than StarDist (that is the fix), and on
-  the stardist backend the nuclear channel is chosen positionally (`--dapi-channel 0`,
-  guarded by `SegBackends`' channel-0 check) instead of resolved from OME channel names.
-  These agree for `CONVERT_IMAGE` output, which is everything reaching this QC, because
-  `CONVERT_IMAGE` normalises the nuclear channel to index 0. Where they diverge, they
-  diverge in two directions and both are deliberate: a slide whose nuclear marker sits at
-  index *n* > 0 was previously segmented at *n* and now fails the guard instead — the same
-  contract `SEGMENT` already enforces on the registered image, so the QC stops being more
-  permissive than the pipeline it is measuring; and a slide with no matching marker at all
-  was previously segmented at index 0 *silently* (`find_nuclear_index`'s fallback) and now
-  fails there too. A failure here is swallowed by the QC `errorStrategy`, so the visible
-  effect in both cases is a missing GeoJSON rather than a failed run.
-  **Published output is unchanged:** verified by diffing a full `-profile test -stub`
-  tree against the same run at `1ad1271` — 62 files both sides, identical but for the
-  QC report's timestamped filename. The QC's per-slide masks are deliberately not
-  published (`publishDir = [ enabled: false ]`): `<pid>/segmentation/` is indexed by
-  `csv/segmented.csv`, which names exactly one per-patient mask.
-- **An aliased process silently inherited the base process' `publishDir`.** Nextflow
-  matches a config selector against an alias' own name *and* its process' original
-  declared name, so `withName: 'SEGMENT'` governs `SEG_QC_SEGMENT` too. That is wanted for
-  container/resources/`ext.args` and a data-loss bug for `publishDir` — it already fired
-  once here, on `SPLIT_CHANNELS`/`SPLIT_PRIOR_PYRAMID`. `tests/test_process_alias_config.py`
-  now fails if any alias of a publishing process lacks its own `publishDir` override, or
-  places it textually *before* the block it means to override (later matching selectors
-  win, per field).
-- **`SEGMENT`'s size log is named from `task.ext.prefix`, not `meta.patient_id`.**
-  Unchanged for `SEGMENT` itself (one task per patient), but the QC alias runs once per
-  *slide*, so every slide of a patient would have written the same
-  `<pid>.SEGMENT.size.csv` into the directory `AGGREGATE_SIZE_LOGS` stages them all into.
-
-- **`TILED_COARSE` never finished inside its 2 h walltime — ORB was being thresholded
-  against raw uint16 counts.** scikit-image's `ORB(fast_threshold=...)` is an *absolute*
-  intensity difference, and `img_as_float` rescales only **integer** inputs — so the
-  `np.asarray(img, dtype=float)` cast in `coarse_align._orb_features` was precisely what
-  stopped the data being rescaled. The planes reaching it come from
-  `tiled_io.read_decimated` as raw microscopy counts widened to float32 (0..65535), where
-  the `0.05` default sits ~6 orders of magnitude below the data range: FAST fired on ~38%
-  of all pixels instead of ~3%, and `corner_peaks`' spacing pass — quadratic in the
-  candidate count — turned the anchor into a multi-hour step. Measured on a 2048² thumbnail,
-  same image: **8.0 s normalised vs 522.1 s raw (65×)**; the gap widens with area (~×15.7 per
-  ×4 px), so at the `reg_tiled_coarse_max_dim=4096` default it is ~2.8 h *per slide* — two
-  slides per task, against `process_low`'s `2.h * task.attempt`. Nothing failed loudly: the
-  step has no intermediate output, so it presented as a hang and then a walltime kill.
-  `coarse_align.normalize_for_orb` now rescales each plane into [0, 1] over a robust
-  percentile window (p1–p99.9, not `img/img.max()`, which one hot pixel would wreck) before
-  ORB sees it. This is a **correctness** fix as much as a speed one: reference and moving
-  come from different cycles with different exposures, so a single absolute threshold applied
-  to two different dynamic ranges could starve one slide of keypoints and silently produce a
-  bogus `M0`. `reg_benchmark._orb_xy` carried the identical bug and now imports the same
-  helper — that path is the more exposed of the two, since `feature_residual` scores
-  full-resolution registered slides rather than a bounded thumbnail. The existing ORB smoke
-  test could never have caught this: it normalises its own input, so it only ever exercised
-  the healthy regime. `tests/test_coarse_align.py` now pins scale-invariance directly
-  (same field at 1× and 65535× must yield identical keypoints) rather than asserting a
-  wall-clock time, which would be flaky on shared CI and would test the symptom.
-- **`TILED_COARSE` was silent for its entire runtime.** It emitted exactly one log line, at
-  the very end, so a stuck or merely slow anchor was indistinguishable from a hang and left
-  nothing in `.command.out` to diagnose. It now logs each stage as it completes — inputs and
-  sizes, both slides' dimensions/dtype/channel counts, the decimation factor and band size,
-  per-slide read time with the observed **intensity percentiles** (the summary that makes the
-  scale bug above visible rather than fatal), per-slide ORB keypoint counts and timings, the
-  match count, the resulting `M0` translation/rotation, and the tile count as the downstream
-  fan-out width. It also now warns on conditions that previously exited 0 in silence: a
-  residual at or beyond `--halo` (the per-tile step reads a window that will not contain the
-  true match — a mis-registered slide that still succeeds), fewer than 10 inliers, too few
-  matches for the requested model, a non-finite residual, and a `--dapi-index` out of range
-  for either slide.
-- **`TILED_COARSE` OOM-killed (exit 137) on real slides — the STARE anchor was never
-  the thumbnail step the design specified.** `docs/parallel_registration_design.md`
-  has always listed `COARSE  thumbnail feature-align (ORB + RANSAC) -> M0  ~1-2 GB`,
-  and the "8 GB is generous" sanity-check only ever analysed `REG_TILE`/`WARP_TILE`/
-  `STITCH`. `bin/tiled_coarse.py` implemented no thumbnail: it called
-  `dapi_channel(load_channels(path))` — the eager whole-slide `tifffile.imread` that
-  `tests/test_tiled_reg_tile_lazy.py` had already retired from the per-tile step, and
-  the last caller of it — then ran ORB at native resolution, where
-  `coarse_align._orb_features` promotes to float64 and scikit-image stacks a Gaussian
-  pyramid plus FAST/Harris responses on top. Measured at ~40 bytes per source pixel:
-  ~35 GB on a 26k x 26k slide, against `8.GB * task.attempt`, which is how one patient
-  burned all four attempts and aborted the run. Both slides are now read through
-  `open_lazy` in byte-budgeted row bands (`tiled_io.read_decimated`, 64 MB/band) and
-  decimated by **one shared factor** (`tiled_io.decimation_factor` — a per-slide factor
-  would put the two thumbnails at different scales and bake a bogus scale term into
-  M0), so peak is ~2 GB regardless of slide size. `M0` and its residual TRE are lifted
-  back to full-resolution pixels via `coarse_align.scale_transform_to_full_res`;
-  `ref_h`/`ref_w` stay full-resolution so the tile plan still spans the frame. New
-  `params.reg_tiled_coarse_max_dim` (default 4096 px, 0 disables) is the cost/accuracy
-  knob. `TILED_COARSE`'s retry ramp now **doubles** (8/16/32/64 GB) instead of scaling
-  linearly — a slide that overshoots an 8 GB estimate overshoots it by multiples, so
-  the old 8/16/24/32 ramp spent every attempt and still died. Guarded by
-  `tests/test_tiled_coarse_thumbnail.py` (8 cases, each watched failing against a
-  targeted mutation) and `tests/modules/tiled_coarse.nf.test`'s rendered-command case,
-  which asserts `--max-dim` reaches the command line — `-stub` cannot see a `script:`
-  block, so nothing else could catch that flag being dropped.
-- **`TILED_REGISTER`'s memory budget was the fan-out budget applied to a
-  non-fan-out process.** Its `withName:` comment claimed it was "tile-streamed"; it is
-  not. `bin/tiled_register.py` holds the whole reference stack, the whole moving stack,
-  a float32 all-channel `mov_hwc` copy and the full-size warped output at once, and
-  `tiled_pipeline.register_slide` additionally promotes both DAPI planes to float64 and
-  materialises a whole-slide `mov_rigid` — ~10-15x the decompressed moving stack, not
-  8 GB. The budget is now derived from input size (`~10 GB per GB on disk`, the
-  `PREPROCESS` pattern). This is a *derived* figure, not a measured one: the genuinely
-  memory-bounded path is `--reg_tiled_fanout true`, which is now correct end to end.
-- **The `tiled` image now installs `procps`, which every task in it needed to start at
-  all.** `containers/tiled/Dockerfile` is `FROM python:3.11-slim` and had no `apt-get`
-  layer, so it shipped without `ps`. Because `params.enable_trace` defaults to `true`,
-  Nextflow injects its task-metrics wrapper into every task, and that wrapper's first
-  line is `command -v ps &>/dev/null || { >&2 echo "Command 'ps' required by nextflow to
-  collect task metrics cannot be found"; exit 1; }` — it runs *before* the `script:`
-  block. Every `registration_method='tiled'` run therefore died at the first
-  `TILED_COARSE` task with **exit status 1, empty stdout and no traceback**, which reads
-  like a silent crash in `tiled_coarse.py` rather than a missing system package. The
-  Dockerfile now installs `procps` and asserts `ps -e -o pid= -o ppid=` at build time, so
-  a regression fails the image build instead of an HPC run. `containers/README.md` gains
-  a "Runtime requirements every image must satisfy" section stating the invariant. No
-  other image is affected: `preprocess` and `spatialdata` already installed `procps`, and
-  the remaining CUDA/PyTorch/TensorFlow-derived bases carry it — all of them are proven
-  by prior end-to-end runs, which ran under the same always-on trace wrapper.
-  **Operational note:** the descriptive tag `bolt3x/attend_image_analysis:tiled` is
-  mutable and was re-pushed in place, so cluster-side Singularity caches must be
-  refreshed (delete the local `.img`/`.sif` and re-pull) before the fix takes effect.
-- **`EXTRACT_NUCLEI_PROPERTIES` now writes its outputs into a `nuclei/` subdirectory of
-  its own task directory** (`modules/local/extract_nuclei_properties.nf`), instead of
-  the task directory root. The published location is unchanged
-  (`<outdir>/<pid>/cell_properties/nuclei/*`, via `conf/modules.config`'s default
-  subdirectory-preserving `publishDir`, no `path:`-only override) — this only fixes a
-  latent gap where `Layout.publishedPath(outdir, pid, 'cell_properties', file)` could
-  not recover the `nuclei/` segment from the file's own task-directory structure (it
-  only saw the config's hardcoded path suffix), which the new `segmented` checkpoint
-  (above) needs in order to record `nucleus_contours`' real published path rather than
-  colliding with `contours`' path. `EXTRACT_NUCLEI_PROPERTIES`'s own size-log CSV now
-  publishes to `<outdir>/<pid>/cell_properties/` instead of `.../cell_properties/nuclei/`
-  (a diagnostic-only artifact, not read by any checkpoint or downstream consumer).
-- **The per-cell registration residuals now reach the QC report on the standard
-  (linear) path, and, as of this change, on `add_cycle` too.** `SEG_QC.out.per_cell`
-  was emitted through `REGISTRATION.out.seg_residuals` and routed to the SpatialData
-  export, but never tagged into the artifact stream, so no report ever showed it. It
-  is now the artifact kind `seg_residuals`, rendered in the report as a capped table
-  (first 500 rows per CSV; `bin/generate_qc_report.py`'s `SEG_RESIDUALS_MAX_ROWS`).
-  `add_cycle.nf` calls `SEG_QC` too and, until now, never captured `.out.per_cell` at
-  all — that gap is closed in the same change that wires it into
-  `workflows/mirage.nf`'s `add_cycle` `FINAL_QC` call site.
-  **`GENERATE_QC_REPORT`'s input arity changed from 7 to 8** (a new
-  `seg_residuals`/`path(..., stageAs: 'seg_residuals/*')` slot) — any external caller
-  of that module directly must add the new argument. `FINAL_QC` additionally fails the
-  run, on the default path (`--skip_final_qc_report=false` and `--enable_trace=true`,
-  both shipped defaults), if any declared artifact kind has no consumer — previously
-  such a kind was silently dropped.
-- **`--mode add_cycle` now rejects `--start`/`--stop` outright, instead of accepting
-  and silently ignoring them**, matching `docs/add_cycle.md`. It used to validate its
-  own prerequisites and return before the linear step gate ever ran, so a
-  contradictory pair like `--start postprocessing --stop preprocessing` reported
-  "validations passed" under `--dry_run` instead of the hard error the standard path
-  always gave for the same pair — and a value like `--stop registration` ran the
-  ENTIRE fixed path through export while `run_summary.json`'s `stop` label claimed
-  the run had stopped after registration. `ParamUtils.validateStop` and the
-  `shouldRun` gate computation now run once, before the `params.mode == 'add_cycle'`
-  branch, so both paths share the ordering check; `add_cycle` itself then calls the
-  new `ParamUtils.validateAddCycleStepFlags`, which throws unless `--stop` is left
-  unset and `--start` is left at its default `preprocessing`.
-  **Behaviour change: a launch that used to succeed with a non-default `--start`/
-  `--stop` under `--mode add_cycle` now fails fast instead.** `add_cycle` runs a
-  FIXED path (new-cycle samplesheet -> preprocess -> register against the frozen
-  prior reference -> quantify -> export) — there is no `--start`/`--stop` choice to
-  make. **To recover:** omit both flags. **Also fixed:** `add_cycle`'s `FINAL_QC`
-  call used to pass the literal string `'add_cycle'` as the run summary's `stop`
-  label — not a member of `ParamUtils.STEP_ORDER`, so any future consumer indexing
-  it would get `-1`. It now unconditionally passes `ParamUtils.STEP_ORDER.last()`
-  (`'postprocessing'`), not `effective_stop` — the rejection above guarantees the
-  fixed path always runs through export, so that is the only honest label.
-- **`add_cycle.nf`'s pyramid-channel grouping now carries the same
-  `groupKey(patient_id, channels_count)` + `remainder: true` streaming hint as
-  `postprocess.nf`'s.** It had drifted to a bare `.groupTuple()` with no size hint at
-  all. The grouping itself — group tagged `[patient_id, channels_count, tiff]` triples
-  into one per-patient list and build the patient-level meta — is now
-  `groupTiffsByPatient`, a shared function in `subworkflows/local/quantify_markers.nf`
-  (a plain function, not a process/workflow, imported via the same `include` syntax).
-  `add_cycle`'s combined channel count is `new_count + prior_count`, deliberately not
-  correcting for a marker-name collision: an over-count is safe here (the group still
-  closes complete, just via `remainder: true` instead of exactly on time), while an
-  under-count is the failure mode that aborts `MERGE_AND_PYRAMID` outright (see
-  `groupTiffsByPatient`'s doc comment). No published-output change: verified via a
-  before/after stub-run tree diff (43 files both times, differing only in the
-  QC report's timestamped filename).
-- **`tests/test_register.py` could never fail.** It imported `merge_first_file`, which
-  `bin/register.py` does not define, behind a `pytest.importorskip("valis")` that meant
-  the `ImportError` was never reached.
-- **The checkpoint manifests no longer name files that do not exist.** `csv/postprocessed.csv`'s
-  `cell_csv` and `cell_geojson` columns previously recorded `<pid>/geojson/cells.geojson` — a
-  basename-only path that omitted the `export/` subdirectory `EXPORT_GEOJSON`'s `publishDir`
-  actually carries the file into, so the recorded path pointed at nothing. All published paths
-  now go through `lib/Layout.groovy`, which preserves the producer subdirectory, so the columns
-  name the real files. **Published-output change (explicitly authorised):** the two path values
-  in `csv/postprocessed.csv` change; the published tree itself does not.
-- **The three checkpoint CSVs (`preprocessed.csv`, `registered.csv`, `postprocessed.csv`) now
-  have deterministic row order.** `collectFile` wrote rows in task-completion order, so two runs
-  of the same commit could produce differently-ordered (though content-identical) CSVs. Rows are
-  now sorted (`sort: true`, patient ID then path). **Published-output change (explicitly
-  authorised):** row order in the three manifests changes; contents and column order do not.
-- **A quoted samplesheet path (e.g. a filename with a space) was silently read wrong.**
-  `subworkflows/local/input_check.nf`'s `.splitCsv(header: true)` had no `quote:`
-  option, so a quoted field came back with its surrounding quote characters still
-  attached; `file()` then saw a value not starting with `/`, treated it as relative,
-  and staged a symlink to nothing. Fixed with `quote: '"'`. Even with that fixed,
-  `modules/local/preflight_scale.nf`'s rendered command built its `--images` list via
-  an unquoted `$(find ... | sort)` command substitution, which word-splits on every
-  space in a staged filename — fixed by reading `find`'s NUL-delimited output into a
-  bash array by hand (`while read -r -d ''`, not bash 4's `mapfile -d ''`: this script
-  runs unchanged under the container-less local stub loop, and macOS ships bash 3.2).
-  Both surfaced from a new nf-test exercising real-world samplesheet shapes (CRLF, a
-  UTF-8 BOM, a quoted path with a space, a non-ASCII filename), not from a synthetic
-  probe.
-- **`bin/utils/qc.py`'s `create_registration_qc` silently fell back to channel 0 when no
-  configured nuclear/fiducial marker matched a slide's OME channel names** — at all three
-  sites (reference, registered, and native), with only a `logger.warning`. It now raises
-  `ValueError` instead. The old behaviour was correct only by accident (channel 0 happens
-  to be `CONVERT_IMAGE`'s reserved nuclear slot); the dangerous case is a real
-  misregistration silently rendered as an apparently-aligned QC overlay. See
-  [`docs/registration_qc.md`](docs/registration_qc.md) for the one-line note on the
-  channel-selection contract.
+- **VALIS registration of small slides (TMA cores) died with "JVM is not running"** after the
+  whole rigid stage. A VALIS defect picks pyramid level -1 for a slide whose full resolution
+  is below the non-rigid source size, swallows the resulting error and returns
+  `(None, None, None)`. `REGISTER` now refuses such slides at start, naming them and the
+  remedies, and treats a `None` result from `register()` as the failure it is.
+- **`cleanup_level` set in a profile or a `-c` site config was ignored by the publish
+  gates**, so a site config pinning `'none'` produced a tree with no intermediates and no
+  checkpoint manifest. It is honoured now; the published layout at either level is
+  unchanged.
+- **The resource report is found where Nextflow wrote it**, also when a wrapper or `sbatch`
+  changes directory. When no trace is found the run warns, naming the path and whether tracing
+  was on, and writes no page.
+- **The release archive and images are built from the tagged commit**, after the version
+  bump.
+- **The nuclear/fiducial channel is resolved from `nuclear_markers` everywhere.** The
+  registration QC overlay no longer warns `No DAPI channel found` on CellTox panels, and
+  `register.py --reference-markers` no longer defaults to a filename match on
+  `["DAPI", "SMA"]`.
+- **A scale disagreement between an image and `pixel_size` was silent.** `CONVERT_IMAGE` logs
+  `[SCALE MISMATCH]` when the OME `PhysicalSize` differs from the configured value by more
+  than 1%. `SPLIT_CHANNELS` and `TILED_STITCH` outputs now carry the scale as TIFF resolution
+  tags (they claimed 1 px = 1 unit). No published number changes.
+- **`cells.geojson` carries the segmentation `label` as a measurement**, so it joins exactly
+  to `cells_data.csv` (a cell with a NaN centroid is in the CSV but not the GeoJSON, so a
+  positional join was wrong).
+- **Registration QC was silently missing for about half of patients on contended runs** (a
+  `groupTuple()` key type mismatch in the warp fan-in). Fixed; `-resume` and existing work
+  directories are unaffected.
+- **Two concurrent `REGISTER` tasks on one node could share a staging file list** under
+  Singularity (`/tmp` is host-mounted). The list now lives in the task directory.
+- **`reg_qc=2` registration QC segments with the run's own `--seg_method`**, and runs at
+  stock defaults (it raised `FileNotFoundError` and produced no QC at all). On the StarDist
+  backend the nuclear channel is channel 0; a slide whose nuclear marker is elsewhere, or
+  absent, now fails that QC task instead of being scored on the wrong channel. Published
+  output is unchanged.
+- **The QC alias of `SEGMENT` no longer inherits `SEGMENT`'s `publishDir`**, and its size log
+  is named per slide.
+- **`TILED_COARSE` never finished inside its 2 h walltime**: ORB ran on raw uint16 intensities.
+  Each plane is now normalised over a robust percentile window first, which also stops two
+  differently exposed cycles getting different keypoint thresholds.
+- **`TILED_COARSE` logs each stage** (inputs, slide sizes, intensity percentiles, keypoint
+  counts, M0) and warns on conditions that used to exit 0 silently: a residual at or beyond
+  the halo, fewer than 10 inliers, too few matches, a non-finite residual, an out-of-range
+  nuclear index.
+- **`TILED_COARSE` was OOM-killed on real slides**: it read the whole slide. It now reads a
+  thumbnail (`reg_tiled_coarse_max_dim`, both slides at one shared decimation factor).
+- **The `tiled` image installs `procps`**: every `registration_method='tiled'` task failed
+  with exit 1 and no traceback without it. Delete a cached `.img`/`.sif` and re-pull.
+- **`EXTRACT_NUCLEI_PROPERTIES`'s size log publishes to `<outdir>/<pid>/cell_properties/`**
+  (was `.../cell_properties/nuclei/`). Its other outputs are unchanged.
+- **Per-cell registration residuals reach the QC report**, on the linear path and on
+  `add_cycle`. A declared QC artifact kind with no consumer now fails the run instead of
+  being dropped.
+- **`--mode add_cycle` rejects `--start`/`--stop`** instead of accepting and ignoring them.
+  Omit both flags. Its run summary records `stop: postprocessing`.
+- **`add_cycle`'s pyramid-channel grouping streams like the linear path's.** No output change.
+- **The checkpoint manifests name files that exist**: `csv/postprocessed.csv`'s `cell_csv`
+  and `cell_geojson` paths include the `export/` subdirectory.
+- **The checkpoint CSVs have a deterministic row order** (patient id, then path).
+- **A quoted samplesheet path (e.g. a filename with a space) was read wrong**; it is read
+  correctly now, also by `PREFLIGHT_SCALE`. CRLF, a UTF-8 BOM and non-ASCII filenames are
+  handled.
+- **Registration QC fails when no configured nuclear marker matches a slide**, instead of
+  silently using channel 0. See [`docs/registration_qc.md`](docs/registration_qc.md).
 
 ### Removed
-- **The `ashlar` registration backend is removed; v1.0.0 ships exactly two, `valis` and
-  `tiled`.** ASHLAR was wired in as a *benchmark baseline* so it could be ranked against
-  VALIS and STARE on the same `reg_qc=2` metric — never as a production backend — and it
-  survives in that role on the **`benchmarking`** branch, which is the only place it was
-  ever used. Gone from here: `bin/ashlar_retile.py`, `bin/ashlar_solve.py`,
-  `modules/local/ashlar_{retile,solve}.nf`,
-  `subworkflows/local/adapters/ashlar_adapter.nf` (with it, the `ASHLAR_STITCH` alias of
-  `TILED_STITCH`), the three parameters `reg_ashlar_tile` / `reg_ashlar_overlap` /
-  `reg_ashlar_max_shift_um`, the `ashlar` member of the `registration_method` enum, the
-  `ashlar` row of `lib/WarpBackends.groovy` and the `ashlar` choice of
-  `bin/warp_seg_qc.py --method`, plus 6 test files. `--registration_method ashlar` is now
-  refused by the schema at launch. There is nothing to migrate for a `valis` or `tiled`
-  run; a script pinning `ashlar` must move to the `benchmarking` branch.
-- **Automated panel-agnostic phenotyping is extracted off this branch, and preserved
-  intact on `feat/automated-phenotyping` (at `56a3a46`).** It is work in progress and
-  is parked there rather than deleted. Gone from here: `COMPILE_PANEL` and `PHENOTYPE`
-  (`bin/compile_panel.py`, `bin/phenotype_cells.py`, `bin/utils/phenotyping/`), the five
-  parameters `panel_spec` / `panel_model` / `pheno_alpha` / `pheno_min_cal` /
-  `pheno_max_enumerate` (the params block now declares 75, was 80), the `phenotyping/`
-  publish kind, `assets/import_phenotype.groovy`, `panel.yaml`, and 22 test files
-  (20 pytest + `tests/modules/{compile_panel,phenotype}.nf.test`). `EXPORT_GEOJSON` is
-  back to a four-slot input tuple and emits the constant `"Cell"` classification with no
-  `panel_model.json` sidecar — gate downstream in QuPath/FlowPath. The one case in
-  `test_export_geojson_phenotype.py` that was NOT about phenotyping — the constant
-  `"Cell"`, no-stamped-`id` contract — survives as `tests/test_export_geojson.py`.
-  The FlowPath-side phenotype join (`bin/join_flowpath.py`,
-  `export_spatialdata.py --attach-phenotypes`) is unaffected; it is a different,
-  post-pipeline feature.
-- **`reg_tiled_fanout` is gone, along with the single-task `TILED_REGISTER` path it
-  selected.** STARE now has exactly one execution shape: the per-tile fan-out
-  `TILED_COARSE` → `TILED_REG_TILE` (×tiles) → `TILED_SOLVE` → `TILED_STITCH`. Its memory is
-  bounded — every process' peak is a function of a parameter (`reg_tiled_coarse_max_dim`,
-  `reg_tiled_tile` + `reg_tiled_halo`, `reg_tiled_out_tile`) rather than of the slide's
-  dimensions. Measured peak RSS on a 16384² 2-channel tiled OME-TIFF: **0.91 / 1.31 / <1.31 /
-  1.35 GB** against an 8 GB budget.
 
-  The removed alternative held both whole slides, a float32 all-channel copy (`mov_hwc`) and the
-  full-size warped output simultaneously, and `tiled_pipeline.register_slide` additionally
-  materialised a whole-slide float64 `mov_rigid` — roughly 10–15× the decompressed moving stack,
-  which is why its budget had to be derived from file size. It produced identical pixels and an
-  identical manifest, so nothing is lost but the footgun: a flag whose "off" position silently
-  reintroduced unbounded memory.
+- **The `ashlar` registration backend**: 1.0.0 ships `valis` and `tiled`.
+  `--registration_method ashlar` and the `reg_ashlar_*` parameters are refused at launch.
+  ASHLAR remains a benchmark baseline on the `benchmarking` branch.
+- **Automated panel-agnostic phenotyping** (work in progress, parked on
+  `feat/automated-phenotyping`): `COMPILE_PANEL`, `PHENOTYPE`, the parameters `panel_spec`,
+  `panel_model`, `pheno_alpha`, `pheno_min_cal`, `pheno_max_enumerate`, and the
+  `phenotyping/` output. `EXPORT_GEOJSON` emits the constant `"Cell"` classification with no
+  `panel_model.json`; gate downstream in QuPath/FlowPath. The FlowPath-side phenotype join
+  (`bin/join_flowpath.py`, `export_spatialdata.py --attach-phenotypes`) is unaffected.
+- **`reg_tiled_fanout` and the single-task `TILED_REGISTER` path.** STARE always runs the
+  per-tile fan-out `TILED_COARSE` → `TILED_REG_TILE` (× tiles) → `TILED_SOLVE` →
+  `TILED_STITCH`, whose memory is bounded by parameters, not slide size. At the default
+  `reg_tiled_tile = 2048` a 26k² slide plans about 169 `TILED_REG_TILE` tasks per moving
+  slide; raise `reg_tiled_tile` to trade task count against mesh resolution.
+- **`reg_reference_markers`**: the reference slide is chosen by `is_reference`; the nuclear
+  channel by `nuclear_markers`.
+- **`padding` / `pad_mode`** and the `PAD_IMAGES`, `GET_IMAGE_DIMS` and `MAX_DIM` processes:
+  both registration backends align inputs of different sizes natively.
+- **`PREPROCESS`**: BaSiC illumination correction runs through nf-core's `BASICPY` module
+  (`TILE_FOR_BASIC` → `BASICPY` → `APPLY_PROFILES`). It runs at `get_darkfield=False`, so no
+  darkfield is estimated or removed (see Migration item 1). It uses the third-party image
+  `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5`.
+- **`bin/registration_benchmark.py`**: on the `benchmarking` branch only.
+- **`segeval_tag`**: the segeval image follows `manifest.version`. Delete the key from old
+  params files; schema validation refuses it.
+- **`docs/figures/failure-schematic.html`**, an unpublished draft.
 
-  **Deleted:** `modules/local/tiled_register.nf`, `bin/tiled_register.py`,
-  `tests/test_tiled_register_cli.py`, the `withName: 'TILED_REGISTER'` block in
-  `conf/modules.config`, the `params.reg_tiled_fanout` declaration and its
-  `nextflow_schema.json` property, and the branch in
-  `subworkflows/local/adapters/tiled_adapter.nf` (the adapter now runs the fan-out
-  unconditionally). `bin/utils/tiled_pipeline.py` is **kept** — still imported by
-  `tests/test_tiled_pipeline.py` and `tests/test_reg_benchmark.py`, though it no longer has a
-  production caller.
-
-  Scheduler load is the trade: at the default `reg_tiled_tile = 2048` a 26k² slide plans ~169
-  `TILED_REG_TILE` tasks per moving slide (capped by `maxForks = 20`). Raise `reg_tiled_tile` to
-  trade task count against mesh resolution.
-
-- **`reg_reference_markers`** — removed. It only fed a filename-based fallback for reference-image
-  selection that the pipeline never reached (the reference slide is chosen by `is_reference`, and
-  `--reference` is always passed to VALIS). Nuclear-channel selection is now `nuclear_markers`
-  (metadata-based). `register.py`'s standalone `--reference-markers` CLI flag is unaffected.
-- **`padding` / `pad_mode`** and the `PAD_IMAGES`, `GET_IMAGE_DIMS`, and `MAX_DIM` processes —
-  removed. Padding was default-off and unused: both registration backends align inputs of differing
-  sizes natively (VALIS into a shared space; the tiled/STARE backend into the reference's shape).
-  This also removed the pipeline's only filename-based channel-name inference.
-- **`PREPROCESS` and `bin/preprocess.py` — deleted.** In-process BaSiCPy illumination
-  correction (one process, one Python script, its own thread pool over per-channel BaSiC
-  fits) is replaced by three processes wrapping nf-core's vendored `BASICPY` module:
-  `TILE_FOR_BASIC` (writes the slide onto the pseudo-FOV grid the module requires — it
-  computes profiles only, refuses a single-sited image, and expects mcmicro/ASHLAR to
-  apply them, which mirage does not have) → `BASICPY` (fits flatfield/darkfield profiles)
-  → `APPLY_PROFILES` (the arithmetic the module leaves out, plus reassembly). See
-  `subworkflows/local/preprocess.nf` and `modules/nf-core/basicpy/MIRAGE-NOTES.md`.
-  - **Illumination-correction MODEL change, published-output change.** `BASICPY` runs at
-    its upstream defaults, which means `get_darkfield=False`: **no additive darkfield is
-    estimated or removed any more.** Mirage's deleted in-process path called
-    `BaSiC(get_darkfield=True, smoothness_flatfield=1)` explicitly. Every corrected pixel
-    downstream of preprocessing — registration, segmentation, quantification, exported
-    intensities — is therefore computed from a flatfield-only correction, not the
-    flatfield+darkfield correction the pipeline shipped until now. `bin/apply_basic_profiles.py`
-    still accepts an optional `--darkfield` and subtracts it when supplied (a fitted
-    darkfield remains all zeros at these defaults, so the subtraction is a no-op in
-    production); there is no pipeline knob that supplies one.
-  - **New third-party container the repo does not build.**
-    `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5`
-    (`modules/nf-core/basicpy/main.nf:5`) is vendored unmodified from mcmicro, unlike
-    every other process image, which is `bolt3x/mirage-<component>` and built by
-    `containers/<component>/Dockerfile` + `.github/workflows/build-images.yml`. It is now
-    a listed exception in `tests/test_container_image_naming.py`'s `EXTERNAL_ALLOWED`,
-    whose scan was widened to cover `modules/nf-core/` (previously `modules/local/` +
-    `lib/` + `conf/` only, so this reference was never checked at all).
-- **`bin/convert_image.py`'s BioIO read is now lazy.** `img.data` (an eager, whole-array
-  materialisation) is replaced by `img.dask_data`, and the OME-TIFF write iterates its
-  chunks instead of holding the decoded array whole. Byte-identical output
-  (`tests/test_convert_lazy_read.py`, `tests/test_convert_streaming_write.py`); see
-  `docs/figures/zarr-schematic.html` panel **d** for the measured peak-RSS shape
-  (435.2 MB eager → 167.7 MB streamed per-plane, on a 144 MB fixture; ratio not claimed to
-  hold at production scale). `TILE_FOR_BASIC` and `APPLY_PROFILES` read through the same
-  lazy primitive by construction (`docs/figures/zarr-schematic.html` panel **c**, "the
-  fifth site").
-- **`bin/registration_benchmark.py` — deleted from the pipeline branches**; it
-  survives on the `benchmarking` branch, where the benchmark harness that calls it
-  lives. `bin/utils/reg_benchmark.py` lost its only production importer with it and
-  is now covered by an allowlisted skip
-  (`tests/test_no_dead_bin_modules.py::test_bin_utils_module_has_a_real_importer[reg_benchmark.py]`,
-  `tests/expected_skips.txt`) rather than deleted, since it is still imported by
-  `tests/test_reg_benchmark.py` and `tests/test_tiled_fanout.py`.
-- **`segeval_tag` parameter — removed.** The segeval image now follows `manifest.version`
-  like every other first-party image, so there is no separate tag to override. An old
-  `-params-file` that still carries the key now fails schema validation at launch; delete
-  the key rather than updating its value.
-- **`docs/figures/failure-schematic.html` is retired.** It was a draft never wired into
-  the published set — linked from no docs page and from no sibling figure's `figset`
-  nav — and it claimed "Supplementary Figure S4", a number `zarr-schematic.html`
-  already holds. `.gitignore` keeps the filename listed so a stray re-creation cannot
-  become a tracked figure by accident.
+`CONVERT_IMAGE` also reads input lazily now, with byte-identical output and a lower memory
+peak.
 
 ### The 1.0.0 feature set
 - **Preprocessing** — BaSiC illumination correction with FOV tiling; Bio-Formats/ND2 →

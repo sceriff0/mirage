@@ -1,19 +1,12 @@
 """RetryContext is a for-loop iterator. Exhaustion must end the loop, not
 escape it.
 
-The bug this guards: __next__ raised self.last_exception on exhaustion, so
-the `for attempt in ctx:` loop never completed normally -- the exception
-propagated out of the loop, past the caller's post-loop partial-failure
-handling, and killed the whole task. On a 400+ GB REGISTER run that meant
-losing the job instead of dropping one slide, and it made
-`all_attempts_failed` unreachable dead code (bin/register.py already checks
-it at line ~885, but could never get there).
+If __next__ raised on exhaustion, the exception would escape the
+`for attempt in ctx:` loop, past the caller's post-loop partial-failure
+handling (bin/register.py's `all_attempts_failed` check), and kill the whole
+task instead of dropping one slide.
 
-Note: `all_attempts_failed` is a `@property` on RetryContext, not a callable
-method -- the architecture-review brief that spawned this test described it
-as `all_attempts_failed()`, but the actual code (and its one existing caller
-in bin/register.py) already uses it as a property. This test follows the
-real code, not the brief.
+`all_attempts_failed` is a `@property`, not a method.
 """
 
 from __future__ import annotations

@@ -1,36 +1,14 @@
 """A `params/*.json` preset must be a preset that can actually run.
 
-Three failure modes, all found in this repository:
+Three checks:
 
-1. **A key the schema does not know.** `-params-file` values go through
-   nf-schema's validator, and an unknown key is either rejected or silently
-   inert depending on the strictness setting. Either way the preset is lying
-   about what it configures.
-
-2. **A backend's parameters without the backend.** `params/full_pipeline.json`
-   carried the whole StarDist block -- `seg_pmin`, `seg_n_tiles_x`,
-   `segmentation_model`, ... -- and set `seg_method: "stardist"` with
-   `segmentation_model_dir: null`, which cannot run (bin/segment.py raises
-   FileNotFoundError, and the shipped model name is not a StarDist built-in).
-   `params/postprocessing_only.json` had shipped the mirror image: the StarDist
-   block with NO seg_method at all, which read as a configuration choice and was
-   inert. Ruling R5 for 1.0.0 switches full_pipeline.json to `instantseg`.
-
-3. **Site sizing baked into a preset.** `full_pipeline.json`,
-   `preprocessing_only.json`, `registration_only.json` and
-   `postprocessing_only.json` all hardcoded IEO's `max_cpus`/`max_memory`/
-   `max_time` (`128`/`700.GB`/`240.h`). `-params-file` overrides `-c`
-   (Nextflow's own precedence), so copying one of these presets onto another
-   cluster and layering `-c site.config` never resizes it -- the preset's
-   ceiling silently wins. Ruling R4 for 1.0.0 makes `conf/site.config.template`
-   the one owner of per-site sizing; a production preset must leave
-   `max_cpus`/`max_memory`/`max_time` for the site config to supply.
-
-The rule for (2): if a preset sets any parameter whose name is owned by one
-segmentation backend, it must also set `seg_method` to that backend.
-
-The rule for (3): no preset may set `max_cpus`, `max_memory` or `max_time`,
-except an explicitly exempted self-contained test preset.
+1. Every key is known to the schema. An unknown key is rejected or silently
+   inert, depending on nf-schema's strictness.
+2. A preset that sets a parameter owned by one segmentation backend also sets
+   `seg_method` to that backend; otherwise the block is inert.
+3. No preset sets `max_cpus`, `max_memory` or `max_time` (except an exempted
+   test preset). `-params-file` overrides `-c`, so a ceiling in a preset would
+   silently beat the site config, which owns per-site sizing.
 """
 
 import json
@@ -57,15 +35,12 @@ BACKEND_PREFIXES = {
     "cellsam": ("seg_cellsam_", "cellsam_model_path"),
 }
 
-# R4: conf/site.config.template is THE owner of per-site sizing. A preset that
-# sets any of these bakes one site's numbers into a file `-params-file` loads
-# ahead of `-c site.config`, silently defeating whatever ceiling the site config
-# supplies.
+# conf/site.config.template owns per-site sizing; `-params-file` beats
+# `-c site.config`, so a preset setting these would override the site's ceiling.
 SITE_SIZING_KEYS = ("max_cpus", "max_memory", "max_time")
 
-# Presets exempt from the site-sizing rule, with why. Each is verified below to
-# still set at least one site-sizing key, so a stale entry cannot quietly cover
-# a real production preset that started hardcoding a ceiling again.
+# Presets exempt from the site-sizing rule, with why. Each must still set at
+# least one site-sizing key (checked below), so a stale entry fails.
 SITE_SIZING_EXEMPT = {
     "test.json": (
         "a self-contained CI/test preset that intentionally pins tiny ceilings "
@@ -173,8 +148,7 @@ def test_a_preset_does_not_bake_in_site_sizing(preset):
 
 
 def test_the_site_sizing_exemption_is_not_stale():
-    """An exemption for a preset that no longer sets any site-sizing key is a
-    licence nobody is using and the next reader will trust."""
+    """Every exempted preset still sets a site-sizing key, so no exemption is stale."""
     for name, reason in SITE_SIZING_EXEMPT.items():
         assert reason.strip(), f"{name} has an empty reason"
         preset = REPO / "params" / name
@@ -187,10 +161,10 @@ def test_the_site_sizing_exemption_is_not_stale():
 
 
 def test_backend_prefixes_covers_exactly_the_schema_backends():
-    """A fourth backend added to the schema's enum without a BACKEND_PREFIXES
-    entry would silently exempt every one of its parameters from the coherence
-    rule above; a stale entry (a backend removed from the schema) would check a
-    backend that no preset can select. Both directions, so this can't drift."""
+    """BACKEND_PREFIXES and the schema's seg_method enum name the same backends.
+
+    A missing entry would exempt a backend's parameters from the rule above; a
+    stale one would check a backend no preset can select."""
     assert set(BACKEND_PREFIXES) == _schema_seg_method_enum()
 
 

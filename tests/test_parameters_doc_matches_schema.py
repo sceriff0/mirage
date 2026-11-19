@@ -1,21 +1,11 @@
 """`docs/parameters.md` must document exactly the schema's parameter surface.
 
-This page is hand-maintained -- its own standfirst says so -- and it is the page
-readers use to decide what to set. Two ways it rots, both silent:
+The page is hand-maintained and rots silently in two ways: a new parameter is
+never documented, or a removed parameter's row survives and advertises a flag
+that is rejected at launch.
 
-* a parameter is added to nextflow.config and the schema and never documented, so
-  it is invisible to everyone who is not reading Groovy; or
-* a parameter is removed and its row survives, so the page advertises a flag that
-  is now rejected at launch.
-
-The page was exactly in sync on 2026-09-03 -- 89 documented rows plus the two
-`config_profile_*` identity strings a site profile sets, against the schema's 91.
-That was a coincidence, not a property. This makes it a property.
-
-The parse is deliberately narrow: a parameter is "documented" when it is the first
-cell of a Markdown table row, in backticks -- the shape every parameter table on
-that page already uses. Prose mentioning a name does not count, because prose
-mentions names in passing all the time.
+A parameter counts as documented only when it is the first cell of a Markdown
+table row, in backticks. Prose mentioning a name does not count.
 """
 
 import importlib.util
@@ -164,7 +154,7 @@ def test_every_literal_doc_default_matches_nextflow_config():
 
 
 def test_the_page_still_says_it_is_hand_maintained():
-    """Literal default cells are now checked against nextflow.config (see
+    """Literal default cells are checked against nextflow.config (see
     test_every_literal_doc_default_matches_nextflow_config), but a NARRATIVE
     default cell and every description are still a human's job, and the page
     must keep telling the reader that."""

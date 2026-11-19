@@ -1,16 +1,11 @@
 """Neither quantification nor morphology should sort the whole mask to learn its label set.
 
 `np.unique(mask)` is a comparison sort over every pixel -- O(n log n) on 1.6x10^9 values for a
-40k x 40k slide -- and both callers already had the answer available more cheaply:
+40k x 40k slide -- and both callers have the answer more cheaply:
 
-  * `extract_cell_properties.extract_morphology` called
-    `labels, counts = np.unique(mask, return_counts=True)` and **never read `counts`**, while
-    `regionprops_table` on the next line recomputes the label set anyway and returns it.
-  * `quantify.compute_compartment_intensities` called `np.unique(cell_mask)` immediately before
-    computing `np.bincount(flat_cell, ...)`, which is a single linear pass whose non-zero bins
-    ARE the label set.
-
-Measured by `PERF-PLAN.md` (C3a) at 3.13x / -80 MB for the morphology site.
+  * `extract_cell_properties.extract_morphology`: `regionprops_table` returns the label set.
+  * `quantify.compute_compartment_intensities`: the non-zero bins of
+    `np.bincount(flat_cell, ...)`, a single linear pass, are the label set.
 
 Identity: `np.unique(mask)` returns the ascending distinct values; `np.nonzero(bincount)[0]`
 returns the ascending indices with at least one pixel. Those are the same set in the same order,
@@ -144,13 +139,12 @@ def test_quantify_still_returns_empty_for_a_mask_with_no_cells():
 
 
 # ---------------------------------------------------------------------------
-# PERF-PLAN 1.3 -- props_df.iterrows() over every cell
+# extract_contours must not iterate props_df.iterrows()
 # ---------------------------------------------------------------------------
 #
-# `extract_contours` iterated `props_df.iterrows()`, which builds a pandas Series per row --
-# 60k Series objects for 60k cells, each one boxing four integers this loop actually wants.
-# Measured 4.02x (PERF-PLAN C12a). The identity argument is that it changes only HOW the same
-# integers are fetched, so the seam is tested directly against the iterrows it replaces.
+# `iterrows()` builds a pandas Series per row (60k for 60k cells) to box four integers. The
+# replacement changes only how the same integers are fetched, so it is tested against
+# iterrows directly.
 
 
 def test_label_bboxes_matches_iterrows_exactly():

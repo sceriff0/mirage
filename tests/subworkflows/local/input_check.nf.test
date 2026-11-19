@@ -1,10 +1,8 @@
 /*
- * INPUT_CHECK — samplesheet in, sample channel out, with the per-patient counts
- * injected into every meta. The injection is what lets the downstream sized
- * groupTuples stream; a silently-missing count degrades those to "wait for
- * everything", and a silently-WRONG one drops or duplicates patients (see
- * tests/main.nf.test's MERGE_QUANT_CSVS count assertions). Neither shows up as a
- * failed run, so it is pinned here directly.
+ * INPUT_CHECK: samplesheet in, sample channel out, with per-patient counts injected
+ * into every meta so downstream sized groupTuples can stream. A missing count makes
+ * them wait for everything; a wrong one drops or duplicates patients without failing
+ * the run, so the counts are pinned here directly.
  */
 nextflow_workflow {
 
@@ -120,37 +118,16 @@ nextflow_workflow {
         }
 
         then {
-            // CORRECTED (Task 4.4, fix round 1): this test's title and expectation used
-            // to pin a nuclear-marker-drop rule ("DAPI is dropped from BOTH rows, neither
-            // is a reference" -> 4) that commit 571976e (":recycle: Derive
-            // countChannelsPerPatient from the keep-set resolver") deliberately removed.
-            // Evidence:
-            //   - 571976e's diff deletes the `MarkerUtils.splitOutputChannels(...)` call
-            //     from countChannelsPerPatient, and its own commit message states the
-            //     intended new behaviour verbatim: "A patient with reference
-            //     DAPI|KI67|CD20 and cycles CELLTOX|CD8 and CELLTOX|FOXP3 now counts 6,
-            //     not 5: the old rule dropped CELLTOX from both non-reference slides...
-            //     even though the reference never carried it."
-            //   - lib/MarkerUtils.groovy's header confirms it "does NOT decide which
-            //     channels a slide emits -- that is CsvUtils.resolveKeptChannelsPerSlide."
-            //   - lib/CsvUtils.groovy's resolveKeptChannelsPerSlide docstring: "NUCLEAR-
-            //     NESS PLAYS NO PART IN THE DROP DECISION, deliberately."
-            // Under that rule, EVERY marker name is claimed exactly once per patient
-            // regardless of which row declares it or whether any row is a reference --
-            // which makes channels_count (the sum of claim-once per-slide keeps) and
-            // declared_channels (the plain per-patient union of declared names) the SAME
-            // number for any samplesheet: both equal the patient's total distinct
-            // upper-cased channel-name count. They can no longer "provably differ"; this
-            // test now pins that they agree, using the same fixture that used to show
-            // them apart.
+            // Keep-set rule is claim-once: every marker name is claimed exactly once per
+            // patient whichever row declares it, so channels_count and declared_channels
+            // are the same number for any samplesheet (the patient's distinct upper-cased
+            // channel names). This pins that they agree.
             assertAll(
                 { assert workflow.success },
                 // Declared union for the manifest: DAPI+CD3+CD8+VIMENTIN+CD45 = 5.
                 { assert workflow.out.counts[0].declared_channels.P001 == 5 },
-                // channels_count/the groupKey: under claim-once, the first row's DAPI is
-                // claimed (nothing has claimed it yet -- no row is a reference here), the
-                // second row's DAPI is already claimed and contributes nothing new.
-                // CD3+CD8 (row 1) + VIMENTIN+CD45 (row 2) + DAPI (claimed once) = 5.
+                // channels_count under claim-once: row 1's DAPI is claimed, row 2's adds
+                // nothing. CD3+CD8 + VIMENTIN+CD45 + DAPI = 5.
                 { assert workflow.out.counts[0].channels.P001 == 5 },
                 { assert workflow.out.samples.every { it[0].channels_count == 5 } }
             )
@@ -160,10 +137,9 @@ nextflow_workflow {
     test("cycle1/slide.ome.tiff and cycle2/slide.ome.tiff get distinct meta.id") {
         tag "stub"
 
-        // duplicate_basename.csv: the ORDINARY cyclic-IF layout -- one directory per
-        // cycle, both cycles sharing the basename "slide.ome.tiff". file(...).simpleName
-        // ("slide") collided for both rows, so both recorded the same path in
-        // preprocessed.csv and the run aborted AFTER the corrupt manifest was written.
+        // duplicate_basename.csv: the ordinary cyclic-IF layout, one directory per
+        // cycle, both cycles named "slide.ome.tiff". simpleName alone collides, so
+        // meta.id must be disambiguated.
         when {
             workflow {
                 """
@@ -192,22 +168,13 @@ nextflow_workflow {
     test("a sheet marking NO reference gets nothing promoted in its place") {
         tag "stub"
 
-        // Replaces a case that asserted the opposite. `--allow_auto_reference` used to
-        // promote a patient's FIRST samplesheet row when no row declared itself. That rule
-        // is gone: the reference is the slide every other slide is warped onto, and picking
-        // it from row order made two sheets differing only in row order produce two
-        // different alignments, with nothing recording that a choice had been made.
+        // No row declares a reference, and nothing is promoted: picking one from row
+        // order would make the alignment depend on row order. The observable is
+        // meta.is_reference (no row carries it); channels_count is unchanged because the
+        // claim-once keep-set rule is independent of the reference.
         //
-        // THE COUNT IS THE WRONG THING TO ASSERT, which is worth stating because the test
-        // this replaces asserted exactly that. channels_count is still 5, unchanged by the
-        // removal, because the KEEP-SET rule is independent of the reference rule: DAPI
-        // goes to the first slide that claims it (claim-once), reference or not, so mov1
-        // keeps [DAPI, CD3, CD8] either way. The observable that actually moved is
-        // meta.is_reference -- with promotion gone, NO row carries it.
-        //
-        // INPUT_CHECK does not raise here; refusing a referenceless sheet is
-        // CsvUtils.validateInputSemantics' job, upstream in workflows/mirage.nf, which has
-        // the better message. Registration would then fail on the missing reference.
+        // INPUT_CHECK does not raise here; CsvUtils.validateInputSemantics refuses a
+        // referenceless sheet upstream in workflows/mirage.nf.
         when {
             workflow {
                 """
@@ -224,9 +191,9 @@ nextflow_workflow {
             assertAll(
                 { assert workflow.success },
                 { assert workflow.out.samples.size() == 2 },
-                // NOTHING was promoted: neither row became the reference.
+                // Nothing was promoted: neither row became the reference.
                 { assert workflow.out.samples.every { !it[0].is_reference } },
-                // Unchanged by the removal -- see the note above.
+                // Unchanged: the keep-set rule does not depend on the reference.
                 { assert workflow.out.counts[0].channels.P001 == 5 }
             )
         }
@@ -235,20 +202,11 @@ nextflow_workflow {
     test("two rows sharing the identical raw path cell get distinct id and keep-set") {
         tag "stub"
 
-        // duplicate_raw_path.csv: BOTH rows declare the exact same path_to_file
-        // string (not just the same basename -- duplicate_basename.csv above covers
-        // that case). This is Task 4.4's fix-round-1 regression, exercised through
-        // the REAL production chain: Nextflow's own splitCsv -> the `.map` closure
-        // in subworkflows/local/input_check.nf that pops CsvUtils.rowIndexPerPatient's
-        // per-key index list -> Meta.fromSamplesheetRow -> the keep-set lookup. No
-        // hand-supplied row indices anywhere in this test.
-        //
-        // Before the fix: rowIndexPerPatient keyed a SCALAR by "patientId::rawImage",
-        // so the second row's index silently overwrote the first's and BOTH rows read
-        // back index 1 -- Meta.fromSamplesheetRow assigned them the SAME meta.id, and
-        // the reference row's real keep-set ([DAPI, CD3]) was silently displaced by
-        // the second row's ([]) under that shared id: both rows read back
-        // keep_channels == [], and channels_count collapsed from 2 to 0.
+        // duplicate_raw_path.csv: both rows declare the exact same path_to_file, run
+        // through the real chain (splitCsv -> the `.map` that pops
+        // CsvUtils.rowIndexPerPatient's per-key index list -> Meta.fromSamplesheetRow ->
+        // keep-set lookup). A scalar index per key would give both rows the same meta.id
+        // and collapse channels_count to 0.
         when {
             workflow {
                 """
@@ -262,13 +220,9 @@ nextflow_workflow {
         }
 
         then {
-            // NOT asserting on is_reference here: resolveReferenceRows/the
-            // is_reference re-resolution in this workflow's own `.map` both compare
-            // by RAW CELL (documented assumption: unique per row within a patient),
-            // which this fixture deliberately violates the same way it violates
-            // rowIndexPerPatient's -- so BOTH rows resolve is_reference=true here.
-            // That is a separate, pre-existing, documented limitation, not what this
-            // test is pinning; it is the keep-set/id disambiguation this task fixes.
+            // Not asserting is_reference: reference resolution compares by raw cell
+            // (assumed unique per row), which this fixture violates, so both rows
+            // resolve is_reference=true. That is a separate known limitation.
             assertAll(
                 { assert workflow.success },
                 { assert workflow.out.samples.size() == 2 },
@@ -277,12 +231,11 @@ nextflow_workflow {
                 // disambiguate them.
                 { assert workflow.out.samples.collect { it[0].id }.unique().size() == 2 },
                 // One row keeps its own [DAPI, CD3] -- not [], and not swapped with
-                // the other row's entry. Sorted by size (not by is_reference, per the
-                // note above) so this doesn't depend on emission order.
+                // the other row's entry. Sorted by size so it does not depend on
+                // emission order.
                 { assert workflow.out.samples.collect { it[0].keep_channels }.sort { it.size() } ==
                         [[], ['DAPI', 'CD3']] },
-                // Patient total: DAPI+CD3 from one row, nothing new from the
-                // duplicate. The collapse bug summed this to 0.
+                // Patient total: DAPI+CD3 from one row, nothing new from the duplicate.
                 { assert workflow.out.counts[0].channels.P001 == 2 },
                 { assert workflow.out.samples.every { it[0].channels_count == 2 } }
             )

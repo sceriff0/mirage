@@ -16,8 +16,8 @@ The same script iterates channels the way ``/opt/main.py`` does
 why the axis order has to be ``CZYX`` and not ``ZCYX``.
 
 Nothing here fits a profile -- BaSiC is the nf-core module's job. What is pinned is the
-*container* the module is handed and the sidecar that lets Task 4 put the slide back
-together without re-deriving the grid.
+*container* the module is handed and the sidecar that lets APPLY_PROFILES put the slide
+back together without re-deriving the grid.
 """
 
 from __future__ import annotations
@@ -29,11 +29,8 @@ import pytest
 np = pytest.importorskip("numpy")
 tifffile = pytest.importorskip("tifffile")
 
-# No basicpy stub any more. Earlier versions of this file installed one because
-# `tile_for_basic` reached its FOV-tiling helpers through `bin/preprocess.py`, which
-# imported basicpy eagerly at module scope. That module is deleted and the helpers now
-# live in `bin/utils/fov_tiling.py`, which imports nothing but numpy -- nothing on this
-# path touches basicpy, so a stub here would only be able to hide a real import.
+# No basicpy stub: the FOV-tiling helpers in `bin/utils/fov_tiling.py` import only numpy,
+# so a stub here could only hide a real import.
 import tile_for_basic  # noqa: E402
 from fov_tiling import reconstruct_image_from_fovs  # noqa: E402
 
@@ -119,17 +116,16 @@ def test_a_grid_of_one_tile_is_refused_rather_than_silently_written(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The nuclear/fiducial skip -- the deleted bin/preprocess.py's contract, moved not dropped
+# The nuclear/fiducial skip
 # ---------------------------------------------------------------------------
 
 
 def test_the_configured_fiducial_is_excluded_from_the_fit(tmp_path):
-    """CELLTOX, not DAPI, is the fiducial here -- the exact case the old code got wrong.
+    """CELLTOX, not DAPI, is the fiducial here.
 
-    ``_process_single_channel_from_stack`` used to test ``"DAPI" in name.upper()``
-    directly, so a CELLTOX panel had its fiducial corrected while a DAPI panel did not.
-    The decision now goes through ``utils.metadata.is_nuclear``, and it is made ONCE,
-    here, and recorded in the sidecar -- Task 4 reads the answer rather than re-deciding.
+    The decision goes through ``utils.metadata.is_nuclear`` (not a ``"DAPI" in name``
+    check), is made once, here, and is recorded in the sidecar, so APPLY_PROFILES reads
+    the answer rather than re-deciding.
     """
     slide = tmp_path / "s.ome.tif"
     names = ["CELLTOX", "PANCK", "DAPI_like"]
@@ -173,8 +169,8 @@ def test_a_celltox_only_panel_still_produces_a_readable_stack(tmp_path):
 
     Nothing is corrected, so nothing NEEDS fitting -- but the module still runs, and an
     OME-TIFF with zero channels is not a thing. The stack therefore carries the channels
-    anyway (``profile_channels``) while ``corrected_channels`` stays empty, and Task 4
-    applies nothing. The two lists are separate for exactly this case.
+    anyway (``profile_channels``) while ``corrected_channels`` stays empty, and
+    APPLY_PROFILES applies nothing. The two lists are separate for this case.
     """
     slide = tmp_path / "celltox.ome.tif"
     _write_slide(slide, _rng_stack(1, 200, 200), ["CELLTOX"])
@@ -202,14 +198,14 @@ def test_a_celltox_only_panel_still_produces_a_readable_stack(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The sidecar: Task 4 must not have to re-derive the grid
+# The sidecar: APPLY_PROFILES must not have to re-derive the grid
 # ---------------------------------------------------------------------------
 
 
 def test_sidecar_positions_reassemble_the_original_exactly(tmp_path):
     """tile -> (identity) -> reassemble is the identity, byte for byte.
 
-    Output-equivalence on the half of the round trip this task owns. If the positions
+    Output-equivalence on this script's half of the round trip. If the positions
     are wrong by a pixel, or the padding of an edge tile leaks back in, this fails.
     """
     slide = tmp_path / "s.ome.tif"

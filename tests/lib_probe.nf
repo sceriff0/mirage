@@ -1,71 +1,30 @@
 /*
-========================================================================================
-    lib/ PROBE — the unit-test surface for lib/*.groovy
-========================================================================================
-    WHY THIS IS A .nf FILE AND NOT AN nf-test ASSERTION BLOCK.
+    lib/ probe: the unit-test surface for lib/*.groovy.
 
-    nf-test's assertion context is a separate Groovy shell that does NOT have the
-    project's lib/ directory on its classpath: naming `Layout` there fails with
-    `No such property: Layout` (see the header of tests/layout.nf.test). A
-    Nextflow PIPELINE SCRIPT, by contrast, is compiled WITH lib/ on the
-    classpath — so the assertions live here, in a script, and
-    tests/lib_probe.nf.test only has to assert that this script ran.
+    nf-test's assertion context cannot see lib/ (`No such property: Layout`), but a
+    Nextflow script is compiled with lib/ on the classpath, so the assertions live
+    here and tests/lib_probe.nf.test only asserts that this script ran.
 
     Run directly:   nextflow run tests/lib_probe.nf -lib lib
     Run in CI:      the nextflow-stub job, and tests/lib_probe.nf.test (tag: stub)
 
-    This file declares no processes and touches no filesystem. Every statement is
-    a pure call into a lib/ class plus an `assert`. A failing assert aborts the
-    run with a nonzero exit — that is the whole mechanism.
+    No processes. Each statement is a call into a lib/ class plus an `assert`; a
+    failing assert exits nonzero. Some checks write and delete temp files.
 
-    APPENDING: later tasks add their own assert blocks under a clearly commented
-    section header, following the pattern below. Keep each class's assertions in
-    its own banner-delimited section.
+    Must parse on Nextflow 25 and 26: `assert cond : 'msg'` and `closure.call(x)`,
+    never `assert cond, 'msg'` or `closure(x)`.
 
-    THE workflow{} BLOCK HAS A HARD SIZE CEILING. Nextflow's DSL2 parser captures
-    a top-level workflow{} block's body whole, as a single Groovy string constant,
-    and the JVM class-file format caps any one String constant at 65535 UTF-16
-    code units (org.codehaus.groovy.classgen.ClassCompletionVerifier
-    #checkStringExceedingMaximumLength) -- confirmed empirically 2026-09-02: at
-    60e5a2e the workflow{} block was already 64072 bytes, ~1.4KB below that
-    ceiling, and appending a normally-commented section pushed it over with
-    "String too long. The given string is N Unicode code units long...". A
-    top-level `def` FUNCTION is not subject to this capture -- only the workflow{}
-    block's own text counts against the limit. So a new section with any real
-    amount of prose goes in its own top-level `def checkX() { ... }` function
-    below, called as ONE statement from inside workflow{}; only add assertions
-    directly inline in workflow{} if they are genuinely a one- or two-liner.
-
-    AND THE CEILING IS COUNTED IN BYTES, NOT CHARACTERS. The javac/Groovy error
-    message talks about "Unicode code units", but the thing that actually
-    overflows is the class file's CONSTANT_Utf8_info entry, whose `length` field
-    is a u2: at most 65535 BYTES of modified UTF-8. ASCII is 1 byte per
-    character, so for an ASCII block the two counts coincide -- but an em-dash
-    costs 3 bytes and 1 code unit, so a block that looks 500 characters clear can
-    already be over. The workflow{} block was converted to ASCII-only on
-    2026-09-11 (its em-dashes became `--`) and measured 65502 bytes, i.e. 33
-    bytes of headroom. KEEP IT ASCII: a single pasted em-dash, curly quote or
-    non-breaking space now costs 2-3 bytes of that 33 and the failure surfaces
-    as a compile error with no line number. Prose with punctuation belongs in a
-    top-level `def` or in this header, neither of which counts.
-========================================================================================
+    Size ceiling: Nextflow 25's parser stores the workflow{} body as one Java string
+    constant, at most 65535 bytes of modified UTF-8 (an em-dash costs 3 bytes). Keep
+    that block ASCII and short; new checks go in a top-level `def checkX()` called
+    from it, which does not count. tests/test_lib_probe_parses_on_nf26.py pins a margin.
 */
 
-/**
- * ResourceReport — trace-path resolution and the missing-trace diagnostic.
- * Kept as a top-level function (see the header note above) so its assertions can
- * carry normal comments without threatening the workflow{} block's size ceiling.
- */
+/** ResourceReport: trace-path resolution and the missing-trace diagnostic. */
 def checkResourceReport() {
 
-    // ------------------------------------------------------------------ //
-    // ResourceReport — where the trace file is looked for
-    // ------------------------------------------------------------------ //
-    // Nextflow resolves trace.file (nextflow.config's "${params.trace_dir}/trace.txt")
-    // against launchDir. main.nf's onComplete handler used to hand the RAW param to
-    // cmd.execute(), which resolves against the JVM's working directory instead --
-    // the same thing only when the pipeline happened to be launched from the
-    // directory it runs in. These four assertions pin the resolution rule.
+    // Nextflow resolves trace.file against launchDir, not the JVM's working directory;
+    // these cases pin that rule.
     assert ResourceReport.tracePath('/abs/trace', '/launch')  == '/abs/trace/trace.txt'
     assert ResourceReport.tracePath('.trace', '/launch')      == '/launch/.trace/trace.txt'
     assert ResourceReport.tracePath('./.trace/', '/launch')   == '/launch/.trace/trace.txt'
@@ -84,9 +43,8 @@ def checkResourceReport() {
     catch (IllegalArgumentException ignored) { blankLaunchDir = true }
     assert blankLaunchDir : 'ResourceReport.tracePath must reject a relative trace_dir with no launchDir'
 
-    // The diagnostic must NAME the path and state whether tracing was on. A message
-    // that says only "could not generate resource report" leaves an operator with no
-    // way to tell a misconfigured trace_dir from a deliberately disabled trace.
+    // The diagnostic must name the path and say whether tracing was on, so an operator
+    // can tell a wrong trace_dir from a disabled trace.
     def traceOn  = ResourceReport.missingTraceMessage('/launch/.trace/trace.txt', true)
     def traceOff = ResourceReport.missingTraceMessage('/launch/.trace/trace.txt', false)
 
@@ -101,22 +59,11 @@ def checkResourceReport() {
     assert !traceOff.contains('--enable_trace') : 'must not suggest a CLI boolean'
 }
 
-/**
- * ProcessEnvelope — the size-log row and container identity in versions.yml.
- *
- * Lives outside `workflow { ... }` deliberately: see "THE WORKFLOW BLOCK HAS A HARD
- * SIZE CEILING" above. Called once from the workflow block, before the final println.
- */
+/** ProcessEnvelope: the size-log row and container identity in versions.yml. */
 def checkProcessEnvelope() {
-    // ------------------------------------------------------------------ //
-    // ProcessEnvelope — the size-log row
-    // ------------------------------------------------------------------ //
-    // The rendered strings are asserted BYTE FOR BYTE, because they are shell
-    // text that no `-stub` run and no snapshot ever evaluates: `-stub` skips
-    // script: entirely, and the aggregated CSV records only the row's VALUES.
-    // If the `$(`/`${` escaping is wrong here, .command.sh gets the literal
-    // command text instead of a byte count and nothing downstream notices --
-    // the exact failure that shipped once in versions() (see probe()'s comment).
+    // The size-log row, asserted byte for byte: it is shell text that no `-stub` run or
+    // snapshot evaluates, so wrong `$(`/`${` escaping would silently publish the command
+    // text instead of a byte count.
     assert ProcessEnvelope.SIZE_LOG_COLUMNS == ['process', 'sample_id', 'filename', 'bytes']
 
     def oneFile = ProcessEnvelope.sizeLog('MIRAGE:PRE:CONVERT_IMAGE', 'P001',
@@ -143,9 +90,7 @@ def checkProcessEnvelope() {
                                        ['channels/*'], 'P001.MERGE_AND_PYRAMID.size.csv')
     assert glob.contains('MIRAGE:POST:MERGE_AND_PYRAMID,P001,inputs/,${size_bytes}')
 
-    // The stub row carries the SAME process name as the real row. That is the whole
-    // point: `STUB` as a process name made a stub CSV structurally incomparable with
-    // a real one, and bin/generate_resource_report.py had to special-case it.
+    // The stub row carries the same process name as the real row, so the CSVs compare.
     assert ProcessEnvelope.sizeLogStub('MIRAGE:PRE:CONVERT_IMAGE', 'P001', 'P001_slide.CONVERT_IMAGE.size.csv') ==
            'echo "MIRAGE:PRE:CONVERT_IMAGE,P001,stub,0" > P001_slide.CONVERT_IMAGE.size.csv'
 
@@ -156,15 +101,8 @@ def checkProcessEnvelope() {
     catch (IllegalArgumentException ignored) { noPaths = true }
     assert noPaths : 'ProcessEnvelope.sizeLog must reject an empty shellPaths list'
 
-    // ------------------------------------------------------------------ //
-    // ProcessEnvelope — container identity in versions.yml
-    // ------------------------------------------------------------------ //
-    // WHY versions.yml AND NOT THE TRACE. The trace records what Nextflow was told
-    // to run; versions.yml is what the RUN ITSELF reports, and it is the artifact
-    // that ships with the results. Ruling R6 makes the image a first-class part of
-    // 1.0.0's reproducibility claim, and an image tag in this repo is descriptive
-    // (:preprocess, :tiled), not immutable -- so "which image produced this" is a
-    // question the outputs must answer for themselves.
+    // Container identity in versions.yml: image tags are descriptive, not immutable, so
+    // the outputs themselves must record which image produced them.
     def withContainer = ProcessEnvelope.versions('MIRAGE:POST:MERGE_AND_PYRAMID',
                                                  ['tifffile'], 'bolt3x/mirage-merge:1.0.0')
     def containerLines = withContainer.readLines()
@@ -182,19 +120,14 @@ def checkProcessEnvelope() {
     assert !ProcessEnvelope.versions('P', ['tifffile'], null).contains('container:')
     assert !ProcessEnvelope.versions('P', ['tifffile']).contains('container:')
 
-    // The stub reports `stub`, never the real image name: a stub run produced no
-    // evidence about any image, and claiming one would be a fabricated provenance
-    // record in exactly the artifact that exists to carry provenance.
+    // The stub reports `stub`: a stub run is no evidence about any image.
     def stubContainer = ProcessEnvelope.versionsStub('MIRAGE:POST:MERGE_AND_PYRAMID',
                                                      ['tifffile'], 'bolt3x/mirage-merge:1.0.0')
     assert stubContainer.readLines()[3] == '    container: stub'
     assert !stubContainer.contains('bolt3x')
 
-    // The bash-only pair, for a module with no Python interpreter at all.
-    // AGGREGATE_SIZE_LOGS runs in bolt3x/mirage-preprocess:1.0.0; routing it through
-    // versions() would run `python --version 2>&1` and write the SHELL'S ERROR MESSAGE
-    // ("bash: python: command not found") into a published report as a version
-    // number, because that heredoc pipes stderr into the value.
+    // The bash-only pair, for an image with no Python: versions() would record
+    // "bash: python: command not found" as a version number.
     def bashVersions = ProcessEnvelope.versionsBash('MIRAGE:FINAL_QC:AGGREGATE_SIZE_LOGS', 'bolt3x/mirage-preprocess:1.0.0')
     assert bashVersions.readLines() == [
         'cat <<-END_VERSIONS > versions.yml',
@@ -214,29 +147,17 @@ def checkProcessEnvelope() {
     ]
 }
 
-/**
- * RegisteredMatch — pairing VALIS's outputs back to their slide metas.
- *
- * Lives outside `workflow { ... }` deliberately: see "THE WORKFLOW BLOCK HAS A HARD
- * SIZE CEILING" above. Called once from the workflow block, before the final println.
- */
+/** RegisteredMatch: pairing VALIS's outputs back to their slide metas. */
 def checkRegisteredMatch() {
-    // ------------------------------------------------------------------ //
-    // RegisteredMatch — pairing VALIS's outputs back to their slide metas
-    // ------------------------------------------------------------------ //
-    // WHY BY CHANNEL SIGNATURE AND NOT BY FILENAME. VALIS renames its outputs; the
-    // only thing carried through registration that identifies a slide is its OME
-    // channel set, which bin/create_channels_manifest.py writes out as
-    // filename -> [channel names]. Getting this wrong does not fail -- it silently
-    // attaches the wrong patient's metadata to a registered image.
+    // By channel signature, not filename: VALIS renames its outputs, and the OME channel
+    // set (bin/create_channels_manifest.py) is the only identity that survives. A wrong
+    // pairing does not fail; it attaches the wrong metadata to a registered image.
     assert RegisteredMatch.signature(['PANCK', 'dapi', 'CD3']) == 'cd3|dapi|panck'
     // Lower-case FIRST, then sort: 'CD3' and 'cd3' must land in the same place.
     assert RegisteredMatch.signature(['cd3', 'DAPI']) == RegisteredMatch.signature(['CD3', 'dapi'])
 
-    // toSorted(), never sort(): meta.channels is a SHARED List reference across
-    // every meta built with `meta + [k: v]` (Map.plus is a SHALLOW clone), so an
-    // in-place sort here would silently reorder a sibling meta's channel list --
-    // and channel ORDER is what --dapi-channel and the pyramid writer index on.
+    // toSorted(), never sort(): meta.channels is shared across metas built with
+    // `meta + [k: v]` (a shallow copy), and channel order is what --dapi-channel indexes.
     def sharedChannels = ['PANCK', 'DAPI']
     RegisteredMatch.signature(sharedChannels)
     assert sharedChannels == ['PANCK', 'DAPI'] : 'RegisteredMatch.signature must not mutate its argument'
@@ -310,15 +231,8 @@ def checkRegisteredMatch() {
     assert noFileForMeta.startsWith('RegisteredMatch: unmatched') : "got: ${noFileForMeta}"
     assert noFileForMeta.contains('no registered file carries the channel') : "3b message: ${noFileForMeta}"
 
-    // Exception 3c: a duplicate FILE signature (as opposed to 3b's duplicate META
-    // signature, already rejected earlier). refMeta and movMeta have DISTINCT
-    // signatures, so the meta-side duplicate check does not fire -- but both
-    // manifest entries below name refMeta's channel set, so fileBySignature
-    // collapses them to one map slot and movFile's entry is overwritten. This is
-    // the third behaviour change documented in lib/RegisteredMatch.groovy's
-    // docstring: the old closure would have silently paired the surviving file to
-    // both metas, whereas here movMeta's signature has no file left and the
-    // "unmatched" throw below is fatal.
+    // Exception 3c: two manifest entries with the same FILE signature collapse to one map
+    // slot, so movMeta has no file left and the "unmatched" throw fires.
     def dupFileSig = ''
     try {
         RegisteredMatch.pair([refMeta, movMeta], [refFile, movFile],
@@ -329,25 +243,8 @@ def checkRegisteredMatch() {
     assert dupFileSig.startsWith('RegisteredMatch: unmatched') : "got: ${dupFileSig}"
 }
 
-/**
- * Checkpoint — requireColumns, the drift guard three readers copied.
- *
- * Lives outside `workflow { ... }` deliberately: see "THE WORKFLOW BLOCK HAS A HARD
- * SIZE CEILING" above. Called once from the workflow block, before the final println.
- */
+/** Checkpoint.requireColumns: the missing-column check checkpoint readers share. */
 def checkCheckpoint() {
-    // ------------------------------------------------------------------ //
-    // Checkpoint — requireColumns, the drift guard three readers copied
-    // ------------------------------------------------------------------ //
-    // Three readers each carried a hand-copied 7-line `.each { col -> if (!(col in
-    // Checkpoint.columns(...))) throw ... }` block: add_cycle.nf twice and
-    // segmentation.nf once. Three copies of one rule, each free to word its message
-    // differently and to fall behind. This is that rule, once.
-    //
-    // `assert cond : 'msg'`, never `assert cond, 'msg'`, and `closure.call(x)`, never
-    // `closure(x)` — the second spelling of each does not parse under Nextflow 26 and
-    // silently skipped every assertion in this file in CI's latest-everything leg.
-    // Guarded by tests/test_lib_probe_parses_on_nf26.py.
 
     // The satisfied case returns quietly.
     Checkpoint.requireColumns('registered', ['patient_id', 'registered_image', 'channels'])
@@ -396,20 +293,8 @@ def checkCheckpoint() {
 }
 
 /**
- * RegBackends — the registration backend's identity, in one table.
- *
- * Lives outside `workflow { ... }` deliberately: see "THE WORKFLOW BLOCK HAS A HARD
- * SIZE CEILING" above. Called once from the workflow block, before the final println.
- *
- * The method name was re-decided in five places: nextflow_schema.json's
- * registration_method enum, workflows/mirage.nf's add_cycle allowlist,
- * register_patient.nf's three-arm dispatch, seg_qc.nf's join-shape branch, and
- * lib/WarpBackends.groovy's own two-key map. Adding a backend meant finding all
- * five; missing one was silent, and the silence had a direction -- the
- * register_patient dispatch used to read `if (tiled) ... else VALIS`, so a method
- * the schema gained but that file did not know about registered with VALIS and
- * REPORTED SUCCESS. A whole benchmark arm would have measured VALIS twice under
- * two labels.
+ * RegBackends: the registration backend's identity, in one table. A method the
+ * schema knows but a dispatch site does not must throw, not fall through to VALIS.
  */
 def checkRegBackends() {
     assert RegBackends.methods() == ['valis', 'tiled'] :
@@ -499,10 +384,7 @@ def checkRegBackends() {
     assert regTableImmutable : 'RegBackends.BACKENDS must be immutable'
 }
 
-// CsvUtils.unknownColumns — report, never reject. Out-of-band like the other
-// check*() functions above: the workflow{} block is already within ~160 bytes
-// of DSL2's 65535-UTF-16-code-unit single-String-constant ceiling (see the file
-// header note), so a new assertion block cannot be inlined there.
+// CsvUtils.unknownColumns: report, never reject.
 def checkCsvUtilsUnknownColumns() {
     def unkCsv = File.createTempFile('unknowncols', '.csv')
     unkCsv.text = '''patient_id,path_to_file,is_reference,channels,operator,scan_date
@@ -539,18 +421,10 @@ P1,/x/a.tiff,true,DAPI|CD3
         'unknownColumns must tolerate an empty file rather than throwing over it'
 }
 
-// CsvUtils.validateInputSemantics -- the duplicate-channel refusal.
-//
-// A NON-NUCLEAR marker carried by two slides of one patient is a samplesheet
-// mistake with no safe interpretation: resolveKeptChannelsPerSlide keeps exactly
-// one copy per marker name per patient, and which slide's copy survives is decided
-// by reference-first/samplesheet order rather than by anything the author meant.
-// So it is refused at launch, in samplesheet validation, before any process is
-// instantiated. NUCLEAR markers are the deliberate exception -- DAPI is the
-// registration fiducial and legitimately repeats on every slide.
-//
-// Out-of-band like the other check*() functions above, for the same DSL2
-// string-constant-ceiling reason noted at the file header.
+// CsvUtils.validateInputSemantics: the duplicate-channel refusal. A non-nuclear
+// marker on two slides of one patient has no safe interpretation (only one copy is
+// kept, chosen by order), so it is refused at launch. Nuclear markers may repeat:
+// DAPI is the registration fiducial.
 def checkDuplicateChannelRefusal() {
 
     // validateInputSemantics also checks that each row's image EXISTS, so the two
@@ -621,20 +495,15 @@ def checkDuplicateChannelRefusal() {
         sheetFor.call('withinnuc', 'DAPI|DAPI|PANCK', 'DAPI|CD3'), nuclear)
     assert withinNuclear != null : 'the within-slide rule does not exempt a nuclear marker'
 
-    // The temp tree is this function's own: delete it rather than leaving two images
-    // and six CSVs in /tmp per probe run, the way the createTempFile cases above do
-    // not have to (a single file each, cleaned by the OS).
+    // Delete the temp tree (two images and six CSVs per run).
     dupDir.deleteDir()
 
     println 'LIB PROBE: checkDuplicateChannelRefusal passed'
 }
 
-// Direct cases for four cross-parameter/CSV/layout validators that otherwise have
-// no unit-test surface: ParamUtils.validatePixelSize, ParamUtils.validateCleanup,
-// ParamUtils.isEntryPoint, CsvUtils.parseIsReference, and Layout's private
-// requireOutdir guard (reached here through the public publishedPath()). Out-of-band
-// like the other check*() functions above, for the same DSL2 string-constant-ceiling
-// reason noted at the file header.
+// Direct cases for validators with no other unit-test surface: validatePixelSize,
+// validateCleanup, isEntryPoint, CsvUtils.parseIsReference and Layout's private
+// requireOutdir (through publishedPath()).
 def checkParamValidators() {
 
     // ------------------------------------------------------------------ //
@@ -706,25 +575,16 @@ def checkParamValidators() {
     assert Layout.publishedPath('/out/', 'P001', 'geojson', geojsonFile) ==
            Layout.publishedPath('/out', 'P001', 'geojson', geojsonFile) : 'a trailing slash is stripped'
 
-    // The duplicate-channel refusal, called from here rather than from workflow{}:
-    // that block has ~33 bytes of headroom against the JVM's 65535-byte String
-    // constant ceiling (see the file header), and a call line would spend them.
+    // The duplicate-channel refusal; kept out of workflow{} for its size ceiling.
     checkDuplicateChannelRefusal()
 
     println 'LIB PROBE: checkParamValidators passed'
 }
 
-// CsvUtils.validateInputSemantics with requireUniqueChannelSets — the VALIS
-// channel-set rule at launch, alongside the cross-slide duplicate-channel rule
-// (Rule A, unconditional -- a NON-nuclear channel shared by two slides of one
-// patient is refused in the per-patient pass regardless of
-// requireUniqueChannelSets) that runs AFTER it (Rule B, opt-in via
-// requireUniqueChannelSets -- two slides sharing one whole channel SET, refused
-// before the per-patient pass). This sheet's rows 3 and 4 share both CD3 and
-// CD8 (non-nuclear) AND the same overall signature, so Rule A already refuses
-// it under `false` -- there is no longer an accepted case here for the VALIS
-// rule alone to distinguish; `true` still gets its own IllegalStateException
-// and message because Rule B runs first and wins.
+// CsvUtils.validateInputSemantics with requireUniqueChannelSets. Rule B (opt-in, two
+// slides sharing one whole channel set) runs before Rule A (always on, a non-nuclear
+// channel shared across a patient's slides). Rows 3 and 4 here trip both, so `false`
+// is refused by Rule A and `true` by Rule B with its own message.
 def checkUniqueChannelSets() {
     def ref  = File.createTempFile('dupsig_ref', '.tiff'); ref.text = 'x'
     def mov1 = File.createTempFile('dupsig_mov1', '.tiff'); mov1.text = 'x'
@@ -735,11 +595,8 @@ P7,${ref.path},true,DAPI|PANCK|SMA
 P7,${mov1.path},false,DAPI|CD3|CD8
 P7,${mov2.path},false,CD8|dapi|CD3
 """
-    // default (false) and explicit false: Rule B (signature pairing) is not asked
-    // for here, but Rule A still fires -- CD3 is the first non-nuclear channel
-    // that repeats across a patient's slides in declaration order (DAPI repeats
-    // too, but it is the nuclear marker passed below, so it is the deliberate
-    // exception and is skipped).
+    // default and explicit false: Rule B is off, but Rule A refuses CD3, the first
+    // non-nuclear channel repeated across the patient's slides (DAPI is nuclear, skipped).
     [null, false].each { arg ->
         def refusedA = false
         def msgA = ''
@@ -775,13 +632,7 @@ P8,${mov1.path},true,DAPI|CD3|CD8
     [ref, mov1, mov2, csv, csv2]*.delete()
 }
 
-// The two sections below used to sit inline in the workflow {} block. They were
-// moved out on 2026-09-13 because the LEGACY (Nextflow 25) parser stores a workflow
-// body's source as ONE Java string constant, capped at 65,535 code units -- and the
-// block had reached 65,513. Adding three lines to it broke the probe on the
-// `NF 25.04.0 stub` leg only ("String too long"), while Nextflow 26 parsed it fine.
-// tests/test_lib_probe_parses_on_nf26.py now pins the block under the cap. New
-// checks go in a `def checkX()` above the block, never inline.
+// Checks called from workflow{}, kept out of it for its size ceiling (file header).
 
 def checkLayoutAndMarkerUtils() {
     // ------------------------------------------------------------------ //
@@ -817,15 +668,14 @@ def checkLayoutAndMarkerUtils() {
     assert MarkerUtils.markerList('DAPI CELLTOX')      == ['DAPI', 'CELLTOX']
     assert MarkerUtils.markerList('PANCK')             == ['PANCK']
 
-    // Matching is case-insensitive SUBSTRING, deliberately: 'DAPI_nuclear' is nuclear.
+    // Matching is case-insensitive substring: 'DAPI_nuclear' is nuclear.
     assert MarkerUtils.isNuclear('DAPI_nuclear', ['DAPI'])
     assert MarkerUtils.isNuclear('dapi', ['DAPI'])
     assert !MarkerUtils.isNuclear('CD3', ['DAPI'])
 
-    // MARKER PREFERENCE ORDER BEATS CHANNEL ORDER. With markers ['DAPI','CELLTOX'] and
-    // channels ['CELLTOX','CD8','DAPI'] the answer is 2, not 0. SEGMENT's CellSAM
-    // backend feeds this straight to --dapi-channel, so a wrong answer segments the
-    // wrong channel rather than failing.
+    // Marker preference order beats channel order: markers ['DAPI','CELLTOX'] over
+    // channels ['CELLTOX','CD8','DAPI'] gives 2, not 0. CellSAM passes this straight to
+    // --dapi-channel, so a wrong answer segments the wrong channel silently.
     assert MarkerUtils.nuclearIndex(['CELLTOX', 'CD8', 'DAPI'], ['DAPI', 'CELLTOX']) == 2
     assert MarkerUtils.nuclearIndex(['CD8', 'CELLTOX'], ['DAPI', 'CELLTOX'])         == 1
 
@@ -837,25 +687,14 @@ def checkLayoutAndMarkerUtils() {
 
 def checkKeepSetRule() {
     // ------------------------------------------------------------------ //
-    // CsvUtils.resolveKeptChannelsPerSlide - THE keep-set rule
+    // CsvUtils.resolveKeptChannelsPerSlide - the keep-set rule
     // ------------------------------------------------------------------ //
-    // Each marker name is claimed exactly once per patient, reference first then
-    // samplesheet order. That single invariant does two things. It makes the winner of a
-    // shared marker DETERMINISTIC -- two slides carrying the same name used to be
-    // deduplicated by ARRIVAL ORDER at a downstream .unique(), so which copy reached
-    // merged_quant.csv and the pyramid varied run to run. And it collapses the
-    // distinct-name count and the emitted-file count into ONE number, which is what lets
-    // a single channels_count size every downstream groupKey correctly.
-    //
-    // It is NOT that some consumer needs the file count: both groupTiffsByPatient callers
-    // dedup on [patient_id, marker] immediately upstream (postprocess.nf's `.unique`,
-    // add_cycle.nf's priority groupTuple), so the distinct-name count would serve them
-    // today. An earlier version of this comment said otherwise.
-    // The inner map is keyed on Meta.identityFor's output (meta.id), not the raw
-    // image cell -- see resolveKeptChannelsPerSlide's doc. For a non-colliding stem,
-    // identityFor ignores its rowIndex argument entirely (n<=1 short-circuits before
-    // rowIndex is ever consulted), so `0` is a safe stand-in below wherever a row's
-    // actual samplesheet-order index isn't the point of the assertion.
+    // Each marker name is claimed once per patient, reference first then samplesheet
+    // order. That makes the winner of a shared marker deterministic, and makes the
+    // distinct-name count equal the emitted-file count, so one channels_count sizes
+    // every downstream groupKey.
+    // The inner map is keyed on Meta.identityFor's output (meta.id). For a
+    // non-colliding stem identityFor ignores rowIndex, so `0` stands in below.
     def keepCsv = File.createTempFile('keepset', '.csv')
     keepCsv.text = '''patient_id,image,channels,is_reference
 P1,ref.tiff,DAPI|KI67|CD20,true
@@ -894,13 +733,9 @@ P3,cyc4.tiff,DAPI|CELLTOX|CD8,false
     assert seeded['P3'][Meta.identityFor('P3', 'cyc4.tiff', 0, [:])] == ['CELLTOX', 'CD8']  // DAPI pre-claimed; CELLTOX new
     keepPrior.delete()
 
-    // BASENAME COLLISION: two rows of one patient can share an image BASENAME while
-    // living in different directories -- a cyclic-IF cohort with one directory per cycle
-    // is the ordinary case, not a pathological one. identityFor disambiguates via each
-    // row's samplesheet-order index (0, 1) whenever the stem would otherwise collide,
-    // and resolveKeptChannelsPerSlide keys its map on exactly that -- so both rows land
-    // as distinct entries even though their basenames, and therefore their un-disambiguated
-    // stems, are identical.
+    // Basename collision: two rows of one patient can share an image basename in
+    // different directories (one directory per cycle is ordinary). identityFor adds the
+    // row index when stems collide, so both rows are distinct entries.
     def dupCsv = File.createTempFile('keepdup', '.csv')
     dupCsv.text = '''patient_id,image,channels,is_reference
 P4,/data/c1/slide.tiff,DAPI|CD3,true
@@ -914,17 +749,10 @@ P4,/data/c2/slide.tiff,DAPI|CD8,false
     assert CsvUtils.countChannelsPerPatient(dupCsv.path, 'image', ['DAPI','CELLTOX'])['P4'] == 3
     dupCsv.delete()
 
-    // RAW-CELL COLLISION -- THE BUG THIS TASK FIXES. Two rows of one patient can share
-    // the exact same raw `<imageColumn>` cell (a duplicate row) or both leave it blank,
-    // which used to collide the map when it was keyed on `row.raw`: the second pass
-    // silently overwrote the first -- here, with []. P6's reference row keeps
-    // DAPI+CD3; the second row declares only DAPI, already claimed, so its OWN keep-set
-    // is legitimately []. Under the old row.raw keying, perSlide['same.tiff'] would be
-    // ['DAPI','CD3'] and then get overwritten by []. Keying on the ASSIGNED identity
-    // instead means the two rows can never collapse into one entry, because identityFor
-    // disambiguates them by rowIndex the moment stemCounts says their stem collides --
-    // exactly as it does for a basename collision above, even though here the raw cells
-    // are not just same-stem but IDENTICAL strings.
+    // Raw-cell collision: two rows sharing the exact same image cell (or both blank)
+    // must stay two entries. P6's second row declares only DAPI, already claimed, so its
+    // keep-set is legitimately []; keying on the assigned identity stops it overwriting
+    // the reference row's ['DAPI','CD3'].
     def rawDupCsv = File.createTempFile('rawdup', '.csv')
     rawDupCsv.text = '''patient_id,image,channels,is_reference
 P6,same.tiff,DAPI|CD3,true
@@ -944,22 +772,12 @@ P6,same.tiff,DAPI,false
     assert CsvUtils.countChannelsPerPatient(rawDupCsv.path, 'image', ['DAPI','CELLTOX'])['P6'] == 2
     rawDupCsv.delete()
 
-    // NOTE: the block above only proves resolveKeptChannelsPerSlide's OWN internal
-    // row index (rowsByPatient[patientId].size(), captured while it builds its rows)
-    // is collision-safe -- it never goes through CsvUtils.rowIndexPerPatient. THAT
-    // function is the SEPARATE, real production call site input_check.nf's `.map`
-    // closure actually uses to get rowIndex for Meta.fromSamplesheetRow, and it had
-    // its OWN, independent collision: it used to key a SCALAR by
-    // "patientId::rawImageCell", so two rows sharing a raw cell (or both blank) had
-    // the SECOND row's index silently overwrite the first's, and BOTH rows read back
-    // the SAME index -- Meta.fromSamplesheetRow then assigned them the SAME meta.id,
-    // and one row's real keep-set silently displaced the other's under that shared id
-    // (a wrong-but-PRESENT entry, not a clean miss -- see lib/Meta.groovy's
-    // fromSamplesheetRow doc). Pinned directly, against the real function, below.
-    // Pinned END TO END -- through Nextflow's own splitCsv and input_check.nf's real
-    // `.map` closure, not a hand-rebuilt copy of it -- by
-    // tests/subworkflows/local/input_check.nf.test's "two rows sharing the identical
-    // raw path cell get distinct id and keep-set" case.
+    // The block above exercises resolveKeptChannelsPerSlide's own row index. The
+    // production call site, input_check.nf, gets rowIndex from
+    // CsvUtils.rowIndexPerPatient; two rows sharing a raw cell must get distinct indexes
+    // there too, or Meta.fromSamplesheetRow gives them the same meta.id. Pinned directly
+    // below, and end to end by input_check.nf.test's "two rows sharing the identical raw
+    // path cell get distinct id and keep-set" case.
     def rowIdxCsv = File.createTempFile('rowindexdup', '.csv')
     rowIdxCsv.text = '''patient_id,image,channels,is_reference
 P8,same.tiff,DAPI|CD3,true
@@ -971,16 +789,11 @@ P8,other.tiff,CD20,false
     assert rowIdx['P8::other.tiff'] == [2]
     rowIdxCsv.delete()
 
-    // AN EMPTY KEEP-SET IS AN ANSWER, NOT AN ABSENCE. A slide whose every declared
-    // channel was already claimed contributes NO new markers, and countChannelsPerPatient
-    // counts it as contributing ZERO. Its entry must therefore be PRESENT and EMPTY:
-    // consumers have to be able to tell "this slide emits nothing" (emit nothing) from
-    // "this slide has no entry" (fall back to its declared list). Groovy's `?:` cannot --
-    // it treats [] as falsy -- so every lookup of this map uses containsKey/an explicit
-    // null test, and input_check.nf does the lookup where meta.id is in scope.
-    // Resolving the empty entry to the FULL declared list emitted a duplicate marker NAME
-    // across two slides of one patient, which is exactly what the one-name-per-patient
-    // invariant exists to forbid.
+    // An empty keep-set is an answer, not an absence: a slide whose channels were all
+    // claimed must have a present, empty entry, so consumers can tell "emit nothing" from
+    // "no entry, use the declared list". Groovy's `?:` treats [] as falsy, so lookups use
+    // containsKey or an explicit null test. Falling back to the declared list would emit
+    // a duplicate marker name across two slides.
     def emptyCsv = File.createTempFile('keepempty', '.csv')
     emptyCsv.text = '''patient_id,image,channels,is_reference
 P5,ref.tiff,DAPI|PANCK|SMA,true
@@ -994,11 +807,9 @@ P5,mov1.tiff,DAPI,false
     assert CsvUtils.countChannelsPerPatient(emptyCsv.path, 'image', ['DAPI','CELLTOX'])['P5'] == 3
     emptyCsv.delete()
 
-    // THE invariant countChannelsPerPatient exists to satisfy: the count equals BOTH the
-    // number of TIFFs emitted AND the number of distinct marker names, because the
-    // one-name-per-patient rule makes those the same number. Pinning both equalities here
-    // is what stops a future change to the resolver from quietly making channels_count
-    // right for one downstream grouping and wrong for the other.
+    // The invariant countChannelsPerPatient exists for: the count equals both the number
+    // of TIFFs emitted and the number of distinct marker names. Both are pinned so a
+    // resolver change cannot make channels_count right for one grouping only.
     def invCsv = File.createTempFile('keepcount', '.csv')
     invCsv.text = '''patient_id,image,channels,is_reference
 P1,ref.tiff,DAPI|KI67|CD20,true
@@ -1013,22 +824,10 @@ P1,cyc3.tiff,CELLTOX|FOXP3,false
     assert invCounts['P1'] == invFlat.toSet().size()  // == distinct names     (quant)
     invCsv.delete()
 
-    // THE SAME INVARIANT, but forced through the ONE case invCsv above never
-    // exercises: a duplicate marker name declared TWICE ON THE SAME ROW (not
-    // across two slides). invCsv's only duplicate, CELLTOX, is claimed by
-    // cyc2 and re-declared by cyc3 -- a CROSS-slide collision. A samplesheet
-    // row's own `channels` cell is free-text and nothing upstream forbids
-    // `DAPI|DAPI|KI67`, so the within-row path through the SAME claimed-set
-    // loop needs its own pin: if a future change replaced the live,
-    // incrementally-updated `claimed` set with one only updated AFTER each
-    // row finishes (e.g. to "parallelise" the per-row scan), cross-slide
-    // dedup would still hold but a same-row repeat would stop being caught,
-    // desynchronising the emitted-file count from the distinct-name count
-    // for exactly the reason this dual invariant exists.
-    //
-    // P9's reference row declares DAPI twice and P9's second row declares
-    // CELLTOX twice -- two independent within-row repeats, one per slide, so
-    // this cannot pass by accident of only one slide being exercised.
+    // The same invariant for a name repeated within one row (`DAPI|DAPI|KI67`), which the
+    // cross-slide case above never exercises: the claimed set must update per channel,
+    // not per row. P9 repeats DAPI on the reference row and CELLTOX on the second row,
+    // so both slides are exercised.
     def dupWithinRowCsv = File.createTempFile('keepdupwithinrow', '.csv')
     dupWithinRowCsv.text = '''patient_id,image,channels,is_reference
 P9,ref.tiff,DAPI|DAPI|KI67|CD20,true
@@ -1074,12 +873,8 @@ def checkSegQcNucleiDir() {
 }
 
 def checkPassthroughPath() {
-    // Layout.passthroughPath delegates to publishedOrAsIs with the kind the correction step
-    // decides: PREPROCESSED when BaSiC ran, 'converted' when skip_preprocessing (the shipped
-    // default) left CONVERT_IMAGE's output as the slide. Pinned to PREPROCESSED, it named a
-    // file that did not exist for every single-slide patient and STARE reference at the
-    // default (2026-09-17). A function, not inline: the workflow body is at Nextflow 25's
-    // 65,535-byte string-constant limit (tests/test_lib_probe_parses_on_nf26.py).
+    // Layout.passthroughPath: PREPROCESSED when BaSiC ran, 'converted' when
+    // skip_preprocessing (the default) left CONVERT_IMAGE's output as the slide.
     def fresh = file("/work/ab/${'c' * 30}/P001_ref.ome.tif")
     assert Layout.passthroughPath('/out', 'P001', fresh, false) ==
         Layout.publishedOrAsIs('/out', 'P001', Layout.PREPROCESSED, fresh)
@@ -1091,11 +886,9 @@ def checkPassthroughPath() {
     println "LIB PROBE: checkPassthroughPath passed"
 }
 
-// ParamUtils.checkRetiredParams -- STARE's cost tier (reg_tiled_mode) was removed on
-// 2026-11-04. A stale value still lands in `params` (CLI, -params-file, profile), and
-// "seamless" removal means it must never silently run the high values: medium/low/custom
-// (or anything else) THROW naming the knobs to set, high only returns a warning, absent
-// returns null. Out-of-band of workflow{} for the string-constant ceiling (file header).
+// ParamUtils.checkRetiredParams: a stale reg_tiled_mode must never silently run the
+// high values. medium/low/custom (or anything else) throw naming the knobs to set,
+// high returns a warning, absent returns null.
 def checkRetiredStareTier() {
     assert ParamUtils.checkRetiredParams([:]) == null : "absent reg_tiled_mode must be a no-op"
     assert ParamUtils.checkRetiredParams([reg_tiled_tile: 512]) == null : "a live STARE knob is not retired"
@@ -1122,8 +915,7 @@ def checkRetiredStareTier() {
 
 workflow {
 
-    // Layout checkpoint paths + MarkerUtils, and CsvUtils.resolveKeptChannelsPerSlide.
-    // See the two functions above the workflow block (and why they are there).
+    // Layout checkpoint paths, MarkerUtils and the keep-set rule (functions above).
     checkLayoutAndMarkerUtils()
     checkKeepSetRule()
 
@@ -1139,9 +931,7 @@ workflow {
     assert !ParamUtils.shouldRun('preprocessing',  'registration',  'postprocessing')
     assert !ParamUtils.shouldRun('postprocessing', 'preprocessing', 'registration')
 
-    // 'segmentation' is now a REAL step (added by this task) and must not be used
-    // here as the "unknown step" example any more -- use a name that is genuinely
-    // absent from STEPS instead.
+    // Use a name absent from STEPS ('segmentation' is a real step).
     def badTarget = false
     try { ParamUtils.shouldRun('quantification', 'preprocessing', 'postprocessing') }
     catch (IllegalArgumentException ignored) { badTarget = true }
@@ -1164,26 +954,21 @@ workflow {
     assert Checkpoint.columns(Layout.POSTPROCESSED) ==
         ['patient_id', 'id', 'cell_csv', 'cell_geojson', 'merged_csv', 'cell_mask', 'pyramid', 'pixel_size']
 
-    // The header IS the seed: string the three writers pass to collectFile. These
-    // three literals are the published contract - Group A must not change them.
-    // RULING R17 (Task 4.3) added 'id'; this task appended 'pixel_size' LAST.
+    // The header is the seed string the writers pass to collectFile; these literals
+    // are the published contract.
     assert Checkpoint.header(Layout.PREPROCESSED)  == 'patient_id,id,preprocessed_image,is_reference,channels,pixel_size'
     assert Checkpoint.header(Layout.REGISTERED)    == 'patient_id,id,registered_image,is_reference,channels,pixel_size'
     assert Checkpoint.header(Layout.POSTPROCESSED) == 'patient_id,id,cell_csv,cell_geojson,merged_csv,cell_mask,pyramid,pixel_size'
 
-    // row() emits values in DECLARED COLUMN ORDER regardless of map insertion order.
-    // This is the whole point: a writer can no longer transpose two columns.
+    // row() emits values in declared column order regardless of map insertion order.
     assert Checkpoint.row(Layout.REGISTERED, [
         channels: 'DAPI|CD3', patient_id: 'P001', id: 'P001_x',
         registered_image: '/out/P001/registered/x.ome.tiff', is_reference: false,
         pixel_size: 0.325,
     ]) == 'P001,P001_x,/out/P001/registered/x.ome.tiff,false,DAPI|CD3,0.325'
 
-    // RFC 4180 QUOTING (Task 4.5). `--outdir` is an arbitrary filesystem path and
-    // every published path is built from it -- a comma anywhere in it used to shift
-    // every later column of a bare `.join(',')` row. A value containing a comma is
-    // now wrapped in double quotes, so the field count is preserved on read-back
-    // (Nextflow's `splitCsv(header: true)` parses RFC 4180 quoting natively).
+    // RFC 4180 quoting: --outdir is an arbitrary path, so a value containing a comma is
+    // quoted and the field count survives read-back (splitCsv parses RFC 4180 natively).
     assert Checkpoint.row(Layout.REGISTERED, [
         patient_id: 'P001', id: 'P001_x',
         registered_image: '/out,dir/P001/registered/x,y.ome.tiff',
@@ -1199,20 +984,15 @@ workflow {
         is_reference: false, channels: 'DAPI|CD3', pixel_size: 0.325,
     ]) == 'P001,P001_x,"/out/say ""hi""/x.ome.tiff",false,DAPI|CD3,0.325'
 
-    // A `null` VALUE (as opposed to a missing KEY, rejected above) now writes as an
-    // EMPTY field, not the literal four-character text `null`. Before this task a
-    // null-valued column read back as a bogus four-character path/id indistinguishable
-    // from a real one; an empty field is what every "artifact not produced" caller
-    // already writes (see the class doc's EMPTY VALUES note), and is what
-    // Meta.fromCheckpointRow's requirePresentInRow already treats as absent.
+    // A null value (unlike a missing key) writes an empty field, not the text `null`:
+    // empty is what "artifact not produced" means to every reader.
     assert Checkpoint.row(Layout.REGISTERED, [
         patient_id: 'P001', id: 'P001_x', registered_image: null,
         is_reference: false, channels: 'DAPI|CD3', pixel_size: 0.325,
     ]) == 'P001,P001_x,,false,DAPI|CD3,0.325'
 
-    // A missing column must throw, not silently emit an empty field - an empty field
-    // is a checkpoint row naming a path that does not exist, which is exactly the
-    // failure csv/postprocessed.csv shipped with for two releases.
+    // A missing column must throw: an empty field would be a checkpoint row naming a
+    // path that does not exist.
     def missingCol = false
     try { Checkpoint.row(Layout.REGISTERED, [patient_id: 'P001']) }
     catch (IllegalArgumentException ignored) { missingCol = true }
@@ -1229,24 +1009,13 @@ workflow {
     catch (IllegalArgumentException ignored) { unknownCol = true }
     assert unknownCol : 'Checkpoint.row must reject an unknown column'
 
-    // Checkpoint and Layout must agree on the step vocabulary. Two tables that drift
-    // is the exact failure this extraction exists to prevent.
+    // Checkpoint and Layout must agree on the step vocabulary.
     assert Checkpoint.STEPS*.name == Layout.CHECKPOINT_STEPS
 
-    // A step's requiredColumns used to EQUAL the previous step's full checkpoint
-    // column list -- that was true before RULING R17. It no longer is, by design:
-    // 'id' was added to every Checkpoint.STEPS schema (every checkpoint FILE now
-    // carries identity), but 'registration'/'segmentation' still enter through
-    // INPUT_CHECK (Meta.fromSamplesheetRow), which derives id itself from the entry
-    // image column and never reads a persisted 'id' value -- so requiring it in
-    // CsvUtils.validateInputCSV there would rightly reject an OLDER checkpoint
-    // (preprocessed.csv/registered.csv written before this task) that INPUT_CHECK
-    // could actually still read correctly. Only 'postprocessing' actually
-    // dereferences 'id' (via READ_SEGMENTED_CHECKPOINT's Meta.fromCheckpointRow),
-    // so only IT gained 'id' in requiredColumns (see lib/ParamUtils.groovy's
-    // comment on that entry). The invariant is now "every OTHER column" equality,
-    // not full-list equality. 'pixel_size' joins 'id' in the exclusion set: those
-    // two steps re-resolve scale via PREFLIGHT_SCALE, not a persisted value.
+    // A step's requiredColumns equal the previous step's checkpoint columns except 'id'
+    // and 'pixel_size': registration and segmentation enter through INPUT_CHECK, which
+    // derives id itself and re-resolves scale via PREFLIGHT_SCALE, so requiring either
+    // would reject an older checkpoint INPUT_CHECK can still read.
     assert ParamUtils.STEPS.find { it.name == 'registration' }.requiredColumns ==
         Checkpoint.columns(Layout.PREPROCESSED) - ['id', 'pixel_size']
     assert ParamUtils.STEPS.find { it.name == 'segmentation' }.requiredColumns ==
@@ -1256,13 +1025,8 @@ workflow {
     assert ParamUtils.STEPS.find { it.name == 'postprocessing' }.requiredColumns
         .every { it in Checkpoint.columns(Layout.SEGMENTED) }
 
-    // columns() must hand out an IMMUTABLE list. Checkpoint.STEPS' outer list is
-    // .asImmutable() but a naive implementation leaves each entry's inner `columns`
-    // ArrayList mutable, so a caller mutating the returned list permanently corrupts
-    // the schema every later header()/row() call in the run sees. Demonstrated before
-    // the fix: `Checkpoint.columns(Layout.PREPROCESSED) << 'injected'` succeeded
-    // silently and mutated the live table in place, so a subsequent header() call
-    // returned 'patient_id,id,preprocessed_image,is_reference,channels,injected'.
+    // columns() must hand out an immutable list: a caller mutating it would corrupt the
+    // schema every later header()/row() call sees.
     def columnsThrew = false
     try { Checkpoint.columns(Layout.PREPROCESSED) << 'injected' }
     catch (UnsupportedOperationException ignored) { columnsThrew = true }
@@ -1275,13 +1039,8 @@ workflow {
     // The artifact vocabulary
     // ------------------------------------------------------------------ //
     def kinds = ParamUtils.STEPS.collectMany { it.qcKinds } + ParamUtils.UNIVERSAL_QC_KINDS
-    // Order is load-bearing here: the kind order is the report-slot order, so this is
-    // an ordered-literal equality, not a set/sorted comparison. That same equality
-    // already subsumes uniqueness -- a duplicate member makes this list one element
-    // longer than the literal on the right, which fails equality before any separate
-    // uniqueness check could run. (A prior version of this file carried a
-    // `kinds.size() == kinds.toSet().size()` line after this assert; it was dead code,
-    // unreachable by construction, and has been removed rather than kept "just in case".)
+    // Order matters: the kind order is the report-slot order, so this is an ordered
+    // equality, which also rules out duplicates.
     assert kinds == ['preprocess_qc', 'registration_qc', 'registration_tre', 'seg_qc',
                      'seg_residuals', 'postprocess_qc', 'versions', 'size_log']
 
@@ -1316,17 +1075,10 @@ workflow {
     assert ParamUtils.entryColumnForStep('segmentation') == 'registered_image'
 
     // ------------------------------------------------------------------ //
-    // Layout.isUnderTaskDir / publishedOrAsIs - the fix for Critical 1
-    // (--start segmentation recording paths that do not exist). A one-level
-    // isTaskDir(path.parent) check cannot tell a FRESH one-level-nested output
-    // (REGISTER's registered_slides/) from an ALREADY-PUBLISHED path with the
-    // same producer-subdirectory name -- both have a parent literally named
-    // 'registered_slides', which never matches the hex-hash pattern either way.
-    // These six cases are exactly what review's own probe checked directly
-    // against lib/, unreachable from any stub-run assertion at the workflow
-    // level: reverting isUnderTaskDir to a parent-only check `isTaskDir(dir)`
-    // makes case 2 fail (a live registered_slides/ output would be treated as
-    // already-published and returned verbatim as its work-directory path).
+    // Layout.isUnderTaskDir / publishedOrAsIs: a fresh output one level down
+    // (REGISTER's registered_slides/) and an already-published path with the same
+    // subdirectory name both have a non-hash parent; only the full check tells them
+    // apart. A parent-only isTaskDir check fails case 2.
     // ------------------------------------------------------------------ //
     def taskHash   = 'c' * 30
     def workDirPre = "/work/ab/${taskHash}"
@@ -1339,27 +1091,21 @@ workflow {
     assert Layout.publishedOrAsIs('/out', 'P001', 'segmentation', freshFlat) ==
         '/out/P001/segmentation/P001_cell_mask.tif'
 
-    // 2. Fresh, ONE level down -- REGISTER's registered_slides/. THE case a
-    // parent-only isTaskDir check gets wrong (see the comment above).
+    // 2. Fresh, one level down: REGISTER's registered_slides/ (a parent-only check fails it).
     def freshNested = file("${workDirPre}/registered_slides/P001_x_registered.ome.tiff")
     assert Layout.isUnderTaskDir(freshNested.parent)
     assert Layout.publishedOrAsIs('/out', 'P001', Layout.REGISTERED, freshNested) ==
         '/out/P001/registered/registered_slides/P001_x_registered.ome.tiff'
 
-    // 3. Already-published, same producer-subdirectory NAME as case 2 -- a prior
-    // run's registered.csv entry read back via --start segmentation's INPUT_CHECK.
-    // Neither the parent ('registered_slides') nor the grandparent ('registered')
-    // is a task hash, so this must be returned AS-IS, not reconstructed against
-    // the new outdir (that was Critical 1).
+    // 3. Already published, same subdirectory name as case 2 (a prior run's registered.csv
+    // read back by --start segmentation): returned as is, not rebuilt against the new outdir.
     def publishedNested = file('/prior/P001/registered/registered_slides/P001_x_registered.ome.tiff')
     assert !Layout.isUnderTaskDir(publishedNested.parent)
     assert Layout.publishedOrAsIs('/out', 'P001', Layout.REGISTERED, publishedNested) ==
         '/prior/P001/registered/registered_slides/P001_x_registered.ome.tiff'
 
-    // 4. A single-slide passthrough, published under 'preprocessed/' but asked
-    // about with kind REGISTERED -- the exact P002 shape from Critical 1's repro.
-    // The kind argument must be IGNORED once the as-is branch fires: returning
-    // the file's own path unchanged is what makes the wrong kind harmless here.
+    // 4. A single-slide passthrough published under preprocessed/ but asked about with
+    // kind REGISTERED: the as-is branch ignores the kind, which makes it harmless.
     def publishedPassthrough = file('/prior/P002/preprocessed/P002_ref_corrected.ome.tif')
     assert !Layout.isUnderTaskDir(publishedPassthrough.parent)
     assert Layout.publishedOrAsIs('/out', 'P002', Layout.REGISTERED, publishedPassthrough) ==
@@ -1372,8 +1118,7 @@ workflow {
     assert Layout.publishedOrAsIs('/out', 'P001', 'segmentation', publishedFlat) ==
         '/prior/P001/segmentation/P001_cell_mask.tif'
 
-    // 6. Fresh, ONE level down via nuclei/ -- EXTRACT_NUCLEI_PROPERTIES's own
-    // producer subdirectory (the fix for I5's published-path regression).
+    // 6. Fresh, one level down via nuclei/ (EXTRACT_NUCLEI_PROPERTIES's subdirectory).
     def freshNuclei = file("${workDirPre}/nuclei/contours.json")
     assert Layout.isUnderTaskDir(freshNuclei.parent)
     assert Layout.publishedOrAsIs('/out', 'P001', 'cell_properties', freshNuclei) ==
@@ -1384,10 +1129,8 @@ workflow {
     checkSegQcNucleiDir()
 
     // ------------------------------------------------------------------ //
-    // ParamUtils.compartmentMode / validateCompartmentQuant -- the
-    // --quantify_compartments seam (mirrors --registration_method's: resolved
-    // once, threaded down as an argument; see workflows/mirage.nf's
-    // `compartment_mode` and tests/test_compartment_mode_routing.py).
+    // ParamUtils.compartmentMode / validateCompartmentQuant: --quantify_compartments is
+    // resolved once and threaded down as an argument.
     // ------------------------------------------------------------------ //
 
     // 1. Plain field mapping, all three flags on.
@@ -1411,8 +1154,7 @@ workflow {
         // expected
     }
 
-    // 4. validateCompartmentQuant: expanded requires compartments (pre-existing
-    // rule, now driven off the resolved map instead of two raw booleans).
+    // 4. validateCompartmentQuant: expanded requires compartments.
     ParamUtils.validateCompartmentQuant([compartments: true, expanded: true, embedMasks: false])   // ok
     ParamUtils.validateCompartmentQuant([compartments: true, expanded: false, embedMasks: false])  // ok
     try {
@@ -1422,16 +1164,13 @@ workflow {
         // expected
     }
 
-    // 5. validateCompartmentQuant: the delayed-cost gap this task closes --
-    // embedMasks requires BOTH compartments AND expanded. Each way to violate
-    // that must be rejected, not just the case where compartments is off.
+    // 5. embedMasks requires both compartments and expanded; each violation is rejected.
     ParamUtils.validateCompartmentQuant([compartments: true, expanded: true, embedMasks: true])    // ok
     try {
         ParamUtils.validateCompartmentQuant([compartments: false, expanded: false, embedMasks: true])
         assert false : "embedMasks=true with compartments=false, expanded=false must be rejected"
     } catch (IllegalArgumentException ignored) {
-        // expected -- this exact combination used to exit 0 and silently publish
-        // a pyramid with no mask series (assemble_export.nf's embed_masks gate).
+        // expected: otherwise a pyramid with no mask series is published silently
     }
     try {
         ParamUtils.validateCompartmentQuant([compartments: true, expanded: false, embedMasks: true])
@@ -1440,10 +1179,9 @@ workflow {
         // expected
     }
 
-    // validateStareKnobs - COARSE's 256 px floor. 0/negatives are DANGEROUS, not
-    // merely invalid: decimation_factor reads <=0 as "no decimation" (full-res
-    // plane into a U-Net) and the memory closure squares the value, so both ask
-    // for the 4 GB floor for the largest possible job. Rationale: ParamUtils.
+    // validateStareKnobs: COARSE's 256 px floor. 0 or negative is dangerous, not just
+    // invalid: decimation reads <=0 as "none" (a full-res plane into a U-Net) and the
+    // memory closure squares the value.
     def sb = [reg_tiled_tile: 2048, reg_tiled_halo: 256,
               reg_tiled_out_tile: 1024]
     [null, 512, 256].each { ParamUtils.validateStareKnobs(sb + [reg_tiled_coarse_max_dim: it]) }
@@ -1479,12 +1217,9 @@ workflow {
     def envVersions     = ProcessEnvelope.versions('TEST:PROC', ['numpy', 'skimage'])
     def envVersionsStub = ProcessEnvelope.versionsStub('TEST:PROC', ['numpy', 'skimage'])
 
-    // The python: row is prepended automatically, in both renderings. A BARE `$(`, not
-    // `\$(` -- `<<-END_VERSIONS` is an unquoted heredoc, so bash performs command
-    // substitution on the former and prints the latter as literal text. This assertion
-    // is the one that would have caught the over-escaping bug: it asserted `\\$(` (an
-    // escaped, unexecuted dollar) until a reviewer caught that the real published
-    // versions.yml was showing shell commands instead of version numbers.
+    // The python: row is prepended in both renderings. A bare `$(`, not `\$(`:
+    // `<<-END_VERSIONS` is an unquoted heredoc, so bash substitutes the former and prints
+    // the latter literally.
     assert envVersions.contains('python: $(python --version')
     assert !envVersions.contains('python: \\$(python --version')
     assert envVersionsStub.contains('python: stub')
@@ -1496,10 +1231,8 @@ workflow {
     assert !envVersions.contains('skimage: $(python -c "import skimage;')
     assert envVersionsStub.contains('scikit-image: stub')
 
-    // The property this whole task exists to guarantee: versions() and versionsStub()
-    // must never be able to name a different set of tools. Comparing the two heredocs'
-    // YAML KEYS (the text before each ':') is what -stub could never see for itself,
-    // because -stub never evaluates the script: block that versions() renders.
+    // versions() and versionsStub() must name the same set of tools. Compare YAML keys:
+    // -stub never evaluates the script: block that versions() renders.
     def keysOf = { String heredoc ->
         heredoc.readLines()
             .findAll { it.startsWith('    ') }
@@ -1512,21 +1245,15 @@ workflow {
     // ------------------------------------------------------------------ //
     // SegBackends - the segmentation seam's versions.yml tool lists
     // ------------------------------------------------------------------ //
-    // Declared as BARE MODULE NAMES, not rendered YAML. That is what lets
-    // modules/local/segment.nf hand the SAME list to ProcessEnvelope.versions()
-    // (script:) and ProcessEnvelope.versionsStub() (stub:). Before this, the table
-    // stored six pre-rendered probe strings, which a stub block cannot reuse -- so
-    // segment.nf's stub: hand-wrote `seg_method: <name>` instead, a key that is not a
-    // tool and that no real run ever emits. `-stub` never evaluates script:, so nothing
-    // in the blocking gate could see the two key sets were disjoint.
+    // Declared as bare module names, not rendered YAML, so segment.nf hands the same list
+    // to ProcessEnvelope.versions() (script:) and versionsStub() (stub:).
     assert SegBackends.methods().toSorted() == ['cellsam', 'instantseg', 'stardist']
     assert SegBackends.of('stardist').versionTools   == ['tensorflow']
     assert SegBackends.of('instantseg').versionTools == ['instanseg', 'torch']
     assert SegBackends.of('cellsam').versionTools    == ['cellSAM', 'torch']
 
-    // `torch` is deliberately repeated across two backends rather than hoisted into a
-    // shared list: exactly ONE backend runs per task, and stardist loads no torch at
-    // all, so a shared list would fabricate a torch row for every StarDist run.
+    // `torch` is repeated per backend, not shared: one backend runs per task and stardist
+    // loads no torch.
     assert !SegBackends.of('stardist').versionTools.contains('torch')
 
     // The property the whole envelope exists for, asserted end-to-end for every
@@ -1578,17 +1305,15 @@ workflow {
     assert badMethod : 'WarpBackends.of must reject an unknown method'
 
     // ------------------------------------------------------------------ //
-    // Meta - the one constructor for every meta map (Task 4.1)
+    // Meta - the one constructor for every meta map
     // ------------------------------------------------------------------ //
     assert Meta.REQUIRED_KEYS.containsAll([
         'patient_id', 'id', 'is_reference', 'channels',
         'keep_channels', 'channels_count', 'images_count',
     ])
 
-    // identityFor: RULING R2, verified directly against Nextflow's own
-    // file(...).simpleName earlier in this task -- it strips EVERY extension
-    // (file('slide.ome.tiff').simpleName == 'slide'), not just the last one.
-    // identityFor must reproduce that for a non-colliding row.
+    // identityFor matches Nextflow's file(...).simpleName, which strips every extension
+    // ('slide.ome.tiff' -> 'slide'), for a non-colliding row.
     assert Meta.identityFor('P1', 'slide.ome.tiff', 0, [:]) == 'P1_slide'
     assert Meta.identityFor('P1', 'slide.tiff', 0, [:])     == 'P1_slide'
     assert Meta.identityFor('P1', 'slide.tif', 0, [:])      == 'P1_slide'
@@ -1603,16 +1328,10 @@ workflow {
     assert Meta.identityFor('P1', 'cycle2/slide.ome.tiff', 1, collideCtx) == 'P1_slide_001'
     assert Meta.identityFor('P2', 'slide.ome.tiff', 0, collideCtx)        == 'P2_slide'
 
-    // fromSamplesheetRow: full construction, REQUIRED_KEYS present, dual invariant
-    // upheld (channels_count comes from ctx.channelsCount, the per-PATIENT total --
-    // NOT meta.keep_channels.size(), which is only a per-SLIDE count. Conflating
-    // the two was a bug in this task's own brief: CsvUtils.countChannelsPerPatient
-    // sums per-slide keep-set sizes ACROSS a patient's slides, so a single slide's
-    // keep_channels.size() under-reports it whenever a patient has more than one
-    // slide).
-    // keepChannelsBySlide is keyed on the ASSIGNED identity (meta.id), matching what
-    // CsvUtils.resolveKeptChannelsPerSlide now produces and what finish() looks up by
-    // -- 'P1_img1' is identityFor('P1', 'img1.ome.tiff', 0, [:]), asserted below.
+    // fromSamplesheetRow: full construction. channels_count comes from ctx.channelsCount,
+    // the per-patient total, not keep_channels.size(), which counts one slide only.
+    // keepChannelsBySlide is keyed on meta.id: 'P1_img1' is
+    // identityFor('P1', 'img1.ome.tiff', 0, [:]).
     def ssCtx = [
         keepChannelsBySlide: [P1: ['P1_img1': ['DAPI', 'CD3']]],
         imagesCount        : [P1: 2],
@@ -1629,14 +1348,10 @@ workflow {
     assert ssMeta.channels_count == 5
     assert ssMeta.images_count   == 2
 
-    // keep_channels ABSENT vs EMPTY: a slide with no entry in keepChannelsBySlide
-    // falls back to its declared channels; a slide with an EXPLICIT empty list
-    // (every marker already claimed by an earlier slide) keeps [], not the
-    // declared list -- `?:` cannot tell these apart because [] is falsy in Groovy.
-    // Both ctx maps below must also carry channelsCount AND imagesCount now (fix
-    // rounds 1 and 2: there is no more per-slide/default fallback for either --
-    // see the channels_count-missing and images_count-missing blocks further down).
-    // 'P1_img2' is identityFor('P1', 'img2.ome.tiff', 0, [:]) -- same reasoning as ssCtx.
+    // keep_channels absent vs empty: no entry falls back to the declared channels; an
+    // explicit [] (every marker already claimed) stays [] (`?:` cannot tell them apart).
+    // Both ctx maps carry channelsCount and imagesCount, which have no fallback.
+    // 'P1_img2' is identityFor('P1', 'img2.ome.tiff', 0, [:]).
     def emptyKeepCtx = [keepChannelsBySlide: [P1: ['P1_img2': []]], channelsCount: [P1: 0], imagesCount: [P1: 1]]
     def emptyKeepRow = [patient_id: 'P1', image: 'img2.ome.tiff', channels: 'DAPI|CD3', is_reference: 'false']
     def emptyKeepMeta = Meta.fromSamplesheetRow(emptyKeepRow, 'image', 0, emptyKeepCtx)
@@ -1646,15 +1361,10 @@ workflow {
     def absentKeepMeta = Meta.fromSamplesheetRow(emptyKeepRow, 'image', 0, absentKeepCtx)
     assert absentKeepMeta.keep_channels == ['DAPI', 'CD3']
 
-    // ---- Fix round 1, item 1: channels_count has NO fallback -----------------
-    //
-    // finish() used to fall back to meta.keep_channels.size() (a per-SLIDE count)
-    // when ctx.channelsCount had no entry for the patient. That silently produced
-    // a too-low count for any multi-slide patient, and a too-low channels_count
-    // feeds groupKey(patient_id, channels_count) -- the group then emits early
-    // with missing members, or never emits, far from this call site. There is now
-    // no fallback and no opt-out: every caller must pre-compute a real per-patient
-    // total (see finish()'s comment for why no legitimate caller lacks one).
+    // ---- channels_count has no fallback ----------------------------------------
+    // A per-slide fallback under-counts a multi-slide patient, and a low count makes
+    // groupKey(patient_id, channels_count) emit early or never. Every caller must supply
+    // a per-patient total.
     def noCountRow = [patient_id: 'P1', image: 'img3.ome.tiff', channels: 'DAPI|CD3', is_reference: 'false']
 
     // Trigger: ctx carries no channelsCount key at all.
@@ -1663,8 +1373,7 @@ workflow {
     catch (IllegalArgumentException ignored) { missingChannelsCountKey = true }
     assert missingChannelsCountKey : 'Meta.fromSamplesheetRow must reject ctx with no channelsCount map at all'
 
-    // Trigger: ctx.channelsCount is populated, but not for THIS patient (the
-    // "computed the map, forgot one patient" case -- the one the review named).
+    // Trigger: ctx.channelsCount is populated, but not for this patient.
     def missingChannelsCountForPatient = false
     try { Meta.fromSamplesheetRow(noCountRow, 'image', 0, [channelsCount: [P2: 9]]) }
     catch (IllegalArgumentException ignored) { missingChannelsCountForPatient = true }
@@ -1680,19 +1389,10 @@ workflow {
     def zeroCountMeta = Meta.fromSamplesheetRow(noCountRow, 'image', 0, [channelsCount: [P1: 0], imagesCount: [P1: 1]])
     assert zeroCountMeta.channels_count == 0
 
-    // ---- Fix round 2: images_count has NO fallback either --------------------
-    //
-    // Same defect, one field over, and WORSE while it lasted: the old expression
-    // was `(ctx?.imagesCount ?: [:])[patientId] ?: 1` -- a bare `?:` on the looked-up
-    // value, which in Groovy treats an explicit `0` as falsy too. So a genuine
-    // `images_count: 0` would have been silently COERCED to `1`, not merely
-    // defaulted to a differently-wrong number the way the old channels_count bug
-    // was. images_count is equally load-bearing: it feeds
-    // groupKey(meta.patient_id, meta.images_count) in
-    // subworkflows/local/registration.nf:77. Same fix, same helper
-    // (requirePerPatientCount), same reasoning: no opt-out, because every caller
-    // already computes a full per-patient imagesCount map up front
-    // (CsvUtils.countImagesPerPatient).
+    // ---- images_count has no fallback either -----------------------------------
+    // It feeds groupKey(meta.patient_id, meta.images_count) in registration.nf, and a bare
+    // `?:` would coerce a genuine 0 to the default. Every caller computes a full
+    // per-patient imagesCount map (CsvUtils.countImagesPerPatient).
 
     // Trigger: ctx carries no imagesCount key at all (channelsCount present, so
     // this isolates the images_count check specifically).
@@ -1711,25 +1411,14 @@ workflow {
     def satisfiedImagesMeta = Meta.fromSamplesheetRow(noCountRow, 'image', 0, [channelsCount: [P1: 2], imagesCount: [P1: 3]])
     assert satisfiedImagesMeta.images_count == 3
 
-    // THE bug this round exists to kill: ctx.imagesCount = [P1: 0] must yield
-    // images_count == 0, NOT 1. The old bare `?:` would have coerced this.
+    // ctx.imagesCount = [P1: 0] must yield images_count == 0, not 1.
     def zeroImagesMeta = Meta.fromSamplesheetRow(noCountRow, 'image', 0, [channelsCount: [P1: 2], imagesCount: [P1: 0]])
     assert zeroImagesMeta.images_count == 0 : 'a genuine images_count of 0 must NOT be coerced to 1'
 
-    // ---- Fix round 1, item 2: fromCheckpointRow validates against the SCHEMA --
-    //
-    // lib/Checkpoint.groovy owns the column list per step; fromCheckpointRow now
-    // reads it from there instead of trusting whatever the row happens to carry.
-    // RULING R17 landed in Task 4.3: every Checkpoint.STEPS schema now carries an
-    // 'id' column, so these calls can finally reach a successful return (see the
-    // full-construction case near the end of this block) -- the schema-level "this
-    // step doesn't declare id yet" throw is no longer reachable for a REAL step
-    // name (only Checkpoint.UnknownStepException remains reachable that way, via
-    // the 'not_a_real_step' case below). What replaces it as the load-bearing
-    // migration check is row.containsKey('id') -- a REAL old checkpoint FILE has no
-    // 'id' column in its header, so splitCsv(header:true) never puts an 'id' key in
-    // the row Map at all, distinct from "the column exists but this row's value is
-    // blank" (a separate, more mundane problem covered further down).
+    // ---- fromCheckpointRow validates against the schema ------------------------
+    // lib/Checkpoint.groovy owns the column list per step. A checkpoint written before
+    // identity tracking has no 'id' column, so its rows carry no 'id' key at all
+    // (distinct from a present but blank value, covered further down).
 
     // 'preprocessed' declares is_reference AND channels (Checkpoint.columns).
     // Missing is_reference is caught BEFORE channels is even inspected.
@@ -1777,8 +1466,7 @@ workflow {
     catch (IllegalArgumentException ignored) { blankIdValue = true }
     assert blankIdValue : 'a row with a blank id VALUE (column present) must fail requirePresentInRow, not the id-gate message'
 
-    // Fully satisfied: fromCheckpointRow can now actually return a complete meta --
-    // unreachable before Task 4.3 added the id column to every schema.
+    // Fully satisfied: fromCheckpointRow returns a complete meta.
     def ckCtx = [
         keepChannelsBySlide: [P1: [P1_slide: ['DAPI', 'CD3']]],
         imagesCount        : [P1: 1],
@@ -1811,9 +1499,8 @@ workflow {
     assert unknownStep : 'Meta.fromCheckpointRow must reject an unknown step name'
 
     // ------------------------------------------------------------------ //
-    // CsvUtils.metaContextFromCheckpoint (Task 4.3) -- the checkpoint-side
-    // twin of the samplesheet-side ctx assembly INPUT_CHECK does by hand
-    // (countImagesPerPatient / resolveKeptChannelsPerSlide / countChannelsPerPatient).
+    // CsvUtils.metaContextFromCheckpoint: the checkpoint-side twin of the ctx
+    // INPUT_CHECK assembles from a samplesheet.
     // ------------------------------------------------------------------ //
     def ckpTmp = File.createTempFile('meta_ctx_checkpoint', '.csv')
     ckpTmp.deleteOnExit()
@@ -1863,45 +1550,30 @@ workflow {
     catch (IllegalArgumentException ignored) { blankStep = true }
     assert blankStep : 'Meta.fromCheckpointRow must reject a blank step'
 
-    // ------------------------------------------------------------------ //
-    // ResourceReport - see checkResourceReport() above workflow{}; kept out of
-    // this block because it is close to the JVM class-file string-constant
-    // ceiling (see the file header note above).
-    // ------------------------------------------------------------------ //
+    // The checks below are defined above workflow{} (size ceiling).
     checkResourceReport()
 
     // ProcessEnvelope - size-log row + container identity in versions.yml.
-    // See checkProcessEnvelope() above the workflow block, and the header
-    // comment's "HARD SIZE CEILING" note for why it lives outside this block.
     checkProcessEnvelope()
 
     // RegisteredMatch - pairing VALIS's outputs back to their slide metas.
-    // See checkRegisteredMatch() above the workflow block.
     checkRegisteredMatch()
 
-    // Checkpoint.requireColumns - the drift guard three readers copied.
-    // See checkCheckpoint() above the workflow block.
+    // Checkpoint.requireColumns
     checkCheckpoint()
 
-    // RegBackends - the registration backend's identity, in one table.
-    // See checkRegBackends() above the workflow block.
+    // RegBackends - the registration backend table.
     checkRegBackends()
 
     // CsvUtils.unknownColumns - report, never reject.
-    // See checkCsvUtilsUnknownColumns() above the workflow block.
     checkCsvUtilsUnknownColumns()
 
     checkParamValidators()
 
     // CsvUtils.validateInputSemantics(..., requireUniqueChannelSets).
-    // See checkUniqueChannelSets() above the workflow block.
     checkUniqueChannelSets()
 
-    // println, NOT log.info: nf-test's underlying `nextflow ... -quiet` run
-    // suppresses log.info from stdout entirely (observed directly: a log.info
-    // line here never appears in workflow.stdout under nf-test, even though the
-    // exact same script printed it fine under a plain `nextflow run`). println
-    // writes straight to stdout regardless of -quiet, so it is what
-    // tests/lib_probe.nf.test's `workflow.stdout.any { ... }` assertion needs.
+    // println, not log.info: nf-test runs nextflow with -quiet, which drops log.info
+    // from stdout, and lib_probe.nf.test asserts on workflow.stdout.
     println "LIB PROBE: all assertions passed"
 }

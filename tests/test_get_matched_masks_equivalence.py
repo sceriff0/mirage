@@ -1,9 +1,8 @@
 """Oracle test for the vectorized get_matched_masks refactor.
 
-The tiny CSE golden fixture (~121 cells, each with a centered same-label nucleus)
-only exercises the trivial matching path. This test freezes the *previous*
-per-cell set-of-tuples algorithm as an oracle and asserts the vectorized
-replacement produces byte-identical matched masks on scenes that hit the
+The CSE golden fixture only exercises the trivial matching path. This test keeps
+the per-cell set-of-tuples algorithm as an oracle and asserts the vectorized
+version produces byte-identical matched masks on scenes that hit the
 branches that matter: mismatch-repair, a nucleus spanning two cells' interiors,
 a nucleus overlapping only a cell's membrane (interior overlap 0 -> unmatched),
 multi-candidate min-mismatch selection with greedy claiming, and skipped cells.
@@ -18,8 +17,7 @@ from bin.utils.cse.functions import get_matched_masks
 
 
 # ---------------------------------------------------------------------------
-# Frozen oracle: the algorithm exactly as it was before vectorization.
-# Copied verbatim (helpers inlined) so the test defines the behavior contract.
+# Frozen oracle: the per-cell algorithm, helpers inlined, as the behaviour contract.
 # ---------------------------------------------------------------------------
 def _old_get_indices_pandas(data):
     import pandas as pd

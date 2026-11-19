@@ -125,32 +125,16 @@ def test_load_qc_keeps_verbatim_json_and_survives_bad_files(tmp_path):
     )
 
 
-# ── mask & pyramid reads (Task 4: one read strategy) ────────────────────────────
-# `read_mask` and `read_pyramid_lazy` both need to be dask-backed, aszarr-opened
-# region reads -- NOT a whole-array `tifffile.imread` -- because their only
-# consumers (`Labels2DModel.parse` / `Image2DModel.parse`) wrap the array
-# structurally and never compute across it. These tests exercise both call sites
-# for real, against fixtures written the same way the pipeline's own writers
-# (`bin/segment.py`, `bin/merge_channels_pyramid.py`) produce them, and assert:
-# (1) the pixels read back are identical to a naive whole-array read, and (2) the
-# read never eagerly decoded the whole file (the strategy itself, not just its
-# output, is pinned).
+# ── mask & pyramid reads ────────────────────────────────────────────────────────
+# `read_mask` and `read_pyramid_lazy` must be lazy, aszarr-opened region reads,
+# not a whole-array `tifffile.imread`: their consumers (`Labels2DModel.parse` /
+# `Image2DModel.parse`) never compute across the array. Asserted: pixels equal a
+# whole-array read, and the read never decoded the whole file.
 #
-# Pixel equality is NOT the same as "exported output is unchanged", though:
-# `spatialdata`'s writer defaults the *exported* zarr's chunk grid to the dask
-# array's own chunksize, so whatever native chunk grid the source file happens to
-# read back with would otherwise propagate straight into the export. A per-row
-# (or per-tile) chunk grid is still pixel-identical, so a pixel-only check would
-# not catch that leak; `test_read_mask_rechunks_away_from_...` below exercises
-# `read_mask`'s explicit rechunk-to-2048 specifically, using a fixture written
-# WITHOUT `tile=` (see `_write_mask`) so it reads back on the un-tiled strip grid
-# `bin/segment.py`/`bin/segment_cellsam.py` produced before `bd5861c` tiled those
-# writers -- i.e. it deliberately exercises the worst case the rechunk guards
-# against, not what those writers emit today (they now write `MASK_TIFF_TILE =
-# 1024` tiles; the rechunk still runs, onto the pipeline's common 2048 grid).
-#
-# `spatialdata`/`geopandas` aren't needed for any of this -- only `tifffile` and
-# `dask`, which are real dependencies of this script and importable here.
+# The exported zarr inherits the dask chunk grid, so `read_mask` must also rechunk
+# (to 2048). The strip-written fixture in `_write_mask` is the worst case for that;
+# the pipeline's writers now tile at `MASK_TIFF_TILE`, and the rechunk still applies.
+# Only `tifffile` and `dask` are needed here.
 
 
 def _write_mask(path, h=48, w=64, seed=0):
@@ -224,8 +208,8 @@ def test_read_mask_stays_a_dask_array_until_computed(tmp_path):
 
 
 def test_read_mask_squeezes_a_singleton_leading_axis(tmp_path):
-    """Some writers add a leading (1, H, W); read_mask must squeeze it away exactly
-    like the eager `np.squeeze(tifffile.imread(path))` it replaced did."""
+    """Some writers add a leading (1, H, W); read_mask must squeeze it away like
+    `np.squeeze(tifffile.imread(path))`."""
     path = tmp_path / "leading_axis_mask.tif"
     arr = np.random.default_rng(2).integers(0, 50, size=(1, 20, 30)).astype(np.uint32)
     tifffile.imwrite(str(path), arr, compression="zlib", bigtiff=True)
@@ -259,32 +243,21 @@ def test_read_pyramid_lazy_matches_the_base_level(tmp_path, monkeypatch):
 
 
 def test_read_mask_rechunks_away_from_the_file_s_strip_layout(tmp_path):
-    """Guards the chunk-grid regression: at slide widths, `bin/segment.py`'s
-    un-tiled `tifffile.imwrite` collapses to ~1-row TIFF strips (measured here at
-    width 40000 -- Task 4's finding's own cited width -- RowsPerStrip=1 at both
-    tifffile 2023.4.12 and 2025.5.10), and `spatialdata`'s `sdata.write()`
-    passes no `storage_options`, so `ome_zarr.writer` defaults the exported zarr's
-    chunk grid to the dask array's chunksize (`chunks_opt = level.chunksize`).
-    Left uncorrected, that turns one mask into tens of thousands of tiny zarr chunk
-    objects. `read_mask` must rechunk before returning, so this checks the
-    RETURNED array's chunksize, not just its pixels -- pixel equality alone is
-    blind to this, since a per-row chunk grid is still bit-identical to a
-    coarser one.
+    """`read_mask` rechunks a strip-written mask before returning.
+
+    At slide widths an un-tiled `tifffile.imwrite` collapses to ~1-row strips, and
+    `sdata.write()` copies the dask chunksize into the exported zarr, so one mask
+    would become tens of thousands of tiny chunks. Pixel equality cannot see this,
+    so the returned chunksize is checked.
     """
     path = tmp_path / "wide_mask.tif"
     h, w = 64, 40000
     arr = np.random.default_rng(7).integers(0, 500, size=(h, w)).astype(np.uint32)
     tifffile.imwrite(str(path), arr, compression="zlib", bigtiff=True)
 
-    # Sanity check on the FIXTURE itself: confirm the raw layout is strictly finer
-    # than what `read_mask` returns, so the final assertion below is not vacuous.
-    # NOT a fixed row count: tifffile's default strip byte target moved between
-    # 2023.4.12 and 2025.5.10 (RowsPerStrip went 1 -> 3 at this file's OLD w=20000,
-    # which is why this check is now written against the invariant it actually
-    # needs rather than a magic number -- see git history for the failure that
-    # caught it). 2048 rows x 40000 x 4 bytes/px is 327 MB per strip, not a layout
-    # any plausible strip-byte target will emit, so this still fails loudly if the
-    # collapsed-strip regime genuinely disappears.
+    # The fixture's raw layout must be finer than what `read_mask` returns, or the
+    # final assertion is vacuous. Not a fixed row count: tifffile's strip-size
+    # default varies by version, but no version writes 2048-row strips at w=40000.
     raw_store = tifffile.imread(str(path), aszarr=True, level=0)
     raw_chunksize = da.from_zarr(raw_store).chunksize
     raw_store.close()

@@ -52,11 +52,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# rglob, not glob: docs/validation/format_validation.md is a navigated page
-# (mkdocs.yml) that a top-level glob silently left outside this guard. The
-# excluded author-facing trees (docs/superpowers, docs/_archive, docs/perf --
-# see mkdocs.yml's exclude_docs) are not published, so they are skipped here
-# for the same reason CHANGELOG.md is: they quote history, not instructions.
+# rglob: navigated pages live in subdirectories too. The trees mkdocs.yml's
+# exclude_docs leaves unpublished quote history, not instructions, so they are skipped.
 _UNPUBLISHED = {"superpowers", "_archive", "perf"}
 SCAN = [
     REPO / "README.md",
@@ -74,8 +71,7 @@ SIZING_PROFILES = {"test", "test_full", "local", "ieo", "shipped_defaults_test"}
 OUTDIR_PROFILES = {"test", "test_full", "shipped_defaults_test"}
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
-# A line may show a deliberately broken command if it says so ON THE SAME LINE --
-# docs/usage.md's "Boolean parameters" section does exactly that.
+# A line may show a broken command if it says so on the same line (`# x fails`).
 _COUNTEREXAMPLE = re.compile(r"#\s*x\s+fails\b", re.I)
 _TRAILING_COMMENT = re.compile(r"\s+#.*$")
 
@@ -181,10 +177,9 @@ def _executable(command):
 
     A substitution only ever REPLACES A VALUE, never removes or adds a flag
     the doc itself did not choose -- `-profile docker`/`slurm,singularity`/etc.
-    are left exactly as written. `--dry_run` exits before any process (and
-    therefore any container) is ever touched -- see the module docstring for
-    the measured 0-files-in-work-dir proof -- so the reader's own profile
-    choice is exactly what gets exercised, at no extra cost.
+    are left exactly as written. `--dry_run` exits before any process or
+    container is touched, so the reader's own profile choice is exercised at
+    no extra cost.
     """
     command = _TRAILING_COMMENT.sub("", command)
 
@@ -218,13 +213,8 @@ def _executable(command):
     return command
 
 
-# The "no reason" sentinel, printed literally rather than left as an empty
-# field. Bash's `read` treats tab as IFS WHITESPACE regardless of what IFS is
-# set to, which means it COLLAPSES an empty field between two tabs instead of
-# preserving it -- measured: `IFS=$'\t' read -r a b c d <<<"x\t1\t\ty"` gives
-# c=y, d=(empty), silently shifting every field after the gap. A sentinel that
-# is never empty sidesteps the collapse entirely and stays human-readable in
-# `--emit`'s own output, unlike switching to a control-character separator.
+# The "no reason" sentinel, never an empty field: bash's `read` treats tab as IFS
+# whitespace and collapses an empty field between two tabs, shifting the rest.
 _NO_REASON = "-"
 
 

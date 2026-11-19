@@ -1,61 +1,37 @@
 """Session configuration for the MIRAGE Python suite, and the floor under it.
 
-Two jobs.
+1. ``sys.path``: put the repository root and ``bin/`` on ``sys.path`` so tests
+   can import the pipeline's Python without an installed package.
 
-**1. sys.path.** Put the repository root and ``bin/`` on ``sys.path`` so the
-tests can import the pipeline's Python without an installed package.
+2. A floor under the suite (everything below ``STRICT_ENV``). Many modules call
+   ``pytest.importorskip`` at module scope, so a degraded environment deselects
+   much of the suite and still exits 0. In strict mode:
 
-**2. A FLOOR under the suite** -- everything below ``STRICT_ENV``.
+   * every skip whose nodeid is not in ``tests/expected_skips.txt`` fails the
+     session, named, with its reason;
+   * a module never collected because a module-scope ``importorskip`` fired is
+     reported by file (it has no test nodeids);
+   * ``session.testscollected`` must be at least ``tests/collected_floor.txt``,
+     which catches a loss that leaves no skip behind (a deleted file, a grown
+     ``--ignore``);
+   * an allowlist entry that matched nothing also fails, so the allowlist can
+     only shrink.
 
-``|| true`` is the *visible* way a CI suite passes while proving nothing. The
-bigger one is that **a count of zero passes.** 39 modules under ``tests/`` call
-``pytest.importorskip`` at MODULE scope, and this repo has no ``pyproject.toml``,
-no ``pytest.ini`` and no ``addopts``. A degraded environment therefore deselects
-most of the suite and exits 0.
+   Both committed files are ratchets; moving either is a one-line diff.
 
-That is not hypothetical here. ``.github/workflows/release.yml`` shipped for
-months missing three packages: **13 tests failed and 30 more silently
-vanished**, and only the 13 were ever visible. ``cv2``'s absence alone
-deselects 29 tests at module scope without producing a single failure.
+Gating: inert unless ``MIRAGE_STRICT_SKIPS`` is set to something other than
+``0``/``false``/``no``/``off``/empty. CI sets it on the full-suite step only
+(step level, not job level), because the same jobs also run single files, which
+collect far below the floor.
 
-``tests/test_disk_test_actually_runs.py`` (retired 2026-09-27 with the DISK front-end) invented the right mechanism
--- run the file, grep the output for ``skipped``, fail if found -- for exactly
-ONE file. This generalises it to the whole session, in process, and adds the
-two things a grep cannot do:
+Scope: the floor is measured with the suite's standard exclusions
+(``pytest tests/ --ignore=tests/testdata --ignore=tests/modules
+--ignore=tests/subworkflows --ignore=tests/integration``). A narrower selection
+with the variable set fails on the count.
 
-* every skip whose nodeid is not in ``tests/expected_skips.txt`` fails the
-  session, **named**, with its reason;
-* a module that is never collected at all because a module-scope
-  ``importorskip`` fired is reported by **file** -- there are no test nodeids
-  to report, because as far as the session is concerned those tests do not
-  exist. That is the shape of the 29-test ``cv2`` cascade, and it is invisible
-  to any check that only looks at tests that ran;
-* ``session.testscollected`` must be at least ``tests/collected_floor.txt``,
-  which catches a loss that leaves no skip behind at all (a deleted file, an
-  ``--ignore`` that grew, a collection filter that stopped matching);
-* an allowlist entry that matched nothing also fails, so the allowlist can
-  only shrink by accident and can never quietly become a blanket. That is the
-  same shrink-only-debt shape ``tests/test_nfmodel.py`` uses.
-
-Both committed files are **ratchets**: they only go up, and moving either one
-is a one-line reviewable diff.
-
-**Gating.** All of it is inert unless ``MIRAGE_STRICT_SKIPS`` is set to
-something other than ``0``/``false``/``no``/``off``/empty. A developer on a
-partial local environment is never blocked by it. It is set in CI on the
-blocking full-suite step ONLY -- deliberately at STEP level, not job level,
-because the same jobs also run ``pytest tests/test_coarse_frontend.py`` on its
-own, and a single-file run collects far below the floor.
-
-**Scope.** The floor is measured with the suite's standard exclusions, i.e.
-``pytest tests/ --ignore=tests/testdata --ignore=tests/modules
---ignore=tests/subworkflows --ignore=tests/integration``. Running any narrower
-selection with the variable set is expected to fail on the count; that is what
-the step-level gating above is for.
-
-**Not xdist-aware.** The bookkeeping below is module state in one process. The
-suite is not run under ``pytest-xdist`` anywhere in this repo; if that ever
-changes, these hooks must move onto ``config`` and be merged across workers.
+Not xdist-aware: the bookkeeping is module state in one process. Under
+``pytest-xdist`` these hooks would have to move onto ``config`` and be merged
+across workers.
 """
 
 import os
@@ -84,18 +60,9 @@ FLOOR_PATH = _HERE / "collected_floor.txt"
 _OFF_VALUES = {"", "0", "false", "no", "off"}
 
 # How far the collected count may run ahead of the committed floor before the
-# floor itself must be re-ratcheted.
-#
-# The floor is a `>=` check, so it NEVER fails on a legitimate test addition --
-# that is the whole reason it is not an equality. The cost of that is rot: with
-# a bare `>=`, a floor of 1161 still passes a suite of 1400 that has just lost
-# 200 tests. A warning would be the usual answer and it is the wrong one in
-# this repo -- an advisory line nobody reads is the exact failure mode the
-# `|| true` register exists to remove. So the band is enforced: once the suite
-# has grown by 50 tests, the floor must be moved, and the failure message says
-# precisely what number to write. 50 is ~4% of the current suite -- a body of
-# work substantial enough that a one-line re-ratchet is proportionate, and
-# small enough that the floor is never more than 50 tests stale.
+# floor must be re-ratcheted. The floor is a `>=` check so test additions never
+# fail it; this band stops it going stale (a floor far below the suite would
+# not notice a large loss). The failure message names the number to write.
 FLOOR_DRIFT = 50
 
 # nodeid -> (kind, reason), populated by the report hooks below.
@@ -117,21 +84,13 @@ def _allowlist():
     Exact match, no globs and no prefixes: the entry names one test (or, for a
     module-scope skip, one file), so a NEW skip in an already-listed file --
     including a new parametrised case of an already-listed function -- is still
-    reported. A file-level or prefix allowlist would have blinded this check to
-    exactly the cascade it exists to catch.
+    reported.
 
-    An entry may be prefixed `?` to mark it ENVIRONMENT-CONDITIONAL: it suppresses
-    the skip when it happens, but is exempt from the stale-entry check, because
-    whether it fires depends on the environment rather than on the repo. That
-    distinction is load-bearing and was learned the hard way -- the floor was first
-    calibrated on a developer machine, where `nextflow` is on PATH, and went red on
-    CI's python-tests job, which deliberately does not install it. Six real,
-    documented skips appear there and nowhere else.
-
-    Keep `?` for exactly that: a skip that a DIFFERENT, equally-valid environment
-    would not produce. An unconditional entry that stops matching is still a
-    failure, because that is an exemption quietly widening -- which is the thing
-    this allowlist exists to prevent.
+    An entry prefixed `?` is environment-conditional: it suppresses the skip when
+    it happens but is exempt from the stale-entry check, because whether it fires
+    depends on the environment (e.g. CI's python-tests job has no `nextflow` on
+    PATH). Use `?` only for a skip another valid environment would not produce;
+    an unconditional entry that stops matching still fails.
     """
     global _allowlist_cache
     if _allowlist_cache is None:

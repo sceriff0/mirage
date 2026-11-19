@@ -1,10 +1,7 @@
 """`cells.geojson` must be written without holding every feature in memory first.
 
-`export_geojson` appended each cell's feature to a list, then wrote the whole
-`FeatureCollection` in one `json.dump`. Both halves cost: the list is one dict-of-dicts per
-cell, and the dump is on top of it. PERF-PLAN.md measures the streamed write at 1.94x and
-**-1004 MB** (C11) -- the largest single memory win in the plan, on the pipeline's largest
-artifact.
+Building a list of every cell's feature and then one `json.dump` holds a dict-of-dicts per
+cell on the pipeline's largest artifact; the writer streams instead.
 
 The requirement that makes this safe is **byte-identity**. `json.dump` uses `", "` between
 array items and `": "` between keys; a hand-rolled writer that emits bare `,` produces valid,

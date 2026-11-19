@@ -1,4 +1,4 @@
-"""Regression guard for the HPC read-only-filesystem BioFormats-JVM crash.
+"""Guard against the BioFormats-JVM crash on a read-only $HOME.
 
 On clusters where $HOME lives on a read-only mount (e.g. /hpcnfs), any stage that
 starts the BioFormats JVM (e.g. warp_seg_qc via valis_config.init_jvm) crashes:
@@ -6,7 +6,7 @@ starts the BioFormats JVM (e.g. warp_seg_qc via valis_config.init_jvm) crashes:
     OSError: [Errno 30] Read-only file system: '/hpcnfs'
       ... jgo.resolve_dependencies -> os.makedirs(workspace)
 
-Root cause: the pinned scyjava (<1.11) derives its jgo ``cache_dir`` / ``m2_repo``
+The pinned scyjava (<1.11) derives its jgo ``cache_dir`` / ``m2_repo``
 from ``pathlib.Path.home()`` at import time (scyjava/config.py) and passes them
 *explicitly* into ``jgo.resolve_dependencies`` (scyjava/_jvm.py). It NEVER reads the
 ``JGO_CACHE_DIR`` / ``M2_REPO`` environment variables, so the Dockerfile ENV knobs are

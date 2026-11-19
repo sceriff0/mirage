@@ -1,15 +1,8 @@
 """The cleanup vocabulary has one owner, like every other path decision.
 
-Layout is THE owner of published-path layout -- tests/test_layout.py forbids a
-hand-written published path anywhere else, and checks PUBLISHED_KINDS against
-conf/modules.config in both directions. Which of those leaves survives a cleaned
-run is the same kind of decision, so it lives in the same place rather than as a
-literal list repeated across conf/modules.config, ParamUtils and the docs.
-
-The gate at each publishDir still has to be an inlined boolean, because
-conf/*.config cannot see lib/*.groovy (CLAUDE.md). What Layout owns is the
-DECISION -- which kinds are final -- and this file is what stops the inlined
-copies drifting from it.
+Which published kinds survive a cleaned run is decided in Layout, alongside the
+published-path layout. The gate at each publishDir is still inlined, because
+conf/*.config cannot see lib/*.groovy; this file stops the copies drifting.
 """
 
 import json
@@ -49,8 +42,7 @@ def test_final_kinds_are_declared_and_are_a_subset_of_published_kinds():
 
 
 def test_intermediate_kinds_is_derived_not_restated():
-    """A second hand-written list is how the keep-set map and the analysis
-    identity set both drifted. INTERMEDIATE_KINDS must be computed."""
+    """INTERMEDIATE_KINDS must be computed, not a second hand-written list."""
     m = re.search(r"INTERMEDIATE_KINDS\s*=\s*(.+)", LAYOUT)
     assert m, "INTERMEDIATE_KINDS is not declared"
     assert "PUBLISHED_KINDS" in m.group(1) and "FINAL_KINDS" in m.group(1), (
@@ -100,10 +92,8 @@ def test_cleanup_work_is_in_the_schema_too():
 
 
 def test_defaults_are_the_requested_ones():
-    """cleanup_level: 'none' is the 2026-09-10 user decision (a run's output
-    is re-enterable by default; 'final' is the opt-in cleaning level). It was
-    'final' from 2026-08-25. cleanup_work: a successful run deletes its work
-    directory (2026-08-25, unchanged)."""
+    """cleanup_level defaults to 'none' (output re-enterable; 'final' is opt-in);
+    cleanup_work defaults to true (a successful run deletes its work directory)."""
     cfg = strip_comments((ROOT / "nextflow.config").read_text())
     assert re.search(r"^\s*cleanup_level\s*=\s*'none'", cfg, re.M), (
         "cleanup_level no longer defaults to 'none'"
@@ -114,7 +104,7 @@ def test_defaults_are_the_requested_ones():
 
 
 def test_the_escape_hatch_survives():
-    """'none' is load-bearing, not a convenience: mode='add_cycle' reads the
+    """'none' is required, not a convenience: mode='add_cycle' reads the
     prior run's registered/ AND its segmentation masks, so without a level that
     publishes intermediates, cyclic-IF becomes structurally impossible. It is
     also what `--start segmentation` needs."""

@@ -1,26 +1,16 @@
 """The bioio-bioformats read path must point scyjava's jgo cache off $HOME BEFORE the
 first ``BioImage`` construction that can trigger a Maven resolve.
 
-Review finding on Task 7 (fix round 1): the container-side bake
-(``tests/test_bioformats_jars_are_baked.py``) and the pin (``BIOFORMATS_VERSION``) are
-real, but nothing on the RUNTIME path called
-``bin/utils/jvm_cache.py::point_jvm_cache_off_readonly_home()`` before this fix. The
-only existing caller was ``bin/utils/valis_config.py::init_jvm`` (the VALIS registration
-path); CONVERT_IMAGE's own read path never called it. Two live openers reach
-``BioImage()``:
+Both openers that reach ``BioImage()`` must call
+``bin/utils/jvm_cache.py::point_jvm_cache_off_readonly_home()`` first:
 
   * ``bin/utils/ome_io.py::_open_bioio`` -- used by ``read_info``/``read_plane``.
-  * ``bin/convert_image.py::read_image`` -> ``read_image_bioio`` -- CONVERT_IMAGE's own
-    read path, and a SEPARATE opener from ``_open_bioio`` (confirmed by
-    ``git grep -n "BioImage(" -- bin/``, which found exactly these two call sites).
+  * ``bin/convert_image.py::read_image`` -> ``read_image_bioio`` -- CONVERT_IMAGE's own,
+    separate opener.
 
-Both are covered here. Neither test needs a real ``bioio``/``bioio-bioformats``/
-``scyjava`` install (none is installed in CI, per ``tests/test_ome_io.py``'s and
-``tests/test_convert_lazy_read.py``'s own docstrings): ``bioio`` is faked via
-``sys.modules`` injection (the technique ``tests/test_convert_lazy_read.py`` already
-uses), and the guard function itself is monkeypatched with a spy rather than exercised
-for real -- ``tests/test_jvm_cache_guard.py`` already covers
-``point_jvm_cache_off_readonly_home``'s own behaviour against a faked ``scyjava``.
+``bioio`` is faked via ``sys.modules`` injection (not installed in CI) and the guard
+function is replaced with a spy; ``tests/test_jvm_cache_guard.py`` covers the guard's
+own behaviour.
 """
 
 from __future__ import annotations
