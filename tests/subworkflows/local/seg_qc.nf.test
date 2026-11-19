@@ -1,40 +1,19 @@
 /*
  * SEG_QC (reg_qc = 2 segmentation-overlap QC), shared by REGISTRATION and ADD_CYCLE.
  *
- * These tests exist because two of SEG_QC's behaviours were previously untestable and
- * defended only by a comment:
+ *  1. `remainder: true` stage-checkpoint join: a patient with a registrar pickle but no
+ *     checkpoint must still reach the warp with `ckpt = []`, not be dropped. No
+ *     whole-pipeline stub run reaches that state (REGISTER's stub always writes one at
+ *     reg_qc >= 2); calling SEG_QC directly can.
+ *  2. The tiled (STARE) branch at reg_qc = 2, which has no other nf-test coverage.
+ *  3. The QC segments with the run's own segmenter (SEG_QC_SEGMENT is SEGMENT aliased,
+ *     so params.seg_method selects the backend); read back from the stub's versions.yml.
  *
- *  1. The `remainder: true` stage-checkpoint totalisation. REGISTER emits
- *     reg_stage_checkpoint as an `optional:` output, so a patient can hold a registrar
- *     pickle and no checkpoint. That patient must still reach the warp with `ckpt = []`
- *     rather than being silently dropped by the downstream combine — silent patient loss
- *     from QC, not a loud failure. REGISTER's stub writes a checkpoint whenever
- *     reg_qc >= 2, and reg_qc >= 2 is also what turns SEG_QC on, so no whole-pipeline
- *     stub run can ever reach the missing-checkpoint state. Calling SEG_QC directly can.
+ * The method arrives as an argument (input[4]), never from params.registration_method;
+ * the "argument beats the param" case below pins that.
  *
- *  2. The tiled (STARE) branch at reg_qc = 2, which has no other nf-test coverage:
- *     registration.nf.test sets skip_registration_qc = true in every params block (so it
- *     never reaches reg_qc >= 1 at all) and add_cycle.nf.test is VALIS-only.
- *
- *  3. That the QC segments with the RUN'S OWN segmenter. SEG_QC_SEGMENT is `SEGMENT`
- *     aliased, so params.seg_method selects the backend here exactly as it does for the
- *     shipped masks. Until this was wired, SEG_QC_GEOJSON ran StarDist unconditionally --
- *     which at the shipped default (instantseg) scored a different segmenter's cells than
- *     the run shipped, and at stock defaults could not run at all. Nothing about that was
- *     observable from a green run: the failure lands in the QC errorStrategy's 'ignore'
- *     branch. The last two cases below read the backend back out of the stub's
- *     versions.yml, which is the one place stub mode records it.
- *
- * The method arrives as an ARGUMENT (input[4]), never from params.registration_method. The
- * params blocks below still set the param, and deliberately so: in the two valis cases the
- * param says 'valis' and in the tiled case it says 'tiled', so if the argument were ever
- * ignored the cases would still pass. What pins the argument is
- * tests/subworkflows/local/register_patient.nf.test's pair of arg-vs-param mismatch cases.
- *
- * The per-patient transform / stage checkpoint / per-slide transform are opaque `path` inputs to
- * the warp processes and are never read in stub mode, so small tracked fixtures stand in
- * for them. (In a real run the checkpoint is a directory; the distinction does not reach
- * the channel logic under test.)
+ * Transforms and checkpoints are opaque `path` inputs never read in stub mode, so
+ * small tracked fixtures stand in for them.
  */
 nextflow_workflow {
 
@@ -273,45 +252,14 @@ nextflow_workflow {
         tag "stub"
         options "-stub"
 
-        // The guard for the whole point of Task 5: SEG_QC dispatches on its `method`
-        // argument, never on the global. Without this case every other test in this file
-        // sets params.registration_method to AGREE with input[4], so reverting seg_qc.nf's
-        // `if (method == 'tiled')` back to `if (params.registration_method == 'tiled')`
-        // would leave the entire suite green -- exactly the one-hop-short shape that
-        // add_cycle.nf.test had before Task 4 closed it. Mirrors
-        // register_patient.nf.test's pair of arg-vs-param mismatch cases one level up.
+        // SEG_QC must dispatch on its `method` argument, not the global. The param says
+        // tiled; the caller says valis; the caller must win.
         //
-        // The param says tiled; the caller says valis. The caller must win.
-        //
-        // CRITICAL to the design of this case: BOTH transform channels are populated, and
-        // both are valid for their own branch. If input[3] were empty (as it is in the two
-        // valis cases above), the tiled branch would produce zero warp tasks anyway and the
-        // assertion below would pass VACUOUSLY -- it would prove nothing about which
-        // branch ran. With both populated, each branch produces warp tasks, so the only
-        // thing that decides which one actually ran is the argument.
-        //
-        // WARP_SEG_QC and WARP_SEG_QC_TILED used to be two processes, so this case could
-        // assert on the process NAME in workflow.trace. Since Task 3 merged them into one
-        // process dispatching on a `method` INPUT (lib/WarpBackends.groovy), the process
-        // name is always "WARP_SEG_QC" regardless of which backend ran.
-        //
-        // stage_order does NOT discriminate the branch either, despite being
-        // backend-specific by construction (valis: native/rigid/non_rigid/micro; tiled:
-        // native/rigid/refined) -- caught by review, verified by mutation. Both arms of
-        // seg_qc.nf's `if` build their tuple as `tuple(meta, method, ...)` (lines ~99 and
-        // ~119): the stub's stage_order comes from `WarpBackends.of(method).stages`, where
-        // `method` is this test's ARGUMENT ('valis') regardless of which arm ran. So under
-        // the exact mutation this case exists to catch -- reverting
-        // `if (method == 'tiled')` to `if (params.registration_method == 'tiled')` -- the
-        // TILED branch is taken (params.registration_method is 'tiled' here), but the
-        // staged `method` value is still 'valis', so the stub still emits the four-stage
-        // VALIS record. A `stage_order` assertion alone would stay green under that
-        // mutation, proving nothing.
-        //
-        // What the `if` actually chooses is WHICH TRANSFORM CHANNEL gets joined and staged
-        // into the WARP_SEG_QC task -- the per-patient `sample_versions.yml` (valis arm,
-        // input[1]) vs. the per-slide `model_config_min.json` (tiled arm, input[3]). That is
-        // the one observable the branch itself controls, so it is what this case asserts on.
+        // Both transform channels are populated, so each branch would produce warp tasks
+        // and the assertion is not vacuous. The process name (always WARP_SEG_QC) and
+        // stage_order (built from the argument, whichever arm ran) cannot tell the arms
+        // apart; which transform file got staged into the task (sample_versions.yml for
+        // valis, model_config_min.json for tiled) can.
 
         when {
             params {
@@ -349,14 +297,9 @@ nextflow_workflow {
         }
 
         then {
-            // Nextflow stages a `path` input into its task's own work-dir entry under its
-            // original filename, whether or not the stub script ever reads it. Only the
-            // branch actually taken creates a WARP_SEG_QC task at all, so scanning the
-            // whole work dir for which of the two distinctly-named transform fixtures
-            // landed in a task directory is what tells the branches apart -- verified by
-            // mutation (see the header comment): reverting to
-            // `params.registration_method` flips this from sample_versions.yml to
-            // model_config_min.json while leaving every other assertion in this file green.
+            // Only the branch taken creates a WARP_SEG_QC task, and each stages its
+            // transform under its own filename, so scanning the work dir for which
+            // fixture landed tells the branches apart.
             def staged_valis_transform = false
             def staged_tiled_transform = false
             new File("$workDir").eachFileRecurse { f ->
@@ -376,8 +319,8 @@ nextflow_workflow {
                     "WARP_SEG_QC never staged sample_versions.yml -- the valis (per-patient) transform" },
                 { assert !staged_tiled_transform,
                     "WARP_SEG_QC staged model_config_min.json -- the tiled (per-slide) transform ran instead of valis" },
-                // Secondary confirmation that the record itself is the VALIS shape (this
-                // alone would NOT catch the mutation above -- see the header comment).
+                // Secondary: the record is the VALIS shape (alone this would not catch a
+                // dispatch on the param; see the header).
                 { assert path(workflow.out.metrics[0][1]).json.stage_order ==
                          ['native', 'rigid', 'non_rigid', 'micro'] }
             )
@@ -385,20 +328,11 @@ nextflow_workflow {
     }
 
     /*
-     * The two cases below differ ONLY in params.seg_method, and assert the backend that
-     * reaches the QC's segmentation task. One case alone would not distinguish "follows
-     * the parameter" from "hardcoded to this value" -- which is precisely the bug being
-     * fixed, in the opposite direction.
-     *
-     * versions.yml is where a stub run records it: SEGMENT's stub block reports the
-     * chosen backend's OWN TOOLS (lib/SegBackends.groovy's `versionTools`, rendered by
-     * lib/ProcessEnvelope.groovy). It used to report a bare `seg_method: ${params.seg_method}`
-     * row instead -- a key no real run ever emitted, because the script: and stub: heredocs
-     * were hand-written separately and `-stub` never evaluates script:. The tool rows are a
-     * strictly stronger witness: they name the stack the backend actually loads, so a run
-     * that reported the right backend NAME while rendering another backend's probes would
-     * now be caught here too. The masks themselves are `touch`ed and carry no backend
-     * identity, and the container directive is never exercised without an engine.
+     * The two cases below differ only in params.seg_method and assert the backend that
+     * reaches the QC's segmentation task; one alone could not tell "follows the param"
+     * from "hardcoded". The witness is versions.yml: SEGMENT's stub reports the chosen
+     * backend's own tools (SegBackends `versionTools`). The touched masks carry no
+     * backend identity.
      */
     test("the QC segments with params.seg_method - instantseg") {
 
@@ -481,9 +415,8 @@ nextflow_workflow {
 
             assertAll(
                 { assert workflow.success },
-                // Non-vacuity: `.every` on an empty list is true, so an unrun (or renamed)
-                // SEG_QC_SEGMENT would satisfy the backend assertion below. Observed --
-                // this case stayed green under a sabotage the instantseg case caught.
+                // Non-vacuity: `.every` on an empty list is true, so an unrun or renamed
+                // SEG_QC_SEGMENT would satisfy the backend assertion below.
                 { assert seg_versions.size() == 1,
                     "expected exactly one SEG_QC_SEGMENT versions.yml; got " + seg_versions.size() },
                 { assert seg_versions.every { it.text.contains('cellSAM: stub') },

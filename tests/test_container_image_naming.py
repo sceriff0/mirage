@@ -1,28 +1,10 @@
 """Container image names are a published interface, and this file is where their shape is fixed.
 
-Every first-party image is ``bolt3x/mirage-<component>:<version>`` -- one Docker Hub repository
-per image, the layout nf-core, biocontainers and the quay.io projects use. The previous layout
-put ten unrelated images in a single repository (``bolt3x/attend_image_analysis``) and used the
-*tag* to say which image it was. That has three consequences worth naming, because each one is
-a thing that actually went wrong:
-
-  * The tag namespace ended up doing two jobs at once. The live repository holds component names
-    (``preprocess``, ``tiled``) next to genuine versions (``v2.3``, ``v2.4``) next to a decade of
-    dead images (``pixie``, ``fastmorph``, ``stardist_gpu``). Nothing in that list can be ordered
-    or compared, because Docker Hub treats one repository as one artifact lineage.
-  * There were no immutable artifacts. The build workflow asked the operator for a version on
-    every ``workflow_dispatch``, resolved it into ``setup.outputs.version`` -- and then never put
-    it in the tag, publishing to the same mutable name regardless. There was no image to roll
-    back TO. ``test_the_build_workflow_applies_the_version_to_the_tag`` is the guard for that
-    specific bug.
-  * Names drifted from what they name. ``instant_seg`` and its build directory ``istantseg``
-    misspelled InstanSeg two different ways; ``convert_bioformats_2`` carried a meaningless
-    ``_2``; ``segmentation_gpu`` and ``quantification_gpu`` carried a ``_gpu`` suffix that
-    ``cellsam`` and ``instant_seg`` -- equally GPU images -- did not; and ``debug_diffeo`` said
-    "debug" while running GENERATE_REGISTRATION_QC in production.
-
-The version in the tag is tied to ``manifest.version`` so an image set and the pipeline that
-pulls it cannot drift apart silently.
+Every first-party image is ``bolt3x/mirage-<component>:<version>``: one Docker Hub repository
+per image, the layout nf-core and biocontainers use. The component is the build-context
+directory name, and the version in the tag is tied to ``manifest.version`` so an image set and
+the pipeline that pulls it cannot drift apart. The retired single-repository layout
+(``bolt3x/attend_image_analysis``) must not be referenced.
 """
 
 import json
@@ -42,12 +24,8 @@ PREFIX = "mirage-"
 # re-hosted (its from-source libvips build is heavy). basicpy-docker-mcmicro is the vendored
 # nf-core BASICPY module's own container (mcmicro-maintained); BASICPY is a vendored module
 # (modules/nf-core/basicpy/), not a bolt3x/mirage-<component> build, so re-hosting it would mean
-# maintaining a fork of the vendored image too.
-#
-# `ubuntu:22.04` USED TO BE HERE, for AGGREGATE_SIZE_LOGS. It is gone because that base ships no
-# procps, so with params.enable_trace=true (the shipped default) Nextflow's task-metrics wrapper
-# hard-exited before the script block and the process failed on every real run. It now uses
-# bolt3x/mirage-preprocess, which six other modules already pull.
+# maintaining a fork of the vendored image too. (No bare `ubuntu:22.04`: it ships no procps,
+# which Nextflow's task-metrics wrapper needs.)
 EXTERNAL_ALLOWED = {
     "docker.io/labsyspharm/basicpy-docker-mcmicro@sha256:355b14e2ec80b7b152272f333afd47234f007d0d37633b3ec948e87ec2c8e9b4",
     # The vendored module (modules/nf-core/basicpy/main.nf) stays byte-for-byte upstream and
@@ -59,19 +37,10 @@ EXTERNAL_ALLOWED = {
 # The retired single-repository name. Nothing may reference it again.
 LEGACY_REPO = "attend_image_analysis"
 
-# THE TAG MAY BE INTERPOLATED, AND THE REFERENCE MAY CARRY A DIGEST. Both forms were
-# invisible to the previous pattern, which required an alphanumeric right after the ":".
-#
-#   * `bolt3x/mirage-segeval:${params.segeval_tag}` matched NOTHING, so both segeval
-#     modules were silently exempt from every assertion in this file -- including the
-#     manifest-version pin. Measured 2026-09-02: 29 references found before widening the
-#     pattern, 31 after, and the two new ones are exactly that pair.
-#   * `cdgatenbee/valis-wsi@sha256:<64 hex>` is the digest-pinned form ruling R6 requires
-#     for an external image (see tests/test_base_images_are_digest_pinned.py).
-#
-# A tag or a digest is REQUIRED -- the alternation has no "neither" branch. Without that
-# the pattern would match any quoted path on a line containing the word "container",
-# e.g. a publishDir `"${params.outdir}/${meta.patient_id}/qc"`.
+# The tag may be interpolated (`bolt3x/mirage-segeval:${params.segeval_tag}`) and an external
+# reference may carry a digest (`cdgatenbee/valis-wsi@sha256:<64 hex>`, see
+# tests/test_base_images_are_digest_pinned.py). A tag or a digest is required, or the pattern
+# would match any quoted path on a line containing the word "container".
 _IMAGE_REF = re.compile(
     r"""['"]("""
     r"""[A-Za-z0-9][A-Za-z0-9._/-]*"""
@@ -105,12 +74,9 @@ def _searched_files():
 def _image_refs():
     """(file, ref) for every quoted image reference in the pipeline's own sources.
 
-    Scanned against `tests.nfmodel.strip_comments` (view B), which blanks
-    comments but keeps string contents verbatim -- the image ref this test
-    exists to check IS a string literal, so view A (which blanks string
-    contents too) would destroy exactly the text being searched for. View B
-    stops a commented-out `// container = 'bolt3x/mirage-old:1.0.0'` line
-    from being read as a live reference, without touching a real one.
+    Read through `tests.nfmodel.strip_comments`, which blanks comments but keeps
+    string contents (the image ref is a string literal), so a commented-out
+    `// container = '...'` line is not read as a live reference.
     """
     out = []
     for path in _searched_files():
@@ -131,12 +97,8 @@ def _container_dirs():
 def test_no_source_references_the_legacy_single_repository():
     """The one-repo-many-tags layout is retired; a stray reference would pull a stale image.
 
-    Scans ``containers/`` itself (every file, recursively) in addition to the pipeline sources
-    ``_searched_files()`` already covers: a Dockerfile's own build/push comments can reference
-    the legacy repository without the string ever appearing in a `container` directive that
-    ``_searched_files()``'s modules/local + lib + conf scan would catch -- exactly the bug this
-    guard missed in containers/convert/Dockerfile, which still named
-    ``bolt3x/attend_image_analysis:bioformats_v1`` in its build/push comments after the rename.
+    Scans every file under ``containers/`` as well as the pipeline sources, so a Dockerfile's
+    build/push comments are covered too.
     """
     offenders = []
     containers_files = sorted(
@@ -198,14 +160,8 @@ def test_every_referenced_component_has_a_build_context():
 def test_the_build_workflow_covers_every_build_context_exactly_once():
     """The matrix must cover every build context on disk, exactly once.
 
-    THE MATRIX MOVED. This test used to parse an inline `{ dir: convert }` list out of
-    the build workflow. That list is gone: `containers/images.json` is now the single source
-    the workflow's matrix and its `only` filter both read, and
-    tests/test_container_build_matrix.py FAILS if an inline copy reappears in the workflow
-    -- because a second copy drifts, and a context missing from one of them is never built
-    while the run stays green. So the two guards had directly contradictory expectations
-    when the streaming line met the benchmarking line; this one now reads the same single
-    source, which serves both intents rather than picking a winner.
+    Reads `containers/images.json`, the single source of the workflow's matrix and its
+    `only` filter (tests/test_container_build_matrix.py forbids an inline copy).
     """
     entries = json.loads((REPO / "containers/images.json").read_text())
     listed = [e["dir"] for e in entries]
@@ -225,7 +181,7 @@ def test_the_build_workflow_applies_the_version_to_the_tag():
     """The specific bug: a required `version` input that never reached the published tag.
 
     Without this, every publish overwrites one mutable name and there is no prior image to roll
-    back to -- while the workflow's UI still asks for a version, implying otherwise.
+    back to.
     """
     text = (REPO / ".github/workflows/containers.yml").read_text()
     tags_line = re.search(r"^\s*tags:\s*(.+)$", text, re.M)
@@ -264,12 +220,7 @@ def test_the_build_workflow_preflights_the_registry_credentials():
 
     Without a preflight the run fans out to one job per image and each dies separately on
     docker/login-action's "Username and password required", which names neither the secret nor
-    the fix. That is what happened the first time the publish path was ever exercised.
-
-    The publish path had been unexercised for months while the workflow reported success: the
-    login step is guarded by `if: needs.setup.outputs.push == 'true'`, and every prior run was a
-    push-to-main build-only event, so the credentials were never reached. A green Build Images
-    run therefore said nothing about whether publishing worked.
+    the fix. A build-only run never reaches the login step, so it says nothing about publishing.
     """
     text = (REPO / ".github/workflows/containers.yml").read_text()
     assert "DOCKERHUB_USERNAME" in text and "DOCKERHUB_TOKEN" in text

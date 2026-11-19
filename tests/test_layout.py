@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
 """Single-ownership guards for lib/Layout.groovy — the output-layout seam.
 
-Where a published file lands used to be stated in six independent places (a
-checkpoint-CSV path template per subworkflow, a work-hash heuristic in
-registration.nf, and `csv/registered.csv` / `csv/postprocessed.csv` as literals in
-both ParamUtils and add_cycle.nf). Nothing tied them together, so they were kept in
-agreement by eye — and the registration one had drifted into reverse-engineering
-conf/modules.config at runtime.
-
-`lib/Layout.groovy` is now the single owner. What Layout CONSTRUCTS is asserted for
-real by tests/layout.nf.test (a stub pipeline run, comparing the checkpoint CSVs
-byte-for-byte against the expected paths). What this file asserts is the property
-that makes being single meaningful: that nobody has quietly re-scattered a path
-template alongside it, and that the `kind`s Layout is asked for are ones
-conf/modules.config actually publishes into.
-
-These run in the plain pytest job — no Nextflow, no container engine — so the
-single-ownership property holds even when the nf-test suite is skipped.
+`lib/Layout.groovy` is the single owner of where published files land. What it
+constructs is asserted by tests/layout.nf.test; this file asserts that no path
+template is restated elsewhere and that every `kind` Layout is asked for is one
+conf/modules.config publishes into. Plain pytest, no Nextflow.
 """
 
 from __future__ import annotations
@@ -45,8 +33,7 @@ def _callers() -> list[Path]:
 
 
 def _sweep_files() -> list[Path]:
-    """_callers() plus modules/ — a re-scattered path template is just as wrong in a
-    process definition, and modules/ was outside the original sweep."""
+    """_callers() plus modules/: a restated path template is as wrong in a process."""
     files = _callers() + sorted((ROOT / "modules").rglob("*.nf"))
     return [f for f in files if f.exists()]
 
@@ -89,8 +76,7 @@ def test_layout_never_reads_params():
 def test_no_caller_restates_a_per_patient_published_path():
     """`<outdir>/<patient_id>/<kind>` belongs to Layout.patientDir alone."""
     # e.g. "${params.outdir}/${meta.patient_id}/registered"
-    # Broadened after review: `${meta.patient_id}` was only one of the spellings a
-    # copy could use. Any `${...outdir}/${<anything>}` is a per-patient template.
+    # Any `${...outdir}/${<anything>}` is a per-patient template, whatever the spelling.
     template = re.compile(r"\$\{params\.(?:prior_)?outdir\}/\$\{[^}]+\}")
     offenders = [
         f"{f.relative_to(ROOT)}:{i}"
@@ -124,16 +110,11 @@ def test_no_caller_restates_a_checkpoint_csv_path():
 def test_no_caller_reimplements_the_work_hash_heuristic():
     """Recognising a Nextflow task directory happens once, in Layout.isTaskDir.
 
-    The docstring this replaces said "the 32-hex-char test" — which was the bug, not
-    the rule: a task directory is <work>/<2 hex>/<30 hex>, so a 32-wide test never
-    fires. A comment asserting 32 is how the defect survived its first review; the
-    guard below therefore matches BOTH widths, so a copy of either the broken or the
-    fixed spelling is caught.
+    A task directory is <work>/<2 hex>/<30 hex>. Both 30- and 32-wide spellings are
+    matched, so a copy of either the wrong or the right test is caught.
     """
-    # Broadened after review: the first version matched only the exact spelling
-    # this repo happened to use. It now catches any hex character class of a
-    # work-hash width, in either order, and any 30/32 length comparison, across
-    # modules/ as well (see _sweep_files).
+    # Any hex character class of a work-hash width, in either order, and any 30/32
+    # length comparison, across modules/ as well (see _sweep_files).
     hash_test = re.compile(
         r"\[(?:0-9a-f|a-f0-9|0-9A-Fa-f)\]\s*\{\s*3[02]"  # [0-9a-f]{32} and friends
         r"|\.\s*(?:length\(\)|size\(\))\s*==\s*3[02]"  # .length() == 32
@@ -166,9 +147,8 @@ def test_checkpoint_step_constants_are_the_csv_basenames():
 
 
 def test_every_kind_asked_of_layout_is_published_by_modules_config():
-    """Layout describes the layout; conf/modules.config enforces it. They are kept
-    in agreement by hand (routing publishDir through Layout is a separate, riskier
-    change), so assert the agreement mechanically instead."""
+    """Layout describes the layout and conf/modules.config enforces it; they are
+    kept in agreement by hand, so assert the agreement."""
     consts = _layout_constants()
     published = set(
         re.findall(
@@ -184,11 +164,8 @@ def test_every_kind_asked_of_layout_is_published_by_modules_config():
     )
     asked = []
     for f in _callers():
-        # Comment-stripped, string-preserving view: the needle (a call whose last
-        # argument is a quoted `kind` literal) lives inside a string, but a call
-        # merely ILLUSTRATED in a comment must not be counted as a real call site --
-        # this is a POSITIVE rule (asserting real call sites exist and agree with
-        # conf/modules.config), so a comment satisfying it would blind the guard.
+        # Comment-stripped, string-preserving view: the `kind` is a quoted literal,
+        # and a call shown only in a comment must not count as a call site.
         text = _strip_comments(f.read_text())
         # Scanned over the whole file, not line by line: registration.nf's call is
         # wrapped across two lines and a per-line scan would silently skip it.
@@ -211,13 +188,7 @@ def test_every_kind_asked_of_layout_is_published_by_modules_config():
 def test_the_unregistered_slide_path_has_its_own_owner():
     """A slide that was never registered is published by whoever produced it, not
     into <pid>/registered/. The checkpoint writer must ask Layout which case it is
-    in rather than assuming — that assumption is defect (c).
-
-    The writer moved out of registration.nf into its own subworkflow so the
-    add_cycle path could share it (an add_cycle run used to write no
-    csv/registered.csv at all), and then back into register_patient.nf once the
-    WRITE itself moved to checkpoint_writer.nf and the separate file had nothing
-    left to own. The property is unchanged; only its owner moved, twice."""
+    in rather than assume."""
     writer = (ROOT / "subworkflows" / "local" / "register_patient.nf").read_text()
     assert "Layout.passthroughPath(" in writer, (
         "the registered-checkpoint row builder no longer routes unregistered slides "
@@ -227,8 +198,7 @@ def test_the_unregistered_slide_path_has_its_own_owner():
 
     # Both producers of an unregistered slide must set the flag the writer keys on:
     # REGISTER_PATIENT's single-slide branch, and TILED_ADAPTER's every-patient
-    # reference. (The single-slide branch moved out of registration.nf with the rest
-    # of the shared registration core — add_cycle.nf had lost it entirely.)
+    # reference.
     reg = (ROOT / "subworkflows" / "local" / "register_patient.nf").read_text()
     assert "is_passthrough" in reg, (
         "REGISTER_PATIENT's single-slide passthrough branch no longer marks the "
@@ -302,9 +272,8 @@ def test_no_declared_kind_is_dead():
 def test_no_process_relies_on_the_fall_through_publish_default():
     """Every process in modules/local/ must have a withName: block that sets publishDir.
 
-    The fall-through default publishes to _UNROUTED_PUBLISH/. It used to publish to a real
-    run-level path, which is how SPLIT_CHANNELS came to overwrite one patient's channels
-    with another's on every multi-patient run without failing.
+    The fall-through default publishes to _UNROUTED_PUBLISH/; a real run-level default
+    lets one patient's outputs silently overwrite another's.
     """
     config = MODULES_CONFIG.read_text()
     processes = set()
@@ -313,12 +282,8 @@ def test_no_process_relies_on_the_fall_through_publish_default():
         if m:
             processes.add(m.group(1))
 
-    # Which process names appear in a withName: selector whose block sets publishDir.
-    # The block's own extent is found by a comment/string-aware brace walk (see
-    # _block_extent), and "sets publishDir" means a real top-level assignment in the
-    # comment/string-stripped block body, not the word appearing anywhere at all —
-    # both of which conf/modules.config's own publishDir-referencing comments would
-    # otherwise defeat.
+    # Process names in a withName: selector whose block assigns publishDir, read
+    # from the comment/string-stripped body so a comment naming publishDir does not count.
     routed = set()
     for m in re.finditer(r"withName:\s*'([^']+)'\s*\{", config):
         names = m.group(1).split("|")
@@ -338,19 +303,11 @@ def test_no_process_relies_on_the_fall_through_publish_default():
 
 
 def test_every_publishdir_path_closure_matches_the_literal_shape_the_parser_reads():
-    """_per_patient_publish_leaves() understands exactly one shape: a `path:` closure
-    that interpolates `${params.outdir}/${meta.patient_id}/<literal segments>`
-    directly. A closure that reaches the same directory through a local variable,
-    string concatenation, or any other Groovy expression is invisible to that regex —
-    conf/modules.config could publish into an undeclared leaf and
-    test_every_per_patient_publish_leaf_is_a_declared_kind would stay green, which is
-    exactly the failure that test exists to catch.
+    """Every `path:` closure naming `patient_id` is in the one shape
+    _per_patient_publish_leaves() can read
+    (`${params.outdir}/${meta.patient_id}/<literal segments>`).
 
-    This targets any `path:` closure that reaches for the patient ID at all (the
-    `patient_id` substring, not just the literal `meta.patient_id` spelling) and
-    requires the WHOLE closure to be in the one shape the parser can read — so an
-    unreadable shape fails loudly here instead of silently escaping the
-    reverse-direction check two tests up.
+    Any other shape would be invisible to the leaf check, so it fails here instead.
     """
     config = MODULES_CONFIG.read_text()
     literal_patient_path = re.compile(
@@ -372,10 +329,8 @@ def test_every_publishdir_path_closure_matches_the_literal_shape_the_parser_read
 
 
 def test_task_dir_test_is_structural_not_a_length_guess():
-    """The predecessor of Layout.isTaskDir tested `length() == 32`. A Nextflow task
-    directory is `<work>/<2 hex>/<30 hex>` — 30, not 32 — so it never fired. Pin the
-    two properties that make the replacement correct: a 30-wide-or-more hex name AND
-    a two-hex-character parent."""
+    """A Nextflow task directory is `<work>/<2 hex>/<30 hex>` (30, not 32): pin a
+    30-or-more-wide hex name AND a two-hex-character parent."""
     text = LAYOUT.read_text()
     body = text[text.index("static boolean isTaskDir(") :]
     body = body[: body.index("\n    }")]

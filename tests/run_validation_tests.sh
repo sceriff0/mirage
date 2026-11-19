@@ -31,45 +31,22 @@ echo ""
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
-# `dry_run` is a `type: boolean` parameter in nextflow_schema.json and MUST NOT
-# be passed on the command line.
-#
-#   * Nextflow 25.04.x turned `--dry_run true` (and a bare `--dry_run`) into a
-#     real Boolean, so nf-schema accepted it.
-#   * Nextflow 26.04.x hands EVERY `--param` through to nf-schema as a String —
-#     `--dry_run true` AND a valueless `--dry_run` both arrive as the string
-#     "true" — and validateParameters() rejects the run with
-#         * --dry_run (true): Value is [string] but should be [boolean]
-#     (measured on NXF_VER=26.04.6; a valueless flag is NOT a workaround).
-#
-# A `-params-file` carries a real JSON boolean, which is a different code path
-# and is accepted unchanged by both engines. Any future boolean parameter this
-# script needs must go in this file, never on the command line.
+# Params go in a file, not on the command line: Nextflow 26 hands every CLI param
+# to nf-schema as a String, so `--dry_run true` (or a bare `--dry_run`) is rejected
+# as "[string] but should be [boolean]". A -params-file carries a real JSON boolean.
+# Any boolean this script needs goes here.
 PARAMS_FILE="$OUTPUT_DIR/dry_run_params.json"
 # dry_run exercises the whole validation surface without instantiating a process.
-#
-# pixel_size and the resource ceilings are here because the pipeline now REQUIRES them:
-# pixel_size has no shipped default (a run must assert a scale or ask for 'auto', and these
-# synthetic fixtures carry no OME PhysicalSize), and nf-schema's `required` list for
-# resource_limits rejects a run that sets neither ceiling. Without them every case below
-# dies at launch on the WRONG error -- "pass" cases look like failures, and "fail" cases
-# fail on the missing ceilings instead of the samplesheet problem they are asserting on.
-# The values are arbitrary but legal; nothing here is resource-bound, since dry_run means
-# no process is ever instantiated.
-#
-# Written to a file rather than passed as --params: Nextflow 26 delivers every CLI --param
-# as a String, so the CLI boolean form is rejected by the schema as "[string] but should be
-# [boolean]".
+# pixel_size and a resource ceiling are required at launch; without them every case
+# would fail on the wrong error. The values are arbitrary but legal.
 printf '{ "dry_run": true, "pixel_size": 0.325, "max_cpus": 2, "max_memory": "6.GB" }\n' \
     > "$PARAMS_FILE"
 
 # Helper function to run a test.
 #
 # Usage: run_test <name> <pass|fail> <input_csv> <expected_error> [extra nextflow args...]
-#   <expected_error> is the substring required in the log for a "fail" test;
-#   pass "" for "pass" tests. Keeping it as an explicit positional argument
-#   (rather than the last element of the args array) avoids leaking the string
-#   into the `nextflow run` command line.
+#   <expected_error> is the substring required in the log for a "fail" test, ""
+#   for a "pass" test. A positional argument so it never leaks into the command.
 run_test() {
     local test_name="$1"
     local expected_result="$2"  # "pass" or "fail"
@@ -84,10 +61,7 @@ run_test() {
     local output_file="$OUTPUT_DIR/test_${TESTS_TOTAL}.log"
     local exit_code=0
 
-    # Run pipeline with dry_run for fast validation. `dry_run` comes from
-    # $PARAMS_FILE, never the command line — see the comment where it is
-    # written; a CLI boolean is rejected on Nextflow 26.
-    # ${arr[@]+"${arr[@]}"} safely expands a possibly-empty array under `set -u`
+    # ${arr[@]+"${arr[@]}"} expands a possibly-empty array under `set -u`
     # (bash 3.2 on macOS errors on a bare "${arr[@]}" when empty).
     cd "$PROJECT_ROOT"
     nextflow run main.nf \
@@ -180,15 +154,8 @@ run_test \
     "" \
     --start preprocessing
 
-# Test 2.3: Invalid - no nuclear channel at all.
-#
-# The rejection used to read "DAPI channel not found"; d5bcc06 deliberately
-# generalised it when the nuclear-marker rule moved into lib/MarkerUtils.groovy
-# and stopped hardcoding the literal 'DAPI' (a CELLTOX-only samplesheet is
-# valid). The expectation below is a BRE, so the marker list inside the
-# parentheses can change without this test drifting again — but it still
-# asserts the nuclear-channel reason and the offending patient, not merely
-# "the run failed".
+# Test 2.3: Invalid - no nuclear channel at all. The expectation is a regex, so the
+# marker list in the parentheses can change; it still asserts the reason and patient.
 run_test \
     "Invalid - no nuclear channel" \
     "fail" \
@@ -218,15 +185,9 @@ echo "Test Suite: Samplesheet shapes"
 echo "=========================================="
 echo ""
 
-# Test 3.1: paths RELATIVE to the launch directory.
-#
-# This case can only live here. CsvUtils.validateInputSemantics resolves a
-# relative path with `new File(p).exists()`, i.e. against the JVM's working
-# directory -- the LAUNCH directory. run_test cd's to $PROJECT_ROOT before every
-# `nextflow run`, so a sheet holding repo-root-relative paths resolves. Under
-# nf-test the launch directory is a per-test .nf-test/tests/<hash>/ path that is
-# not knowable when the fixture is generated, so the same assertion cannot be
-# made from an nf-test file.
+# Test 3.1: paths relative to the launch directory. Only possible here: relative
+# paths resolve against the JVM's working directory, and under nf-test that is a
+# per-test hash directory unknown when the fixture is generated.
 run_test \
     "Valid - paths relative to the launch directory" \
     "pass" \
@@ -234,12 +195,8 @@ run_test \
     "" \
     --start preprocessing
 
-# Test 3.2: CRLF line endings (Excel on Windows). MEASURED on NXF_VER=25.04.7
-# and 26.04.6: Nextflow's splitCsv already strips the trailing \r cleanly, so
-# this is a regression guard (a future engine change, or a hand-rolled reader
-# that splits on "\n" without going through splitCsv/readLines) rather than a
-# currently-live bug -- see generate_complete_testdata.py's crlf_input.csv
-# comment for the full measurement.
+# Test 3.2: CRLF line endings (Excel on Windows). splitCsv strips the trailing \r;
+# this guards against a reader that splits on "\n" itself.
 run_test \
     "Valid - CRLF line endings" \
     "pass" \
@@ -283,19 +240,13 @@ run_test \
     "" \
     --start preprocessing
 
-# Test 3.7: the warning half of Test 3.6. Accepting an unknown column silently is
-# the failure this pair exists to close, so "it ran" is not the assertion --
-# "the operator was told which columns are ignored" is. run_test's grep is for
-# FAILURE cases only, so this one greps the log directly.
+# Test 3.7: the warning half of Test 3.6: the log must name the ignored columns.
+# run_test greps only failure cases, so this greps the log directly.
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
 echo -e "${YELLOW}[TEST $TESTS_TOTAL]${NC} Unknown extra columns are NAMED in a warning"
 warn_log="$OUTPUT_DIR/test_${TESTS_TOTAL}.log"
 cd "$PROJECT_ROOT"
-# Exit status is genuinely not the assertion here -- dry_run succeeding or
-# failing tells us nothing about whether the warning was logged, which is the
-# only thing checked below -- so it is captured into an explicitly-unused
-# variable (the `n=$(...) || n=0` idiom tests/test_no_swallowed_failures.py
-# asks for), never discarded with a bare `|| true`.
+# The exit status is not the assertion; it is captured, not discarded.
 nextflow run main.nf \
     -params-file "$PARAMS_FILE" \
     --input "$TESTDATA_DIR/extra_column_input.csv" \

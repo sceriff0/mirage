@@ -67,9 +67,7 @@ nextflow_process {
 
             assertAll(
                 { assert rendered.size() >= 1 },
-                // The brief pinned channel_name 'PANCK', but the copied input tuple
-                // (this file's own first stub case) carries channel_name: 'DAPI' --
-                // substituted per the brief's own fallback instruction.
+                // The input tuple carries channel_name: 'DAPI'.
                 { assert rendered.every { it.contains("--channel-name 'DAPI'") },
                     "single-quoted, so a marker with a space or parenthesis survives the shell: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--nuclei_mask_file') }, "quantify_compartments defaults true: " + rendered.join(' --- ') },
@@ -137,15 +135,10 @@ nextflow_process {
             assertAll(
                 { assert process.success },
                 { assert process.out.individual_csv },
-                // Validate CSV content against the SHIPPED defaults, which is what
-                // this case runs on: nextflow.config sets quantify_compartments =
-                // true but expanded_quantification = FALSE, and conf/modules.config
-                // renders `--expanded` only when the latter is on. Median alone is
-                // computed, so the contract is
+                // Shipped defaults: quantify_compartments = true, expanded_quantification = false,
+                // and `--expanded` is rendered only when the latter is on. Median alone is computed:
                 //   label + bare marker + Median x {Nucleus, Cytoplasm, Cell} = 5.
-                // This assertion said 11 (and its comment claimed expanded defaulted
-                // to true) from before that default moved; it got 5 on every real
-                // run. See the expanded companion case below for the 11-column shape.
+                // The expanded companion case below covers the 11-column shape.
                 {
                     def csvFile = process.out.individual_csv.get(0).get(1)
                     def lines = path(csvFile).readLines()
@@ -170,11 +163,8 @@ nextflow_process {
 
     test("Should produce the expanded column set when expanded_quantification is on - real") {
 
-        // The other half of the contract the case above pins. Without this one,
-        // moving expanded_quantification's default would silently take the
-        // Mean/Sum columns out of the pipeline's reachable behaviour and nothing
-        // would notice -- conf/modules.config's `--expanded` flag is rendered from
-        // a `script:`-time ext.args closure, which no -stub run evaluates.
+        // The expanded half of the contract. `--expanded` comes from a `script:`-time
+        // ext.args closure, which no -stub run evaluates.
         tag "real"
         tag "slow"
 

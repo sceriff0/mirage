@@ -1,28 +1,19 @@
 """An nf-test output value is a **String**, not a File. Assertions must wrap it.
 
 `process.out.<x>.get(0).get(1)` is a `java.lang.String` holding a path (or an
-`ArrayList` of them) in nf-test 0.9.0. So an assertion that reaches straight for
-a `File` member gets one of three outcomes, and **none** of them is the check
-its author wrote:
+`ArrayList` of them) in nf-test 0.9.0. An assertion that reaches straight for a
+`File` member does not check what its author meant:
 
 * `.name`, `.toFile()`, `.exists()`, `.text` -- `MissingPropertyException` /
   `MissingMethodException`. The test can never pass, whatever the pipeline does.
 * `.readLines()` -- Groovy *does* define `String.readLines()`. It splits the
-  path string, so a 4-line CSV silently reads as **one** line and the assertion
-  fails for a reason that has nothing to do with the file.
-* `.size()` -- the character count of the path. Measured on nightly run
-  33633986188: `assert it.size() > 1000` reported **161**, the length of a work
-  directory path, against a file that was on disk and was fine.
+  path string, so a 4-line CSV reads as one line.
+* `.size()` -- the character count of the path, not the file size.
 
-That run was **14 of 28 `real` cases red, and 8 of the 14 were this one bug**
-(`.superpowers/sdd/01-suite-truth/nightly_real_33633986188.log`, families
-tabulated in `.github/workflows/nightly.yml`'s header). The `stub`-tagged cases
-sitting in the *same files* wrap with `file(it)` and were green throughout --
-which is the point: nothing in the blocking suite could tell the two apart,
-because `nf-test test --tag stub` never runs a `real` case at all. This guard is
-that missing signal, and it runs in the blocking pytest suite.
+`nf-test test --tag stub` never runs a `real` case, so this guard is the
+blocking suite's only check on them.
 
-**The rule.** Inside any `test { }` block of any `.nf.test` file, a value
+The rule: inside any `test { }` block of any `.nf.test` file, a value
 derived from `process.out` / `workflow.out` by index (`.get(n)`, `[n]`) is
 *tainted*. A tainted value may not receive `.name`, `.getName()`, `.toFile()`,
 `.exists()`, `.text`, `.readLines()`, `.absolutePath`, `.isFile()` or
@@ -32,10 +23,7 @@ threshold (see SIZE_IS_CARDINALITY_BELOW). Wrapping
 in `file(...)`, `path(...)` or `new File(...)` removes the taint, because that
 is exactly the conversion the assertion needs. Taint follows a `def` binding, a
 `with(...)` receiver, and the parameter of `.each`/`.every`/`.collect`/`.any`/
-`.find`/`.findAll`/`.sort`/`.eachWithIndex`/`.with` over a tainted value --
-because that
-is how seven of the eight failures were written: not as one long chain, but
-through a local.
+`.find`/`.findAll`/`.sort`/`.eachWithIndex`/`.with` over a tainted value.
 
 The correct fix is a wrap at the seam, once:
 
@@ -44,32 +32,15 @@ The correct fix is a wrap at the seam, once:
     files.each { f -> assert f.size() > 100 }
     assert files*.name.any { it.contains('DAPI') }
 
-**Why the model.** Parsing is delegated to `tests/nfmodel` -- `nf_test_files()`
-to enumerate and `strip_comments` / `block_extent` to read -- per this repo's
-rule that no guard carries a private Nextflow parse. The *string-preserving*
-view is the correct one here: the thing under assertion is code, and a
-GString-interpolated `"... ${f.name} ..."` inside an assertion message is code
-that runs and throws just like the bare expression, so blanking string contents
-would hide real hits.
+Parsing uses `tests/nfmodel` (`nf_test_files()`, `strip_comments`,
+`block_extent`). The string-preserving view is used because a
+GString-interpolated `"... ${f.name} ..."` in an assertion message runs and
+throws like the bare expression.
 
-**Known gap.** This guard does not catch every way a `real` case can misread an
-nf-test output -- only the type-confusion class above. Two of the FOUR reds
-fixed in `783cfaa` (`preprocessing.nf.test`/`registration.nf.test`'s
-`3dc7c107`/`7ef417e4`) were a different bug entirely: an unqualified
-`collect`/`each`/etc. called *inside* a `with(receiver) { ... }` block does not
-resolve against `receiver` the way a qualified `receiver.collect { ... }` does
--- Groovy hands the closure the WHOLE enclosing scope's `it`, not the `with`
-receiver, so `it[0]` inside such a closure is the first element of whatever
-`it` happens to be at that call site, not an element of `receiver`. That
-produced `MissingPropertyException: ... No such property: patient_id for
-class: java.lang.String` where the author's intent was clearly `receiver[0]`.
-Closing it statically needs delegate-scope analysis (tracking what `with`'s
-receiver actually binds `it`/an implicit call to, across nested closures) that
-this file's taint walk does not attempt -- the walk here tracks TYPE (String
-vs File), not SCOPE (which receiver a closure call resolves against). A
-one-off scan over every `with(...)` body in `tests/**/*.nf.test` at the time
-found no other instance of it; a standing guard for this class remains
-unwritten.
+Known gap: only the type-confusion class is caught. An unqualified
+`collect`/`each` inside a `with(receiver) { ... }` block, which binds the
+enclosing `it` rather than the receiver, needs scope analysis this walk does
+not do.
 """
 
 import re
@@ -94,8 +65,8 @@ FILE_ONLY_MEMBERS = (
 # `size()` is the one that cannot be settled by type: on a tuple or a grouped
 # list it is a CARDINALITY and legitimate (`...get(0)[1].size() == 2` -- two
 # CSVs); on a path String it is the character count of the path, which is the
-# defect (161, on the CI runner). Rather than guess, the guard reads the
-# THRESHOLD, which is not ambiguous at all: a cardinality in these tests is
+# defect. Rather than guess, the guard reads the
+# threshold: a cardinality in these tests is
 # compared to a small literal (1, 2, 3), and a byte check is compared to 100,
 # 1000, 10_000 -- nobody asserts a channel holds at least a hundred elements.
 # So `.size()` is accepted only when it is immediately compared to a literal
@@ -144,11 +115,9 @@ def _is_the_meta_slot(chain: str, depth: int) -> bool:
     `registered` emit is `tuple val(patient_id), path(...), val(all_metas),
     path(...)`, where slot 0 is a `val` holding a plain String, so `.get(0).size()`
     there really would be the path-length bug. This heuristic is process-blind
-    (it has no way to know which emit produced a given chain) and deliberately
-    accepts that false negative rather than flag every legitimate meta-map
-    lookup; a chain against `register.nf`'s `registered` output is not currently
-    distinguished from one against a `tuple val(meta), path(...)` emit. Only
-    meaningful from depth two: on a `path`-only emit, `...get(0)` IS the path."""
+    and accepts that false negative rather than flag every legitimate meta-map
+    lookup. Only meaningful from depth two: on a `path`-only emit, `...get(0)`
+    is the path."""
     if depth < AMBIGUOUS_MIN_DEPTH:
         return False
     last = re.findall(_INDEXER, chain)[-1]
@@ -224,8 +193,7 @@ def _scan(body: str, tainted: dict, problems: list, where: str, base_depth: int 
 
     # Taint through a local binding: `def files = <tainted expr>`, and onward
     # through a second binding off the first (`def fileList = (files instanceof
-    # List) ? files : [files]` -- the shape the stub cases use, and the one the
-    # break-it check exposed as a hole on the guard's first draft). Run to a
+    # List) ? files : [files]` -- the shape the stub cases use). Run to a
     # fixpoint, because the bindings need not appear in dependency order. A
     # wrapper anywhere in the right-hand side discharges the taint, which is
     # what makes `.collect { file(it) }` the fix rather than a workaround.
@@ -337,22 +305,6 @@ def test_no_nf_test_assertion_treats_an_output_string_as_a_file():
     """Every `.nf.test` assertion that reaches for a File member wraps the raw
     output first.
 
-    WATCHED FAILING, twice. Rewriting
-    `tests/modules/split_channels.nf.test:50`'s stub assertion from
-    `fileList.collect { file(it).name }` to `fileList.collect { it.name }` and
-    re-running gave, verbatim:
-
-        tests/modules/split_channels.nf.test:10+14: `it.name` inside a closure
-        over a raw nf-test output -- `it` is a path String, not a File.
-        Wrap it: file(it).name
-
-    The FIRST attempt at that same edit passed, and that is why the taint walk
-    below runs to a fixpoint: `files` came from `get(0).get(1)` but the closure
-    ran over `fileList`, bound one line later as `(files instanceof List) ?
-    files : [files]`, and a single pass never carried the taint across that
-    second binding. A guard that had only ever been run green would have shipped
-    with that hole.
-
     The reported location is `<file>:<line of the test block's brace>+<line
     within the block>` -- nf-test's own failures name a test by id, not by
     line, so pointing at the block start is the useful anchor.
@@ -379,13 +331,8 @@ def test_the_scan_actually_reaches_real_tagged_blocks():
 
 
 def test_scan_flags_an_unwrapped_dot_name_in_a_synthetic_real_block():
-    """The test above proves `real`-tagged BLOCKS are counted; it says nothing
-    about whether `_scan` actually finds anything inside one -- a scan that
-    counted blocks but walked none of their bodies would pass it too. This runs
-    `_scan` directly against a synthetic block containing exactly one unwrapped
-    `.name` access on a tainted output and asserts it is reported, closing that
-    gap the way `SIZE_IS_CARDINALITY_BELOW`'s and the taint-fixpoint's own
-    watched-failing runs closed theirs."""
+    """`_scan` reports one unwrapped `.name` access on a tainted output in a
+    synthetic block (the test above only proves blocks are counted)."""
     body = """
         then {
             assertAll(
@@ -401,12 +348,8 @@ def test_scan_flags_an_unwrapped_dot_name_in_a_synthetic_real_block():
 
 
 def test_scan_does_not_flag_the_same_access_once_wrapped_in_file():
-    """The NEGATIVE control for the test above: the identical `.name` access,
-    wrapped in `file(...)` -- the discharge this whole guard exists to require --
-    must report NOTHING. Without this half, a `_scan` that flagged every `.name`
-    access unconditionally (wrapped or not) would still pass the positive test
-    above; this is what proves the walk is actually looking at the wrap, not
-    just pattern-matching `.name`."""
+    """Negative control: the same `.name` access wrapped in `file(...)` reports
+    nothing, so the walk is looking at the wrap, not just matching `.name`."""
     body = """
         then {
             assertAll(

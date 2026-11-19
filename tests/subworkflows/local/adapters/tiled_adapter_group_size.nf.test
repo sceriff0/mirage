@@ -1,49 +1,16 @@
 /*
- * requireTilesCount() -- the guard behind the tiled fan-in's groupKey (tiled_adapter.nf:109-112).
+ * requireTilesCount(): the guard behind the tiled fan-in's sized groupKey
+ * (tiled_adapter.nf). The gather keys with groupKey(slideKey(meta), requireTilesCount(meta))
+ * so a slide's group closes as soon as its own tiles arrive. Unlike the other groupKey
+ * sites, which fall back to a bare key when the count is absent, this one errors.
  *
- * The gather used to be a bare `.groupTuple(by: 0)` with no size hint, so no slide's
- * TILED_SOLVE could start until every tile of every slide of every patient had finished. The
- * fix keys the gather with groupKey(slideKey(meta), requireTilesCount(meta)) so a slide's
- * group can close as soon as its own tiles arrive. requireTilesCount is the piece that makes
- * a missing count impossible to paper over: unlike the three existing groupKey call sites in
- * this repo (registration.nf:73, quantify_markers.nf:137, postprocess.nf:192), which all fall
- * back to a bare, unsized key via a ternary when the count is absent, this one errors loudly.
- *
- * A true streaming-emission-order test (a slide's TILED_SOLVE starting before another slide's
- * TILED_REG_TILE tasks have all finished) is not reliably expressible via nf-test here: the
- * STARE tiled stub (tiled_coarse.nf's stub block) always writes exactly one tile row
- * regardless of input, and stub-mode scripts (`echo`/`printf`) complete effectively
- * instantaneously, so two patients' tasks finish within the same scheduler tick with no
- * controllable gap to assert an ordering against -- any such assertion would be indistinguishable
- * from coincidence. What IS deterministic and directly load-bearing is the mechanism that makes
- * early closing possible in the first place: the gather must key with a *sized* GroupKey
- * (Nextflow closes it once `tiles_count` items with that key have arrived) rather than a bare
- * String key (which groupTuple buffers until the WHOLE upstream channel closes). These tests
- * pin that mechanism directly, plus the "must fail before, pass after" missing-count case:
- *   - requireTilesCount(meta) returns the count when present (the value fed into groupKey).
- *   - requireTilesCount(meta) errors -- rather than returning null and letting a bare key slip
- *     through -- when tiles_count is missing.
- * RED before this task: the function did not exist at all (the gather was a plain
- * `slideKey(meta)` string with no size check whatsoever), so both tests below fail to even
- * resolve the function. GREEN after: both pass.
- *
- * Review finding (2026-08-06): neither requireTilesCount test above, nor the fan-out stub
- * workflow test in tiled_adapter.nf.test, would catch tiled_adapter.nf:110's groupKey call
- * being reverted to a bare `slideKey(meta)` string -- TILED_COARSE's stub always emits exactly
- * one tile row, so every group has size 1 and a bare key behaves identically to a sized one in
- * that test. groupKey(k, n) and a bare key k produce IDENTICAL emitted values; they differ only
- * in when the group closes, which is not observable from any output assertion. That gap cannot
- * be closed by asserting on values -- see tiled_adapter.nf.test's header comment.
- *
- * What DOES have real teeth is the correctness of `n` itself, since a wrong count has
- * consequences a bare key never has: too high and the group never closes (the pipeline hangs);
- * too low and the group closes early, so TILED_SOLVE fits its mesh from truncated control
- * points (a silently mis-registered slide). countTileRows() and requirePositiveTileCount() are
- * pulled out of the ch_tile_counts closure specifically so that correctness is unit-testable in
- * isolation, covering n > 1, a trailing blank line, a blank line interspersed among data rows,
- * and the header-only (n == 0) case that must hit the loud error. See also
- * tile_count_probe.nf.test, which pins countTileRows against a live splitCsv(header: true) on
- * the same fixture files -- the one invariant that would actually matter if it drifted.
+ * Streaming order itself is not testable here (stub tasks finish in the same tick, and
+ * a sized and a bare key emit identical values). What these tests pin:
+ *   - requireTilesCount(meta) returns the count when present, and errors when missing.
+ *   - countTileRows() / requirePositiveTileCount() compute `n` correctly (n > 1, trailing
+ *     and interspersed blank lines, header-only n == 0 must error). A wrong `n` hangs
+ *     the pipeline (too high) or truncates TILED_SOLVE's control points (too low).
+ * tile_count_probe.nf.test pins countTileRows against a live splitCsv(header: true).
  */
 nextflow_function {
 
@@ -181,11 +148,9 @@ nextflow_function {
 
     test("requirePositiveTileCount errors on a header-only (n == 0) tile plan") {
 
-        // The scenario this guards: TILED_COARSE wrote a tile-plan CSV with no data rows
-        // (tiles_header_only.csv is exactly this shape -- countTileRows returns 0 for it,
-        // proven above). A silent 0 would size the groupKey at 0, which either can never
-        // close or closes immediately with no control points -- either way TILED_SOLVE never
-        // gets a usable mesh, silently. This must fail loudly instead, naming the slide.
+        // A tile-plan CSV with no data rows (countTileRows returns 0) would size the
+        // groupKey at 0 and leave TILED_SOLVE without a mesh, silently. It must fail
+        // loudly instead, naming the slide.
 
         function "requirePositiveTileCount"
 

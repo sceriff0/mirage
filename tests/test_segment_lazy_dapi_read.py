@@ -1,43 +1,20 @@
-"""The segmentation backends must stop decoding every channel to use one.
+"""The segmentation backends decode only the channel they use.
 
-``bin/segment.py:extract_dapi_channel`` (StarDist) and
-``bin/segment_cellsam.py:extract_dapi_channel`` (CellSAM) both used to call
-``tifffile.TiffFile(...).asarray(out="memmap")``, then slice out one channel.
-That call's name is misleading: on compressed input it does NOT memory-map
-the source file. It decodes the ENTIRE image into a brand-new, full-size,
-*uncompressed* temp file and memory-maps THAT -- measured directly (not
-exercised as a pytest here) in task-4-report.md: for a 6-channel image the
-returned memmap covers all 6 channels' worth of bytes even though only one
-channel is ever read from it, and its backing file is a distinct ``tmp*``
-path, not the source ``.tif``. So on a 20 GB slide, both backends decoded
-every channel and spilled ~20 GB of scratch, in order to use one plane.
+``tifffile.TiffFile(...).asarray(out="memmap")`` does not memory-map compressed
+input: it decodes the whole image into a full-size uncompressed temp file and
+maps that, so a 20 GB slide spills ~20 GB of scratch to read one plane.
 
-Both backends now delegate their channel read to
-``bin/utils/segment_io.py:extract_dapi_channel``, which reads through
-``tiled_io.open_lazy`` (a tifffile zarr view) instead -- only the requested
-channel's tiles are decoded.
+Both backends (``bin/segment.py``, ``bin/segment_cellsam.py``) delegate their
+channel read to ``bin/utils/segment_io.py:extract_dapi_channel``, which reads
+through ``tiled_io.open_lazy`` (a tifffile zarr view) so only the requested
+channel's tiles are decoded. ``segment_io.py`` imports no ML stack, so these
+tests exercise the production read path directly in CI.
 
-``segment_io.py`` is deliberately its own module, importable without either
-backend's heavy ML stack (stardist/csbdeep for segment.py, cellSAM for
-segment_cellsam.py). That is what makes the behavioral and equivalence tests
-below runnable in CI at all without decorative skips: they exercise the REAL
-production read path (``segment_io.extract_dapi_channel``) directly.
-
-``bin/segment_cellsam.py`` itself has no heavy top-level imports (cellSAM is
-imported lazily inside ``run_cellsam``), so it IS importable here, and is
-exercised directly too. ``bin/segment.py`` carries module-level
-``from stardist.models import StarDist2D`` / ``from csbdeep.utils import
-normalize``, so whether IT is importable is a property of the ambient
-environment, not of the repo -- measured 2026-08-29: ``import stardist``
-raises ``ModuleNotFoundError`` on CI's Python 3.10 leg, succeeds on the 3.11
-leg (both legs have stardist/csbdeep pip-installed), and raises locally
-(neither package installed at all). Because that answer varies per
-environment, its delegation to ``segment_io`` is verified two ways:
-structurally by source inspection, which runs unconditionally in every
-environment (``test_segment_py_delegates_to_segment_io_and_drops_memmap``),
-plus a stronger behavioral identity check that additionally runs wherever
-the import happens to succeed
-(``test_segment_py_delegation_is_live_when_importable``, skipped otherwise).
+``bin/segment_cellsam.py`` imports cellSAM lazily and is tested directly.
+Whether ``bin/segment.py`` imports depends on the environment (stardist,
+TensorFlow), so its delegation is checked structurally always
+(``test_segment_py_delegates_to_segment_io_and_drops_memmap``) and by identity
+where the import succeeds (``test_segment_py_delegation_is_live_when_importable``).
 """
 
 from __future__ import annotations
@@ -120,16 +97,13 @@ def _write_2d_plane(
 
 
 # ---------------------------------------------------------------------------
-# Frozen copies of the PRE-CHANGE memmap-based implementations, used as the
-# independent "old" reference for the equivalence tests below. Verbatim
-# ports of bin/segment.py's and bin/segment_cellsam.py's original
-# extract_dapi_channel (before this task's change), minus module-specific
-# logging wording.
+# Frozen copies of the memmap-based implementations, used as the independent
+# reference for the equivalence tests below.
 # ---------------------------------------------------------------------------
 
 
 def _old_segment_extract_dapi_channel(multichannel_image_path, dapi_channel_index=0):
-    """Frozen copy of pre-change bin/segment.py:extract_dapi_channel."""
+    """Frozen memmap-based copy of bin/segment.py:extract_dapi_channel."""
     logger = logging.getLogger("old_segment")
 
     with tifffile.TiffFile(multichannel_image_path) as tif:
@@ -178,7 +152,7 @@ def _old_segment_extract_dapi_channel(multichannel_image_path, dapi_channel_inde
 def _old_segment_cellsam_extract_dapi_channel(
     multichannel_image_path, dapi_channel_index=0
 ):
-    """Frozen copy of pre-change bin/segment_cellsam.py:extract_dapi_channel."""
+    """Frozen memmap-based copy of bin/segment_cellsam.py:extract_dapi_channel."""
     logger = logging.getLogger("old_segment_cellsam")
 
     with tifffile.TiffFile(multichannel_image_path) as tif:
@@ -213,9 +187,8 @@ def _old_segment_cellsam_extract_dapi_channel(
 def test_extract_dapi_channel_never_calls_asarray_out_memmap(
     tmp_path, monkeypatch, compression
 ):
-    """segment_io must never call tif.asarray(out="memmap") -- that call is
-    what decodes the whole image into a full-size temp file (see module
-    docstring), for EITHER a compressed or uncompressed source.
+    """segment_io never calls tif.asarray(out="memmap"), which decodes the whole
+    image into a full-size temp file, for a compressed or uncompressed source.
     """
     path, _stack = _write_3d_stack(tmp_path, compression=compression)
 
@@ -238,9 +211,8 @@ def test_extract_dapi_channel_never_calls_asarray_out_memmap(
 
 
 def test_extract_dapi_channel_routes_through_open_lazy(tmp_path, monkeypatch):
-    """The read must go through tiled_io.open_lazy (the module's lazy zarr
-    seam), and only the requested channel index must ever be sliced out of
-    it -- not every channel in the stack.
+    """The read goes through tiled_io.open_lazy, and only the requested channel
+    index is sliced out of it.
     """
     path, _stack = _write_3d_stack(tmp_path, n_channels=4)
 
@@ -330,19 +302,14 @@ def test_out_of_range_channel_index_raises_with_original_message(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3. segment_cellsam.py -- importable directly in CI (no heavy top-level
-#    imports). Its two channel-read tests below call segment_io's function
-#    directly (not through segment_cellsam), so they exercise the shared
-#    segment_io.extract_dapi_channel implementation rather than the backend
-#    wrapper end-to-end; the delegation identity check below is what actually
-#    proves segment_cellsam is wired to that same implementation.
+# 3. segment_cellsam.py: importable in CI (no heavy top-level imports). The
+#    delegation identity check proves it is wired to segment_io.
 # ---------------------------------------------------------------------------
 
 
 def test_segment_cellsam_module_has_no_heavy_top_level_imports():
-    """Documents/guards the premise that lets this file test segment_cellsam
-    directly: cellSAM must stay a deferred import inside run_cellsam, not a
-    module-level one, or this whole file's CI-runnability assumption breaks.
+    """cellSAM stays a deferred import inside run_cellsam, so segment_cellsam is
+    importable in CI.
     """
     import segment_cellsam
 
@@ -355,13 +322,9 @@ def test_segment_cellsam_module_has_no_heavy_top_level_imports():
 
 
 def test_segment_cellsam_delegates_to_segment_io():
-    """segment_cellsam.py must delegate its channel read to segment_io, the
-    same shape bin/segment.py is checked against in
-    test_segment_py_delegation_is_live_when_importable below. Without this
-    identity check, the two tests that follow (equivalence, lazy-path) only
-    prove facts about segment_io.extract_dapi_channel itself -- they call it
-    directly -- and say nothing about whether segment_cellsam is actually
-    wired to it.
+    """segment_cellsam.py delegates its channel read to segment_io (same shape as
+    test_segment_py_delegation_is_live_when_importable). The tests that follow
+    call segment_io directly, so only this proves segment_cellsam is wired to it.
     """
     import segment_cellsam
 
@@ -410,28 +373,18 @@ def test_segment_cellsam_extract_dapi_channel_uses_lazy_path(tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# 4. segment.py -- not importable here (module-level stardist/csbdeep
-#    imports; neither is installed in this environment, matching CI). The
-#    wiring is verified structurally instead of by execution.
+# 4. segment.py: importable only where stardist/csbdeep/TensorFlow are. The
+#    wiring is verified structurally, and by identity where possible.
 # ---------------------------------------------------------------------------
 
 
 def _segment_py_is_importable():
     """Whether ``bin/segment.py`` can actually be imported in THIS environment.
 
-    Asks the question LITERALLY -- by importing the module -- rather than probing a
-    hand-listed set of packages. An enumerated list answers a narrower question and
-    drifts: probing top-level ``stardist``/``csbdeep`` returned True on CI's 3.11 leg,
-    where ``import stardist`` succeeds but ``stardist.models`` (bin/segment.py:34)
-    raises ``RuntimeError: Please install TensorFlow``. segment.py also imports
-    dask.array, skimage and tifffile at module level, so any enumeration is a guess
-    about which one fails next.
-
-    Measured 2026-08-29: raises on CI's 3.10 leg, raises on the 3.11 leg (TensorFlow),
-    and the packages are absent entirely on a dev machine -- three environments, three
-    reasons. `except Exception` is deliberate and broader than ImportError: the 3.11
-    failure is a RuntimeError, and a collection-time probe must degrade to skip rather
-    than crash collection of the whole module.
+    Imports the module rather than probing a list of packages: ``import stardist`` can
+    succeed while ``stardist.models`` raises ``RuntimeError: Please install TensorFlow``.
+    `except Exception`, not ImportError, so a collection-time probe skips rather than
+    crashing collection.
     """
     try:
         import segment  # noqa: F401, PLC0415
@@ -443,22 +396,16 @@ def _segment_py_is_importable():
 def test_segment_py_delegates_to_segment_io_and_drops_memmap():
     """bin/segment.py must delegate its channel read and not decode eagerly.
 
-    Checked STRUCTURALLY (source text) always, because that works in every
-    environment. See _segment_py_is_importable for why an import-dependent
-    premise is not something this test may rest on.
+    Checked structurally (source text), which works in every environment.
     """
     src = (REPO_ROOT / "bin" / "segment.py").read_text()
-    # The eager whole-image decode ASSIGNMENT itself, not just the substring
-    # 'out="memmap"' -- the fix's own explanatory docstring legitimately names
-    # that call in prose, so a bare substring check would false-positive on
-    # its own documentation.
+    # The eager decode assignment itself, not the bare substring 'out="memmap"',
+    # which a docstring may name in prose.
     assert "image_memmap = tif.asarray(out=" not in src, (
         "bin/segment.py still calls asarray(out='memmap') directly"
     )
-    # A single `from segment_io import extract_dapi_channel` line, OR that name
-    # sharing an import statement with a sibling (e.g. `expand_labels_tiled`) once
-    # ruff's isort rule merges same-module imports onto one line -- either way,
-    # the import must come from segment_io, not a re-implementation.
+    # `from segment_io import extract_dapi_channel`, possibly sharing the line with a
+    # sibling name (ruff's isort merges same-module imports).
     assert re.search(
         r"^from segment_io import .*\bextract_dapi_channel\b", src, re.MULTILINE
     ), "bin/segment.py no longer delegates to segment_io.extract_dapi_channel"
@@ -472,11 +419,8 @@ def test_segment_py_delegates_to_segment_io_and_drops_memmap():
 def test_segment_py_delegation_is_live_when_importable():
     """The stronger form of the check above, where the environment permits it.
 
-    Deliberately additive: this NEVER replaces the structural assertions, so a
-    change in what pip happens to resolve can only ever ADD coverage here, never
-    remove it. bin/segment.py:32 imports the name directly now
-    (`from segment_io import extract_dapi_channel`), so identity against
-    segment_io's function is the real delegation.
+    Additive to the structural assertions, never a replacement. bin/segment.py imports
+    the name directly, so identity against segment_io's function is the delegation.
     """
     import segment  # noqa: PLC0415
 

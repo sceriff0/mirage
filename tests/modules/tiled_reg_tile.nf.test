@@ -59,8 +59,8 @@ nextflow_process {
                 { assert rendered.size() >= 1 },
                 { assert rendered.every { it.contains('--nuclear-index 0') },
                     "DAPI is channel 0 under the default nuclear_markers: " + rendered.join(' --- ') },
-                // STARE v2 retired --upsample (the per-window peak is a 3-point Gaussian fit);
-                // reg_tile.py's argparse no longer accepts it, so a stale rendering fails the task
+                // --upsample is retired (the per-window peak is a 3-point Gaussian fit) and
+                // reg_tile.py's argparse rejects it
                 { assert rendered.every { !it.contains('--upsample') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--ix 0 --iy 0 --cx 8 --cy 8') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--rx0 0 --ry0 0 --rx1 16 --ry1 16') }, rendered.join(' --- ') },

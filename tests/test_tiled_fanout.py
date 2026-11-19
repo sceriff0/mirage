@@ -82,9 +82,8 @@ def test_fanout_scripts_chain_into_a_registered_slide(tmp_path):
             "128",
             "--halo",
             "32",
-            # --max-dim is REQUIRED (no default): a default in bin/tiled_coarse.py would be a
-            # second, unpinned copy of nextflow.config's reg_tiled_coarse_max_dim default. 256 keeps this
-            # fixture's 512 px planes at decimation factor 2, which is what the chain asserts.
+            # --max-dim has no default (nextflow.config owns reg_tiled_coarse_max_dim). 256
+            # keeps this fixture's 512 px planes at decimation factor 2, as the chain asserts.
             "--max-dim",
             "256",
             "--out-m0",
@@ -150,7 +149,7 @@ def test_fanout_scripts_chain_into_a_registered_slide(tmp_path):
             str(tre_f),
         ]
     )
-    # fix: the fan-out now emits the intrinsic TRE (spatial rigid heatmap), not just the manifest
+    # the fan-out emits the intrinsic TRE (spatial rigid heatmap), not just the manifest
     tre = json.loads(tre_f.read_text())
     assert tre["n_tiles"] == len(rows)
     assert len(tre["tiles"]) == len(rows)

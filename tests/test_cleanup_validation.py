@@ -23,14 +23,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def _launch(*args, outdir):
-    # `-params-file params/dry_run.json`, NOT `--dry_run`. Nextflow 26 delivers
-    # every CLI --param as a String, so a bare `--dry_run` (or `--dry_run true`)
-    # is rejected by the schema as "[string] but should be [boolean]" and the run
-    # fails for a reason that has nothing to do with what is under test.
-    # docs/usage.md documents this for every boolean param.
-    #
-    # --outdir is redirected because -profile test writes to `test_results/` in
-    # the repo root, and a validation test must not leave a tree behind.
+    # `-params-file params/dry_run.json`: Nextflow 26 passes every CLI --param as a
+    # String, so a boolean on the command line fails schema validation.
+    # --outdir is redirected so the test leaves no tree in the repo root.
     return subprocess.run(
         [
             # No `-q`: Nextflow's quiet mode suppresses log.warn from stdout

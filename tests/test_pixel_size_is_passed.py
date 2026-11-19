@@ -1,16 +1,11 @@
 """Every process whose script can take a scale must be handed the configured one.
 
-`params.pixel_size` is the single owner of every µm conversion in the pipeline. That
-only holds if each process that accepts a scale is actually given it: a `bin/` script
-whose `--pixel-size` is never passed falls back to its own argparse default, which is a
-second, silent owner — exactly the failure this file exists to prevent.
+`params.pixel_size` owns every µm conversion. A `bin/` script whose `--pixel-size` is
+never passed falls back to its own argparse default, a second silent owner.
 
-Static rather than behavioural on purpose. `-stub` never evaluates a `script:` block, so
-a stub run cannot see a rendered command at all, and a real nf-test per process would
-need that process's whole dependency stack (a STARE manifest for
-TILED_STITCH) to be installed just to read a string.
-`tests/modules/split_channels.nf.test`'s rendered-command case is the behavioural
-counterpart for the one process that can be rendered cheaply.
+Static, because `-stub` never renders a `script:` block and a real nf-test per process
+needs its whole dependency stack. `tests/modules/split_channels.nf.test` has the
+rendered-command counterpart for one process.
 """
 
 from __future__ import annotations
@@ -30,9 +25,8 @@ MODULES_CONFIG = ROOT / "conf" / "modules.config"
 FLAG_RE = re.compile(r'add_argument\(\s*["\'](--pixel[-_]size)["\']')
 PASSED_RE = re.compile(r"--pixel[-_]size\s+\$\{([^}]+)\}")
 
-# Scripts that are operator tools rather than pipeline processes: no module invokes
-# them, so there is no call site to check. Each must stay unreferenced by modules/ for
-# this exemption to remain honest, which is asserted below.
+# Operator tools, not pipeline processes: no module invokes them. Asserted below to
+# stay unreferenced by modules/.
 STANDALONE = {"join_flowpath.py"}
 
 
@@ -40,8 +34,8 @@ def _scripts_accepting_a_scale() -> dict[str, str]:
     """{bin script name: the --pixel-size flag it declares}.
 
     Read through ``tests.stare_shims.source_of``: ``bin/tiled_stitch.py`` is a shim over
-    ``stare.stages.stitch``, whose argparse is where the flag now lives. Keyed by the
-    SHIM's name, because that is what ``modules/local/tiled_stitch.nf`` invokes.
+    ``stare.stages.stitch``, whose argparse declares the flag. Keyed by the shim's name,
+    which is what ``modules/local/tiled_stitch.nf`` invokes.
     """
     out = {}
     for path in sorted(BIN.glob("*.py")):
@@ -52,9 +46,8 @@ def _scripts_accepting_a_scale() -> dict[str, str]:
 
 
 # SEGMENT does not name its backend script: it renders `${backend.entrypoint}` from
-# lib/SegBackends.groovy, so no .nf file contains the string "segment_instantseg.py".
-# Resolved through the same table the module uses, rather than hardcoded here, so a
-# renamed entrypoint surfaces as a lookup failure instead of a silently skipped script.
+# lib/SegBackends.groovy. Resolved through that table, so a renamed entrypoint fails
+# the lookup instead of being skipped.
 SEG_BACKENDS = ROOT / "lib" / "SegBackends.groovy"
 
 
@@ -90,12 +83,9 @@ def _haystack(nf: Path) -> str:
 def _resolves_to_the_param(expr: str, nf_text: str) -> bool:
     """True if the rendered value is params.pixel_size, directly or via a local def.
 
-    `meta.pixel_size` is also accepted: it is INPUT_CHECK's per-slide value, already
-    resolved from params.pixel_size by PREFLIGHT_SCALE (subworkflows/local/input_check.nf),
-    and it is the only correct choice for a process with no image of its own to read a
-    scale from -- passing params.pixel_size there would hand the tool the literal string
-    'auto'. That is not a second owner of the scale: PREFLIGHT_SCALE is still the one
-    place params.pixel_size gets resolved to a number.
+    `meta.pixel_size` is also accepted: PREFLIGHT_SCALE (subworkflows/local/input_check.nf)
+    resolves params.pixel_size into it, and a process with no image of its own must use
+    it, since params.pixel_size may be the literal string 'auto'.
     """
     expr = expr.strip()
     if expr in ("params.pixel_size", "meta.pixel_size"):

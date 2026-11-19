@@ -1,31 +1,19 @@
 """Real CI coverage for bin/register.py's pure, VALIS-free helper logic.
 
-bin/register.py does ``from valis import registration`` (and other valis
-submodules) at module level, which VALIS is not installed to satisfy in CI —
-see tests/test_register.py, which does ``pytest.importorskip("valis")`` and is
-therefore SKIPPED on every CI run. That leaves register.py's pure helpers
-(filename/marker matching, reference-file glob discovery) with zero real
-coverage.
-
-This file gets real coverage without refactoring register.py (extracting a
-module-level import guard is out of scope) and without installing VALIS, using
-two different techniques depending on whether the logic is a standalone
-function or inline in a VALIS-heavy function:
+bin/register.py imports valis at module level and VALIS is not installed in
+CI, so register.py cannot be imported there. Its pure helpers (filename/marker
+matching, reference-file glob discovery) are covered without VALIS in two ways:
 
 1. ``find_reference_image`` and ``validate_input_slides`` are standalone
    top-level functions with no VALIS dependency in their bodies. Their source
    is extracted via ``ast`` directly from the current bin/register.py text and
-   exec'd in an isolated namespace. This runs the ACTUAL current source (not a
-   hand-typed copy), so it can't silently drift from the real implementation.
+   exec'd in an isolated namespace, so the real source is what runs.
 
-2. The reference-image glob fallback (inside ``valis_registration()``, the
-   ``*.ome.tif`` / ``*.ome.tiff`` union-glob around bin/register.py lines
-   313-318) is inline in a large function that also builds a VALIS Registrar,
-   so it can't be AST-extracted standalone. It is hand-replicated here
-   (verbatim) instead, per brief-14 §14.3 option (b). A canary test below
-   greps bin/register.py for the exact glob literals so an edit to that
-   pattern without updating the replica fails loudly instead of silently
-   drifting.
+2. The reference-image glob fallback (the ``*.ome.tif`` / ``*.ome.tiff``
+   union-glob inside ``valis_registration()``) is inline in a function that
+   builds a VALIS Registrar, so it is hand-replicated here. A canary test greps
+   bin/register.py for the exact glob literals, so an edit there without
+   updating the replica fails.
 """
 
 from __future__ import annotations

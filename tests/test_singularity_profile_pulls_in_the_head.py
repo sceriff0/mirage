@@ -1,12 +1,8 @@
 """Singularity images are pulled by the Nextflow head, as in nf-core's `singularity` profile.
 
 `ociAutoPull = true` makes every task run `singularity exec docker://<ref>`, so each task
-converts its own image into Apptainer's cache. That cache is not safe for concurrent
-writers. On 2026-09-15 (head_neck) 39 QUANTIFY tasks started together on a cold cache and
-one died before its script ran:
-
-    FATAL: Unable to handle docker://bolt3x/mirage-quantify:1.0.0 uri: while building
-           SIF from layers: conveyor failed to get: unexpected end of JSON input
+converts its own image into Apptainer's cache, which is not safe for concurrent writers.
+Tasks starting together on a cold cache can die with "unexpected end of JSON input".
 
 Left off (Nextflow's default, and the nf-core pipeline template's `singularity` profile),
 the head pulls each image once into singularity.cacheDir under a temporary name and

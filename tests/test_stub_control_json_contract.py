@@ -1,11 +1,9 @@
 """The stub control JSON must exercise the solve every real run takes, not route around it.
 
-`-stub` already cannot see a `script:` block. If the stub's own output also dodges the branch
-under test, stub coverage of this module is worth nothing. Under STARE v1 the trap was the
-`error` key (a control point without it took a legacy accept-with-warning path). Since STARE v2
-SOLVE solves only the window-vector lattice and REFUSES a control JSON without `lattice` and
-`vectors` -- so a stub missing them would fail every stub run's TILED_SOLVE, and a stub whose
-vectors are all out of range would solve to no mesh while real runs refine one.
+`-stub` cannot see a `script:` block; if the stub's own output also dodges the branch under
+test, stub coverage of this module is worth nothing. SOLVE refuses a control JSON without
+`lattice` and `vectors`, so a stub missing them would fail every stub run's TILED_SOLVE, and a
+stub whose vectors are all out of range would solve to no mesh while real runs refine one.
 
 The test drives the real consumer rather than string-matching the stub, so the two cannot
 drift: it parses the JSON the stub actually writes and runs `stare.solve.solve_dctpls` on it.

@@ -1,19 +1,14 @@
 """Resolve a ``bin/`` STARE shim to the package source it stands for.
 
-STARE is an installed package (github.com/sceriff0/stare, pinned in requirements/stare.txt;
-it lived in ``packages/stare`` until 2026-10-01). Four scripts under ``bin/``
-(``tiled_coarse.py``, ``tiled_reg_tile.py``, ``tiled_solve.py``, ``tiled_stitch.py``)
-and nine modules under ``bin/utils/`` are SHIMS: a docstring, an import of the package
-module, and ``sys.modules[__name__] = _impl``. A guard that reads a bin script's source
-to check its argparse flags, its pixel-writing calls or its tifffile keywords would, on
-a shim, read a file that contains none of those and pass vacuously -- or fail its own
-non-vacuity tripwire. Both happened on the first run after the move.
+STARE is an installed package (github.com/sceriff0/stare, pinned in requirements/stare.txt).
+Four scripts under ``bin/`` (``tiled_coarse.py``, ``tiled_reg_tile.py``, ``tiled_solve.py``,
+``tiled_stitch.py``) and nine modules under ``bin/utils/`` are shims: a docstring, an import
+of the package module, and ``sys.modules[__name__] = _impl``. A guard reading a shim's own
+source would find none of the code it checks and pass vacuously.
 
-This module is the ONE definition of "what source does this bin file stand for", derived
-by parsing the shim (``from stare.stages import coarse as _impl``) rather than from a
-hand-written table, so a shim that starts pointing somewhere else is followed, not
-silently mis-attributed. Guards call ``source_of(path)`` on every ``bin/**/*.py`` they
-scan, and get back either the same path (an ordinary script) or the package file.
+The mapping is derived by parsing the shim (``from stare.stages import coarse as _impl``),
+not from a hand-written table. Guards call ``source_of(path)`` on every ``bin/**/*.py`` they
+scan and get back either the same path (an ordinary script) or the package file.
 
 Plain module, not a test; imported by guards under ``tests/``.
 """
@@ -29,9 +24,8 @@ BIN = REPO / "bin"
 
 
 def _installed_package_src() -> Path:
-    """The directory holding the INSTALLED `stare` package (site-packages, or an editable
-    checkout's src/). Guards read STARE's source from what is installed, which is exactly
-    what the pinned release put there -- never from a copy in this repository."""
+    """The directory holding the installed `stare` package (site-packages, or an editable
+    checkout's src/). Guards read STARE's source from what the pinned release installed."""
     spec = importlib.util.find_spec("stare")
     if spec is None or not spec.origin:
         raise ImportError(
@@ -59,11 +53,10 @@ def package_module_file(dotted: str) -> Path | None:
 def shim_target(path: Path) -> Path | None:
     """The package file a shim re-exports, or None if ``path`` is not a shim.
 
-    A shim is recognised STRUCTURALLY: its module body is a docstring, imports, an
-    ``if __name__`` guard at most, and the assignment ``sys.modules[__name__] = <name>``
-    where ``<name>`` was bound by ``from stare[.x] import y as <name>``. Anything else --
-    a function, a class, a second statement -- makes it a real module and it is returned
-    as itself by ``source_of``.
+    A shim's module body is a docstring, imports, at most an ``if __name__`` guard, and
+    ``sys.modules[__name__] = <name>`` where ``<name>`` was bound by
+    ``from stare[.x] import y as <name>``. Anything else (a function, a class, another
+    statement) makes it a real module, returned as itself by ``source_of``.
     """
     try:
         tree = ast.parse(path.read_text(), filename=str(path))

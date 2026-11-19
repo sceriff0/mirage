@@ -5,20 +5,14 @@ genuinely had nothing in it, or **something upstream failed**. `ifEmpty` cannot 
 apart, so an `error` raised from inside it reports the first while the second is what really
 occurred.
 
-Measured on Nextflow 26.04.6 with a two-line script -- a failing process whose output feeds
-`.ifEmpty { error "..." }`:
+With a failing process feeding `.ifEmpty { error "..." }`:
 
-  * default `errorStrategy` (terminate): the real error prints, then the `ifEmpty` message
-    prints *after* it, so the false diagnosis is the last line the user reads;
-  * `errorStrategy 'ignore'` -- **which is what `conf/modules.config` sets** -- the real
-    failure is dropped entirely. The whole console output is exit 1 and one wrong sentence.
+  * default `errorStrategy` (terminate): the real error prints, then the `ifEmpty` message,
+    so the false diagnosis is the last line the user reads;
+  * `errorStrategy 'ignore'` (used in `conf/modules.config`): the real failure is dropped
+    and the output is exit 1 and one wrong sentence.
 
-The second case is total erasure, and it is the case this repo actually runs in. It is not
-visible from reading either file alone: it needs `conf/modules.config`'s `'ignore'` branch and
-the `ifEmpty` together.
-
-The right place for an emptiness check is up front, where the condition is knowable and cannot
-be confused with an abort -- `CsvUtils.validateInputSemantics` already rejects a samplesheet
+Emptiness checks belong up front: `CsvUtils.validateInputSemantics` rejects a samplesheet
 with no reference row before any process is instantiated.
 """
 
@@ -84,7 +78,7 @@ def test_the_scan_actually_looks_at_the_file_that_carried_this_bug():
 
 
 def test_the_detector_recognises_the_shape_it_is_meant_to_catch():
-    """Pin the detector against a reconstruction of the removed code, so it cannot rot into a no-op."""
+    """Pin the detector against a known offending snippet, so it cannot rot into a no-op."""
     reconstructed = (
         "    ch_references.ifEmpty {\n"
         '        error "No reference images found (is_reference=true). Cannot run segmentation."\n'

@@ -1,21 +1,8 @@
-// UNVERIFIED LOCALLY: nf-test resolves -profile test,docker and hangs under qemu on
-// this host (see CLAUDE.md's "Verification reality"). Written to cover the two new
-// workflows in subworkflows/local/segmentation.nf and the exact regression this
-// task's review found (nuclei_mask silently withheld when --quantify_compartments
-// is false, which drops every patient from postprocess.nf's plain
-// `ch_cell_mask.join(ch_nuclei_mask)`), but never run.
-//
-// Both SEGMENTATION and READ_SEGMENTED_CHECKPOINT gained a second take: input,
-// compartment_mode -- Task 4 (arch-B-split)'s seam for --quantify_compartments /
-// --expanded_quantification / --embed_masks, resolved once by workflows/mirage.nf
-// in production and threaded down the same way here. Every test below sets
-// input[1] accordingly. The two "compartments off"/"no compartments" tests pass a
-// LITERAL map ([compartments: false, ...]) that DIVERGES from params (left at its
-// true default), proving the workflow honours the argument rather than
-// re-reading params.quantify_compartments -- an argument that always agreed with
-// ParamUtils.compartmentMode(params) could not tell the two apart. The other
-// three tests keep ParamUtils.compartmentMode(params) as the baseline positive
-// path.
+// SEGMENTATION and READ_SEGMENTED_CHECKPOINT take compartment_mode as input[1]. The
+// "compartments off"/"no compartments" tests pass a literal map that conflicts with
+// params (left at the true default), proving the workflow honours the argument rather
+// than re-reading params.quantify_compartments. The other tests use
+// ParamUtils.compartmentMode(params) as the baseline.
 
 nextflow_workflow {
 
@@ -63,8 +50,7 @@ nextflow_workflow {
                 { with(workflow.out.checkpoint_csv) {
                     def csv = get(0)
                     def lines = file(csv).readLines()
-                    // 'id' (RULING R17, Task 4.3) is column 1; 'pixel_size' (this
-                    // task) is appended last.
+                    // 'id' is column 1; 'pixel_size' is appended last.
                     assert lines[0] == 'patient_id,id,registered_image,is_reference,channels,cell_mask,nuclei_mask,contours,nucleus_contours,pixel_size'
                     assert lines.drop(1).findAll { it.trim() }.size() == 3
                 }}
@@ -74,28 +60,21 @@ nextflow_workflow {
 
     test("Should record nuclei_mask unconditionally when --quantify_compartments is false - stub") {
 
-        // THE regression this task's review found: SEGMENT always emits nuclei_mask
-        // regardless of --quantify_compartments, and postprocess.nf's `ch_mask =
-        // ch_cell_mask.join(ch_nuclei_mask, by: 0)` is a PLAIN join on that
-        // invariant. Withholding nuclei_mask here (as an earlier version of this
-        // checkpoint writer did, treating it as gated the same way nucleus_contours
-        // is) silently emptied that join for every patient -- --start postprocessing
-        // exited 0 with no postprocessed.csv, no quantification/, no geojson/ at all.
-        // Only nucleus_contours -- EXTRACT_NUCLEI_PROPERTIES's own output, which does
-        // not run at all under this flag -- may legitimately be empty.
+        // SEGMENT always emits nuclei_mask regardless of --quantify_compartments, and
+        // postprocess.nf's `ch_cell_mask.join(ch_nuclei_mask, by: 0)` is a plain join on
+        // that invariant: withholding nuclei_mask empties it for every patient and
+        // --start postprocessing exits 0 with no output. Only nucleus_contours may be
+        // empty under this flag.
 
         tag "stub"
         options "-stub"
 
         when {
             params {
-                // Deliberately NOT overriding quantify_compartments/
-                // expanded_quantification here (both default true) -- input[1]
-                // below is a LITERAL map with compartments: false, so this proves
-                // SEGMENTATION honours the compartment_mode ARGUMENT, not a re-read
-                // of the (here, conflicting) global param. No module downstream of
-                // SEGMENTATION reads params.quantify_compartments directly, so
-                // nothing else needs the raw param to agree with input[1].
+                // quantify_compartments/expanded_quantification left at their true
+                // defaults; input[1] is a literal with compartments: false, so this
+                // proves SEGMENTATION honours the argument. No module downstream reads
+                // the raw param, so nothing else needs it to agree.
                 outdir = "$outputDir"
                 seg_gpu = false
             }
@@ -201,22 +180,17 @@ nextflow_workflow {
 
     test("Should keep nuclei_mask populated but nucleus_contours empty when the checkpoint recorded no compartments - stub") {
 
-        // The read-side twin of SEGMENTATION's own regression test above: a
-        // checkpoint written under --quantify_compartments false still has a
-        // populated nuclei_mask column (only nucleus_contours is blank), and this
-        // reader must not filter nuclei_mask out because SOME row happens to have
-        // an empty nucleus_contours -- the two columns are independent.
+        // Read-side twin of the case above: a checkpoint written with
+        // --quantify_compartments false still has a populated nuclei_mask column, and
+        // the reader must not drop it because nucleus_contours is blank.
         tag "stub"
         options "-stub"
 
         when {
             params {
-                // Deliberately NOT overriding quantify_compartments/
-                // expanded_quantification (both default true) -- input[1] below is
-                // a LITERAL map with compartments: false, proving
-                // READ_SEGMENTED_CHECKPOINT honours the compartment_mode ARGUMENT
-                // (which gates whether EXTRACT_NUCLEI_PROPERTIES runs at all), not
-                // a re-read of the -- here, conflicting -- global param.
+                // Params left at their true defaults; input[1] is a literal with
+                // compartments: false, proving READ_SEGMENTED_CHECKPOINT honours the
+                // argument (which gates whether EXTRACT_NUCLEI_PROPERTIES runs).
                 outdir = "$outputDir"
                 seg_gpu = false
             }

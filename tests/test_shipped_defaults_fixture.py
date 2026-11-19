@@ -1,17 +1,14 @@
 """The shipped-defaults smoke fixture: the one image pair with a real OME scale.
 
 Every other fixture `tests/testdata/generate_complete_testdata.py` writes is
-deliberately scale-less, so `--pixel_size auto` (the shipped default) would
-correctly hard-fail at PREFLIGHT_SCALE against any of them -- see the note in
-`conf/test.config`. `tests/testdata/P900_ref_scaled.ome.tiff` and
-`tests/testdata/P900_mov_scaled.ome.tiff` (referenced here, and by
-`tests/testdata/shipped_defaults_input.csv`) are the exception: they carry a
-real `PhysicalSizeX`/`PhysicalSizeY`, so `auto` actually resolves for them.
+scale-less, so `--pixel_size auto` (the shipped default) hard-fails at
+PREFLIGHT_SCALE against them (see `conf/test.config`).
+`tests/testdata/P900_ref_scaled.ome.tiff` and `tests/testdata/P900_mov_scaled.ome.tiff`
+(also used by `tests/testdata/shipped_defaults_input.csv`) carry a real
+`PhysicalSizeX`/`PhysicalSizeY`, so `auto` resolves for them.
 
-This is the `auto` happy path's first real coverage: `tests/test_preflight_scale.py`
-exercises the same code against synthetic tmp_path fixtures it writes itself, never
-against a checked-in fixture the rest of the suite (and a shipped-defaults CI job)
-can also point at.
+`tests/test_preflight_scale.py` covers the same code on synthetic tmp_path images;
+this covers the checked-in fixture the shipped-defaults CI job uses.
 """
 
 from __future__ import annotations

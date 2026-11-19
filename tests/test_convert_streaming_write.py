@@ -1,40 +1,16 @@
 """``bin/convert_image.py:convert_to_ome_tiff`` must write the slide one plane at a time.
 
-BOTH HALVES OR NOTHING. Swapping ``img.data`` for ``img.dask_data`` (pinned by
-``tests/test_convert_lazy_read.py``) on its own saves no memory at all: the lazy handle
-is handed straight to ``tifffile.imwrite``, which calls ``numpy.asarray`` on it and
-materialises the whole slide at the write instead of at the read. The write has to
-stream -- ``tifffile.TiffWriter(...).write(<iterator of planes>, shape=..., dtype=...)``,
-the pattern ``bin/tiled_stitch.py:156-170`` already uses for the gigapixel stitch.
+A lazy read (``tests/test_convert_lazy_read.py``) saves nothing on its own:
+``tifffile.imwrite`` calls ``numpy.asarray`` on the handle and materialises the slide at
+the write. The write has to stream through ``tifffile.TiffWriter(...).write(<iterator>)``.
 
-This file pins the write half and, crucially, the OUTPUT EQUIVALENCE: the streamed file
-must have the same decoded PIXELS and the same OME-XML header as what the previous
-``tifffile.imwrite(path, whole_array, ...)`` call produced from the same pixels and the
-same OME metadata.
+This file pins the streamed write and its output equivalence with the eager
+``tifffile.imwrite`` reference: same decoded pixels, same OME-XML. Bytes are not
+compared because the streamed writer tiles its output (``CONVERT_TIFF_TILE``) and the
+reference is striped; ``test_the_write_is_tiled`` pins the tiling itself.
 
-That equivalence used to be checked byte-for-byte (masking only the UUID field below).
-It no longer is, because of a *second*, later change layered on top of the streaming
-write this docstring otherwise describes: ``write_ome_tiff`` now writes a TILED TIFF
-(``tile=(convert_image.CONVERT_TIFF_TILE,) * 2``) instead of the striped layout
-``tifffile.imwrite`` defaults to -- see ``convert_image.CONVERT_TIFF_TILE`` for why
-(striped output makes every downstream region read decode a whole plane). Tiling changes
-which TIFF tags get written (``TileWidth``/``TileLength``/``TileOffsets`` replace
-``RowsPerStrip``/``StripOffsets``/``StripByteCounts``) and therefore the raw bytes, on
-top of the UUID -- so a masked byte comparison would now fail for a reason that is
-CORRECT, not a regression. The equivalence tests below therefore decode both files and
-compare pixels (``tifffile.imread``) and compare the OME-XML text (masking the UUID as
-before); ``test_the_write_is_tiled`` is the one that positively pins the new layout, so
-that reverting the ``tile=`` argument still fails a test rather than silently passing
-this weakened equivalence check.
-
-The one byte-level caveat that DOES remain relevant, measured rather than assumed:
-tifffile stamps a fresh time-based UUID into the OME-XML header
-(``UUID="urn:uuid:..."``) on every write, so no two OME-TIFFs tifffile ever writes are
-byte-identical, including two runs of the same writer.
-``test_the_only_nondeterminism_is_the_ome_uuid`` is the control that establishes that --
-it writes the same array twice through the OLD writer and asserts the ONLY differing
-bytes fall inside that UUID field. The OME-XML comparison below masks that one
-36-character field, which is exactly as strict as an XML-text comparison can be made.
+tifffile stamps a fresh UUID into the OME-XML on every write, so the XML comparison
+masks that one field; ``test_the_only_nondeterminism_is_the_ome_uuid`` is the control.
 """
 
 from __future__ import annotations
@@ -77,19 +53,11 @@ def _legacy_write(
     axes="CYX",
     pixel_size_z_um=None,
 ):
-    """The write this task replaces, verbatim, kept only as the equivalence reference.
+    """The eager ``tifffile.imwrite`` write, kept as the equivalence reference.
 
-    ``bin/convert_image.py`` before the streaming rewrite::
-
-        tifffile.imwrite(output_filename, image_data, metadata=ome_metadata,
-                         photometric="minisblack", ome=True, bigtiff=True)
-
-    It takes the SAME keyword signature the production writer now has (it is
-    monkeypatched in over ``convert_image.write_ome_tiff``), and builds its metadata
-    through ``ome_io.ome_metadata`` -- so what is being compared is the WRITE, not two
-    different headers. ``tifffile.imwrite`` here is in ``tests/``, which
-    ``tests/test_ome_io_is_the_only_writer.py`` deliberately does not scan: the point of
-    a reference implementation is that it is the old code.
+    Same keyword signature as ``convert_image.write_ome_tiff`` (it is monkeypatched in
+    over it) and the same ``ome_io.ome_metadata``, so only the write differs.
+    ``tests/test_ome_io_is_the_only_writer.py`` does not scan ``tests/``.
     """
     tifffile.imwrite(
         output_filename,
@@ -183,14 +151,9 @@ class _FakeBioImage:
 def _install_fake_bioio(monkeypatch, img):
     module = types.ModuleType("bioio")
     module.BioImage = lambda _path: img
-    # ome_io.require_reader (now called by convert_image.read_image before dispatch)
-    # asks importlib.util.find_spec("bioio"), which -- for a module already present in
-    # sys.modules -- returns sys.modules["bioio"].__spec__ rather than probing the
-    # filesystem. A bare types.ModuleType has that attribute set to None, so find_spec
-    # raises ValueError("bioio.__spec__ is None") and require_reader would report a
-    # real bioio as "not installed" even though this fake module answers every call the
-    # rest of this file makes on it. A real (if loader-less) ModuleSpec is enough to
-    # satisfy find_spec without pulling in the actual package.
+    # ome_io.require_reader calls find_spec("bioio"), which returns the module's
+    # __spec__; a bare ModuleType has None there and find_spec raises. A loader-less
+    # ModuleSpec satisfies it.
     module.__spec__ = importlib.machinery.ModuleSpec("bioio", loader=None)
     monkeypatch.setitem(sys.modules, "bioio", module)
 
@@ -303,10 +266,7 @@ def test_streamed_pixels_match_the_eager_writer_for_a_multichannel_stack(
 
     assert ref_channels == new_channels == ["DAPI", "CD3", "CD8"]
     assert ref_path.name == new_path.name
-    # Not a byte comparison: the streamed writer now tiles its output (see the module
-    # docstring), so ``ref_path`` (striped) and ``new_path`` (tiled) legitimately differ
-    # at the byte level even with the UUID masked. Decoded pixels are the equivalence
-    # that must hold.
+    # Decoded pixels, not bytes: the reference is striped, the streamed write tiled.
     np.testing.assert_array_equal(
         tifffile.imread(str(new_path)), tifffile.imread(str(ref_path))
     )
@@ -330,9 +290,7 @@ def test_streamed_pixels_match_the_eager_writer_for_the_s_as_c_case(
     ref_path, _ = _convert(monkeypatch, img, ref_dir, channels, writer=_legacy_write)
     new_path, _ = _convert(monkeypatch, img, new_dir, channels)
 
-    # See test_streamed_pixels_match_the_eager_writer_for_a_multichannel_stack: the tiled
-    # layout means the raw bytes differ from the striped reference on purpose, so this
-    # compares decoded pixels rather than masked bytes.
+    # Decoded pixels, not bytes: the reference is striped, the streamed write tiled.
     np.testing.assert_array_equal(
         tifffile.imread(str(new_path)), tifffile.imread(str(ref_path))
     )
@@ -405,10 +363,8 @@ def test_the_only_nondeterminism_is_the_ome_uuid(tmp_path):
 def test_the_numpy_reader_branches_also_write_identical_pixels(monkeypatch, tmp_path):
     """The NDPI/HDF5 readers still hand over a decoded ``np.ndarray``.
 
-    They go through the same streamed writer now, so their published pixels are in scope
-    too -- a change confined to the BioIO branch would still have moved them. (Not a byte
-    comparison -- see the module docstring: the streamed writer tiles, the reference
-    writer does not, so the raw bytes differ on purpose.)
+    They go through the same streamed writer, so their pixels are in scope too.
+    Compared decoded, not byte for byte (see the module docstring).
     """
     rng = np.random.default_rng(29)
     array = rng.integers(0, 4000, size=(3, 24, 20), dtype=np.uint16)
@@ -453,36 +409,20 @@ def test_the_numpy_reader_branches_also_write_identical_pixels(monkeypatch, tmp_
 
 
 # ---------------------------------------------------------------------------
-# the tiled layout -- what this task exists to change
+# the tiled layout
 # ---------------------------------------------------------------------------
 
 
 def test_the_write_is_tiled(monkeypatch, tmp_path):
-    """Pin the layout change this task exists to make, and state why.
+    """The output is tiled, so a downstream region read decodes tiles, not whole planes.
 
-    ``write_ome_tiff`` used to write a STRIPED TIFF (tifffile's default): a plain
-    ``tifffile.imread(path, aszarr=True)`` view of that reports ``chunks=(1, H, W)``, one
-    chunk per whole plane, so a single "read just this 2048x2048 region" call downstream
-    (the BaSiC path, the STARE registration path, SPLIT_CHANNELS, the QC processes) has to
-    decode the ENTIRE plane to slice it out. Measured on a 6000x6000 uint16 plane: a single
-    2048^2 region read peaks at 76.7 MiB striped vs 16.0 MiB tiled.
+    A striped TIFF has one zarr chunk per plane, and every region read (BaSiC, STARE,
+    SPLIT_CHANNELS, QC) would decode the full plane. Checked two ways:
 
-    Checked two ways, so a revert of the ``tile=`` argument in ``write_ome_tiff`` fails
-    here rather than silently reintroducing that cost:
+    1. the TIFF tags (``TileWidth``/``TileLength``) against ``CONVERT_TIFF_TILE``;
+    2. the zarr chunk shape ``bin/utils/tiled_io.py:open_lazy`` actually sees.
 
-    1. the TIFF tags tifffile itself writes (``TileWidth``/``TileLength``), against
-       ``convert_image.CONVERT_TIFF_TILE`` rather than a bare ``2048``, so the two stay in
-       sync if the constant ever changes;
-    2. the zarr chunk shape the pipeline's own region reader actually sees
-       (``bin/utils/tiled_io.py:open_lazy`` uses exactly this ``aszarr=True`` + ``zarr.open``
-       pattern), which is the property the whole task is about -- the TIFF tags could in
-       principle be present without the zarr view honouring them, and this check is the one
-       that would catch that.
-
-    The un-tiled reference writer (``_legacy_write``, i.e. the writer this task's write
-    replaced) is asserted to be striped, as the contrast: this is not merely "some file
-    happens to be tiled", it is "the streamed writer changed layout and the old one did
-    not".
+    The striped reference writer is the contrast.
     """
     import zarr
 
@@ -570,19 +510,12 @@ def _chunked_read(monkeypatch, array, chunks, channel_names):
 
 
 def test_a_whole_slide_chunk_is_decoded_once_not_once_per_plane(monkeypatch, tmp_path):
-    """The regression a naive per-plane loop introduces, pinned.
+    """A one-chunk stack must not be decoded once per plane.
 
-    If the reader hands back the stack as ONE dask chunk, asking for plane ``i`` decodes
-    that whole chunk -- and dask does not cache across independent ``compute()`` calls, so
-    a per-plane loop pays a FULL-STACK decode PER PLANE. That is strictly worse than the
-    eager write it replaced: same peak memory, N times the work. Whether it happens is up
-    to the bioio plugin's chunking, and ``bioio-czi`` is exactly the format PERF-PLAN's
-    6 GB -> 20 GB example was about, so it cannot be assumed away.
-
-    Measured before the fix on this fixture: 8 planes produced 8 whole-stack decodes.
-    A plain ``.rechunk()`` does NOT fix it (measured: still 8) -- rechunking splits the
-    graph downstream of the source read, and each plane's ``compute()`` re-reads the
-    source chunk anyway. Only iterating in CHUNK-SIZED SLABS does.
+    dask does not cache across ``compute()`` calls, so a per-plane loop over a single
+    whole-stack chunk decodes the full stack N times. Readers such as ``bioio-czi``
+    can return that chunking. ``.rechunk()`` does not help (each plane still re-reads
+    the source chunk); iterating in chunk-sized slabs does.
     """
     rng = np.random.default_rng(31)
     array = rng.integers(0, 4000, size=(8, 24, 20), dtype=np.uint16)
@@ -715,19 +648,12 @@ def test_a_per_plane_chunked_read_is_not_warned_about(monkeypatch, tmp_path, cap
 
 
 def test_a_plane_larger_than_one_tile_still_writes(tmp_path):
-    """The case every other test in this file was too small to reach.
+    """A plane larger than one tile, with partial edge tiles.
 
-    tifffile's iterator mode is TILE-wise, not plane-wise, whenever ``tile=`` is set:
-    it walks ``numtiles`` items per page and raises ``ValueError('tile is too large')``
-    the moment one exceeds a single tile. Every fixture here is 24x20 -- smaller than
-    one 2048x2048 tile -- so tifffile PADDED the plane without complaint and
-    ``test_the_write_is_tiled`` above passed while the writer was feeding it whole
-    planes. The first real slide (30552 x 32072) failed at CONVERT_IMAGE with
-    "tile is too large", after the scheduler had granted the task its memory.
-
-    Shrinking the tile rather than growing the image keeps this fast and additionally
-    exercises PARTIAL EDGE TILES: 24x20 over a 16px tile is 2x2 tiles of which three
-    are short, which is the other thing a plane-fed writer never reached.
+    With ``tile=`` set, tifffile's iterator mode is tile-wise and raises
+    ``ValueError('tile is too large')`` if fed whole planes; a plane smaller than one
+    tile is padded silently, so the other fixtures cannot catch it. A 16px tile over
+    24x20 gives 2x2 tiles, three of them short.
     """
     import numpy as np
     import tifffile
@@ -735,9 +661,8 @@ def test_a_plane_larger_than_one_tile_still_writes(tmp_path):
     shape = (2, 24, 20)
     data = (np.arange(int(np.prod(shape)), dtype=np.uint16) % 4096).reshape(shape)
     out = tmp_path / "big_plane.ome.tif"
-    # tile= as an ARGUMENT rather than monkeypatching the constant: the writer moved
-    # to bin/utils/ome_io.py, and patching convert_image's imported binding would not
-    # reach the default in ome_io.write_ome_tiff's own signature.
+    # tile= as an argument: patching convert_image's imported constant would not reach
+    # the default in ome_io.write_ome_tiff's signature.
     convert_image.write_ome_tiff(
         out, data, channels=["a", "b"], pixel_size_um=None, tile=16
     )

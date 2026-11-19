@@ -15,13 +15,9 @@ nextflow_process {
 
         when {
             params {
-                // SEG_QUALITY_EVAL carries `ext.when = { !params.skip_seg_quality_eval }`
-                // and the param ships true (CSE is opt-in). Without this the process
-                // is never instantiated, `process.out.metrics` is [], and the test
-                // fails on an assertion that reads like a broken process -- which is
-                // what it did. Set here rather than via `-profile test,seg_quality`
-                // because nf-test's `--profile` is one flag and CI's sweep already
-                // owns it.
+                // SEG_QUALITY_EVAL has `ext.when = { !params.skip_seg_quality_eval }` and the param
+                // ships true (CSE is opt-in); without this the process never runs and the outputs
+                // are empty. Set here because CI's sweep already owns nf-test's one `--profile` flag.
                 skip_seg_quality_eval = false
             }
             process {

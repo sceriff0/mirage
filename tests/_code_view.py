@@ -6,16 +6,12 @@ cannot mistake prose in a comment, or a filename substring inside a comment, for
 code. It masks `'...'`, `"..."`, `'''...'''`, triple-double-quoted, slashy `/.../` and
 dollar-slashy `$/.../$` string forms, honouring backslash escapes everywhere except
 `$/.../$`, where Groovy makes a backslash a literal character. GString interpolation is
-deliberately NOT masked -- `${...}` and `$ident` stay verbatim, so their braces still
-balance and a read hidden inside an interpolation is still counted.
+not masked: `${...}` and `$ident` stay verbatim, so their braces still balance and a
+read inside an interpolation is still counted.
 
-Extracted from `tests/test_group_key_unwrapped.py`, which was the first guard to need a
-scan more thorough than the older `_strip_comments()` in `tests/test_resume_determinism.py`
-(comments only, no string masking). See that file's module docstring for the full
-rationale -- the bug class this exists to catch, the two safety nets (`_assert_balanced`
-and the raw-newline-in-string check), and the documented residual limits of the `/`
-slashy-string heuristic. Do not re-derive a second copy of this lexer: import `code_view`
-here instead.
+Two safety nets catch a mis-tokenization: `_assert_balanced` and the
+raw-newline-in-string check. Import `code_view` from here rather than writing a second
+lexer.
 """
 
 from __future__ import annotations
@@ -25,10 +21,8 @@ from pathlib import Path
 _SLASHY_PRECEDERS = set("([{,;=~!&|?:+-*%<>^")
 
 # Groovy allows a slashy string wherever an expression may START, and after a
-# keyword the preceding CHARACTER is alphanumeric -- `return /re/`, `case /re/:`.
-# Looking only at the character therefore misread those as division, which is how
-# a spurious quote inside the misread body could open a string state and blank
-# real code out of the view. The classification is token-aware for that reason.
+# keyword the preceding character is alphanumeric (`return /re/`, `case /re/:`),
+# so the classification looks at the preceding token, not just the character.
 _SLASHY_KEYWORDS = frozenset(
     {
         "return",
@@ -117,9 +111,7 @@ def code_view(path: Path) -> str:
                 i = j + 2
                 continue
             if src.startswith("$/", i):
-                # Dollar-slashy `$/ ... /$`. Without this branch its body was
-                # scanned AS CODE, so a brace or a quote inside it stayed live --
-                # the round-2 truncation defect wearing a different delimiter.
+                # Dollar-slashy `$/ ... /$`: its body must not be scanned as code.
                 state = {"q": "/$", "interp": True, "line": _line_of(src, i)}
                 i += 2
                 continue
@@ -137,11 +129,9 @@ def code_view(path: Path) -> str:
                 continue
             if c == "/":
                 # Groovy's one genuine ambiguity: slashy string vs division.
-                # Settled by the preceding significant TOKEN -- punctuation that
-                # opens an expression, or a keyword that does. This is a
-                # heuristic and is documented as one; the two assertions below
-                # (delimiter balance, and no raw newline inside a '' or ""
-                # string) are what catch the cases it gets wrong.
+                # Settled by the preceding significant token (punctuation or a
+                # keyword that opens an expression). A heuristic: the balance and
+                # raw-newline checks catch the cases it gets wrong.
                 prev, word = prev_significant(i)
                 if (
                     prev is None
@@ -164,13 +154,10 @@ def code_view(path: Path) -> str:
             i += 2
             continue
         if c == "\n" and len(q) == 1 and q != "/":
-            # Groovy forbids a raw newline inside a '' or "" string (an escaped
-            # one is consumed by the branch above), so reaching here means the
-            # opening quote was not really a string opener -- the classic
-            # symptom of a slashy string misread as division, whose body then
-            # contained a stray quote. That spurious mask can blank real code
-            # while removing no delimiters, so `_assert_balanced` would never
-            # see it. Raise instead.
+            # Groovy forbids a raw newline inside a '' or "" string, so the
+            # opening quote was not a real string opener (usually a slashy
+            # string misread as division). `_assert_balanced` cannot see this
+            # case, so raise here.
             raise AssertionError(
                 f"{path}:{state['line']}: a {q}-quoted string opened here is "
                 f"still open at the end of line {_line_of(src, i)}, which Groovy "
@@ -216,11 +203,9 @@ def code_view(path: Path) -> str:
 def _assert_balanced(path: Path, code: str) -> None:
     """The masked file's delimiters must balance, or the mask is wrong.
 
-    This is the loudness net under `code_view`. If any string form was
-    mis-tokenized, the delimiters it wrongly hid or exposed will almost certainly
-    unbalance here, and the guard RAISES instead of quietly auditing a truncated
-    closure body -- which is exactly how the previous revision could pass on a
-    real leak.
+    If any string form was mis-tokenized, the delimiters it wrongly hid or
+    exposed will almost certainly unbalance here, so the guard raises instead of
+    auditing a truncated closure body.
     """
     pairs = {")": "(", "]": "[", "}": "{"}
     stack: list = []
@@ -244,6 +229,5 @@ def line_of(src: str, pos: int) -> int:
     return src.count("\n", 0, pos) + 1
 
 
-# Back-compat alias for the leading-underscore spelling other modules used before
-# this file was extracted.
+# Alias for the leading-underscore spelling some importers use.
 _line_of = line_of

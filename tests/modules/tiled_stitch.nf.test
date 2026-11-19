@@ -38,20 +38,10 @@ nextflow_process {
 
     test("Should pass the panel's channel names to the stitch - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate collects it, but
-        // deliberately WITHOUT `options "-stub"` -- `-stub` never evaluates a `script:` block,
-        // so no stub run can observe a rendered command. Same shape as
-        // tests/modules/tiled_solve.nf.test's "rendered command" cases.
-        //
-        // The stitched slide is written as `*_registered.ome.tiff`, and tifffile writes an OME
-        // header for that suffix whether or not one is asked for. Without `--channel-names` the
-        // header it writes is anonymous -- `<Channel ID="Channel:0:0" SamplesPerPixel="1">`, no
-        // Name -- so a consumer opening the deliverable cannot tell which plane is CD3. The
-        // names exist in meta.channels; this asserts they actually reach the command.
-        //
-        // The assertions read the rendered .command.sh rather than the process outcome, so the
-        // case holds whether tiled_stitch.py itself succeeds; under `-profile test` no container
-        // engine is active and the staged manifest here is not a real manifest.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`.
+        // tifffile writes an OME header for `*_registered.ome.tiff` regardless; without
+        // `--channel-names` its channels are anonymous, so a consumer cannot tell which plane
+        // is CD3. Asserts .command.sh, not the outcome (no container engine, fake manifest).
         tag "stub"
 
         when {
@@ -77,16 +67,14 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered TILED_STITCH .command.sh found under the task work dir" },
-                // The whole panel, in order. A partial match would also be satisfied by a
-                // truncated list, which is exactly the failure that leaves a channel anonymous.
+                // The whole panel, in order: a partial match would pass a truncated list.
                 { assert rendered.every { it.contains('--channel-names DAPI CD3 CD8') },
                     "--channel-names does not carry the full panel in order; got: " +
                     rendered.collect { (it =~ /--channel-names[^\\\\\n]*/)[0] }.join(' | ') },
-                // pixel size still reaches the stitch: it is stamped both as TIFF resolution
-                // tags and, now, as OME PhysicalSize
+                // pixel size reaches the stitch, stamped as TIFF resolution tags and OME PhysicalSize
                 { assert rendered.every { it.contains('--pixel-size') },
                     "--pixel-size is no longer rendered" },
-                // the reg_tiled_out_tile default (the former 'high' row; STARE has no tiers)
+                // the reg_tiled_out_tile default
                 { assert rendered.every { it.contains('--out-tile 1024') },
                     "--out-tile is not the 1024 default: " + rendered.join(' --- ') }
             )

@@ -1,4 +1,4 @@
-"""bin/utils/registration_utils.py — percentile autoscaling, untested until now.
+"""bin/utils/registration_utils.py — percentile autoscaling.
 
 autoscale is what every registration QC overlay is built from. Two of its
 properties are the kind that fail silently: a constant image divides by a zero
@@ -25,15 +25,9 @@ def test_a_constant_image_does_not_divide_by_zero():
     """hi == lo. Without the 1e-6 floor this is a RuntimeWarning and an array of
     NaN cast to uint8 -- i.e. a black QC overlay that still writes a valid PNG.
 
-    ``np.errstate(all="raise")`` is load-bearing, not decoration: a bare
-    ``np.isfinite(scaled).all()`` on the RETURNED array is vacuously true no
-    matter what happened upstream, because the return value is already uint8
-    -- integers are always finite, so casting NaN to uint8 (silently, to some
-    implementation-defined bit pattern) does not fail that assertion. Observed
-    directly: with the 1e-6 floor removed, this test as first written still
-    PASSED, with a RuntimeWarning captured but unasserted. Forcing NumPy's
-    warning into a FloatingPointError is what actually distinguishes 'correct'
-    from 'divided by zero and got lucky'."""
+    ``np.errstate(all="raise")`` is required: the returned array is uint8, so an
+    ``isfinite`` check on it is vacuously true even after a NaN cast. Raising the
+    warning as FloatingPointError is what catches the division by zero."""
     with np.errstate(all="raise"):
         scaled = ru.autoscale(np.full((32, 32), 700, dtype=np.uint16))
     assert scaled.dtype == np.uint8

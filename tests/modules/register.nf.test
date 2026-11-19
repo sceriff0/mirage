@@ -153,20 +153,11 @@ nextflow_process {
 
     test("Should stage its file list at a task-relative path, not /tmp - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"` — `-stub` never evaluates a `script:`
-        // block, so a stub run cannot see the `/tmp/files_to_copy.txt` fix at all (same
-        // blind spot documented in generate_qc_report.nf.test). This pins the fix: REGISTER
-        // is per-patient with maxForks > 1, and under Singularity /tmp is host-bind-mounted,
-        // so two concurrent tasks sharing a constant /tmp path would each stage the other's
-        // slide list. The list must live at a plain relative path inside the task's own
-        // work directory instead.
-        //
-        // The blocking gate runs `--profile test` (no docker), so this executes register.py
-        // for real on the bare host rather than in the VALIS container; register.py is not
-        // expected to succeed there. That is fine — like the GENERATE_QC_REPORT precedent,
-        // the assertions read the rendered .command.sh rather than process outcome, so the
-        // case holds whether or not the script completes.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`. REGISTER is
+        // per-patient with maxForks > 1 and Singularity bind-mounts /tmp, so a constant /tmp
+        // slide list would be shared between concurrent tasks; it must be a relative path in
+        // the task's own work directory. Asserts the rendered .command.sh, not the outcome
+        // (register.py is not expected to succeed on the bare host).
         tag "stub"
 
         when {
@@ -200,14 +191,11 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered REGISTER .command.sh found under the task work dir" },
-                // The assertion with teeth: against the pre-fix module this reads
-                // `/tmp/files_to_copy.txt` in all three spots (find redirect, and two cats)
-                // and this fails.
+                // Fails if the slide list is written to `/tmp/files_to_copy.txt`.
                 { assert rendered.every { !it.contains('/tmp/files_to_copy.txt') },
                     "rendered command still writes/reads the shared /tmp path: " + rendered.join(' --- ') },
-                // The replacement path must be plain and relative (no leading '/'), which
-                // keeps it inside the task's own work directory rather than any shared or
-                // absolute location.
+                // The path must be plain and relative (no leading '/'), so it stays inside the
+                // task's own work directory.
                 { assert rendered.every { it.contains('> files_to_copy.txt') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('cat files_to_copy.txt') },
@@ -218,14 +206,12 @@ nextflow_process {
 
     test("Should run valis-wsi at its defaults: no tier, micro, keypoint or size flags - rendered command") {
 
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block.
-        //
-        // REGISTER runs valis-wsi 1.2.0 at its defaults (2026-11-05): the rendered call carries
-        // the inputs, the JVM heap and the stage checkpoint, and NOTHING that sets VALIS. Each
-        // flag below is one the tuned configuration used to render (archive/valis-mirage-tuned);
-        // register.py no longer accepts any of them, so a reappearance would also fail the task.
-        // The one non-default VALIS argument, the registration channel (index 0), lives inside
-        // register.py and is pinned by tests/test_register_valis_defaults.py.
+        // `stub` tag but no `options "-stub"`: -stub never evaluates a script: block.
+        // REGISTER runs valis-wsi 1.2.0 at its defaults: the rendered call carries the inputs,
+        // the JVM heap and the stage checkpoint, and nothing that sets VALIS. Each flag below
+        // belongs to the archived tuned configuration and register.py rejects it. The
+        // registration channel (index 0) is set inside register.py
+        // (tests/test_register_valis_defaults.py).
         tag "stub"
 
         when {
@@ -264,8 +250,7 @@ nextflow_process {
                     "no rendered REGISTER .command.sh found under the task work dir" },
                 { assert calls.every { c -> removed.every { !c.contains(it + ' ') } },
                     "a VALIS setting is rendered again: " + calls.join(' --- ') },
-                // reg_valis_mode 'default' renders nothing: the command is byte-identical to
-                // the one before the option existed (the hires case below renders the flag).
+                // reg_valis_mode 'default' renders no flag (the hires case below renders it).
                 { assert calls.every { !it.contains('--valis-mode') },
                     "the default mode rendered a mode flag: " + calls.join(' --- ') },
                 // REGISTER passes the STAGED path (stageAs 'ref/*' -> ref/<name>); register.py
@@ -287,14 +272,10 @@ nextflow_process {
 
     test("Should run valis-wsi's hires example under reg_valis_mode hires - rendered command") {
 
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block, so a stub
-        // run cannot see whether the mode reached register.py.
-        //
-        // reg_valis_mode = 'hires' is valis-wsi 1.2.0's own high-resolution example
-        // (MicroRigidRegistrar + register_micro, built inside register.py and pinned by
-        // tests/test_register_valis_modes.py). Its whole rendered footprint is ONE flag,
-        // `--valis-mode hires`, sharing the stage-checkpoint line; nothing else changes. The
-        // default case above asserts the flag's absence, so `default` stays byte-identical.
+        // `stub` tag but no `options "-stub"`: only the rendered command shows whether the
+        // mode reached register.py. reg_valis_mode = 'hires' is valis-wsi 1.2.0's
+        // high-resolution example (tests/test_register_valis_modes.py); its whole rendered
+        // footprint is one flag, `--valis-mode hires`, on the stage-checkpoint line.
         tag "stub"
 
         when {
@@ -349,15 +330,9 @@ nextflow_process {
 
     test("Should render the envelope's size-log row and container line - rendered command") {
 
-        // `stub` tag but NO `options "-stub"`: -stub never evaluates a script: block,
-        // so a stub run cannot see either line this case exists to pin. Same shape and
-        // same reason as the two rendered-command cases above.
-        //
-        // The blocking gate runs `--profile test` (no docker), so register.py executes
-        // on the bare host and is not expected to succeed. That is fine -- the
-        // assertions read .command.sh, not the outcome. task.container is non-null even
-        // with no container engine enabled (measured 2026-09-02 on 25.04.7), which is
-        // why the container line is assertable here at all.
+        // `stub` tag but no `options "-stub"`: -stub never evaluates a script: block.
+        // Asserts .command.sh, not the outcome. task.container is set even with no container
+        // engine enabled, so the container line is assertable here.
         tag "stub"
 
         when {
@@ -390,38 +365,26 @@ nextflow_process {
             assertAll(
                 { assert rendered.size() >= 1,
                     "no rendered REGISTER .command.sh found under the task work dir" },
-                // The envelope's one-stat form, over REGISTER's two staged globs. Split
-                // into two shorter needles rather than one long literal: the whole line
-                // is quoting-dense (an awk program inside a command substitution) and a
-                // single mistyped character in the test reads as a product failure.
+                // The envelope's one-stat form over REGISTER's two staged globs, split into two
+                // shorter needles because the line is quoting-dense.
                 { assert rendered.every { it.contains('stat -L --printf="%s\\n" ref/* input_*/*') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('awk \'{s+=$1} END {print s+0}\'') },
                     "rendered command: " + rendered.join(' --- ') },
-                // The row itself, with `inputs/` for a multi-path measurement. The process
-                // name is asserted by SUFFIX, because nf-test wraps a directly-tested
-                // process in its own generated workflow and the fully-qualified name it
-                // renders is not the one a pipeline run produces.
+                // The process name is asserted by suffix: nf-test wraps a directly-tested process in
+                // its own workflow, so the fully-qualified name differs from a pipeline run's.
                 { assert rendered.every { it.contains('REGISTER,P001,inputs/,${size_bytes}" > P001.REGISTER.size.csv') },
                     "rendered command: " + rendered.join(' --- ') },
-                // ...and it is a real name, not the literal STUB the stub blocks used to write.
+                // ...and it is a real name, not the literal STUB.
                 { assert rendered.every { !it.contains('"STUB,') },
                     "rendered command: " + rendered.join(' --- ') },
-                // Against the pre-refactor module the size-log preamble reads
-                // `total_bytes=$(find -L ref input_* -maxdepth 1 -type f (...) -exec stat -L
-                // --printf="%s\n" {} + ...)` and every assertion above fails. Against a module
-                // that lost the envelope call entirely, `rendered` is empty and the first
-                // assertion fails. The needle is scoped to `-exec stat -L --printf`, the part
-                // unique to that removed find -- REGISTER's script: ALSO runs an unrelated,
-                // still-legitimate `find -L ref input_* -maxdepth 1 ...` to stage input files
-                // for copying (modules/local/register.nf, the "STAGE INPUT FILES" section), so
-                // a bare `find -L ref input_*` needle would false-positive against that line on
-                // every render, migrated or not.
+                // The needle is scoped to `-exec stat -L --printf`: REGISTER's script: also runs an
+                // unrelated `find -L ref input_* -maxdepth 1 ...` to stage input files, so a bare
+                // `find -L ref input_*` needle would always match.
                 { assert rendered.every { !it.contains('-exec stat -L --printf') },
                     "rendered command still uses the hand-written find: " + rendered.join(' --- ') },
-                // Ruling R6: the image is recorded by the run itself, not only by the trace.
-                // Digest-pinned, no tag (Apptainer/Singularity: NAME[:TAG|@DIGEST], never both) --
-                // see tests/test_base_images_are_digest_pinned.py.
+                // The image is recorded by the run itself, not only by the trace. Digest-pinned, no
+                // tag (Apptainer/Singularity: NAME[:TAG|@DIGEST], never both).
                 { assert rendered.every { it.contains('    container: bolt3x/mirage-valis:1.0.0') },
                     "rendered command: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('valis: $(python -c "import valis;') },

@@ -102,17 +102,10 @@ nextflow_process {
 
     test("Should render the configured nuclear markers, not a hardcoded DAPI - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"` -- same shape as
-        // tests/modules/preprocess.nf.test's and seg_qc_geojson.nf.test's rendered-command
-        // cases. `-stub` never evaluates a `script:` block, so no stub run can observe
-        // what merge_quant_csvs.py is invoked with, and that invocation is what changed.
-        //
-        // Two behaviours in the merge depend on knowing which column is the fiducial:
-        // it is protected from being overwritten on an add_cycle run, and it leads the
-        // marker block. Both were pinned to the literal string "DAPI", so a CELLTOX
-        // panel silently lost the protection and the ordering. A non-default marker
-        // list is used here precisely so a regression to the literal cannot pass.
+        // `stub` tag but no `options "-stub"`: the subject is what merge_quant_csvs.py is
+        // invoked with. The fiducial column is protected from overwrite on add_cycle and leads
+        // the marker block; a non-default marker list (CELLTOX) proves it comes from
+        // params.nuclear_markers rather than a literal "DAPI".
         tag "stub"
 
         when {
@@ -147,8 +140,8 @@ nextflow_process {
                     "no rendered MERGE_QUANT_CSVS .command.sh found under the task work dir" },
                 { assert rendered.every { it.contains('--nuclear-markers CELLTOX') },
                     "rendered command does not carry the configured marker: " + rendered.join(' --- ') },
-                // The literal must not survive: params.nuclear_markers says CELLTOX only,
-                // so a rendered 'DAPI' would mean the marker list was not consulted.
+                // params.nuclear_markers says CELLTOX only, so a rendered 'DAPI' means the marker
+                // list was not consulted.
                 { assert rendered.every { !(it =~ /--nuclear-markers[^\n]*DAPI/) },
                     "rendered command carries DAPI despite nuclear_markers=['CELLTOX']: " + rendered.join(' --- ') }
             )

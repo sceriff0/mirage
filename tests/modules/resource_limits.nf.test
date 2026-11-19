@@ -8,15 +8,9 @@ nextflow_process {
     tag "modules_local"
     tag "resource_limits"
 
-    // Characterisation test: CONVERT_IMAGE requests a hard 24.GB floor (see
-    // conf/modules.config withName:'CONVERT_IMAGE' -- (file_gb < 4 ? 0.GB :
-    // ...) + 24.GB * task.attempt). Under -profile test, params.max_memory is
-    // '6.GB' (conf/test.config), so the effective submitted memory must be
-    // clamped down to 6.GB by process.resourceLimits -- proving max_memory
-    // (and max_cpus/max_time) are still enforced under the test ceiling. This
-    // must pass both before and after the nextflow.config resourceLimits
-    // hoist (Task 9a) -- it guards against silently loosening CI's resource
-    // ceiling.
+    // CONVERT_IMAGE requests at least 24.GB (conf/modules.config withName:'CONVERT_IMAGE').
+    // Under -profile test params.max_memory is '6.GB', so process.resourceLimits must clamp
+    // the submitted memory to 6.GB: this guards CI's resource ceiling.
     test("Should clamp CONVERT_IMAGE's memory request to the test ceiling (6.GB) - stub") {
 
         tag "stub"
@@ -41,10 +35,8 @@ nextflow_process {
         }
 
         then {
-            // nf-test's process.trace wrapper (WorkflowTask) only exposes
-            // success/name, not the resolved resource columns, so read the
-            // CSV trace nf-test itself records for this test alongside its
-            // other meta/ artifacts.
+            // nf-test's process.trace wrapper exposes only success/name, so read the CSV trace
+            // nf-test records under this test's meta/ directory.
             def traceFile = new File(new File(outputDir).parentFile, 'meta/trace.csv')
             def lines = traceFile.readLines()
             def header = lines[0].split('\t')

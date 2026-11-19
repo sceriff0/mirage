@@ -113,22 +113,10 @@ nextflow_process {
 
     test("Should render backend-specific flags in the real command, not the stub - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"` -- same shape as
-        // tests/modules/seg_qc_geojson.nf.test's "rendered command" case (Group C Task 3).
-        // `-stub` never evaluates a `script:` block, so no stub run can observe a rendered
-        // command at all -- and this task made the rendered command METHOD-DEPENDENT for
-        // the first time (container, flags, versionTools all come from
-        // lib/WarpBackends.groovy keyed on the `method` input), which is exactly the
-        // change `-stub` is blind to.
-        //
-        // No container engine is active under `--profile test` (docker.enabled is only
-        // true in the `docker` profile, which this suite is told never to combine with
-        // `test` on this arm64 machine), so this runs warp_seg_qc.py directly on the host
-        // and it will fail for unrelated environmental reasons (no such binary on PATH,
-        // possibly missing VALIS/scikit-image). That is fine: like
-        // seg_qc_geojson.nf.test's rendered-command case, the assertions read the
-        // rendered .command.sh rather than the process outcome.
+        // `stub` tag but no `options "-stub"`: `-stub` never evaluates `script:`, and the
+        // rendered command is method-dependent (container, flags and versionTools come from
+        // lib/WarpBackends.groovy keyed on the `method` input). No container engine is active
+        // under `--profile test`, so the task fails; the assertions read .command.sh only.
         tag "stub"
 
         when {
@@ -212,11 +200,8 @@ nextflow_process {
                     "tiled rendered command must not carry --micro-reg (valis-only flag): " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('--checkpoint-dir') },
                     "tiled rendered command must not carry --checkpoint-dir (valis-only flag): " + rendered.join(' --- ') },
-                // --jvm-heap-gb is VALIS's own JVM-heap knob (the tiled container is
-                // JVM-free); it must be structurally impossible to leak here regardless of
-                // params.registration_method, not merely absent by default -- see
-                // lib/WarpBackends.groovy's class header for why this used to be an
-                // ext.args ternary keyed on the global param instead of the `method` input.
+                // --jvm-heap-gb is VALIS's JVM knob (the tiled container is JVM-free); it is keyed on
+                // the `method` input, so it cannot leak whatever params.registration_method says.
                 { assert rendered.every { !it.contains('--jvm-heap-gb') },
                     "tiled rendered command must not carry --jvm-heap-gb (valis-only flag): " + rendered.join(' --- ') },
                 { assert rendered.every { !it.contains('valis: $(python') },
@@ -227,11 +212,8 @@ nextflow_process {
 
     test("Should render the pairing flags from ext.args - rendered command") {
 
-        // Tagged `stub` for CI's blocking gate, deliberately WITHOUT `options "-stub"`:
-        // a stub run never evaluates `script:`, so it cannot observe an ext.args change at
-        // all. Same shape as the two rendered-command tests above. The task will fail for
-        // environmental reasons (no container engine under `--profile test`); the
-        // assertions read .command.sh, not the process outcome.
+        // `stub` tag, no `options "-stub"`: only script: shows an ext.args change. The task
+        // fails without a container engine; the assertions read .command.sh only.
         tag "stub"
 
         when {

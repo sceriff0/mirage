@@ -1,7 +1,6 @@
 """Tie ``export_spatialdata.join_reg_residuals`` to the premise that makes it correct.
 
-``join_reg_residuals`` is the last convention-sensitive pairing in this repo with
-nothing testing its premise. It matches ``warp_seg_qc``'s per-cell residuals --
+``join_reg_residuals`` matches ``warp_seg_qc``'s per-cell residuals --
 whose ``ref_x``/``ref_y`` trace back to ``bin/mask_to_geojson.py``'s rings, and are
 therefore **centre**-of-pixel -- against ``quant[["x", "y"]]``, raw regionprops
 output and therefore **centre** too. It reads the quantification CSV directly
@@ -9,11 +8,10 @@ rather than ``obsm["spatial"]``, so the centre->corner conversion
 ``build_table`` applies never touches it. The join needs no offset.
 
 That correctness rests entirely on ``bin/mask_to_geojson.py`` keeping its
-deliberate opt-out from ``bin/utils/pixel_convention.py``. Nothing in the suite
-failed if somebody "fixed" that opt-out for consistency: both producers would
-still run, the join would still pair every residual with a cell, and every cell
-would silently acquire a systematic ``hypot(0.5, 0.5) == 0.707 px`` bias in the
-distance it was matched at. This file is what fails instead.
+deliberate opt-out from ``bin/utils/pixel_convention.py``. If that opt-out were
+"fixed" for consistency, the join would still pair every residual with a cell,
+and every cell would silently acquire a ``hypot(0.5, 0.5) == 0.707 px`` bias in
+the distance it was matched at.
 
 Three assertions, in increasing strength:
 
@@ -197,9 +195,8 @@ def test_join_reg_residuals_is_fed_the_quantification_csv_not_obsm_spatial():
     ``spatialdata``/``geopandas`` stack. So this reads the module with ``ast`` --
     a parse, not a grep -- and asserts the argument's provenance.
 
-    The failure it exists to catch is somebody "simplifying" the builder to reuse
-    ``adata.obsm["spatial"]``, which ``build_table`` has already converted to
-    corner-of-pixel. That reads as a tidy-up and is a 0.707 px bias.
+    Reusing ``adata.obsm["spatial"]`` here, which ``build_table`` has already
+    converted to corner-of-pixel, would introduce a 0.707 px bias.
     """
     src = _ESD_PATH.read_text()
     tree = ast.parse(src)
@@ -312,9 +309,8 @@ def test_the_offset_is_invisible_at_the_shipped_join_radius(tmp_path):
     ``spatialdata_residual_join_max_px`` ships at 15.0 px. A 0.707 px shift is
     two orders of magnitude inside that, so every pair still joins, to the same
     cell, and every summary statistic in ``stats`` is byte-identical. Only the
-    match DISTANCE moves, and that is never reported. Pinning this is what makes
-    the tight-radius test above honest about what it is doing, and it is the
-    reason the opt-out needs a guard at all rather than being caught in practice.
+    match DISTANCE moves, and that is never reported. This is why the opt-out
+    needs a guard.
     """
     mask = _mask()
     labels, qc = _qc_side(mask)

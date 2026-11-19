@@ -1,21 +1,17 @@
 """Correctness + memory-shape tests for the lazy per-tile read in tiled_reg_tile.py.
 
 tiled_reg_tile is the per-tile fan-out step: it runs once per tile (N tasks), unlike
-tiled_stitch which runs once per slide. The old implementation called
-``nuclear_channel(load_channels(path))`` on both the reference and moving slide on every
-invocation — a full whole-slide decode, N times over. This mirrors what
-test_tiled_stitch_streaming.py already pins for the stitch step: the lazy zarr-region-read
-path must produce numerically identical output to the old full-decode path, while actually
-bounding the region read.
+tiled_stitch which runs once per slide, so a whole-slide decode per tile would cost N full
+decodes. Like test_tiled_stitch_streaming.py for the stitch step, the lazy zarr-region-read
+path must match a full-decode oracle numerically while bounding the region read.
 
 Three properties are pinned here:
-  1. Numerical equivalence: the lazy path's control point (the window-vector grid since the
-     vector estimator, and its median top level) matches an independently computed "old style"
+  1. Numerical equivalence: the lazy path's control point (the window-vector grid and its
+     median top level) matches an independently computed full-decode
      oracle (full nuclear_channel/load_channels + whole-image warp_image, then the same
      estimator on the same read box) exactly.
   2. Bounded read: for an interior tile, the region actually read off the moving slide is a
-     small fraction (< 25%) of the full slide — this is the test that fails against the
-     pre-change code (it reads the whole slide, i.e. 100%). The read box is the core plus
+     small fraction (< 25%) of the full slide. The read box is the core plus
      3 x stride (vector_grid.read_box), so the slide must be several of those wide.
   3. Edge tiles: a tile whose source_region maps entirely outside the moving slide produces
      an all-zero moving tile without raising.
@@ -49,11 +45,8 @@ from stare.vector_grid import estimate_tile_vectors, read_box  # noqa: E402
 from tiled_io import load_channels, nuclear_channel  # noqa: E402
 from tiled_warp import warp_image  # noqa: E402
 
-# The pipeline's key set, pinned EXACTLY (not with `>=`) on purpose -- a control point is a
-# published artifact and a silent extra key is how two writers drift. ref_fg / mov_fg came
-# with Phase 1 of the foreground work; lattice / vectors / rejected / pass1 with the window-
-# vector grid (stare.vector_grid); gauss_fallback_rate with the Xue min-subtracted sub-pixel
-# fit (Phase 5b). Update deliberately, naming the new keys.
+# The pipeline's key set, pinned exactly (not with `>=`): a control point is a published
+# artifact and a silent extra key is how two writers drift. Update it when keys change.
 CONTROL_KEYS = {
     "ix",
     "iy",
@@ -163,9 +156,7 @@ def test_lazy_path_matches_old_full_decode_oracle(tmp_path):
 def test_moving_slide_region_read_is_bounded(tmp_path, monkeypatch):
     """The moving-slide read must be a small fraction of the full slide for an interior tile.
 
-    This is the test that fails against the pre-change code: nuclear_channel(load_channels(path))
-    decodes the *entire* slide on every tile invocation, so the read region would be 100% of
-    the full slide, not < 25%.
+    A full decode (nuclear_channel(load_channels(path))) would read 100% of the slide.
     """
     n = 2048
     ref_f, mov_f, m0_f, _m0, _ref, mov = _write_pair(
@@ -359,9 +350,7 @@ def test_nuclear_index_out_of_range_raises_same_message(tmp_path):
 def _reg_tile_args(
     ref_f, mov_f, m0_f, out_f, nuclear_index=0, rx0=0, ry0=0, rx1=32, ry1=32
 ):
-    """Small argv builder used only by the two close-callable tests below — the four tests above
-    are left as-is (a full `_run(...)` refactor of the whole file is a deferred minor, out of
-    scope for this fix)."""
+    """Small argv builder used by the two close-callable tests below."""
     return [
         "--reference",
         str(ref_f),
@@ -413,10 +402,9 @@ def _spy_close(orig_open_lazy, closed, key_for_path):
 def test_reference_handle_closed_when_moving_open_raises(tmp_path, monkeypatch):
     """If open_lazy(a.moving) itself raises, the already-open reference handle must still close.
 
-    Regression test for a review finding: the two open_lazy calls originally ran before a single
-    try/finally, so a failure opening the moving slide (bad path, corrupt/unreadable TIFF,
-    zarr-open failure) leaked the reference handle. Uses a real nonexistent path so the exception
-    comes from the real primitive, not a simulated one.
+    A failure opening the moving slide (bad path, unreadable TIFF, zarr-open failure) must not
+    leak the reference handle. Uses a real nonexistent path so the exception comes from the
+    real primitive.
     """
     ref_f, _mov_f, m0_f, _m0, _ref, _mov = _write_pair(tmp_path, n=64)
     bad_moving = tmp_path / "does_not_exist.ome.tiff"

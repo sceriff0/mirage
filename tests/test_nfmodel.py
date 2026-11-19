@@ -1,7 +1,7 @@
 """Meta-test for the shared Nextflow source model.
 
-Each test here plants a construct that historically defeated a private
-regex parse, and asserts the model still sees the code that follows it.
+Each test here plants a construct that defeats a naive regex parse, and
+asserts the model still sees the code that follows it.
 A guard built on this model is only as trustworthy as this file.
 """
 
@@ -25,9 +25,8 @@ from tests.nfmodel import (
 
 def test_stage_as_glob_does_not_open_a_block_comment():
     """`stageAs: 'ref/*'` contains `/*`. A DOTALL regex reads that as an open
-    block comment and eats everything to the next `*/` -- 64 lines of
-    register.nf, including its whole script: block. The string-aware walk must
-    treat it as a string literal."""
+    block comment and eats everything to the next `*/` (in register.nf, the
+    whole script: block). The string-aware walk must treat it as a string."""
     src = (
         "process REGISTER {\n"
         "    input:\n"
@@ -89,20 +88,9 @@ def test_triple_quote_is_matched_as_a_unit_not_three_single_quotes():
     From there it keeps alternately pairing off whichever `"` characters
     happen to appear inside the body, blanking one span and leaking the next.
 
-    That mispairing can happen to land back in sync by the time it reaches
-    the real closing `\"\"\"` -- which is exactly what made the previous
-    version of this test blind: its body (`foo // not a comment`) contains
-    *zero* embedded `"` characters, an even count, so the mis-ordered walk
-    re-synchronises at the close and both of that test's assertions pass by
-    coincidence, indistinguishable from a correct parser (or even a
-    context-free `//`-to-EOL stripper that never looks at quotes at all).
-
-    An ODD number of embedded `"` characters removes that coincidence: the
-    mis-ordered walk is still out of sync when it reaches the close, so it
-    either swallows the trailing marker as part of a still-open "string" or
-    leaks unblanked body words into the output. Either failure is directly
-    observable, which is what makes this test an actual guard rather than a
-    property that merely happens to hold today.
+    With an even number of embedded `"` characters the mispairing lands back
+    in sync at the close and the bug is invisible. An odd number keeps it out
+    of sync, so it either swallows the trailing marker or leaks body words.
     """
     src = 'script:\n"""\necho "one" "two" "three\n"""\nMARKER_AFTER\n'
     clean = strip_comments_and_strings(src)
@@ -199,8 +187,7 @@ def test_nf_files_is_recursive():
 
 
 def test_register_script_body_is_visible():
-    """The load-bearing case: REGISTER's script: block was invisible to
-    test_resume_determinism because of stageAs: 'ref/*'."""
+    """REGISTER's script: block must be visible despite its stageAs: 'ref/*'."""
     body = script_bodies()["REGISTER"]
     assert body.strip(), "REGISTER's script: body came back empty"
     assert len(body.splitlines()) > 10
@@ -335,27 +322,12 @@ def test_param_refs_excludes_map_method_calls():
 # Anti-vacuity: no test file may privately re-implement a Nextflow/Groovy
 # source parse tests.nfmodel already provides.
 #
-# This USED to be a hardcoded GUARDS list of seven files. That list was
-# itself an instance of this phase's own recurring defect shape: correct the
-# day it was written, silently stale the moment an eighth guard was added
-# elsewhere and nobody remembered to list it. A repo-wide count taken while
-# fixing that list found >=24 additional tests/test_*.py files privately
-# parsing Nextflow/Groovy source, unlisted and unchecked -- the exact decay
-# this file exists to prevent, discovered inside its own capstone.
-#
-# So the targets are DISCOVERED, not enumerated: any tests/test_*.py that
-# reads a file (`.read_text()`/`.glob()`/`.rglob()`) while mentioning `.nf`,
-# `.groovy` or `modules.config` anywhere in its own source. A ninth guard
-# added tomorrow is covered the moment it exists, not only once someone
-# remembers to add it to a list.
-#
-# As of 2026-08-25: 32 files discovered. 8 already import tests.nfmodel (the
-# 7 guards Task 1.6 repointed, plus this file). The other 24 are pre-existing
-# private parses not yet repointed -- tracked honestly below as debt, not
-# silently passed. 2026-08-30 adds a 33rd, tests/test_no_legacy_frontends.py,
-# which is neither: see FLAT_TREE_SCANNERS immediately below. 2026-08-31 adds a
-# 34th, tests/test_release_workflow_graph.py, which is a third kind again: see
-# WORKFLOW_YAML_GUARDS.
+# The targets are discovered, not enumerated, so a new guard is covered the
+# moment it exists: any tests/test_*.py that reads a file
+# (`.read_text()`/`.glob()`/`.rglob()`) while mentioning `.nf`, `.groovy` or
+# `modules.config` anywhere in its own source. A discovered file either imports
+# tests.nfmodel or is listed below: as debt (UNREPOINTED_NF_SOURCE_READERS), as
+# a flat tree scanner, or as a CI YAML guard.
 # --------------------------------------------------------------------------
 
 
@@ -371,35 +343,19 @@ def _discover_nf_source_readers() -> list:
     return found
 
 
-# A DIFFERENT kind of exemption, kept in its own list rather than smuggled into
-# the debt allowlist below, because it is not debt and will never be discharged.
-#
-# A guard that scans the WHOLE TRACKED TREE as flat text for a forbidden token is
-# discovered by the heuristic above (it names a `.nf` path and calls
-# `.read_text()`), but it is not a Nextflow PARSE: it strips no comments, matches
-# no blocks, and asserts the token appears NOWHERE -- in code, strings and
-# comments alike. Every blind spot the model exists to close makes such a guard
-# MISS a hit, never accept one, so repointing it at the model would strictly
-# weaken it. There is also nothing in the model for it to call: it needs every
-# tracked file, not the structure of one.
-#
-# Uniform, mechanically-checked reason, in the same spirit as the debt list
-# below: an entry must actually INVOKE `git ls-files` -- the argv literal, not a
-# mention of it in prose. That distinction is not pedantry: the first draft of
-# test_flat_tree_scanners_are_really_flat searched for the bare string, was fed a
-# file whose subprocess call had been swapped for `git diff --name-only HEAD~1`,
-# and PASSED on the docstring alone. The argv form is the property that makes an
-# entry a whole-tree token scan rather than a parse of a named construct.
+# Not debt: a guard that scans the whole tracked tree as flat text for a
+# forbidden token is discovered by the heuristic above but is not a Nextflow
+# parse. It asserts the token appears nowhere, comments included, so the model
+# could only make it miss hits. An entry must invoke `git ls-files` (the argv
+# literal, not a prose mention).
 _FLAT_REASON = "whole-tree flat token scan over `git ls-files`, not a Nextflow parse"
 
 FLAT_TREE_SCANNERS = {
     "tests/test_no_legacy_frontends.py": _FLAT_REASON,
-    # Scope-FILTERED rather than whole-tree (CHANGELOG.md is excluded on
-    # purpose), but the same kind of thing: since 2026-09-03 it reads
-    # workflows/*.nf and subworkflows/**/*.nf as flat text for a forbidden CLI
-    # form, comments and log strings included -- stripping comments would make
-    # it MISS the `log.warn` it was widened to catch. Enumerates via
-    # `git ls-files`, filters in `_in_scope`.
+    # Scope-filtered (CHANGELOG.md excluded) rather than whole-tree. It reads
+    # workflows/*.nf and subworkflows/**/*.nf as flat text, comments and log
+    # strings included, so a `log.warn` naming the CLI form is caught.
+    # Enumerates via `git ls-files`, filters in `_in_scope`.
     "tests/test_no_cli_boolean_params_in_docs.py": _FLAT_REASON,
 }
 
@@ -425,9 +381,8 @@ def test_flat_tree_scanners_are_really_flat():
                 "FLAT_TREE_SCANNERS"
             )
         text = path.read_text()
-        # The argv literal, NOT the bare phrase: a docstring that merely NAMES git
-        # ls-files satisfied an earlier version of this check while the actual call had
-        # been swapped for a diff against HEAD~1. Watched failing before being trusted.
+        # The argv literal, not the bare phrase: a docstring naming git ls-files
+        # must not satisfy this.
         if '["git", "ls-files"]' not in text:
             problems.append(
                 f'{rel}: does not invoke `["git", "ls-files"]` to enumerate the tracked '
@@ -443,23 +398,12 @@ def test_flat_tree_scanners_are_really_flat():
     assert not problems, "\n".join(problems)
 
 
-# A THIRD kind, and like FLAT_TREE_SCANNERS it is not debt and will never be
-# discharged.
-#
-# A guard over this repository's CI YAML -- `.github/workflows/*.yml` and, since
-# the composite actions landed, `.github/actions/*/action.yml` -- parses YAML, not
-# Nextflow. It is discovered by the heuristic above only because a CI step's
-# COMMAND STRING or a cache key mentions a `.nf` path -- `nextflow run
-# tests/lib_probe.nf -lib lib`, `tests/modules/segment_deepcell_token.nf.test`,
-# `hashFiles('**/*.nf')` -- which is the needle the guard looks FOR inside the
-# YAML, never a file it opens. There is nothing in the model for it to call: the
-# model parses Nextflow sources, and this reads none.
-#
-# The mechanically-checked property that separates "names a .nf path in a string"
-# from "reads Nextflow source" is whether the file ever CONSTRUCTS a path to one.
-# A real reader has to: `REPO_ROOT / "modules" / ...`, `glob("*.nf")`. A workflow
-# guard does not, and the check below fails the moment one appears -- at which
-# point the file is a real reader and belongs in the model.
+# Also not debt: a guard over the CI YAML (`.github/workflows/*.yml`,
+# `.github/actions/*/action.yml`) parses YAML, not Nextflow. It is discovered only
+# because a CI command or cache key mentions a `.nf` path (e.g.
+# `hashFiles('**/*.nf')`), which is a needle it looks for, not a file it opens.
+# The check below fails if such a file ever constructs a path to a .nf/.groovy
+# source (`REPO_ROOT / "modules" / ...`, `glob("*.nf")`).
 _WORKFLOW_YAML_REASON = (
     "parses this repo's CI YAML (.github/workflows/*.yml and "
     ".github/actions/*/action.yml); its `.nf` mentions are needles it looks for "
@@ -468,9 +412,7 @@ _WORKFLOW_YAML_REASON = (
 
 WORKFLOW_YAML_GUARDS = {
     "tests/test_release_workflow_graph.py": _WORKFLOW_YAML_REASON,
-    # Added 2026-09-01 with the CI redesign's Phase 3. It trips the heuristic on
-    # `hashFiles('**/*.nf')` -- the cache key it exists to FORBID, quoted in its
-    # docstring and in its failure message.
+    # Trips the heuristic on `hashFiles('**/*.nf')`, the cache key it forbids.
     "tests/test_ci_cache_keys.py": _WORKFLOW_YAML_REASON,
 }
 
@@ -529,14 +471,8 @@ def test_workflow_yaml_guards_really_only_parse_workflow_yaml():
     assert not problems, "\n".join(problems)
 
 
-# Every entry here carries the SAME reason, deliberately -- this repo has
-# been bitten before by an allowlist entry with a bespoke, invented
-# justification that turned out to have counterexamples elsewhere (see
-# lib/ParamUtils.groovy's `process_high_memory` prose-only label, or the
-# per-file excuses `ENTRY_COLUMN_EXEMPT` in test_step_vocabulary_consistency.py
-# explicitly warns against reproducing here). A uniform, literally-true
-# reason -- "this file has not been repointed yet" -- cannot drift out of
-# sync with itself the way a bespoke one can.
+# Every entry carries the same reason: "not repointed yet" is literally true
+# and cannot drift the way a bespoke per-file justification can.
 _UNREPOINTED_REASON = "pre-existing private parse, not yet repointed (2026-08-25)"
 
 UNREPOINTED_NF_SOURCE_READERS = {
@@ -568,10 +504,8 @@ def test_allowlist_only_shrinks():
     """Every UNREPOINTED_NF_SOURCE_READERS entry must still be real, undischarged
     debt: the file must still exist, must still be discovered by
     _discover_nf_source_readers(), and must still lack the tests.nfmodel
-    import. An entry that no longer applies -- the file was deleted, or was
-    repointed by a later task without being removed here -- is a hard
-    failure. The list may only ever be edited to shrink it; it cannot be left
-    to rot in place the way GUARDS did."""
+    import. An entry that no longer applies is a hard failure, so the list
+    can only shrink."""
     discovered = {
         p.relative_to(REPO_ROOT).as_posix() for p in _discover_nf_source_readers()
     }
@@ -596,16 +530,11 @@ def test_allowlist_only_shrinks():
 def test_no_guard_parses_nextflow_source_privately():
     """Every tests/test_*.py file that reads Nextflow/Groovy source either
     queries tests.nfmodel, or is honestly tracked as not-yet-repointed debt in
-    UNREPOINTED_NF_SOURCE_READERS. A private regex parse is how four guards
-    came to pass while checking nothing -- each had a different blind spot,
-    and none was visible from the interface -- and a hardcoded list of which
-    files to check is the same failure shape one level up (see the discovery
-    rationale above). This scans every DISCOVERED file, not a named list, so
-    a new private parse is caught the moment it is written, not only once
-    someone remembers to name it here.
+    UNREPOINTED_NF_SOURCE_READERS. A private regex parse has its own blind
+    spots, invisible from the interface. Every discovered file is scanned.
 
-    If you genuinely need a parse the model does not expose, ADD IT TO THE
-    MODEL (with a case in this file), do not re-implement it here."""
+    If you need a parse the model does not expose, add it to the model (with a
+    case in this file) rather than re-implementing it."""
     private = re.compile(r"re\.(sub|search|finditer|findall)\([^)]*/\\\*")
     offenders = []
     for path in _discover_nf_source_readers():
@@ -692,9 +621,8 @@ nextflow_process {
 def test_nf_test_cases_sees_the_stub_run_spelling_and_single_quotes(tmp_path):
     """`-stub-run` is Nextflow's documented primary spelling (`-stub` is the
     alias), and nf-test accepts single-quoted option strings. A case written
-    either way used to parse as `stub_option=False`, i.e. as a RENDERED case --
-    which is how a stub-only case could satisfy the rendered-coverage rule in
-    test_process_nf_test_coverage.py while rendering nothing."""
+    either way must parse as a stub case, or a stub-only case would satisfy
+    the rendered-coverage rule in test_process_nf_test_coverage.py."""
     _write_nf_test(
         tmp_path,
         "e.nf.test",
@@ -720,8 +648,8 @@ nextflow_process {
 
 
 def test_nf_test_cases_sees_a_single_quoted_case_name(tmp_path):
-    """`test('...')` is legal nf-test; a parser that only matched `test("...")`
-    dropped the case silently, so its tags and options were never modelled."""
+    """`test('...')` is legal nf-test; a parser matching only `test("...")`
+    would silently drop the case."""
     _write_nf_test(
         tmp_path,
         "f.nf.test",

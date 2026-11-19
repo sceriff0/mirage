@@ -1,13 +1,9 @@
-"""Ruling R6: every base image and every external image is pinned by content digest.
+"""Every base image and every external image is pinned by content digest.
 
-A version TAG is mutable. `python:3.11-slim` is republished weekly, `nvidia/cuda:12.2.2-*`
-has been rebuilt against new CUDA patch releases, and even `ubuntu:22.04` moves on every
-point release. Rebuilding an image from a mutable tag therefore produces a DIFFERENT image
-than the one that generated the published results, with nothing in the repository recording
-which one that was. containers/README.md has admitted this in a "Remaining reproducibility
-caveat" paragraph since the one-repo-per-image rename; this file is what closes it.
+A version tag is mutable (`python:3.11-slim` is republished weekly), so rebuilding from a
+tag can produce a different image than the one that generated the published results.
 
-TWO FORMS, AND THE DIFFERENCE IS THE CONTAINER RUNTIME.
+Two forms, because the container runtimes differ:
 
   * A Dockerfile `FROM` keeps its tag AND carries the digest --
     `FROM image:tag@sha256:<64 hex>`. BuildKit documents that form and the tag is what
@@ -18,9 +14,9 @@ TWO FORMS, AND THE DIFFERENCE IS THE CONTAINER RUNTIME.
     bugs with the combined form. The cluster pulls through Singularity, so these take
     the form both runtimes agree on. The tag lives in the comment beside them.
 
-FIRST-PARTY IMAGES ARE DELIBERATELY NOT COVERED. bolt3x/mirage-* digests do not exist
-until release.yml has pushed them, so pinning one in modules/local/*.nf is a
-chicken-and-egg. Their record is the published-digest column of containers/README.md.
+First-party images are not covered: bolt3x/mirage-* digests do not exist until
+release.yml has pushed them. Their record is the published-digest column of
+containers/README.md.
 """
 
 import re
@@ -63,9 +59,8 @@ def _dockerfiles():
 
 @pytest.mark.parametrize("path", _dockerfiles(), ids=lambda p: p.parent.name)
 def test_every_from_line_carries_a_digest(path):
-    # Comment-stripped: several of these Dockerfiles quote an unpinned reference in their
-    # header prose ("Build: docker build -t bolt3x/mirage-convert:1.0.0 ..."), and a raw
-    # scan would count it as a FROM line -- or, worse, let prose satisfy the pinned form.
+    # Comment-stripped: Dockerfile headers quote unpinned references in prose, which must
+    # neither count as a FROM line nor satisfy the pinned form.
     code = "\n".join(
         line
         for line in path.read_text().splitlines()
@@ -109,11 +104,10 @@ def test_every_external_runtime_image_is_digest_pinned(rel):
 
 
 def test_first_party_images_are_deliberately_not_digest_pinned():
-    """The rule has a boundary, and an untested boundary is an assumption.
+    """First-party images are pinned by tag, not digest.
 
     A bolt3x/mirage-* digest cannot exist before release.yml pushes the image, so a
-    digest there would be unresolvable. If this ever starts failing, someone has pinned
-    one and the pipeline can no longer be built from a clean tree.
+    digest there would make the pipeline unbuildable from a clean tree.
     """
     offenders = []
     for path in sorted((REPO / "modules").rglob("*.nf")) + sorted(

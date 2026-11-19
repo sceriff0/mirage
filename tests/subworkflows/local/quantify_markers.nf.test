@@ -1,24 +1,14 @@
 /*
- * QUANTIFY_MARKERS — the per-marker fan-out + QUANTIFY + per-patient grouping chain
+ * QUANTIFY_MARKERS: the per-marker fan-out + QUANTIFY + per-patient grouping chain
  * shared by POSTPROCESSING and ADD_CYCLE.
  *
- * These tests exist because the grouping is the piece the two callers had forked, and
- * the fork was invisible from either file alone: add_cycle grouped with a bare
- * `.groupTuple()` while postprocess used `groupKey(patient_id, channels_count)`.
- *
- * What can and cannot be asserted here:
- *   - A sized groupKey and a bare key emit IDENTICAL values, so no assertion on
- *     grouped_csv can prove the streaming hint is present. What the tests below pin is
- *     the observable consequence of the size being *wrong*: groupTuple discards
- *     under-sized groups unless `remainder: true`, so "patient still emitted when
- *     channels_count over-counts the markers" fails loudly if the size is applied
- *     without the remainder safety net — which is exactly the state add_cycle would
- *     have inherited from a naive extraction (verified: MERGE_QUANT_CSVS and
- *     EXPORT_GEOJSON stopped running in an add_cycle stub run).
- *   - `channels_count` being read at all is pinned by the grouped meta carrying it
- *     through, plus the no-channels_count fallback case.
- *   - Early (streaming) emission itself is not observable through nf-test's collected
- *     outputs and is NOT covered.
+ *   - A sized groupKey and a bare key emit identical values, so no assertion can prove
+ *     the streaming hint is present. What is pinned is the consequence of a wrong size:
+ *     groupTuple discards under-filled groups unless `remainder: true`, so "patient
+ *     still emitted when channels_count over-counts" fails if the safety net is lost.
+ *   - channels_count is pinned by the grouped meta carrying it, plus the
+ *     no-channels_count fallback case.
+ *   - Early (streaming) emission is not observable through nf-test and is not covered.
  */
 nextflow_workflow {
 

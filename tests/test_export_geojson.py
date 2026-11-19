@@ -2,13 +2,8 @@
 
 This module is the contract seam to the sibling FlowPath QuPath extension, so what
 `export_geojson()` writes into each Feature is pinned here rather than left to the
-`real`-tagged nf-tests (which CI's `--tag stub` gate never runs).
-
-Recovered from tests/test_export_geojson_phenotype.py, which was deleted with the
-panel-phenotyping extraction (see CHANGELOG's [Unreleased] Removed entry). Only the
-"phenotyping is off" case survived that removal, and it is the case that now describes
-the module's whole behaviour: constant "Cell" classification, no stamped feature `id`,
-no phenotype measurements.
+`real`-tagged nf-tests (which CI's `--tag stub` gate never runs): constant "Cell"
+classification, no stamped feature `id`, no phenotype measurements.
 """
 
 from __future__ import annotations
@@ -33,7 +28,7 @@ _SPEC.loader.exec_module(eg)
 def test_no_panel_supplied_is_constant_cell_classification(tmp_path):
     """Constant "Cell", no id, no phenotype extras.
 
-    The absent `id` is load-bearing: export_geojson() passes object_id=None so that
+    The absent `id` matters: export_geojson() passes object_id=None so that
     features are NOT all stamped with the constant "PathDetectionObject", which QuPath
     treats as a per-object UUID — a shared id across every detection breaks re-import
     for the whole cohort.
@@ -222,18 +217,12 @@ def test_iter_rows_positional_preserves_a_non_contiguous_index():
     assert idxs == [0, 5]
 
 
-# ---- byte-identity: the binding G1 evidence -------------------------------------------
+# ---- byte-identity with an iterrows reference --------------------------------------
 #
-# These reference functions are a verbatim copy of the pre-change, iterrows-driven loop
-# bodies (the code this task replaces). They are kept ONLY to prove byte-for-byte output
-# equality with the new numpy-positional loops on NaN-free input.
-#
-# NOTE on scope: on a frame with a NaN centroid, the pre-fix export_combined_geojson()
-# crashed (`skipped[0] += 1` on a plain int), so there is no "before" output to compare
-# bytes against for that case. Byte-identity below is therefore asserted on NaN-free
-# input only; the NaN-centroid case is covered instead by
-# test_export_combined_geojson_survives_a_nan_centroid below (a regression test, not a
-# byte-identity comparison). This is a deliberate gap, not an oversight.
+# These reference functions are a plain iterrows implementation of the feature loops,
+# kept to prove byte-for-byte equality with the numpy-positional loops on NaN-free
+# input. The NaN-centroid case is covered by
+# test_export_combined_geojson_survives_a_nan_centroid instead.
 
 
 def _reference_iter_features(df, marker_cols, pixel_size, contours):
@@ -394,17 +383,11 @@ def test_export_combined_geojson_is_byte_identical_to_iterrows_on_nan_free_input
         assert len(old_bytes) > 0
 
 
-# ---- the NaN-centroid regression test (not a byte-identity comparison) ----------------
+# ---- NaN centroids ---------------------------------------------------------------------
 
 
 def test_export_combined_geojson_survives_a_nan_centroid(tmp_path, caplog):
-    """Regression test for the `skipped[0] += 1` crash on a plain `skipped = 0` int.
-
-    Pre-fix, this call raised `TypeError: 'int' object is not subscriptable` on the
-    first row with a NaN x/y centroid. There is no "before" output to byte-compare
-    against for this input (the old code never produced any -- see the byte-identity
-    tests' module note); this test instead pins the fixed behaviour directly.
-    """
+    """A row with a NaN x/y centroid is skipped and counted, not a crash."""
     df = pd.DataFrame(
         {
             "label": [1, 2, 3],

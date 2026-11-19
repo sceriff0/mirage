@@ -1,15 +1,10 @@
 /*
- * FINAL_QC — the end-of-run aggregation, shared by the linear path and by
- * add_cycle. Both used to carry their own copy of it ("Mirrors the standard-path
- * aggregation below").
+ * FINAL_QC: the end-of-run aggregation, shared by the linear path and add_cycle.
  *
- * The contract under test is that ONE module serves both callers even though they
- * contribute different sets of artifact kinds: add_cycle has no preprocess_qc, no
- * registration_tre and no postprocess_qc. If the missing kinds were not defaulted to
- * an empty list inside the module, `.collect()` on an empty channel would simply
- * never emit and GENERATE_QC_REPORT would silently never run — a green pipeline
- * with no report. Hence the explicit task-count assertions rather than
- * `assert workflow.success` alone.
+ * One module serves both callers although they contribute different artifact kinds
+ * (add_cycle has no preprocess_qc, registration_tre or postprocess_qc). If a missing
+ * kind were not defaulted to an empty list, `.collect()` would never emit and
+ * GENERATE_QC_REPORT would silently not run; hence the task-count assertions.
  */
 nextflow_workflow {
 
@@ -130,11 +125,8 @@ nextflow_workflow {
 
     /*
      * The tag vocabulary is hand-written at both call sites. A typo ('registration_QC')
-     * matches no artifactsOf() filter, so that whole QC category would vanish from the
-     * report — the run stays green, GENERATE_QC_REPORT still runs exactly once, and every
-     * OTHER test in this file still passes, because they assert task counts and not report
-     * contents. Under the old positional signature the same typo was a parse-time
-     * resolution error. This test is the replacement for that safety.
+     * matches no artifactsOf() filter, so that QC category would vanish from the report
+     * while the run stays green and every task-count test still passes.
      */
     test("an unknown artifact kind fails loudly instead of dropping the category") {
         tag "stub"

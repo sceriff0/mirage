@@ -1,16 +1,13 @@
-"""Every mask-writing TIFF the segmentation backends produce must be TILED, not striped.
+"""Every mask-writing TIFF the segmentation backends produce must be tiled, not striped.
 
-``bin/convert_image.py:35-49`` is the canonical statement of why: tifffile's zarr view of
-a STRIPED (untiled) TIFF reports one chunk per whole plane (``chunks=(H, W)``), so any
-"read just this region" call downstream has to decode the entire plane to slice it out.
-``CONVERT_IMAGE`` was already fixed (see ``tests/test_convert_streaming_write.py``); this
-file is the same fix and the same pin for the segmentation mask, the highest-fan-out
-artifact in the pipeline -- written once by whichever backend ran, then read back by
-``QUANTIFY`` (once per marker), ``EXTRACT_CELL_PROPERTIES``, ``EXTRACT_NUCLEI_PROPERTIES``,
-``SEG_QC_GEOJSON``, ``EXPORT_GEOJSON``, ``EXPORT_SPATIALDATA``, ``SEG_QUALITY_EVAL`` and
-``WARP_SEG_QC``.
+tifffile's zarr view of a striped TIFF reports one chunk per whole plane (``chunks=(H, W)``),
+so any region read has to decode the entire plane (see ``bin/convert_image.py`` and
+``tests/test_convert_streaming_write.py`` for CONVERT_IMAGE). The segmentation mask is the
+highest-fan-out artifact: read back by ``QUANTIFY`` (once per marker),
+``EXTRACT_CELL_PROPERTIES``, ``EXTRACT_NUCLEI_PROPERTIES``, ``SEG_QC_GEOJSON``,
+``EXPORT_GEOJSON``, ``EXPORT_SPATIALDATA``, ``SEG_QUALITY_EVAL`` and ``WARP_SEG_QC``.
 
-Four writers, four ``tifffile.imwrite`` call sites:
+Four writers:
 
 * ``bin/segment.py`` (StarDist backend)
 * ``bin/segment_cellsam.py`` (CellSAM backend)
@@ -93,8 +90,7 @@ SEGMENT_INSTANTSEG_PY = REPO_ROOT / "bin" / "segment_instantseg.py"
 
 
 # ---------------------------------------------------------------------------
-# AST helpers for bin/segment.py, which this file deliberately never imports
-# (see module docstring)
+# AST helpers for bin/segment.py, which this file never imports (see module docstring)
 # ---------------------------------------------------------------------------
 
 
@@ -113,16 +109,8 @@ def _count_imwrite_tile_kwarg_call_sites(path: Path, tile_name: str) -> int:
     """How many ``tifffile.imwrite(...)`` or ``ome_io.write_tiff(...)`` calls in ``path``
     pass ``tile=(tile_name, tile_name)``.
 
-    Both spellings, because the mask writers now go through ``bin/utils/ome_io.py``'s
-    ``write_tiff`` -- a verbatim forwarder to ``tifffile.imwrite``, so the argument this
-    function checks is the same argument reaching the same writer. Matching only
-    ``imwrite`` after that migration would have made this check return 0 for every file
-    and fail loudly, which is what happened and is why it is widened rather than
-    reasoned about.
-
-    An AST ``Call`` match, not a text/regex search: the module also carries a comment
-    quoting ``tile=`` in prose (this file's own docstring, and ``convert_image.py``'s),
-    so a substring search would risk over- or under-counting.
+    Both spellings: ``bin/utils/ome_io.py``'s ``write_tiff`` forwards verbatim to
+    ``tifffile.imwrite``. An AST ``Call`` match, so ``tile=`` quoted in prose is not counted.
     """
     tree = ast.parse(path.read_text())
     count = 0
@@ -179,16 +167,15 @@ def _chunks(path):
 
 
 def _label_mask(shape=(40, 30), seed=1):
-    """Deliberately SMALLER than one 1024x1024 tile in both dims -- the pad-to-tile
-    edge case the brief calls out: tifffile pads the tile internally, and the decoded
-    array must still come back at this original (unpadded) shape.
+    """Smaller than one 1024x1024 tile in both dims: tifffile pads the tile internally,
+    and the decoded array must come back at this original (unpadded) shape.
     """
     rng = np.random.default_rng(seed)
     return rng.integers(0, 5000, size=shape, dtype=np.uint32)
 
 
 def _write_like(path, array, tile):
-    """Round-trip ``array`` through an imwrite call with the SAME keyword arguments as
+    """Round-trip ``array`` through an imwrite call with the same keyword arguments as
     the writers' real mask writes (``compression="zlib"``, ``bigtiff=True``), plus the
     tile size in effect for the given writer.
     """
@@ -208,27 +195,17 @@ _ALL_WRITER_TILES = [
 @pytest.mark.parametrize("writer, tile", _ALL_WRITER_TILES)
 def test_the_tile_constant_is_a_valid_tifffile_tile_size(writer, tile):
     # tifffile requires each tile dimension to be a multiple of 16. 1024 is a tuning
-    # choice (see MASK_TIFF_TILE's own comment for the measurement behind it), not an
-    # invariant -- this asserts the real constraint against the imported constant, not
-    # a specific value that would break this test on a legitimate retune.
+    # choice, so the constraint is asserted, not the value.
     assert tile % 16 == 0
 
 
 @pytest.mark.parametrize("writer, path", _SOURCE_PATH_BY_WRITER.items())
 def test_the_real_call_sites_pass_the_tile_constant(writer, path):
-    """The AST call-site check, applied uniformly to all three ML-backend writers.
+    """The AST call-site check, applied to all three ML-backend writers.
 
-    ``bin/segment_cellsam.py`` and ``bin/segment_instantseg.py`` ARE importable here, and
-    the round-trip/chunk-geometry tests above already read their real ``MASK_TIFF_TILE``
-    off the imported module -- but that only proves the constant is well-formed, not that
-    either module's real ``run_cellsam()`` / ``run_instanseg()`` nuclei/cell-mask
-    ``tifffile.imwrite`` calls actually pass it. A constant defined and never used at its
-    call site would be invisible to every other test in this file (``_write_like``
-    reconstructs an independent call from the constant, it never touches the real one) --
-    and is the mirror image of this task's own free deletion (an unused ``_image_tensor``
-    binding in ``segment_instantseg.py``). This is the check that closes
-    that gap, reusing the same AST walk ``bin/segment.py`` needed anyway because it can't
-    be imported here at all.
+    The tests above read ``MASK_TIFF_TILE`` and rebuild an independent call
+    (``_write_like``), so they prove only that the constant is well-formed. This checks
+    the real mask writes in each backend actually pass it.
     """
     n = _count_imwrite_tile_kwarg_call_sites(path, "MASK_TIFF_TILE")
     assert n == 2, (
@@ -257,7 +234,7 @@ def test_decoded_pixels_are_bit_identical_after_tiling(tmp_path, writer, tile):
 
 
 # ---------------------------------------------------------------------------
-# the chunk geometry is actually tiled -- the assertion that pins the fix
+# the chunk geometry is actually tiled
 # ---------------------------------------------------------------------------
 
 
@@ -279,12 +256,10 @@ def test_the_write_reports_a_tiled_chunk_geometry(tmp_path, writer, tile):
 
 
 def test_a_striped_write_of_the_same_array_fails_the_chunk_geometry_assertion(tmp_path):
-    """The control: the same assertion applied to the layout these writers used to produce.
+    """The control: the same assertion applied to a striped write.
 
-    Same array, same compression, no ``tile=`` -- tifffile's striped default, which is
-    exactly what all four writers wrote before this task. Watched failing (see the task
-    report) before trusting ``test_the_write_reports_a_tiled_chunk_geometry`` above: a
-    test that only checked round-trip equality would pass just as well on this file.
+    Same array, same compression, no ``tile=`` (tifffile's striped default). A test that
+    only checked round-trip equality would pass on this file too.
     """
     array = _label_mask()
     path = tmp_path / "striped_mask.tif"

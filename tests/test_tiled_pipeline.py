@@ -67,8 +67,8 @@ def test_register_slide_realigns_a_synthetically_warped_moving_image():
 def test_a_pure_rigid_shift_leaves_the_mesh_near_zero_the_coarse_anchor_absorbs_it():
     """A global translation is fully captured by M0, so the mesh has almost nothing to fix.
 
-    STARE v1 gated every tile out (``mesh is None``); v2 has no TRE dead zone, so the solved
-    field is a measurement of the residual -- sub-pixel, not exactly zero.
+    There is no TRE dead zone, so the solved field measures the residual: sub-pixel, not
+    exactly zero.
     """
     ref = _textured(seed=1, n=256)
     from scipy.ndimage import shift as ndi_shift

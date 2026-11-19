@@ -1,21 +1,13 @@
 """bin/utils/segment_io.py:expand_labels_tiled -- one implementation, and covered.
 
-The function existed TWICE, verbatim apart from formatting: bin/segment.py:200-244
-(StarDist) and bin/segment_cellsam.py:99-142 (CellSAM), the latter's docstring
-saying outright "Identical to segment.py:expand_labels_tiled". Neither copy was
-covered by any test, because segment.py imports stardist/csbdeep at module scope
-and is therefore not importable in CI at all -- so the two could drift with
-nothing to notice.
+It lives in segment_io rather than in the segmentation scripts because
+bin/segment.py imports stardist/csbdeep at module scope and cannot be imported
+in CI.
 
-Its neighbour extract_dapi_channel had already been extracted here for exactly
-that reason (see this module's docstring). This is the same extraction for the
-same reason, and the tests below are the coverage neither copy ever had.
-
-THE PROPERTY THAT MATTERS is the one the docstring claims and nothing checked:
-the tiled expansion must produce IDENTICAL output to a full-image
-skimage.segmentation.expand_labels. A map_overlap whose depth is smaller than the
-expansion distance produces a seam at every tile boundary -- correct-looking
-labels, wrong where it counts, and invisible on any fixture smaller than one tile.
+The key property: the tiled expansion must produce output identical to a
+full-image skimage.segmentation.expand_labels. A map_overlap whose depth is
+smaller than the expansion distance leaves a seam at every tile boundary,
+invisible on any fixture smaller than one tile.
 """
 
 from __future__ import annotations
@@ -32,13 +24,9 @@ sys.path.insert(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "utils"
     ),
 )
-# "skimage", not "skimage.segmentation": the requirements-guard scan
-# (tests/test_ci_stack_pinned.py) matches importorskip names against DISTRIBUTION names
-# via an exact-string lookup, and a submodule-qualified name matches nothing a
-# requirements file declares -- silently deselecting this whole file in CI. dask needs no
-# importorskip at all: it is installed UNCONDITIONALLY there (see
-# tests/test_convert_lazy_read.py's docstring), and segment_io.py already imports it at
-# module scope, so its absence would be a loud ImportError, not a silent skip.
+# "skimage", not "skimage.segmentation": tests/test_ci_stack_pinned.py matches
+# importorskip names against distribution names exactly, and a submodule name would
+# silently deselect this file in CI. dask needs no importorskip: CI always installs it.
 pytest.importorskip("skimage")
 
 from segment_io import expand_labels_tiled  # noqa: E402
@@ -58,7 +46,7 @@ def _labels(h=64, w=64, n=7, seed=3):
 
 @pytest.mark.parametrize("distance", [1, 2, 5])
 def test_tiled_expansion_equals_full_image_expansion(distance):
-    """The claim the docstring made and nothing checked."""
+    """Tiled expansion equals full-image expansion."""
     labels = _labels()
     expected = segmentation.expand_labels(labels, distance=distance)
     got = expand_labels_tiled(labels, distance=distance, tile_size=16)
@@ -96,8 +84,7 @@ def test_background_stays_background_where_nothing_reaches_it():
 
 
 def test_only_one_implementation_survives():
-    """The extraction is only worth anything if the copies are gone. A second
-    definition anywhere under bin/ is the drift this move exists to end."""
+    """No second definition of expand_labels_tiled anywhere under bin/."""
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parent.parent / "bin"

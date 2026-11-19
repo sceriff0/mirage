@@ -3,18 +3,12 @@
 """Pin that check_param_consistency.py's `_refs_from_text` and
 tests/nfmodel's `param_refs` agree on what counts as a `params.<name>` READ.
 
-Both independently implement "a match immediately followed by `(` is a `Map`
-method call (params.subMap(...)), not a param read" -- one for the CLI
-checker's multi-directory glob, one for the shared source model other guards
-build on. Nothing forces them to stay in sync; if a future edit to either
-loosens or tightens the rule, this is the only test that would catch the
-drift.
+Both implement "a match followed by `(` is a `Map` method call
+(params.subMap(...)), not a param read": one for the CLI checker, one for the
+shared source model other guards use.
 
-This file is deliberately a `test_*.py` module, not code inside
-`check_param_consistency.py` itself -- pytest never collects a file whose
-name doesn't match `test_*.py`, and a test placed there would silently never
-run (the exact "guard that cannot fail" defect this remediation phase exists
-to eliminate).
+It lives in a `test_*.py` file because pytest would never collect a test
+placed inside `check_param_consistency.py`.
 """
 
 import importlib.util

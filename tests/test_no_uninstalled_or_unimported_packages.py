@@ -1,30 +1,17 @@
 """The reverse of "installs what it imports": an image may not install what nothing reaches.
 
 tests/test_container_harmonisation.py::test_container_installs_what_its_scripts_import
-catches the dependency an image is MISSING -- the bioio case, invisible at build time and
-fatal at gigapixel scale after the scheduler has already granted the task its memory.
-Nothing caught the opposite direction, and the opposite direction had a live instance:
-containers/regqc carried tensorflow 2.17.1, stardist 0.9.1, csbdeep, gputools, edt and a
-whole Miniconda install with bioconda bftools -- roughly 4 GB pulled on every QC task,
-imported by nothing, for an image that runs ONE script whose third-party import set is
-{cv2, numpy, skimage, tifffile, zarr}.
+catches a dependency an image is missing. This catches the opposite: a package installed
+that nothing imports, pulled on every task for nothing.
 
-tests/test_no_unreachable_container_frameworks.py is the neighbouring guard and it is
-deliberately a NAMED DENYLIST: "Most entries in a Dockerfile are legitimately transitive
-or runtime-only dependencies that no first-party file imports, so a blanket rule would
-produce noise and get disabled." That is true, and it is the reason this file exists in
-the shape it does: it takes the blanket rule and pays for it with ALLOWED_UNIMPORTED --
-explicit, per-image, each entry naming the distribution that loads the package at run
-time, and each entry checked by two meta-tests so it cannot outlive its reason.
+tests/test_no_unreachable_container_frameworks.py is a named denylist, because many
+Dockerfile entries are transitive or runtime-only. This file applies the blanket rule and
+pays for it with ALLOWED_UNIMPORTED: per image, each entry naming the distribution that
+loads the package at run time, each checked by two meta-tests so it cannot outlive its
+reason. "Might be needed later" is not a reason.
 
-"Might be needed later" is not a reason. That is what produced the regqc stack, and
-tests/test_no_dead_bin_modules.py already rejects it one layer down for bin/utils/.
-
-NOTHING HERE IS RE-DERIVED. The parser, the container-to-scripts mapping, the import walk
-and the import-name-to-distribution table are all imported from
-test_container_harmonisation, which is where they are debugged; this repository has been
-bitten by seven guards each carrying a private parse of the same files, each with a
-different blind spot.
+The parser, container-to-scripts mapping, import walk and import-to-distribution table are
+imported from test_container_harmonisation, not re-derived.
 """
 
 import pytest
@@ -33,23 +20,15 @@ from tests import test_container_harmonisation as harmonisation
 
 # (container, distribution) -> why nothing in bin/ imports it and it must stay anyway.
 #
-# THE RULE FOR ADDING AN ENTRY: the package must be loaded by ANOTHER INSTALLED
-# DISTRIBUTION at run time -- a codec backend, a plugin discovered by entry point, a
+# Rule for adding an entry: the package must be loaded by another installed
+# distribution at run time -- a codec backend, a plugin discovered by entry point, a
 # required dependency of a package bin/ does import. If the reason you can write is
 # "something might need it", delete the pip line instead.
 #
-# NOTE ON WHAT DOES NOT NEED AN ENTRY HERE: `_unimported()` below counts
-# `REQUIRED_RUNTIME_IMPORTS[container]` (test_container_harmonisation.py) as reached, not
-# just module-scope imports. A package whose only importer is a LAZY import already
-# declared there -- containers/convert's bioio, h5py, scyjava; containers/stare's zarr,
-# scipy, skimage; containers/segeval's matplotlib; every name in
-# containers/spatialdata's REQUIRED_RUNTIME_IMPORTS entry -- is therefore never unimported
-# in the first place and must NOT be listed below: an entry here for one of those would
-# immediately fail test_every_allowlist_entry_is_still_unimported, because the package is
-# reached. Two tables would otherwise carry the same fact with two different reasons that
-# can drift -- REQUIRED_RUNTIME_IMPORTS is the one place a lazily-reached runtime import is
-# recorded; this dict is for a package NEITHER walker finds an importer for, because it is
-# loaded by another INSTALLED DISTRIBUTION rather than by any first-party script at all.
+# A package reached only by a lazy import belongs in REQUIRED_RUNTIME_IMPORTS
+# (test_container_harmonisation.py), which `_unimported()` counts as reached, not here:
+# an entry here for it would fail test_every_allowlist_entry_is_still_unimported. This
+# dict is for packages no first-party script imports at all.
 ALLOWED_UNIMPORTED = {
     # --- codec and store backends, everywhere -------------------------------------
     # tifffile does not depend on imagecodecs; it imports it lazily, per codec, on the
@@ -61,10 +40,8 @@ ALLOWED_UNIMPORTED = {
             "LZW/zstd/JPEG read or write; not a declared dependency of tifffile, so it "
             "must be installed explicitly or a compressed write fails at run time."
         )
-        # spatialdata is NOT in this comprehension: it gets its own entry below, with a
-        # reason naming the specific artifact it reads. Listing it in both would make one
-        # dict literal silently override the other -- legal Python, and exactly the kind of
-        # duplicate that makes an allowlist unreviewable.
+        # spatialdata is not in this comprehension: it has its own entry below. Listing it
+        # in both would make one dict literal silently override the other.
         for c in (
             "cellsam",
             "convert",
@@ -153,12 +130,8 @@ ALLOWED_UNIMPORTED = {
     ("convert", "zarr"): (
         "tifffile's aszarr store backend, which bioio-ome-tiff reads through."
     ),
-    # ('convert', 'scyjava') is deliberately ABSENT: REQUIRED_RUNTIME_IMPORTS['convert']
-    # ['scyjava'] (test_container_harmonisation.py) already covers it -- bin/utils/ome_io.py's
-    # and bin/convert_image.py's calls to jvm_cache.point_jvm_cache_off_readonly_home() reach
-    # scyjava's lazy `from scyjava import config` unconditionally on the bioformats route -- so
-    # scyjava is REACHED, not unimported, and an entry here would fail
-    # test_every_allowlist_entry_is_still_unimported.
+    # ('convert', 'scyjava') is absent: REQUIRED_RUNTIME_IMPORTS['convert'] covers it
+    # (jvm_cache reaches scyjava lazily on the bioformats route).
     # --- containers/spatialdata: the scverse serialization stack -------------------
     ("spatialdata", "zarr"): (
         "spatialdata's on-disk store. This image is the python:3.12 / zarr>=3 island and "
@@ -176,25 +149,18 @@ ALLOWED_UNIMPORTED = {
         "zstd/LZW-compressed OME-TIFF through tifffile."
     ),
     # --- pending an image rebuild -------------------------------------------------
-    # (empty since 2026-09-27: containers/tiled's torch/kornia entries went when the
-    # torch-free containers/stare replaced it)
+    # (empty)
 }
 
 
 def _unimported(container):
     """Distributions this image installs that no script it runs imports.
 
-    "Imports" here means module-scope imports (``_third_party_imports``, walked
-    module-scope-only as of Task 8a) UNIONED with ``REQUIRED_RUNTIME_IMPORTS[container]``
-    -- the positive table of names a container's scripts reach only through a lazy
-    (runtime, not module-scope) import, each proven still genuine by
-    ``test_required_runtime_imports_are_actually_reached`` in test_container_harmonisation.
-    Without that union, every package a script needs only at runtime -- bioio, h5py and
-    scyjava for containers/convert; zarr/scipy/skimage for containers/stare; matplotlib for
-    containers/segeval -- would read as unreached and demand an ALLOWED_UNIMPORTED entry
-    duplicating a reason REQUIRED_RUNTIME_IMPORTS already states, which is exactly the kind
-    of second copy of the same fact this repository's guards avoid (see
-    test_container_harmonisation's own docstring on re-derivation).
+    "Imports" means module-scope imports (``_third_party_imports``) united with
+    ``REQUIRED_RUNTIME_IMPORTS[container]``, the names a container's scripts reach only
+    through a lazy import (checked by ``test_required_runtime_imports_are_actually_reached``
+    in test_container_harmonisation). Without the union, every lazily-imported package
+    would need a duplicate ALLOWED_UNIMPORTED entry.
     """
     installed = set(harmonisation._installed(container))
     scripts = harmonisation._module_container_and_scripts().get(container, set())
@@ -268,8 +234,7 @@ def test_no_image_installs_a_package_nothing_reaches(container):
 def test_every_allowlist_entry_is_still_installed(key):
     """A stale exemption is worse than none: it reads as a reviewed decision.
 
-    Same argument as test_every_pinned_exception_is_still_doing_something -- an entry for
-    a package the image no longer installs is a hole nobody re-examines.
+    An entry for a package the image does not install is a hole nobody re-examines.
     """
     container, package = key
     assert container in harmonisation._container_dirs(), (
@@ -289,10 +254,7 @@ def test_every_allowlist_entry_is_still_unimported(key):
     """The other direction: once a script imports it, the exemption is not just stale, it
     is actively hiding the package from the FORWARD guard.
 
-    test_container_installs_what_its_scripts_import would then be the thing keeping it
-    honest -- but only if the package is genuinely required, and an exemption here does
-    not stop that. Failing loudly is still right: it means the reason written above the
-    entry is now false.
+    Failing is right: the reason written for the entry is now false.
     """
     container, package = key
     assert package in _unimported(container), (

@@ -1,31 +1,10 @@
 """The stitched slide's OME header must carry what a `.ome.tiff` promises.
 
-The source review recorded this as "`tiled_stitch.py:123` writes `*_registered.ome.tiff`
-containing **no OME-XML**". Measured against the working tree, that is **not what happens** --
-tifffile infers OME mode from the `.ome.tiff` suffix, so a header is written whether or not the
-code asks for one:
-
-    is_ome        : True
-    ome_metadata  : <?xml version="1.0" ...><OME ...>
-
-What is true is that the header was **content-free**:
-
-    <Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="uint16" SizeX=... SizeY=... SizeC="2">
-    <Channel ID="Channel:0:0" SamplesPerPixel="1">      <- no Name
-    <Channel ID="Channel:0:1" SamplesPerPixel="1">      <- no Name
-
-No channel names, and no `PhysicalSizeX`/`PhysicalSizeY` -- the pixel size reached the file only
-as TIFF-level `resolution` tags. A consumer that reads OME metadata, which is the natural thing
-to do with a file called `.ome.tiff`, got neither.
-
-That also retires the reason the code gave for not writing one: "an OME header here would become
-a second, channel-less source of channel names for SPLIT_CHANNELS to find". tifffile was writing
-that header anyway, so the situation the comment argued against was the situation in effect. And
-SPLIT_CHANNELS could not have been misled by it in any case -- `split_channels.nf:31` passes
-`--channels ${meta.channels.join(' ')}` unconditionally, and `split_multichannel.py:92` only
-falls back to `extract_channel_names_from_ome` when no names were passed.
-
-So the fix is to fill the header in, not to suppress it.
+tifffile writes an OME header for any `.ome.tiff` suffix, so the header exists either way;
+these tests pin that it carries channel names and `PhysicalSizeX`/`PhysicalSizeY`, not only
+TIFF-level `resolution` tags. SPLIT_CHANNELS is not affected by the names: it passes
+`--channels ${meta.channels.join(' ')}`, and `split_multichannel.py` reads OME names only
+when none were passed.
 """
 
 import json
@@ -136,14 +115,13 @@ def test_the_tiff_resolution_tags_are_not_lost(tmp_path):
         xres = tags["XResolution"].value
 
     # CENTIMETER means pixels-per-cm: 1e4 um/cm over um/px. The tolerance is loose because TIFF
-    # stores resolution as a RATIONAL (numerator/denominator, both uint32), so 30769.23... is
-    # only approximable -- measured 30769.327, a relative error of 3.1e-06. That is inherent to
-    # the tag, not to this change; a genuinely wrong pixel size would be out by percent or more.
+    # stores resolution as a uint32 rational, so 30769.23... is only approximable (~3e-06
+    # relative); a wrong pixel size would be out by percent or more.
     assert xres[0] / xres[1] == pytest.approx(1e4 / PIXEL_SIZE, rel=1e-4)
 
 
 def test_the_pixels_survive_unchanged(tmp_path):
-    """Metadata only -- this must not touch a single pixel."""
+    """Metadata only: no pixel changes."""
     out = _stitch(tmp_path)
 
     written = tifffile.imread(str(out))

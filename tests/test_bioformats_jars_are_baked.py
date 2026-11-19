@@ -5,18 +5,10 @@
 runtime through `cjdk` into `~/.cache/cjdk`. The cluster has a READ-ONLY $HOME and
 docs/usage.md documents air-gapped execution, so a first run there would die exactly the
 way bin/utils/jvm_cache.py's docstring records: jgo's `os.makedirs($HOME/.jgo)` raising
-`OSError [Errno 30] Read-only file system`.
+`OSError [Errno 30] Read-only file system`. A missing jar is fixed only by the image.
 
-This is a CONTAINER-ONLY fix. A git pull can never repair a missing jar. It is the same
-shape as the retired containers/tiled's DISK/LightGlue bake, and this file was modelled on
-tests/test_disk_weights_are_baked.py (now tests/test_stare_image_is_slim.py) -- including
-its comment-blindness, which is not a refinement but a defect found by breaking that
-file's guards before trusting them.
-
-WHY /root AND NOT /opt. bin/utils/jvm_cache.point_jvm_cache_off_readonly_home() already
-searches `$MIRAGE_JVM_HOME` then `/root` for a `.jgo` directory and points scyjava's
-frozen module globals at it. Baking into /root means the runtime path is the one this
-repository already wrote and tested, not a second mechanism.
+The bake goes to /root because bin/utils/jvm_cache.point_jvm_cache_off_readonly_home()
+searches `$MIRAGE_JVM_HOME` then `/root` for a `.jgo` directory and points scyjava at it.
 """
 
 from pathlib import Path
@@ -27,23 +19,16 @@ CONVERT_SMOKE = REPO / "containers" / "convert" / "smoke.sh"
 
 
 def _code(path):
-    """The file with COMMENT LINES REMOVED, so prose can never satisfy a guard.
+    """The file with comment lines removed, so prose can never satisfy a guard.
 
-    Not a refinement -- a defect found by breaking tests/test_disk_weights_are_baked.py
-    deliberately: two of its four cases stayed GREEN with the thing they protect deleted,
-    because the Dockerfile's comments named the very strings they grepped for. Every
-    comment in containers/convert/Dockerfile names `bioio-bioformats`, `formats-gpl` and
-    `/root/.jgo`, so the raw view here would be pure annotation.
+    The Dockerfile's comments name `bioio-bioformats`, `formats-gpl` and `/root/.jgo`,
+    the very strings these checks look for.
     """
     text = path.read_text()
     code = "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
-    # A check whose "good" answer is a presence must still prove the stripper left a file.
-    # Two different files pass through here (the Dockerfile and smoke.sh), so the
-    # sanity marker is per-file rather than a single Dockerfile-only pair -- a shared
-    # marker would fail on smoke.sh unconditionally, for a reason unrelated to what
-    # that test actually checks.
+    # Prove the stripper left a real file; the sanity marker is per file.
     if path == CONVERT_DOCKERFILE:
         assert "FROM eclipse-temurin" in code and "pip3 install" in code, (
             "the comment stripper returned something that is not containers/convert's "
@@ -69,7 +54,7 @@ def test_the_bioformats_plugin_is_installed():
 
 
 def test_the_bioformats_maven_coordinate_is_pinned():
-    """Ruling R6 pins the Python side; the Java side needs the same treatment or the
+    """The Python pins live in requirements/; the Java side needs the same treatment or the
     version of Bio-Formats in the image floats on every rebuild."""
     code = _code(CONVERT_DOCKERFILE)
     assert "BIOFORMATS_VERSION=ome:formats-gpl:" in code, (
@@ -136,13 +121,9 @@ def test_the_smoke_test_opens_a_file_with_no_home():
 
 
 def test_the_smoke_test_calls_the_production_redirect_not_a_hand_rolled_copy():
-    """Review round 1 on Task 7: the smoke test used to call
-    `scyjava.config.set_cache_dir`/`set_m2_repo` directly -- two calls production never
-    made, since nothing on the CONVERT_IMAGE run path called
-    `jvm_cache.point_jvm_cache_off_readonly_home()` at the time. That let the smoke test
-    pass while proving nothing about the real run path. It must now call the SAME
-    function `bin/utils/ome_io.py::_open_bioio` and `bin/convert_image.py::read_image`
-    call, via the copy the Dockerfile COPYs in."""
+    """smoke.sh calls the same `jvm_cache.point_jvm_cache_off_readonly_home()` that
+    `bin/utils/ome_io.py::_open_bioio` and `bin/convert_image.py::read_image` call, via
+    the copy the Dockerfile COPYs in, not its own `scyjava.config.set_cache_dir`."""
     dockerfile_code = _code(CONVERT_DOCKERFILE)
     assert "COPY bin/utils/jvm_cache.py" in dockerfile_code, (
         "containers/convert/Dockerfile does not COPY bin/utils/jvm_cache.py into the "
@@ -167,8 +148,7 @@ def test_the_smoke_test_proves_the_redirect_is_load_bearing_with_a_negative_leg(
     """A positive-only smoke test run as root cannot tell "the redirect worked" apart
     from "root can write anywhere anyway" (CAP_DAC_OVERRIDE). The negative leg drops to
     an unprivileged UID and skips the guard, so the read must FAIL -- if it does not,
-    either the redirect stopped being load-bearing or this leg stopped exercising the
-    failure it claims to."""
+    either the redirect stopped mattering or this leg stopped exercising the failure."""
     code = _code(CONVERT_SMOKE)
     assert "os.setuid(65534)" in code, (
         "containers/convert/smoke.sh's negative leg does not drop privileges to an "
@@ -182,14 +162,11 @@ def test_the_smoke_test_proves_the_redirect_is_load_bearing_with_a_negative_leg(
 
 
 def test_the_glencoe_cli_tools_are_gone():
-    """They were installed, symlinked and smoke-tested for months, and invoked by nothing:
-    the CONVERT_IMAGE module runs convert_image.py, which reads through bioio.
+    """Nothing invokes bioformats2raw/raw2ometiff: CONVERT_IMAGE runs convert_image.py,
+    which reads through bioio.
 
-    (Deliberately not naming that module's file by its literal Nextflow module
-    extension here: a docstring mentioning it trips tests/test_nfmodel.py's "reads
-    Nextflow source" discovery heuristic, which pattern-matches on that extension
-    as a bare substring -- this file parses no Nextflow/Groovy source at all, only
-    containers/convert's own Dockerfile and smoke.sh.)"""
+    (The module file is not named with its Nextflow extension here: that substring
+    trips tests/test_nfmodel.py's "reads Nextflow source" discovery heuristic.)"""
     code = _code(CONVERT_DOCKERFILE)
     for tool in ("bioformats2raw", "raw2ometiff"):
         assert tool not in code, (

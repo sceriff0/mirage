@@ -257,9 +257,8 @@ def test_run_honours_pairing_mutual_nn(tmp_path):
     x=0,3; moving at x=1,7; radius 5). a1's only in-radius candidate is b0 (dist 2), but
     b0's nearest is a0 (dist 1), so mutual-NN drops a1 entirely and pairs only (a0,b0).
     LSA maximises cardinality first and pairs both (a0,b0) and (a1,b1) (dist 1 and 4). On a
-    uniform-shift grid (the old fixture) both backends pair everything, so only the
-    ``method`` string distinguished them; this geometry would fail if ``--pairing`` were
-    silently ignored."""
+    uniform-shift grid both backends pair everything; this geometry fails if ``--pairing``
+    were silently ignored."""
     ref = _write(tmp_path, "ref.geojson", _pair_fc([0.0, 3.0]))
     mov = _write(tmp_path, "mov.geojson", _pair_fc([1.0, 7.0]))
     warp = _shift_warp({STAGE_RIGID: 0.0})
@@ -370,7 +369,7 @@ def test_deltas_are_measured_against_the_anchor_and_carry_the_sign(tmp_path):
 
 
 def test_a_stage_that_makes_things_worse_shows_a_positive_displacement_delta(tmp_path):
-    """The failure this whole design exists to surface: micro-registration regressing."""
+    """A micro stage that regresses shows a positive delta against the anchor."""
     ref = _write(tmp_path, "ref.geojson", _grid_fc())
     mov = _write(tmp_path, "mov.geojson", _grid_fc(dx=100.0))
     warp = _shift_warp(
@@ -622,10 +621,8 @@ def test_parse_args_accepts_micro_reg_level():
 
 # ── the tiled (STARE) dispatch: JVM-free, driven through the real CLI main() ────
 #
-# Folded in from the former tests/test_warp_seg_qc_tiled.py when
-# modules/local/warp_seg_qc_tiled.nf was merged into modules/local/warp_seg_qc.nf
-# (lib/WarpBackends.groovy) -- both exercise the same, method-agnostic
-# bin/warp_seg_qc.py, which this merge left unchanged.
+# Both backends of modules/local/warp_seg_qc.nf (lib/WarpBackends.groovy) run the same
+# method-agnostic bin/warp_seg_qc.py.
 def test_reg_qc2_tiled_cli_scores_through_a_manifest_without_a_jvm(tmp_path):
     # manifest: reference is identity; moving rigid-aligns to within 4px, a uniform mesh finishes it
     manifest = {

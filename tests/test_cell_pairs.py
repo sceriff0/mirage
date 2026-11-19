@@ -233,7 +233,7 @@ def test_lsa_recovers_the_pair_mutual_nn_drops():
 
 
 def test_lsa_component_decomposition_equals_a_dense_solve():
-    # The load-bearing correctness claim: per-component LSA IS the global optimum.
+    # The core correctness claim: per-component LSA is the global optimum.
     rng = np.random.default_rng(7)
     a = rng.uniform(0, 300, size=(60, 2))
     b = a + rng.normal(0, 2.0, size=a.shape)

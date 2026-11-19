@@ -49,11 +49,9 @@ nextflow_process {
     test("Should render mask_file, outdir and the two ext.args tunables - rendered command") {
 
         // No options "-stub": stub mode never evaluates script:, so this is the only
-        // tag-"stub" case that reaches the rendered command. extract_cell_properties.py
-        // needs pandas and skimage; CI's nf-test job installs only requirements/testdata.txt
-        // (numpy, tifffile), so the process FAILS there and process.success is deliberately
-        // NOT asserted -- the assertions read .command.sh only (measured 2026-09-13, CI run
-        // 34754762338). The script's behaviour is covered by the Python unit tests.
+        // tag-"stub" case that reaches the rendered command. CI's nf-test job lacks pandas
+        // and skimage, so the process fails there and process.success is not asserted; the
+        // script's behaviour is covered by the Python unit tests.
         tag "stub"
 
         when {
@@ -76,11 +74,8 @@ nextflow_process {
 
             assertAll(
                 { assert rendered.size() >= 1 },
-                // The brief pinned "P001_cell_mask.tif", but the input tuple copied from
-                // this file's own stub case above stages P001_cell_mask.npy (both
-                // fixtures exist in tests/testdata/; this process's module isn't
-                // defective, it just echoes whatever path(cell_mask) it's handed).
-                // Measured .command.sh: `--mask_file P001_cell_mask.npy`.
+                // The input tuple stages P001_cell_mask.npy; the module echoes whatever
+                // path(cell_mask) it is handed.
                 { assert rendered.every { it.contains('--mask_file P001_cell_mask.npy') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--outdir .') }, rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--simplify_tolerance 1.0') },

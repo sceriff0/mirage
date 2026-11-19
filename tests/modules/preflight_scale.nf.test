@@ -67,10 +67,8 @@ nextflow_process {
                     "the NUL-delimited find is the fix for space-in-filename word splitting: " + rendered.join(' --- ') },
                 { assert rendered.every { it.contains('--images "${images[@]}"') },
                     "the images array must be expanded quoted: " + rendered.join(' --- ') },
-                // The module's explanatory comment names `mapfile` by prose (bash 4's
-                // `mapfile -d ''` alternative), so a bare substring check on the whole
-                // rendered text false-fails on the comment itself. Check functional
-                // (non-comment) lines only for an actual `mapfile` invocation.
+                // The module's own comment names `mapfile` in prose, so check only non-comment lines
+                // for an actual `mapfile` invocation.
                 { assert rendered.every { text ->
                     !text.readLines().any { !it.trim().startsWith('#') && it.contains('mapfile') }
                 }, "mapfile is bash 4; the container-less local loop runs on macOS bash 3.2: " + rendered.join(' --- ') }
@@ -113,10 +111,8 @@ nextflow_process {
 
     test("Should resolve a staged filename that contains a space - real script under the test profile") {
 
-        // The module's comment block describes exactly this bug: an unquoted
-        // $(find ...) split "P001 ref.ome.tiff" into two argv words, both
-        // nonexistent, and the report said the real file was missing. This is the
-        // behavioural test that comment never had.
+        // An unquoted $(find ...) splits "P001 ref.ome.tiff" into two argv words and reports
+        // the real file as missing.
         tag "stub"
 
         when {

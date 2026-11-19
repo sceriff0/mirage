@@ -6,19 +6,10 @@ the process silently falls through to `conf/base.config`'s defaults. That
 makes an unmatched label invisible at runtime: it never crashes, it just
 quietly under- (or over-) provisions the process.
 
-This bit `modules/local/export_spatialdata.nf`, whose `label` line is a
-ternary choosing between `'process_high_memory'` and `'process_medium'`.
-`process_high_memory` was never defined in `conf/modules.config` -- it only
-ever existed in CLAUDE.md's prose -- so the branch meant to request *more*
-memory silently fell back to base.config's 6 GB default, 1/33rd of the
-cheaper branch's 200 GB.
-
 This test asserts every resource label referenced in `modules/local/*.nf`
-resolves to a `withLabel` selector defined in `conf/modules.config`. Because
-a `label` line can be an expression (a ternary, as above) rather than a bare
-literal, extraction pulls *every* quoted string off a `label` line, not just
-a single literal -- otherwise the guard would miss exactly the shape that
-caused this bug.
+resolves to a `withLabel` selector defined in `conf/modules.config`. A `label`
+line can be an expression (e.g. a ternary) rather than a bare literal, so
+extraction pulls every quoted string off the line.
 """
 
 from __future__ import annotations
@@ -46,13 +37,9 @@ LABEL_LINE_RE = re.compile(r"^\s*label\s+.+$")
 QUOTED_STRING_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"")
 
 # A trailing `// ...` line comment, or an inline `/* ... */` block comment.
-# Stripped before label extraction: extraction deliberately takes *every*
-# quoted string off a `label` line (to catch the ternary shape), so a quoted
-# word inside a comment would otherwise be read as a live label. Measured:
-# `label 'process_high'  // was 'process_low'` made the doc-table cross-check
-# below pass while the process asked for 4x the cpus and ~10x the memory the
-# doc promised -- a tier bump plus the comment explaining it silently
-# disarmed the guard.
+# Stripped before label extraction: extraction takes every quoted string off a
+# `label` line, so a quoted word in a comment (`// was 'process_low'`) would
+# otherwise be read as a live label.
 COMMENT_RE = re.compile(r"//.*$|/\*.*?\*/")
 
 # `withLabel: 'name' { ... }` selectors in conf/modules.config.
@@ -71,13 +58,10 @@ def extract_labels_from_line(line: str) -> list[str]:
 
     A bare `label 'process_medium'` yields one label. A ternary like
     `label cond ? 'process_high_memory' : 'process_medium'` yields both
-    branches -- this is the shape that produced the original bug, so any
-    extraction that only handles a single literal would miss it.
+    branches.
 
     Comments are stripped first, so an annotation such as
     `label 'process_high'  // was 'process_low'` yields only the live label.
-    Taking every quoted string is what makes the ternary work and what makes
-    a commented-out label dangerous; the strip is the price of the former.
     """
     return [
         m.group(1) if m.group(1) is not None else m.group(2)
@@ -109,10 +93,8 @@ def find_defined_labels() -> set[str]:
 def test_extract_labels_handles_ternary_expression():
     """Extraction must find both branches of a ternary `label` line, not just one literal.
 
-    This is a regression guard on the extractor itself: a naive
-    `label\\s+'([^']+)'`-style pattern (single literal only) would silently
-    return just one match -- or none -- for the exact line shape that
-    caused the export_spatialdata.nf defect, defeating the guard below.
+    A guard on the extractor itself: a single-literal pattern such as
+    `label\\s+'([^']+)'` would return one match, or none, for a ternary.
     """
     ternary_line = "    label params.spatialdata_include_image ? 'process_high_memory' : 'process_medium'"
     assert extract_labels_from_line(ternary_line) == [
@@ -127,13 +109,8 @@ def test_extract_labels_handles_ternary_expression():
 def test_extract_labels_ignores_commented_out_labels():
     """A quoted label inside a comment must not count as a live label.
 
-    Measured on `modules/local/merge_quant_csvs.nf`: bumping
-    `label 'process_low'` to `'process_high'` is caught by the doc-table
-    cross-check below, but the *same* bump annotated
-    `// was 'process_low'` was not -- the stale label came back out of the
-    comment, matched the unchanged `docs/resources.md` row, and the guard
-    went green while the process asked for 8 cpu / 300 GB against a doc
-    promising 2 cpu / 32 GB.
+    Otherwise a bumped label annotated `// was 'process_low'` would match the
+    unchanged `docs/resources.md` row and hide the bump from the doc cross-check.
     """
     assert extract_labels_from_line(
         "    label 'process_high'  // was 'process_low'"
@@ -151,9 +128,7 @@ def test_every_module_label_resolves_to_a_conf_modules_config_selector():
 
     An unmatched label is not a Nextflow error -- the process silently
     inherits conf/base.config's defaults instead of the resources its label
-    name implies. This is exactly how export_spatialdata.nf's
-    'process_high_memory' branch OOM-prone-ly ran on a 6 GB default instead
-    of a high-memory tier.
+    name implies.
     """
     defined = find_defined_labels()
     sites = find_module_label_sites()
@@ -199,13 +174,9 @@ def test_every_module_label_resolves_to_a_conf_modules_config_selector():
 #     defaults (1 cpu, 6 GB, 4 h -- see conf/base.config), silently
 #     under-provisioning the task.
 #
-# Both are bugs; exactly one of {label, full withName coverage} must be true
-# per process. A *partial* withName override (some but not all of
-# cpus/memory/time -- e.g. TILED_SOLVE's withName block sets only
-# `memory`, leaving `cpus`/`time` to the label's tier) is not a violation:
-# the label is still the sole owner of the field(s) withName leaves alone,
-# so removing it would silently change that field's value -- exactly the
-# regression this guard exists to prevent, not permit.
+# Exactly one of {label, full withName coverage} must be true per process. A
+# partial withName override (e.g. TILED_SOLVE's block sets only `memory`) is not
+# a violation: the label still owns the fields withName leaves alone.
 # ---------------------------------------------------------------------------
 
 
@@ -214,12 +185,10 @@ def find_module_processes() -> dict[str, Path]:
 
     Sourced from `tests.nfmodel.processes()`, which finds `process NAME {` on
     the comment/string-stripped text of every `.nf` file under `modules/`
-    (recursively) -- then filtered down to `modules/local/` here, deliberately.
-    `modules/nf-core/basicpy/` also declares a process (`BASICPY`), but it is a
-    vendored, unmodified nf-core module outside the one-owner rule this file
-    enforces; docs/resources.md's "Per-process requests" section explains why
-    it is excluded from every count below by name. Widening this filter would
-    silently pull it back in and desync those counts from the doc.
+    (recursively), filtered here to `modules/local/`. `modules/nf-core/basicpy/`
+    (`BASICPY`) is a vendored nf-core module outside the one-owner rule;
+    docs/resources.md excludes it from every count by name, so widening this
+    filter would desync those counts from the doc.
     """
     return {
         name: p.path
@@ -231,12 +200,9 @@ def find_module_processes() -> dict[str, Path]:
 def find_labelled_processes() -> set[str]:
     """Return the set of process names whose module file has a `label` line.
 
-    LABEL_LINE_RE is anchored with bare `^`/`$` and deliberately compiled
-    without `re.MULTILINE` (find_module_label_sites, above, matches it
-    per-line via .match() on each splitlines() entry) -- so it must be
-    applied the same way here, per line, not via .search() on the whole
-    file text, or `^`/`$` would only ever anchor to the start/end of the
-    entire string and silently never match.
+    LABEL_LINE_RE is compiled without `re.MULTILINE`, so it must be applied
+    per line, not via .search() on the whole file text, where `^`/`$` would
+    anchor only to the whole string and never match.
     """
     labelled = set()
     for name, path in find_module_processes().items():
@@ -249,12 +215,10 @@ def find_withname_resource_fields() -> dict[str, set[str]]:
     """Return {PROCESS_NAME: {fields it sets}} for every `withName:` block.
 
     A selector's name group can be a `|`-separated alternation naming
-    several processes (conf/modules.config:140, :270) -- every name in the
-    alternation gets credited with the fields the shared block sets. A
-    process named by more than one `withName:` block (e.g. GENERATE_
-    PREPROCESS_QC, matched by both the shared QC-errorStrategy alternation
-    at :140 and its own dedicated block at :185) has its fields unioned
-    across all matching blocks.
+    several processes; every name gets credited with the fields the shared
+    block sets. A process named by more than one `withName:` block (e.g. a
+    shared errorStrategy alternation plus its own block) has its fields
+    unioned across all matching blocks.
     """
     fields_by_process: dict[str, set[str]] = {}
     for block in _with_name_blocks():
@@ -267,12 +231,8 @@ def find_withname_resource_fields() -> dict[str, set[str]]:
     return fields_by_process
 
 
-# Nested-brace and comment-mentioned-selector regression coverage for the
-# walk this function is built on now lives in tests/test_nfmodel.py
-# (test_block_extent_walks_nested_braces,
-# test_with_name_blocks_ignores_a_selector_mentioned_only_in_a_comment) --
-# this file no longer has a private brace-matcher of its own to regression-
-# test.
+# Nested-brace and comment-mentioned-selector coverage for the walk this
+# function uses lives in tests/test_nfmodel.py.
 
 
 def test_exactly_one_resource_owner_per_process():
@@ -281,11 +241,8 @@ def test_exactly_one_resource_owner_per_process():
 
     `withName:` always wins when both are present (Nextflow config-merge
     precedence), so a `label` alongside a `withName:` block that sets all
-    three fields is provably dead: removing it changes nothing, and leaving
-    it in place misleads a maintainer who edits the label expecting an
-    effect (this is exactly what motivated this task -- see
-    export_geojson.nf, which used to declare `process_medium` while its
-    withName block set `memory = 32.GB`, a 3x disagreement).
+    three fields is dead: removing it changes nothing, and leaving it in
+    place misleads a maintainer who edits the label expecting an effect.
 
     A process with neither a label nor full withName coverage is worse: the
     field(s) nothing sets fall through to conf/base.config's defaults (1
@@ -335,47 +292,26 @@ def test_exactly_one_resource_owner_per_process():
 # ---------------------------------------------------------------------------
 # docs/resources.md's per-process table vs conf/modules.config.
 #
-# `docs/resources.md` restates every process's cpus/memory/time by hand. Nothing
-# stopped those numbers drifting from `conf/modules.config`, and four rows were
-# still wrong when this guard was written: TILED_SOLVE documented as 4 GB against
-# a config that says 1 GB (conf/modules.config:340); TILED_REG_TILE and
-# TILED_STITCH documented as flat 8 GB after both became parameter-derived
-# closures (:317, :360); and EXPORT_SPATIALDATA described as having "no label at
-# all", which cascaded into a false claim that it was the one process relying on
-# conf/base.config's fallback -- its label is a ternary, so it has one either way
-# (modules/local/export_spatialdata.nf:22). A fifth, PHENOTYPE, had already gone
-# with the process it described. Three of the four are reproduced as watched
-# failures below before this guard was trusted.
-#
-# This is the same shape as tests/test_layout.py: one file describes, one file
-# enforces, and the guard checks both directions --
+# `docs/resources.md` restates every process's cpus/memory/time by hand. The
+# guard checks both directions:
 #   * every row in the doc table names a real process, and its cpus / memory /
 #     time / owner agree with what conf/modules.config (or the module's label)
 #     actually sets;
 #   * every process that has a label or a `withName:` resource block has a row.
 #
 # How the numbers are compared, and why not more loosely:
-#   * cpus and time are evaluated to integers on both sides. If a config
-#     expression is something this guard cannot evaluate, the row FAILS with the
-#     expression quoted -- it does not skip. An earlier revision guarded on
-#     `if expected: ...`, so `cpus = { params.seg_gpu ? 16 : 12 }` deleted the
-#     check silently and the suite stayed green with the doc saying `1`.
-#   * memory is compared against COMPUTED values, never against "every integer
-#     that appears in the expression". That looser rule let a wrong doc number
-#     pass whenever it coincided with a tier constant or a byte-shift operand in
-#     the same closure: CONVERT_IMAGE's base documented as 48 GB (a tier constant
-#     two clauses away) and SPLIT_CHANNELS' `f<5` threshold documented as `f<30`
-#     (the `>> 30` shift) both passed.
-#   * memory is also compared PAIRWISE, not as pools of numbers. A tier ladder
-#     is an ordered list of (threshold, magnitude) rungs; a size-linear request
-#     is a (coefficient, addend) position pair. The pooled version let a doc cell
-#     hold every right number in the wrong place and pass: SPLIT_CHANNELS
-#     documented as `f<5 -> 64, f<15 -> 32` against a config saying the inverse,
-#     and the (since-removed) PREPROCESS's `7`/`8` swapped between the per-GiB
-#     coefficient and the flat addend. Both now fail by name. See memory_cell_mismatch, which knows
-#     exactly three shapes and refuses loudly on a fourth.
+#   * cpus and time are evaluated to integers on both sides. An expression this
+#     guard cannot evaluate FAILS the row with the expression quoted; it does
+#     not skip.
+#   * memory is compared against computed values, never against "every integer
+#     in the expression", which would let a wrong doc number pass when it
+#     coincides with a tier constant or a `>> 30` shift operand.
+#   * memory is compared pairwise, not as pools of numbers: a tier ladder is an
+#     ordered list of (threshold, magnitude) rungs, a size-linear request a
+#     (coefficient, addend) pair, so the right numbers in the wrong places fail.
+#     memory_cell_mismatch knows exactly three shapes and refuses a fourth.
 #
-# What is deliberately NOT compared, and why:
+# What is not compared, and why:
 #   * `TILED_REG_TILE` / `TILED_STITCH` memory is derived from
 #     `reg_tiled_tile`/`reg_tiled_halo` and `reg_tiled_out_tile` at task
 #     submission, not a literal. Re-deriving it here would duplicate the very
@@ -384,29 +320,18 @@ def test_exactly_one_resource_owner_per_process():
 #     DERIVATION SOURCE named in the config expression is named in the doc cell
 #     too, and leaves the illustrative "4 GB at defaults" figure unchecked.
 #     Changing which parameter the formula reads therefore still fails the build;
-#     re-tuning its constants does not. docs/resources.md says so in the same
-#     words, so the unchecked figure is labelled as such where a reader sees it.
-#     The two closures used to call a `tiledRegTileGb(params)` helper and the
-#     source asserted on was the HELPER name; Nextflow 26's strict config parser
-#     forbids declaring a function in a config file, so the arithmetic is now
-#     inlined and the sources asserted on are the `params.*` reads themselves.
-#     For these two rows that is a tighter assertion -- the parameters, not a
-#     name that said nothing about which parameters were read. It is NOT a
-#     blanket improvement, which is why the reads are allowlisted by name in
-#     DERIVED_MEMORY_PARAMS: recognising any `params.` mention would hand the
-#     exemption to expressions that used to be checked or loudly refused, and
-#     the exemption's whole content is "nobody checks the magnitudes here".
+#     re-tuning its constants does not. docs/resources.md labels the unchecked
+#     figure as such. The reads are allowlisted by name in DERIVED_MEMORY_PARAMS
+#     so the exemption cannot spread to any closure that mentions `params.`.
 #   * `SEG_QC_SEGMENT` (and, on dev, `SPLIT_PRIOR_PYRAMID`) are ALIASES, not modules. Their
 #     `withName:` blocks set no resource field (they override publishDir /
 #     ext.prefix only), so neither is required to have a row. SEG_QC_SEGMENT has
 #     one anyway -- it is a documented GPU/QC cost -- and ALIASES below maps it
 #     back to SEGMENT so its numbers are still checked against a real config
 #     block rather than skipped.
-#   * The **ramp SHAPE** of a flat request. `32.GB * (2 ** (task.attempt - 1))`
-#     documented as `32 GB x attempt` still passes: only magnitudes are compared,
-#     and 32 is the attempt-1 value either way. Known, disclosed, left as-is --
-#     a wrong RUNG COUNT is caught (the later rungs would not be in the computed
-#     set), only the notation between them is not.
+#   * The ramp shape of a flat request. `32.GB * (2 ** (task.attempt - 1))`
+#     documented as `32 GB x attempt` still passes: only magnitudes are compared.
+#     A wrong rung count is caught; the notation between rungs is not.
 #   * Everything in docs/resources.md outside the per-process tables. The label
 #     tier table, the conf/base.config fallback table, the `maxForks` column, the
 #     global-ceiling and profile tables, the retry-policy tables and the
@@ -423,10 +348,8 @@ DOCS_RESOURCES = ROOT / "docs" / "resources.md"
 ALIASES = {"SEG_QC_SEGMENT": "SEGMENT"}
 
 # `withLabel: 'name' { ... }` -- the opening brace is needed to brace-match the
-# body via `_closure_body` below. `tests.nfmodel` has no `with_label_blocks()`
-# equivalent of `with_name_blocks()` (only withName selectors were a repeated
-# private parse across guards), so this scan and its comment/string-aware
-# body extent (via `block_extent`) stay local to this file.
+# body via `_closure_body` below. `tests.nfmodel` has no `with_label_blocks()`,
+# so this scan stays local to this file (its body extent uses `block_extent`).
 WITH_LABEL_OPEN_RE = re.compile(r"withLabel:\s*(?:'([^']+)'|\"([^\"]+)\")\s*\{")
 
 # The start of a `cpus = ` / `memory = ` / `time = ` assignment. Same anchoring
@@ -442,52 +365,19 @@ NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 # the tier thresholds in neighbouring cells from being read as hours.
 HOURS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*\.\s*h\b")
 
-# The parameters a memory closure is allowed to be DERIVED FROM -- the reads in
-# TILED_REG_TILE's and TILED_STITCH's inlined `memory = { ... }` arithmetic, which
-# no longer goes through a helper because the strict config parser forbids
-# declaring one in a config file.
+# The parameters a memory closure may be DERIVED FROM: the reads in the inlined
+# `memory = { ... }` arithmetic of the STARE rows (tile, halo, out tile, coarse
+# size), TILE_FOR_BASIC / APPLY_PROFILES (`preproc_tile_size`) and
+# MERGE_AND_PYRAMID (`pyramid_resolutions`, `pyramid_scale`). None of these
+# values is computable from pytest, so the doc row must name every term instead.
 #
-# Enumerated rather than written `params\.(\w+)`. The broad form looks like the
-# same rule and is not: the exemption SKIPS the numeric comparison entirely and
-# asks only that the doc cell contain the name, so a broad pattern silently
-# swallows any future memory closure that merely mentions a parameter --
-# `params.big_run ? 128.GB : 32.GB * task.attempt` reserves one of two literal
-# amounts, both of which a doc row should have to state, and under the broad form
-# no row would state either. Those expressions get memory_cell_mismatch's loud
-# "fourth shape" refusal instead, which is the outcome that puts a human in
-# front of the decision. test_derived_memory_exemption_does_not_swallow_a_param_
-# dependent_choice pins exactly that, and
-# test_derived_memory_param_allowlist_is_not_stale keeps this list honest.
-#
-# Widening this list is a deliberate act: it means asserting that the new
-# closure's value genuinely cannot be computed from pytest, the way these two
-# cannot.
-#
-# `preproc_tile_size` was added when TILE_FOR_BASIC and APPLY_PROFILES stopped
-# holding the slide. Both used to ask for a flat multiple of the INPUT FILE's
-# size (`f x 3 GB` and `f x 7 GB`), which the numeric comparison could check.
-# Both now stream a tile at a time, so their requests are built from the
-# pseudo-FOV size the same way the two STARE rows are built from the tile and
-# halo -- a profile-plane term of `2 x C x preproc_tile_size^2 x 8` bytes plus
-# write buffers, none of it computable here. Neither closure carries a file-size
-# term any more: CONVERT_IMAGE and SPLIT_CHANNELS now write tiled
-# (tests/test_convert_streaming_write.py::test_the_write_is_tiled,
-# tests/test_split_multichannel_lazy_read.py::test_the_write_is_tiled), so a
-# region read decodes a tile rather than the whole plane the old
-# `ome_tiff.size()` term used to bound. The doc rows name every remaining term
-# instead.
-#
-# `pyramid_resolutions` and `pyramid_scale` were added when MERGE_AND_PYRAMID
-# stopped holding the slide. Its request used to be a `f<20 ? 200.GB : 300.GB`
-# ladder, which the pairing comparison could check; it is now built from ONE
-# decoded plane (estimated from the largest single channel file) plus the pyramid
-# levels that have to stay resident while tifffile fills the SubIFDs level by
-# level. That second term is a geometric series in the SCALE FACTOR and vanishes
-# below three levels, so both parameters genuinely change the magnitude -- at
-# `--pyramid-resolutions 2` the term is zero, and at scale 4 it is a sixteenth of
-# its value at scale 2. Neither is computable here: the first term depends on the
-# input file's compression ratio and the second on the channel count, and a doc
-# row could state neither. The row names every term instead.
+# Enumerated rather than `params\.(\w+)`: the exemption skips the numeric
+# comparison entirely, so a broad pattern would swallow any closure that merely
+# mentions a parameter (`params.big_run ? 128.GB : 32.GB * task.attempt`), which
+# should instead get memory_cell_mismatch's "fourth shape" refusal.
+# test_derived_memory_exemption_does_not_swallow_a_param_dependent_choice pins
+# that; test_derived_memory_param_allowlist_is_not_stale keeps this list honest.
+# Add a name only when the new closure's value cannot be computed from pytest.
 DERIVED_MEMORY_PARAMS = (
     "reg_tiled_tile",
     "reg_tiled_halo",
@@ -498,17 +388,11 @@ DERIVED_MEMORY_PARAMS = (
     "pyramid_scale",
 )
 
-# A memory request derived from params at submission time rather than being a
-# literal -- either an allowlisted `params.reg_tiled_tile` read (the inlined form
-# the strict config parser forces) or a legacy `tiledRegTileGb(params)` helper
-# call. The capture is the DERIVATION SOURCE: the parameter name, or the helper
-# name. See the header above for why these rows are exempt from the numeric
-# comparison and what is asserted in its place.
-#
-# Both alternatives are kept because both must keep returning None from
-# expr_values_per_attempt: a helper call is not arithmetic pytest can evaluate,
-# and neither is a param read. Only the second form occurs in conf/modules.config
-# today; test_derived_memory_detects_both_forms covers the first.
+# A memory request derived from params at submission time: an allowlisted
+# `params.reg_tiled_tile`-style read, or a `helper(params)` call. The capture is
+# the derivation source (parameter or helper name). Only the param-read form
+# occurs in conf/modules.config; test_derived_memory_detects_both_forms covers
+# both, since neither is arithmetic expr_values_per_attempt can evaluate.
 DERIVED_HELPER_RE = re.compile(
     r"\b(\w+)\(\s*params\s*\)|\bparams\.(" + "|".join(DERIVED_MEMORY_PARAMS) + r")\b"
 )
@@ -523,12 +407,8 @@ def derived_memory_sources(expr: str) -> set[str]:
 
 
 # One rung of a size-tier ladder, CONFIG side: `file_gb < 10 ? 32.GB`. Threshold
-# and magnitude are captured TOGETHER, in one match, so the pair cannot come
-# apart. An earlier revision collected thresholds and magnitudes into two
-# independent multisets, which meant a doc cell could state the right set of
-# each and pair them backwards -- `f<5 -> 64, f<15 -> 32` against a config that
-# says the opposite -- and pass. That is a reader sizing an allocation from a
-# table that states the inverse of the truth.
+# and magnitude are captured together, in one match, so a doc cell that pairs
+# the right numbers backwards (`f<5 -> 64, f<15 -> 32` against the inverse) fails.
 CONFIG_TIER_RE = re.compile(r"<\s*(\d+(?:\.\d+)?)\s*\?\s*(\d+(?:\.\d+)?)\s*\.GB")
 
 # The ladder's final `else` branch: the first `: N.GB` after its last rung.
@@ -536,19 +416,11 @@ CONFIG_ELSE_RE = re.compile(r":\s*(\d+(?:\.\d+)?)\s*\.GB")
 
 # A non-ladder size-dependent shape, `... * N.GB * task.attempt + M.GB`, linear in file
 # size: coefficient and flat addend captured positionally (not pooled), so a doc cell
-# cannot state the right pair of numbers in the wrong roles and pass -- the same
-# mispairing CONFIG_TIER_RE's comment above describes for the ladder rungs.
+# cannot state the right pair of numbers in the wrong roles and pass.
 #
-# CURRENTLY UNUSED in conf/modules.config: TILE_FOR_BASIC and APPLY_PROFILES were this
-# regex's only two matches, and f154792 rewrote both off a file-size term entirely (they
-# now derive from preproc_tile_size, not from the staged input's size). That is not a
-# broken guard -- memory_cell_mismatch still refuses loudly on any shape it does not
-# recognise, so a size-linear closure landing anywhere in the config is still caught, not
-# silently waved through -- and the mechanism itself is unit-tested against a synthetic
-# literal in test_memory_cell_mismatch_compares_pairs_not_pooled_numbers, independent of
-# whether any real closure currently matches it. Kept
-# so a reintroduced size-linear closure (this shape or another process's) is still
-# checked, not because anything live matches it today.
+# Nothing in conf/modules.config currently matches this shape. It is kept so a
+# size-linear closure is checked if one returns, and is unit-tested on a synthetic
+# literal in test_memory_cell_mismatch_compares_pairs_not_pooled_numbers.
 CONFIG_SIZE_LINEAR_RE = re.compile(
     r"\*\s*(\d+(?:\.\d+)?)\s*\.GB\s*\*\s*task\.attempt\s*\+\s*(\d+(?:\.\d+)?)\s*\.GB"
 )
@@ -581,13 +453,9 @@ def _closure_body(text: str, open_brace_index: int) -> str:
     """Return the body between `text[open_brace_index] == '{'` and its partner.
 
     A thin adapter over `tests.nfmodel.block_extent`, which wants `start` just
-    PAST the opening `{` and returns the index just past the matching `}` (so
-    its slice includes the closing brace) -- this keeps the `_brace_match`-era
-    call convention (index OF the opening brace in, body EXCLUDING both braces
-    out) at the two call sites below without duplicating the walk itself.
-    block_extent's own walk is comment/string-aware (`skip_non_code`), which
-    the naive character count this replaces was not: a `{` inside a `//` or
-    `/* */` comment inside a memory/cpus/time closure could mis-balance it.
+    past the opening `{` and returns the index just past the matching `}`.
+    This takes the index of the opening brace and returns the body excluding
+    both braces. The walk is comment/string-aware.
     """
     assert text[open_brace_index] == "{"
     end = _block_extent(text, open_brace_index + 1)
@@ -600,13 +468,9 @@ def parse_resource_exprs(body: str) -> dict[str, str]:
     The right-hand side is either a closure (`memory = { ... }`, read by
     brace-matching, since it nests) or a bare literal to end of line
     (`cpus = 8`). `tests.nfmodel.strip_comments` (view B) then drops any
-    `/* */` or `//` comment INSIDE the expression while keeping string
-    contents verbatim -- load-bearing, and demonstrated in situ rather than
-    asserted: CONVERT_IMAGE, SEGMENT, SPLIT_CHANNELS, MERGE_AND_PYRAMID and
-    GENERATE_REGISTRATION_QC all have multi-line memory closures whose
-    interior is fair game for a comment, and a stale number parked in one
-    (`// was 999.GB before the rewrite`) must not silently license the same
-    stale number in docs/resources.md.
+    `/* */` or `//` comment inside the expression while keeping string
+    contents verbatim, so a stale number in a comment (`// was 999.GB`)
+    cannot license the same stale number in docs/resources.md.
     """
     exprs: dict[str, str] = {}
     for match in FIELD_ASSIGN_RE.finditer(body):
@@ -634,11 +498,8 @@ def find_label_resource_exprs() -> dict[str, dict[str, str]]:
 def find_withname_resource_exprs() -> dict[str, dict[str, str]]:
     """Return {PROCESS: {field: expression}} unioned over matching withName blocks.
 
-    Sourced from `tests.nfmodel.with_name_blocks()` -- which finds each real
-    `withName: '...' {` selector on the RAW text (real quotes to match) and
-    then filters out any match whose start position moved once comments and
-    strings are blanked, i.e. one that only appears inside a comment -- rather
-    than this file's own raw-text `finditer` over `conf/modules.config`.
+    Sourced from `tests.nfmodel.with_name_blocks()`, which ignores a selector
+    that only appears inside a comment.
     """
     exprs: dict[str, dict[str, str]] = {}
     for block in _with_name_blocks():
@@ -752,9 +613,8 @@ def _doc_magnitude_counts(cell: str) -> Counter:
     """Multiset of the GB magnitudes a doc memory cell states, for a FLAT row.
 
     The doubling-ramp notation (`2^(attempt-1)`) is removed first: its `2` and
-    `1` are structure, not magnitudes. Tiered and size-linear rows do not use
-    this -- they are compared as (threshold, magnitude) pairs and as positional
-    roles respectively, which is the whole point of _ladder/_size_linear below.
+    `1` are structure, not magnitudes. Tiered and size-linear rows are compared
+    as (threshold, magnitude) pairs and positional roles instead.
     """
     stripped = DOC_RAMP_RE.sub(" ", cell)
     return Counter(float(m.group(0)) for m in NUMBER_RE.finditer(stripped))
@@ -766,8 +626,8 @@ def _config_ladder(expr: str):
     `rungs` is an ORDERED list of (threshold, GB) pairs read straight off the
     ternary chain, so `file_gb < 5 ? 32.GB : file_gb < 15 ? 64.GB : 128.GB`
     gives [(5, 32), (15, 64)] with else_gb 128. `leftover_gb` is the multiset of
-    `N.GB` literals outside the ladder -- CONVERT_IMAGE's `+ 24.GB *
-    task.attempt` per-attempt base is the only one today.
+    `N.GB` literals outside the ladder (e.g. CONVERT_IMAGE's `+ 24.GB *
+    task.attempt` per-attempt base).
     """
     rungs = [
         (float(m.group(1)), float(m.group(2))) for m in CONFIG_TIER_RE.finditer(expr)
@@ -855,31 +715,23 @@ def _param_selected_mismatch(m: re.Match, expr: str, cell: str) -> str | None:
 def memory_cell_mismatch(expr: str, cell: str) -> str | None:
     """Return why `cell` misstates `expr`, or None if it states it correctly.
 
-    Three shapes, because conf/modules.config has exactly three. Anything else
-    fails loudly rather than falling through to a looser comparison -- the
-    fall-through is what produced every hole found in review so far.
+    Three shapes (plus the param-selected flat ramp handled first). Anything
+    else fails loudly rather than falling through to a looser comparison.
 
     * a **flat** request (`32.GB * task.attempt`, `100.GB + 100.GB *
       task.attempt`, `32.GB * (2 ** (task.attempt - 1))`) is evaluated on
       attempts 1..4; every magnitude in the doc cell must be one of those four
-      values, and the attempt-1 value must be among them. Comparing against the
-      COMPUTED values -- not against every integer that appears in the
-      expression -- is what stops a tier constant or a `>> 30` byte shift from
+      values, and the attempt-1 value must be among them. Comparing against
+      computed values stops a tier constant or a `>> 30` byte shift from
       laundering a wrong number.
     * a **size-tier ladder** (`(file_gb < 10 ? 32.GB : ...) * task.attempt`)
       cannot be evaluated without a file, so its rungs are compared as an
       ORDERED list of (threshold, magnitude) PAIRS, plus the `else` branch, plus
-      a multiset of any `N.GB` outside the ladder. Pairs, not two independent
-      multisets: with the latter, a doc cell stating the right thresholds and
-      the right magnitudes but pairing them backwards -- `f<5 -> 64,
-      f<15 -> 32` against a config that says `f<5 -> 32, f<15 -> 64` -- passed.
-    * a **size-linear** request (APPLY_PROFILES's `* 7.GB * task.attempt + 8.GB`)
-      has no `<` at all, so it is not a ladder; its two numbers are compared
-      POSITIONALLY, coefficient against coefficient and addend against addend.
-      Pooling them let `7` and `8` be swapped in the doc and still pass, even
-      though they mean different things. Given its own shape rather than a loud
-      refusal because the shape is genuinely checkable and a refusal would need
-      an exemption that checks nothing.
+      a multiset of any `N.GB` outside the ladder, so thresholds and magnitudes
+      paired backwards fail.
+    * a **size-linear** request (`* 7.GB * task.attempt + 8.GB`) has no `<`, so
+      it is not a ladder; its two numbers are compared positionally,
+      coefficient against coefficient and addend against addend.
     """
     selected = PARAM_SELECTED_RE.match(expr.strip())
     if selected:
@@ -1027,11 +879,8 @@ def effective_exprs(name: str, field: str) -> list[str]:
 def test_strip_comments_removes_numbers_a_maintainer_would_annotate_with():
     """A number inside a comment in a memory closure must not count as config.
 
-    conf/modules.config has no such comment today, so this is the only place the
-    branch is exercised in the checked-in tree -- but it is not hypothetical:
-    see parse_resource_exprs's docstring for the in-situ demonstration that
-    adding one to CONVERT_IMAGE's closure lets a stale doc number pass without
-    `tests.nfmodel.strip_comments` (imported here as `_strip_comments`).
+    conf/modules.config may have no such comment, so this exercises the strip
+    in `tests.nfmodel.strip_comments` (imported here as `_strip_comments`).
     """
     annotated = "32.GB * task.attempt   // was 64.GB before the bounding-box rewrite"
     assert _strip_comments(annotated).strip() == "32.GB * task.attempt"
@@ -1113,13 +962,9 @@ def test_expr_values_per_attempt_handles_the_shapes_in_modules_config():
 def test_derived_memory_detects_both_forms():
     """DERIVED_HELPER_RE must capture the derivation SOURCE in either form.
 
-    The inlined form is the one conf/modules.config uses -- the strict config
-    parser forbids the helper -- and it is the one that matters: it is what makes
-    the doc cell name `reg_tiled_tile` rather than a helper name that pinned
-    nothing about which parameter the formula actually read. The helper form is
-    kept alive only so a config that reintroduces one (in a file the strict
-    parser does not govern) is still routed to the exemption rather than being
-    numerically compared against a number it does not have.
+    The inlined `params.*` form is the one conf/modules.config uses (the strict
+    config parser forbids a helper function). The helper form is still routed to
+    the exemption rather than compared against a number it does not have.
     """
 
     sources = derived_memory_sources
@@ -1141,16 +986,12 @@ def test_derived_memory_exemption_does_not_swallow_a_param_dependent_choice():
 
     The exemption skips the numeric comparison outright and asks only that the
     doc cell contain the source's name, so every expression it swallows is an
-    expression nothing checks the magnitudes of. That is the right trade for the
-    two STARE closures -- their value genuinely cannot be computed from pytest --
-    and the wrong trade for a param-dependent CHOICE between literal
-    reservations, where the magnitudes are right there in the config and a doc
-    cell stating neither of them should fail.
+    expression nothing checks the magnitudes of. That suits closures whose value
+    cannot be computed from pytest, not a param-dependent choice between literal
+    reservations, whose magnitudes the doc cell should have to state.
 
-    Both expressions below get a loud "fourth shape" refusal from
-    memory_cell_mismatch when they are NOT exempted, which is the outcome this
-    pins: `params.`-mentioning is not the rule, and a future closure of this
-    shape must land in front of a human rather than be waved through.
+    Both expressions below get the "fourth shape" refusal from
+    memory_cell_mismatch when not exempted, which is what this pins.
     """
     counterexamples = [
         "params.big_run ? 128.GB : 32.GB * task.attempt",
@@ -1163,10 +1004,9 @@ def test_derived_memory_exemption_does_not_swallow_a_param_dependent_choice():
             "-- exempting it means no doc row states either magnitude and "
             "nothing notices"
         )
-        # Not evaluable, not a ladder, not size-linear: so with the exemption
-        # correctly withheld it reaches the refusal branch. If it did NOT, the
-        # assertion above would be cosmetic -- the row would go unchecked by a
-        # different route.
+        # Not evaluable, not a ladder, not size-linear: with the exemption
+        # withheld it must reach the refusal branch, or the row would go
+        # unchecked by a different route.
         assert "cannot be checked" in (
             memory_cell_mismatch(expr, "`32 GB \u00d7 attempt`") or ""
         ), f"`{expr}` is silently accepted by memory_cell_mismatch"
@@ -1175,10 +1015,9 @@ def test_derived_memory_exemption_does_not_swallow_a_param_dependent_choice():
 def test_derived_memory_param_allowlist_is_not_stale():
     """Every name in the allowlist must really be read by a memory expression.
 
-    An allowlist entry whose justification has evaporated is the failure mode
-    this repo keeps rediscovering: it looks like coverage and checks nothing.
-    If a STARE closure stops reading one of these, drop it here too -- the row
-    then goes back through the numeric comparison, which is the safe direction.
+    A stale entry looks like coverage and checks nothing. If a closure stops
+    reading one of these, drop it here too; the row then goes back through the
+    numeric comparison.
     """
     memory_exprs = [
         expr
@@ -1200,12 +1039,10 @@ def test_derived_memory_param_allowlist_is_not_stale():
 def test_memory_cell_mismatch_compares_pairs_not_pooled_numbers():
     """The tiered and size-linear paths must bind each number to its role.
 
-    Every assertion here is a shape that PASSED an earlier revision: the
-    comparison pooled thresholds and magnitudes into two independent multisets,
-    so a doc cell could hold the right numbers in the wrong places. The last two
-    cases are the other direction -- duplicate magnitudes and duplicate
-    thresholds are legitimate config, and a pairing comparison is exactly where
-    they would false-positive.
+    A pooled comparison of thresholds and magnitudes would let a doc cell hold
+    the right numbers in the wrong places. The last two cases are the other
+    direction: duplicate magnitudes and duplicate thresholds are legitimate
+    config and must not false-positive.
     """
     ladder = "(file_gb < 5 ? 32.GB : file_gb < 15 ? 64.GB : 128.GB) * task.attempt"
     correct = "tier: `f<5` \u2192 32, `f<15` \u2192 64, else 128 GB, `\u00d7 attempt`"
@@ -1266,8 +1103,8 @@ def test_every_documented_process_matches_conf_modules_config():
     magnitudes the config expression can produce (its literals plus its value on
     attempts 1..4), with the attempt-1 value required to appear for a flat
     request and every `N.GB` literal required to appear for a size-tiered one.
-    The two param-derived rows are matched on helper NAME instead -- see the
-    header of this section.
+    Param-derived rows are matched on their derivation sources instead -- see
+    the header of this section.
     """
     doc_rows = parse_doc_process_table()
     processes = find_module_processes()
@@ -1288,13 +1125,8 @@ def test_every_documented_process_matches_conf_modules_config():
             continue
 
         # --- cpus and time -------------------------------------------------
-        # Both are plain integers everywhere in conf/modules.config today, so
-        # both are compared the same way -- and both FAIL LOUDLY rather than
-        # skipping when the expression is something this guard cannot evaluate.
-        # An earlier revision guarded on `if expected: ...`, which meant one
-        # config edit (`cpus = { params.seg_gpu ? 16 : 12 }`) silently deleted
-        # the check for that field with no message at all. That is this repo's
-        # signature defect -- a guard that passes because it stopped looking.
+        # Both fail loudly rather than skipping when the expression is something
+        # this guard cannot evaluate (e.g. `cpus = { params.seg_gpu ? 16 : 12 }`).
         for field, documented in (
             ("cpus", _numbers(row.get("cpus", ""))),
             (
@@ -1407,12 +1239,7 @@ def test_every_configured_process_is_documented():
 
 
 def test_one_owner_rule_case_counts_match_conf_modules_config():
-    """The three counts in docs/resources.md's `case 1/2/3` panel must be real.
-
-    They were 14 / 6 / 7 against a tree holding 12 / 6 / 6 -- stale since the
-    phenotyping processes were removed, and wrong about EXPORT_SPATIALDATA,
-    which was counted as having no label at all.
-    """
+    """The three counts in docs/resources.md's `case 1/2/3` panel must be real."""
     counts = {"withName": 0, "label": 0, "partial": 0}
     for name in find_module_processes():
         counts[resource_owner_case(name)] += 1

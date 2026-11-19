@@ -1,22 +1,13 @@
 /*
- * VALIS_ADAPTER — the adapter contract, and the channel-signature pairing.
+ * VALIS_ADAPTER: the adapter contract, and the channel-signature pairing
+ * (lib/RegisteredMatch.groovy). A wrong pairing fails silently (the wrong meta is
+ * attached to a registered image and the run completes), so every case asserts the
+ * pairing, not just workflow.success. REGISTER's stub writes a real
+ * channels_manifest.json from the incoming metas, so RegisteredMatch.pair runs on real
+ * data.
  *
- * TILED_ADAPTER has had a test since its fan-out gather was fixed; VALIS_ADAPTER had
- * none, which mattered because it carries the harder half of the seam: 84 lines of
- * matching registered outputs back to their slide metas by OME channel signature, now
- * lib/RegisteredMatch.groovy. That rule fails SILENTLY when it is wrong -- the wrong
- * meta gets attached to a registered image and the run completes -- so a test that only
- * asserts `workflow.success` would prove nothing. Every case below asserts the PAIRING.
- *
- * The stub is a real exercise of the rule, not a bypass: modules/local/register.nf's
- * stub: block builds a genuine channels_manifest.json with JsonOutput.toJson from the
- * incoming metas, so RegisteredMatch.pair runs against real manifest data.
- *
- * The seven emit names are asserted by NAME because the contract in both adapter headers
- * is that a method producing no artifact for a slot emits Channel.empty() rather than
- * omitting the emit. An omitted name is a compile-time break for every consumer of the
- * other backend; a null-object empty channel is not. Only naming each one catches the
- * difference.
+ * The seven emit names are asserted by name: a slot with no artifact must emit
+ * Channel.empty() rather than be omitted, and only naming each one catches that.
  */
 nextflow_workflow {
 
@@ -59,11 +50,10 @@ nextflow_workflow {
             assertAll(
                 { assert workflow.success },
                 { assert workflow.out.registered.size() == 2 },
-                // THE assertion with teeth. REGISTER's stub names each output
-                // <patient>_<channels joined by _>_registered.ome.tiff, so a file whose
-                // name carries CD3 must be paired with the meta whose channels contain
-                // CD3. Swap the two pairings and this fails; assert only .size() and it
-                // would not.
+                // REGISTER's stub names each output
+                // <patient>_<channels joined by _>_registered.ome.tiff, so the file
+                // carrying CD3 must pair with the meta whose channels contain CD3.
+                // A .size() check would miss a swap.
                 { def byId = workflow.out.registered.collectEntries { m, f -> [(m.id): f.toString()] }
                   assert byId.keySet().toSorted() == ['P001_mov', 'P001_ref']
                   assert byId['P001_ref'].endsWith('P001_DAPI_PANCK_SMA_registered.ome.tiff')

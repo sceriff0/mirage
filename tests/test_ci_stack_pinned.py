@@ -1,62 +1,23 @@
 #!/usr/bin/env python3
 """Guard: there is exactly ONE copy of every dependency version, and it lives in requirements/.
 
-WHAT THIS FILE USED TO BE, and why it is a tenth of the size now.
+`requirements/constraints.txt` is the version authority; the Dockerfiles COPY it and pass
+it to pip with `-c`, and `requirements/ci.txt` includes the files the images build from.
+This asserts:
 
-`.github/workflows/*.yml` used to write the imaging stack's pins inline --
-`pip install numpy==1.26.4 scipy==1.15.3 ... zarr==2.18.3` -- and `containers/tiled/
-requirements.txt` wrote the same numbers again. This file was 862 lines whose entire job
-was proving the two copies equal: a hand-maintained `GUARDED_PACKAGES` set, a
-`NON_TILED_AUTHORITY` sub-table for the four packages whose authority was a different
-image, and one bespoke version-equality test per authority. It worked, and it was still
-open at both ends. A package nobody added to `GUARDED_PACKAGES` was unguarded (that is how
-CI shipped an unpinned `pandas`, and how `imagecodecs`, `matplotlib` and
-`opencv-python-headless` each had to be added AFTER a real failure), and a new workflow job
-could install a fifth version of anything.
+  1. No workflow or composite action names a package version, and every install goes
+     through `-r requirements/<file>` (or `-c requirements/constraints.txt`). A closed rule:
+     no package list to forget. It covers `pip install`, `pip3 install`,
+     `python -m pip install` and `uv pip install`.
+  2. Every `containers/*/Dockerfile` that pip-installs a constrained package passes the
+     constraints file to that invocation, unless it is an exception in
+     `test_container_harmonisation.PINNED_EXCEPTIONS`.
+  3. `requirements/constraints.txt` is `test_container_harmonisation.HARMONISED` (read, not
+     restated).
 
-The pins now live in `requirements/`. `requirements/constraints.txt` is the version
-authority; the Dockerfiles COPY it and pass it to pip with `-c`; `requirements/ci.txt`
-`-r`-includes the very files `containers/segeval` and `containers/tiled` build from. There
-is no second copy to prove equal, so this file no longer tries. It asserts the three
-properties that make the identity real:
-
-  1. NO workflow names a package version at all, and every install goes through
-     `-r requirements/<file>` (or `-c requirements/constraints.txt`). This is a CLOSED
-     rule -- it needs no package list, so nothing can be forgotten out of it, and it is
-     phrased over `pip install`, `pip3 install`, `python -m pip install` AND `uv pip
-     install` so the planned switch to uv needs no change here.
-  2. Every `containers/*/Dockerfile` that pip-installs a constrained package COPYs
-     `requirements/constraints.txt` and passes it to every pip invocation that names one --
-     unless it is a DOCUMENTED exception, and the exception list is derived from
-     `test_container_harmonisation.PINNED_EXCEPTIONS`, not written by hand here.
-  3. `requirements/constraints.txt` IS `test_container_harmonisation.HARMONISED`. That
-     module reads the file rather than restating it; this asserts it still does, so
-     re-hardcoding the table fails.
-
-SCOPE: every workflow under `.github/workflows/` and every directory under `containers/`,
-both discovered by glob -- never a filename list. The hardcoded ancestor of this guard
-passed green while `release.yml` ran the identical unpinned install in its release gate.
-
-PHASE-2 NOTE, WRITTEN BEFORE THE MOVE AND UPDATED AFTER IT. The old per-job checks read
-`run:` script bodies, so they would have gone silently vacuous the moment those scripts
-moved into a composite action under `.github/actions/**`. That move happened on
-2026-09-01. Two consequences, both handled:
-
-  * Assertion 1's SCOPE is now `.github/workflows/*.yml` AND `.github/actions/*/action.yml`
-    (`tests/ci_actions.scanned_files()`). It is a negative rule, so leaving it pointed at
-    the workflows alone would have kept it green while an unpinned `pip install numpy`
-    sat in an action -- green for the reason that makes a guard worthless.
-  * The non-vacuity check below no longer counts pip INVOCATIONS, because
-    `.github/actions/setup-python-env` runs one `pip install -r "$req"` in a loop over the
-    files its caller names. Counting invocations against a floor of 10 would fail on a
-    correct tree. It counts what the loop actually installs instead, resolved PER JOB
-    through `tests/ci_actions.py` -- which is a stronger statement than the old one, and
-    the one that would actually notice the installs leaving CI.
-
-Assertions 2 and 3 (the ones that carry the actual pins) read FILES and are unaffected by
-where the install command lives.
-
-Plain pytest, no pipeline-runtime imports, all paths derived from `__file__`.
+Workflows (`.github/workflows/*.yml`), composite actions (`.github/actions/*/action.yml`) and
+containers are discovered by glob. What each job installs is resolved per job through
+`tests/ci_actions.py`.
 """
 
 import ast
@@ -75,11 +36,8 @@ CONTAINERS_DIR = ROOT / "containers"
 REQUIREMENTS_DIR = ROOT / "requirements"
 CONSTRAINTS = REQUIREMENTS_DIR / "constraints.txt"
 
-# The harmonisation module owns the Dockerfile parser and the documented per-image
-# exceptions. Importing it rather than re-deriving either is the point: seven guards in this
-# repo once carried seven private parses of the same files and each had a different blind
-# spot. sys.path is nudged explicitly so this import does not depend on pytest's rootdir
-# insertion behaviour.
+# The harmonisation module owns the Dockerfile parser and the per-image exceptions; import
+# them rather than re-parse. sys.path is set so this does not depend on pytest's rootdir.
 if str(Path(__file__).parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent))
 harmonisation = importlib.import_module("test_container_harmonisation")
@@ -95,9 +53,8 @@ def workflow_files() -> list[Path]:
 def scanned_files() -> list[Path]:
     """Every file a CI `pip install` can live in: workflows AND composite actions.
 
-    Widened 2026-09-01. `.github/actions/setup-python-env` is where every CI install now
-    happens; scanning only the workflows would leave assertion 1 -- a negative rule --
-    passing over a directory that no longer contains an install at all.
+    Every CI install happens in `.github/actions/setup-python-env`, so scanning only the
+    workflows would leave assertion 1 passing over nothing.
     """
     files = ci_actions.scanned_files()
     assert files, "no workflow or composite-action files found under .github/"
@@ -115,28 +72,20 @@ def container_dirs() -> list[str]:
 # --------------------------------------------------------------------------------------
 # Parsing a pip invocation out of a shell body
 # --------------------------------------------------------------------------------------
-# `uv pip install` is accepted deliberately, ahead of the installer switch: the rule is
-# about where the VERSION lives, not about which binary resolves it, and a guard that had to
-# be edited to allow uv would be one more reason to edit a guard while changing what it
-# guards.
+# `uv pip install` is accepted: the rule is about where the version lives, not which binary
+# resolves it.
 _PIP_INSTALL_RE = re.compile(
     r"(?:uv\s+)?(?:python[0-9.]*\s+-m\s+)?pip[0-9]*\s+install\b(?P<args>[^\n]*)"
 )
 
-# Shell operators that end the argument list. Without them, `pip install -r x.txt && echo
-# numpy==1.0` would put a version from the ECHO into the install's token list.
-#
-# Applied to shlex TOKENS, not to the raw string. A regex over the raw string cut
-# `pip install "scipy >= 0, < 99"` at the ` < `, hiding a real quoted pin -- `<` is a
-# redirect only when the shell sees it UNQUOTED, which is exactly the distinction shlex
-# makes and a regex over the raw text cannot.
+# Shell operators that end the argument list, so `pip install -r x.txt && echo numpy==1.0`
+# does not read the echo's version. Applied to shlex tokens, so a quoted
+# `"scipy >= 0, < 99"` is not cut at the `<`.
 _SHELL_OPERATORS = frozenset(
     {"&&", "||", ";", "|", "&", ">", ">>", "<", "<<", "2>", "2>&1"}
 )
 
-# Bootstrap tooling pip installs of itself. These may appear without `-r`/`-c` because there
-# is nothing to pin them to and no image ships a version of them that CI must match. They
-# may still not carry a VERSION -- assertion 1 applies to them like everything else.
+# Bootstrap tooling. May be installed without `-r`/`-c`, but still not with a version.
 _BOOTSTRAP_ONLY = frozenset({"pip", "setuptools", "wheel"})
 
 
@@ -144,9 +93,8 @@ def pip_invocations(text: str) -> list[str]:
     """Every pip/uv-pip install argument string in a shell body, comments excluded.
 
     Continuation backslashes are joined first, so a multi-line install is one invocation.
-    Whole-line `#` comments are dropped BEFORE the search: a comment explaining why a pin
-    was removed necessarily quotes the pin, and reading that as a live install would
-    pressure the next person to delete the rationale instead of keeping it.
+    Only whole-line `#` comments are dropped: this feeds negative rules, so a trailing
+    comment quoting a pin makes the guard noisy rather than blind.
     """
     joined = re.sub(r"\\\s*\n", " ", text)
     live = "\n".join(ln for ln in joined.splitlines() if not ln.strip().startswith("#"))
@@ -156,14 +104,8 @@ def pip_invocations(text: str) -> list[str]:
 def split_args(args: str) -> list[str]:
     """Shell-split one pip argument string.
 
-    `shlex`, not `str.split`. A plain split breaks on a QUOTED token containing spaces, so
-    `pip install \'numpy == 1.0.0\'` -- which pip accepts, PEP 508 allows, and a human
-    reviewing a diff reads as a pin -- came back as three tokens (`\'numpy`, `==`, `1.0.0\'`),
-    none of which parse as a requirement. It was therefore invisible to BOTH halves of
-    assertion 1: no version reported, and no "installs without -r/-c" reported either.
-
-    A shell body that shlex cannot parse falls back to a naive split rather than raising at
-    import time, but it does not go unnoticed:
+    `shlex`, not `str.split`, so a quoted `\'numpy == 1.0.0\'` stays one requirement token.
+    An unparseable body falls back to a naive split;
     `test_every_workflow_pip_invocation_is_shell_parseable` fails on it by name.
     """
     try:
@@ -229,10 +171,8 @@ def goes_through_a_requirements_file(args: str) -> bool:
 # --------------------------------------------------------------------------------------
 # Non-vacuity: the detector must actually detect
 # --------------------------------------------------------------------------------------
-# Every check below is a NEGATIVE assertion over a discovered set. Two ways such a guard
-# passes having proved nothing -- the set comes back empty, or the detector never matches
-# the form it is looking for -- and this repo has been bitten by both. These two tests are
-# what make the three real ones mean something.
+# The checks below are negative assertions over a discovered set; these tests fail if the set
+# is empty or the detector never matches.
 
 
 @pytest.mark.parametrize(
@@ -246,10 +186,7 @@ def goes_through_a_requirements_file(args: str) -> bool:
             "pip install torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu",
             ["torch==2.3.1"],
         ),
-        # A QUOTED requirement containing spaces. Legal pip, legal PEP 508, and invisible
-        # to `str.split` -- which returned ["'numpy", "==", "1.0.0'"], none of which parse
-        # as a requirement, so it was reported by NEITHER half of assertion 1. This case is
-        # why split_args uses shlex.
+        # A quoted requirement containing spaces (why split_args uses shlex).
         ("pip install 'numpy == 1.0.0'", ["numpy == 1.0.0"]),
         ('pip install "scipy >= 0, < 99"', ["scipy >= 0, < 99"]),
         # Must NOT fire on any of these.
@@ -262,11 +199,10 @@ def goes_through_a_requirements_file(args: str) -> bool:
     ],
 )
 def test_the_version_detector_actually_detects(body, expected):
-    """The exact forms this repo writes, plus the three ways it has fooled a scanner before.
+    """The forms this repo writes, plus three near-misses.
 
-    The trailing three are the near-misses: a `#` comment quoting a removed pin, a version
-    appearing AFTER a shell operator, and an option value (`--index-url https://...`) that a
-    naive splitter reads as a package name.
+    The near-misses: a `#` comment quoting a removed pin, a version after a shell operator,
+    and an option value (`--index-url https://...`) a naive splitter reads as a package.
     """
     found = [tok for args in pip_invocations(body) for tok in pinned_tokens(args)]
     assert found == expected
@@ -275,10 +211,8 @@ def test_the_version_detector_actually_detects(body, expected):
 def test_the_scanned_files_actually_install_something():
     """An empty invocation set would make assertion 1 pass over nothing.
 
-    This is not hypothetical bookkeeping: a refactor that moves the installs somewhere this
-    scanner cannot see leaves assertion 1 passing while nothing is checked. Fail here
-    instead, loudly, with the count. It happened on 2026-09-01 -- the installs moved into
-    `.github/actions/**`, which is why `scanned_files()` reaches there now.
+    A refactor that moves the installs somewhere this scanner cannot see would leave
+    assertion 1 passing while nothing is checked.
     """
     counts = {
         p.relative_to(ROOT).as_posix(): len(pip_invocations(p.read_text()))
@@ -293,30 +227,14 @@ def test_the_scanned_files_actually_install_something():
     )
 
 
-# The requirements/ files CI actually installs, as a NAMED SET rather than a count.
-# Measured 2026-09-01 on ci/phase-6-7 (CI redesign Phase 7):
-#   _test-suite.yml::python-tests    ci.txt, torch-cpu.txt (kornia.txt until 2026-09-27)
-#   _test-suite.yml::nextflow-stub   testdata.txt
-#   _test-suite.yml::nf-test-stub    testdata.txt
-#   _test-suite.yml::security-tests  testdata.txt
+# The requirements/ files CI installs, as a named set rather than a count:
+#   _test-suite.yml::python-tests    ci.txt, torch-cpu.txt
+#   _test-suite.yml::nextflow-stub, nf-test-stub, security-tests   testdata.txt
 #   _test-suite.yml::ruff            lint.txt
 #   _test-suite.yml::format-tests    format-tests.txt
-#   nightly.yml::nf-test-real        testdata.txt
-#   nightly.yml::nf-test-integration testdata.txt
-# requirements/nf-core.txt was in this set until Phase 7 deleted the `nf-core lint`
-# job that installed it; no released nf-core/tools version can lint this repository
-# (the nf-core tools config at the repository root carries the version-by-version
-# measurement in its header), so the job went rather than the pin.
-#
-# THAT PARENTHESIS IS DELIBERATELY NOT WRITTEN AS THE FILENAME, and the reason is
-# worth one sentence because it bit twice in five minutes. tests/test_nfmodel.py
-# discovers "guards that read Nextflow source" by a SUBSTRING test for the Nextflow
-# file extension, and the nf-core config filename starts with that same substring --
-# so naming the file here got this module reported as a private Nextflow parser,
-# which it is not. Writing the explanation out then tripped it a second time.
-# Recorded rather than worked around in silence: the heuristic has the same false
-# positive on tests/test_test_profile_fixture_compat.py today, and tightening it to
-# a non-word-boundary form drops exactly those two and nothing else (measured).
+#   nightly.yml::nf-test-real, nf-test-integration   testdata.txt
+# Do not write the nf-core tools config's filename in this file: tests/test_nfmodel.py
+# flags any module containing the Nextflow file extension as a Nextflow-source reader.
 EXPECTED_CI_REQUIREMENTS = {
     "requirements/ci.txt",
     "requirements/torch-cpu.txt",
@@ -327,16 +245,12 @@ EXPECTED_CI_REQUIREMENTS = {
 
 
 def test_ci_still_installs_the_files_it_is_supposed_to():
-    """The real non-vacuity floor, and the reason the invocation count above can be 1.
+    """The real non-vacuity floor, and why the invocation count above can be 1.
 
-    `.github/actions/setup-python-env` installs `pip install -r "$req"` in a loop, so
-    counting invocations no longer measures anything: one loop covers three files in
-    `python-tests` and one in `ruff`. What matters is which requirements/ files each JOB
-    ends up installing, which `tests/ci_actions.py` resolves through the `requirements:`
-    input at each call site.
-
-    PER JOB, not a union over the repository. A union is how a sibling job's install line
-    came to satisfy a check on behalf of the job that actually needed the package.
+    `.github/actions/setup-python-env` runs `pip install -r "$req"` in a loop, so what
+    matters is which requirements/ files each job installs, resolved per job by
+    `tests/ci_actions.py` through the `requirements:` input. Per job, not a union: a
+    sibling job's install does nothing for another runner.
     """
     per_job = {}
     for wf in workflow_files():
@@ -347,19 +261,8 @@ def test_ci_still_installs_the_files_it_is_supposed_to():
 
     distinct = {req for files in per_job.values() for req in files}
 
-    # TWO CHECKS, NOT ONE, AND THE REASON IS THE MESSAGE RATHER THAN THE NUMBER.
-    # This was a bare `len(distinct) >= 5`, and after Phase 7 deleted the nf-core lint
-    # job (and requirements/nf-core.txt with it) the resolved set is EXACTLY five. So
-    # the next routine consolidation -- folding requirements/kornia.txt into
-    # requirements/testdata.txt, say, which changes no behaviour -- would have gone red
-    # saying "the installs have gone somewhere tests/ci_actions.py cannot follow",
-    # which is not what happened and sends the reader to the wrong file.
-    #
-    # The tripwire and the inventory are different questions, so they are asked
-    # separately: a floor far below any plausible consolidation catches a resolver
-    # that stopped resolving, and an exact set catches a change to WHICH files CI
-    # installs -- naming the difference in both directions, so the failure text says
-    # what actually changed.
+    # Two checks: a low floor catches a resolver that stopped resolving, and an exact set
+    # catches a change to which files CI installs, naming the difference both ways.
     assert len(distinct) >= 3, (
         f"CI resolves to only {len(distinct)} distinct requirements/ file(s) across "
         "every job. That is far below anything a consolidation would produce, so the "
@@ -392,9 +295,7 @@ def test_no_workflow_step_that_installs_a_requirements_file_is_conditional():
     """`tests/ci_actions.py` evaluates an `if:` inside a composite action and ignores one
     on a workflow step -- it has no way to resolve `always()` or a matrix expression.
 
-    That asymmetry is safe only while no workflow step gates an install. Assert it, rather
-    than leaving the resolver quietly over-reporting the day someone adds `if:` to an
-    install step.
+    That asymmetry is safe only while no workflow step gates an install.
     """
     offenders = []
     for wf in workflow_files():
@@ -422,11 +323,7 @@ def test_no_workflow_step_that_installs_a_requirements_file_is_conditional():
 
 
 def test_no_workflow_pins_a_package_version():
-    """A CLOSED rule: no package list, so no package can be forgotten out of it.
-
-    This replaces a hand-maintained `GUARDED_PACKAGES` set that had to be extended three
-    separate times AFTER a real CI failure caused by the package it did not yet name.
-    """
+    """A closed rule: no package list, so no package can be forgotten out of it."""
     offenders = []
     for path in scanned_files():
         for args in pip_invocations(path.read_text()):
@@ -445,11 +342,8 @@ def test_no_workflow_pins_a_package_version():
 def test_every_workflow_install_goes_through_a_requirements_file():
     """The positive half of the same rule.
 
-    Assertion 1 alone permits `pip install numpy` -- unpinned, no file, and silently
-    resolving whatever PyPI serves that day, which is the exact failure that started this
-    whole guard (an unpinned tifffile pulling a zarr>=3.2 that was then force-downgraded,
-    leaving CI reading blank thumbnails). An install must name a file, or install nothing
-    but pip's own bootstrap tooling.
+    Assertion 1 alone permits `pip install numpy`, which resolves whatever PyPI serves that
+    day. An install must name a file, or install only pip's own bootstrap tooling.
     """
     offenders = []
     for path in scanned_files():
@@ -485,47 +379,22 @@ def _parses(token: str) -> bool:
 # --------------------------------------------------------------------------------------
 # PRESENCE, PER JOB -- a different property from "no version is named here"
 # --------------------------------------------------------------------------------------
-# Assertions 1 and 3 are about WHERE a version lives. Neither says that the job which runs
-# the suite actually installs anything, and that is a separate, load-bearing property with
-# its own measured history.
-#
-# Measured 2026-08-31: deleting the imaging-stack install from `.github/workflows/ci.yml`'s
-# `python-tests` job -- the blocking gate -- left the whole guard file GREEN, because five
-# SIBLING JOBS in the same file each carried a `pip install` of their own to generate test
-# data. A whole-FILE text scan let one job's install line satisfy the check on behalf of the
-# job that needed it. A job runs on its own runner; another job's pip does nothing for it.
-#
-# So the unit here is the JOB, resolved with `yaml.safe_load` -- only the structural walk
-# can say which `run:` belongs to which job -- and never a repo-wide grep, which is exactly
-# the hole that fix closed.
-#
-# PHASE 2 (composite actions) IS ACCOUNTED FOR, AND BY ONE RESOLVER. Which steps a job
-# actually runs -- including the ones it reaches through a `uses: ./.github/actions/<name>`
-# composite action, and which `requirements/*.txt` those install -- is answered by
-# `tests/ci_actions.py` and nothing else. This file used to carry a private walker of its
-# own (`_job_run_text`) written before that module existed; two resolvers that can disagree
-# is exactly the duplication this redesign deletes, and the private one was already wrong:
-# it read `run:` bodies only, so it could not see the `with: requirements:` input that is
-# now the required form, and reported the blocking gate as installing nothing at all.
-# Keeping these checks live across that move is the whole point -- the DISK guard covers
-# only torch/kornia and only per-FILE, so without them the blocking gate could have run
-# with no cv2 (29 tests deselected in silence) and no pyyaml (which deletes both of
-# tests/test_ci_job_hygiene.py's guards).
+# Assertions 1 and 3 are about where a version lives; these check that the job running the
+# suite installs what it needs. The unit is the job, since a sibling job's install does
+# nothing for another runner. Which steps a job runs, including through composite actions,
+# is resolved by `tests/ci_actions.py` only.
 # --------------------------------------------------------------------------------------
 
-# `pytest ... tests/` -- the DIRECTORY form, i.e. a job that runs the whole suite. The
-# lookahead is what keeps `pytest tests/test_coarse_frontend.py` (the DISK non-skip proof
-# step) from counting, which would let a job satisfy the scope with the proof step alone.
+# `pytest ... tests/`: the directory form, i.e. a job that runs the whole suite. The
+# lookahead keeps `pytest tests/test_<one file>.py` from counting.
 _RUNS_THE_PYTEST_SUITE_RE = re.compile(r"pytest\b[^\n]*\btests/(?=\s|$)")
 
 
 def jobs_running_the_pytest_suite() -> list[tuple[Path, str, dict]]:
     """(workflow, job id, the job) for every JOB that runs the whole suite.
 
-    The step walk is `tests/ci_actions.py`'s -- see the ONE RESOLVER note above.
-    `job_run_scripts` is the COMMAND view (`run:` bodies only, whole-line and
-    trailing comments stripped); `job_resolved_run_text` would let a comment
-    naming `pytest tests/` manufacture a hit, and is for `uses:` questions.
+    Uses `job_run_scripts`, the command view with comments stripped, so a comment naming
+    `pytest tests/` cannot manufacture a hit.
     """
     hits: list[tuple[Path, str, dict]] = []
     files_with_a_hit: set[Path] = set()
@@ -542,12 +411,8 @@ def jobs_running_the_pytest_suite() -> list[tuple[Path, str, dict]]:
         "running in CI, or the structural walk lost the step -- fix the walk, do not "
         "leave the checks passing over nothing."
     )
-    # Non-vacuity, the other way round: the raw-text scan and the structural walk must
-    # agree on WHICH FILES run the suite. A file whose text says `pytest ... tests/` but
-    # none of whose jobs do means the YAML walk lost a step (a `run:` somewhere this
-    # helper does not look, e.g. a composite action it could not resolve), and every
-    # per-job assertion below silently stops covering that file. The text side reads the
-    # comment-stripped view, so a comment quoting the command cannot manufacture a hit.
+    # Non-vacuity: the text scan and the structural walk must agree on which files run the
+    # suite, or the YAML walk lost a step and the per-job checks stop covering that file.
     text_hits = {
         wf
         for wf in workflow_files()
@@ -610,13 +475,10 @@ def _declared_packages(path: Path, seen: set[Path] | None = None) -> set[str]:
 
 
 def test_every_job_running_the_suite_installs_the_ci_requirements_file():
-    """PER-JOB, structurally. The property the 2026-08-31 fix established, restored.
+    """Per job: a job running `pytest tests/` installs `requirements/ci.txt`.
 
-    `requirements/ci.txt` is the reviewed union the unit tests run in. A job that runs
-    `pytest tests/` without installing it runs the suite in whatever the runner happened to
-    ship -- and the suite does not fail, it DESELECTS: every module-scope
-    `pytest.importorskip` turns into a silent skip. That is the shape of failure this whole
-    file exists to make impossible.
+    Without it the suite does not fail, it deselects: every module-scope
+    `pytest.importorskip` becomes a silent skip.
     """
     missing = [
         f"{wf.relative_to(ROOT).as_posix()}: job `{job_id}`"
@@ -630,9 +492,8 @@ def test_every_job_running_the_suite_installs_the_ci_requirements_file():
     )
 
 
-# Import name -> distribution name, for the few that differ. Only these three do in this
-# repo; anything else is assumed to match, and a mismatch fails the check below by name
-# rather than passing silently.
+# Import name -> distribution name where they differ; anything else is assumed to match, and
+# a mismatch fails the check below by name.
 _IMPORT_TO_DIST = {
     "yaml": "pyyaml",
     "cv2": "opencv-python-headless",
@@ -644,11 +505,8 @@ _IMPORT_TO_DIST = {
 def module_scope_importorskips() -> dict[str, list[str]]:
     """{distribution: [test files]} for every MODULE-SCOPE pytest.importorskip under tests/.
 
-    Parsed with `ast`, not a regex: a regex cannot tell a module-scope call from one inside
-    a function, and the two mean different things here. A module-scope importorskip removes
-    the WHOLE FILE from collection when its package is absent -- silently -- so the set of
-    them is exactly the set of packages CI must install for the suite to mean anything.
-    Derived from the suite itself, so a new importorskip is covered the moment it is written.
+    Parsed with `ast`, so only module-scope calls count: those silently remove the whole file
+    when the package is absent, so they are the packages CI must install.
     """
     out: dict[str, list[str]] = {}
     for path in sorted((ROOT / "tests").glob("test_*.py")):
@@ -683,10 +541,7 @@ def test_the_module_scope_importorskip_scan_is_not_empty():
         "no longer finds them -- fix the walk rather than leaving the check below to pass "
         "over an empty set."
     )
-    # The ones that must be there, because each is a package whose absence deselects tests
-    # with nothing in the output to show for it, and each has bitten this repo. kornia left
-    # this list on 2026-09-27, deliberately: STARE's COARSE no longer uses it, and the tests
-    # that importorskip'd it (the DISK front-end and everything reaching it) no longer do.
+    # Packages whose absence would silently deselect tests.
     for dist in ("pyyaml", "opencv-python-headless"):
         assert dist in found, (
             f"{dist} is no longer reached by the module-scope importorskip scan. It was "
@@ -698,14 +553,9 @@ def test_the_module_scope_importorskip_scan_is_not_empty():
 def test_every_job_running_the_suite_installs_what_the_suite_importorskips():
     """PER-JOB. `-r requirements/ci.txt` is necessary; this is what makes it sufficient.
 
-    A job could install ci.txt and still be missing torch and kornia, which live in their
-    own files for the CPU-index reason. And ci.txt itself could stop declaring pyyaml -- the
-    package whose absence silently deletes both of tests/test_ci_job_hygiene.py's guards,
-    and which reached the runner only as a transitive dependency of dask until 2026-08-31.
-
-    The required set is DERIVED from the suite's own module-scope importorskips, so it
-    cannot be forgotten out of: a new `pytest.importorskip` at module scope is covered the
-    moment it is written, which is the same closed-rule property assertion 1 has.
+    A job could install ci.txt and still miss torch, which lives in its own file for the
+    CPU index. The required set is derived from the suite's module-scope importorskips, so a
+    new one is covered as soon as it is written.
     """
     required = module_scope_importorskips()
     missing = []
@@ -731,8 +581,8 @@ def test_every_job_running_the_suite_installs_what_the_suite_importorskips():
 def test_every_workflow_pip_invocation_is_shell_parseable():
     """`split_args` falls back to a naive split when shlex cannot parse; fail on that.
 
-    Without this the fallback is a silent hole: an unbalanced quote anywhere in a pip line
-    would send every token through the splitter that cannot see `'numpy == 1.0.0'`.
+    Otherwise an unbalanced quote would send the line through a splitter that cannot see
+    `'numpy == 1.0.0'`.
     """
     bad = []
     for wf in workflow_files():
@@ -753,13 +603,8 @@ def test_every_workflow_pip_invocation_is_shell_parseable():
 # --------------------------------------------------------------------------------------
 # Assertion 2 -- every image that installs a constrained package reads the constraints file
 # --------------------------------------------------------------------------------------
-# The exception list is DERIVED, never written here. `PINNED_EXCEPTIONS` already records
-# every (image, package) pair that must diverge from the harmonised set, each with the
-# upstream constraint forcing it; an image on that list literally cannot take the
-# constraints file, because pip reports ResolutionImpossible rather than letting a
-# constraint "win" over a divergent direct requirement. Deriving the list means a new
-# exception costs a documented PINNED_EXCEPTIONS entry -- it cannot be bought with a name
-# added to a list in this file.
+# The exception list is derived from `PINNED_EXCEPTIONS`: an image there cannot take the
+# constraints file, because pip reports ResolutionImpossible on a divergent direct pin.
 EXEMPT = frozenset({harmonisation.PY312_ISLAND}) | {
     container for container, _pkg in harmonisation.PINNED_EXCEPTIONS
 }
@@ -805,11 +650,8 @@ def _uncovered_invocations(container: str) -> list[str]:
                 names.add(parsed[0])
         if not names & constrained_packages():
             continue
-        # ANCHORED on `requirements/constraints.txt`, not on any path ENDING in
-        # "constraints.txt". The looser form accepted `-c /tmp/my-old-constraints.txt` --
-        # a file that constrains nothing from requirements/ -- and passed assertion 2 while
-        # the image's pins were unconstrained again. The Dockerfiles COPY to
-        # /tmp/requirements/constraints.txt, so the anchored form matches all of them.
+        # Anchored on `requirements/constraints.txt`, so `-c /tmp/my-old-constraints.txt`
+        # does not count. The Dockerfiles COPY to /tmp/requirements/constraints.txt.
         if any(
             re.fullmatch(r"(?:.*/)?requirements/constraints\.txt", target)
             for target in option_targets(args, ("-c", "--constraint"))
@@ -856,9 +698,7 @@ def test_image_installing_a_constrained_package_reads_the_constraints_file(conta
 def test_every_exempt_image_is_still_diverging(container):
     """A stale exemption is worse than none: it reads as a reviewed decision.
 
-    An image is exempt only while it genuinely cannot take the constraints file. The moment
-    its divergence is resolved upstream, the exemption must go -- and the way to find that
-    out is to fail here, not to leave the image quietly outside the guard forever.
+    An image is exempt only while it genuinely cannot take the constraints file.
     """
     installs = _constrained_installs(container)
     assert installs, (
@@ -882,9 +722,7 @@ def test_every_exempt_image_is_still_diverging(container):
 def test_the_constraints_file_is_the_harmonised_table():
     """`test_container_harmonisation.HARMONISED` must be READ from the file, not restated.
 
-    This is the assertion that makes the other two worth having. If the table is ever
-    hardcoded again, the images get checked against a set of numbers that nothing installs,
-    and both the Dockerfiles and CI can drift from it without anything going red.
+    A hardcoded table would check the images against numbers nothing installs.
     """
     fresh = harmonisation._read_constraints(CONSTRAINTS)
     assert harmonisation.HARMONISED == fresh, (
@@ -896,17 +734,10 @@ def test_the_constraints_file_is_the_harmonised_table():
     )
 
 
-# Two DISTRIBUTION names that package the same upstream release. `containers/regqc` and
-# `containers/merge` install `opencv-python`; CI installs `opencv-python-headless`, because
-# the runners have no display libs. No single constraint can cover both -- pip resolves on
-# the distribution name -- so both are pinned in constraints.txt and this table is what ties
-# them together. Without it the two versions sat in two files with nothing between them: a
-# CVE bump taking regqc to 4.11.x would have left CI exercising bin/utils/qc.py against a
-# different cv2 than production ships, with nothing going red.
-#
-# The second name of each pair is exempt from the "installed by more than one image" rule,
-# because by construction NO image installs it -- that is what makes its constraint inert
-# and therefore free for the nine images that COPY the file.
+# Distribution names that package the same upstream release. The images install
+# `opencv-python`; CI installs `opencv-python-headless` (no display libs). pip resolves on the
+# distribution name, so both are pinned and this table keeps their versions equal. The second
+# name is installed by no image, so it is exempt from the "shared by more than one image" rule.
 EQUIVALENT_DISTRIBUTIONS = (("opencv-python", "opencv-python-headless"),)
 
 
@@ -934,15 +765,14 @@ def test_equivalent_distributions_are_pinned_to_the_same_release():
 def test_every_constrained_package_is_installed_by_more_than_one_image():
     """The constraints file is for SHARED packages; a solo pin belongs in that image's file.
 
-    Without this, constraints.txt grows into a second global requirements file, and every
-    image that COPYs it starts carrying resolution pressure from packages it never installs.
+    Otherwise constraints.txt grows into a second global requirements file.
     """
     counts = {pkg: 0 for pkg in constrained_packages()}
     for container in container_dirs():
         for pkg in _constrained_installs(container):
             counts[pkg] += 1
-    # The second name of an equivalent pair is installed by no image ON PURPOSE; its
-    # constraint exists to hold CI to the first name's release and is inert everywhere else.
+    # The second name of an equivalent pair is installed by no image; its constraint holds
+    # CI to the first name's release.
     exempt = {b for _a, b in EQUIVALENT_DISTRIBUTIONS}
     lonely = sorted(p for p, n in counts.items() if n < 2 and p not in exempt)
     assert not lonely, (

@@ -1,35 +1,11 @@
-"""Foreground fraction: measured in Phase 0, emitted in Phase 1, gated by nobody yet.
+"""Foreground fraction: ``ref_fg`` and ``mov_fg`` on every control point, gated by nothing.
 
-PHASE 0 -- what the measurement says
-------------------------------------
-The source review, and the handover after it, both reach for Otsu foreground detection as "the
-real fix" for the accepted-but-wrong band. Phase 0's job was to check that before anything was
-built on it. Measured over the same dense sweep that pins the exposure -- 21 blanking fractions
-x 4 geometries x 3 seeds, 252 configurations, of which 200 are accepted and 68 of those carry a
-wrong shift:
-
-    signal              threshold losing 0 correct tiles    wrong tiles rejected
-    mov_fg                          >= 0.0371                   41/68  (60.3%)
-    mov_fg / ref_fg                 >= 0.4165                   44/68  (64.7%)
-
-So the answer to "real separator or second overlapping signal?" is **both**. Foreground fraction
-removes about 60-65% of the exposure at zero cost to real tissue, which is a large, real gain --
-and the distributions still overlap (correct tiles reach down to mov_fg 0.0371, wrong tiles reach
-up to 0.0624), so roughly a third of the wrong tiles survive any per-tile threshold. Phase 2's
-neighbourhood consistency is still required; foreground detection alone does not close the band.
-
-The ratio separating better than ``mov_fg`` alone is why BOTH crops are measured, not just the
-moving one.
-
-PHASE 1 -- what this change does
----------------------------------
-Emit ``ref_fg`` and ``mov_fg`` on every control point. **Nothing gates on them.** That is
-deliberate: emitting first is cheap and reversible, makes the next phase measurable on real
-slides instead of synthetic tiles, and lets ``--out-tre`` say why a tile was dropped.
-
-(The "accepted-but-wrong band" above was STARE v1's one-point-per-tile exposure. Since STARE v2
-the mesh is built from per-window vectors on a foreground mask with a peak-ratio floor; the
-per-tile ``ref_fg``/``mov_fg`` are still emitted and still gated on by nothing.)
+Both crops are measured because ``mov_fg / ref_fg`` separates wrong shifts from correct
+ones better than ``mov_fg`` alone. On a dense synthetic sweep a foreground threshold
+rejected about 60-65% of wrong shifts at no cost to correct tiles, but the distributions
+overlap, so foreground alone is not a sufficient gate. The values are emitted so a future
+gate can be measured on real slides and ``--out-tre`` can say why a tile was dropped; SOLVE
+does not read them.
 """
 
 import json
@@ -95,7 +71,7 @@ def test_a_smooth_unimodal_tile_reports_no_foreground():
 
 
 def test_the_fraction_falls_monotonically_as_tissue_is_removed():
-    """The property a Phase 2 gate would depend on, and that a raw Otsu split does NOT have."""
+    """The property a gate would depend on, and that a raw Otsu split does NOT have."""
     rng = np.random.default_rng(5)
     tile = _tissue()
     values = []
@@ -143,7 +119,7 @@ def test_blanking_half_a_tile_roughly_halves_its_foreground():
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: the control point carries the signal
+# the control point carries the signal
 # ---------------------------------------------------------------------------
 
 
@@ -201,7 +177,7 @@ def test_the_control_point_carries_both_foreground_fractions(tmp_path):
 
 
 def test_the_existing_control_point_keys_are_unchanged(tmp_path):
-    """Phase 1 adds keys; it must not move or drop any."""
+    """The fraction adds keys; it must not move or drop any."""
     control = _run_tile(tmp_path)
 
     for key in ("ix", "iy", "cx", "cy", "dx", "dy", "tre", "error"):
@@ -209,7 +185,7 @@ def test_the_existing_control_point_keys_are_unchanged(tmp_path):
 
 
 def test_nothing_gates_on_the_foreground_fraction_yet():
-    """Phase 1 emits without gating -- deliberately, so the next phase stays measurable.
+    """The fraction is emitted, not gated on.
 
     The per-tile ``ref_fg``/``mov_fg`` must not change what SOLVE takes from a tile: a tile's
     acceptance (``stare.solve.tile_accepted``) reads only its vectors and the range gate.

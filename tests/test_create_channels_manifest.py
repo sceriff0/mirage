@@ -1,11 +1,9 @@
 """bin/create_channels_manifest.py — the map REGISTER and RegisteredMatch pair on.
 
-This script had no test. Its JSON is filename -> [channel names], and after
-phase 04 it is what RegisteredMatch.pair uses to reunite VALIS's registered
-outputs with their slide metas by channel signature -- so a manifest that
-skipped a file, or recorded its channels in the wrong order, re-pairs one
-slide's meta with another slide's pixels. Nothing about that is visible in an
-exit code.
+Its JSON is filename -> [channel names], which RegisteredMatch.pair uses to reunite
+VALIS's registered outputs with their slide metas by channel signature. A manifest that
+skips a file or misorders channels re-pairs one slide's meta with another slide's
+pixels, with no visible error.
 """
 
 from __future__ import annotations
@@ -106,7 +104,7 @@ def test_a_registered_file_with_no_ome_metadata_stops_the_run(tmp_path, monkeypa
     """The dangerous alternative is an empty channel list in the manifest, which
     reads downstream as 'this slide has no channels' rather than as an error.
 
-    ``ome=False`` is load-bearing here, not decoration: tifffile infers OME
+    ``ome=False`` matters here: tifffile infers OME
     output from the ``.ome.tiff`` suffix alone and synthesizes a
     ``Channel:0:0`` OME-XML block even without an explicit ``ome=True`` --
     observed directly (``extract_channel_names_from_ome`` returned

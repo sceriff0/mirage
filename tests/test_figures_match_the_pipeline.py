@@ -1,13 +1,9 @@
 """Make the claims in `docs/figures/*.html` checkable against the pipeline.
 
-Those figures are the supplementary methods explainers -- the artefact a
-reviewer reads instead of the source. Until this file existed **nothing parsed
-them**, and every drift found while auditing them existed for exactly that
-reason: a parameter default that had been changed for a documented reason, a
-process renamed, an archived process still drawn as if it ran. All of it looked
-fine, because a static HTML page fails no test.
+Those figures are the supplementary methods explainers, which a reviewer reads
+instead of the source; a static HTML page fails no test unless something parses it.
 
-Three claim classes are checked, chosen because a test can actually settle them:
+Four claim classes are checked, chosen because a test can settle them:
 
 1. **Parameter names.** Every `--<name>` and `params.<name>` a figure writes
    must be declared in `nextflow.config`'s `params {}` block.
@@ -40,10 +36,8 @@ What this does **not** cover, and cannot:
   seg_pmax` carries two defaults in one cell (`1.0 / 99.8`). Both NAMES are
   checked for existence; neither value is compared.
 
-The floors in each test are what stop the checks becoming vacuous if the
-markup is restyled: a restyle that silently stopped matching would otherwise
-turn every assertion below into a loop over an empty list, which is the exact
-"a count of zero passes" failure `tests/conftest.py` exists to prevent.
+The floors in each test stop the checks becoming vacuous if the markup is
+restyled and the extraction silently matches nothing.
 """
 
 from __future__ import annotations
@@ -61,13 +55,8 @@ FIGURES_DIR = REPO_ROOT / "docs" / "figures"
 # --------------------------------------------------------------------------
 # The shrink-only debt allowlist.
 #
-# Same shape as tests/test_nfmodel.py's UNREPOINTED_NF_SOURCE_READERS: an
-# entry is a debt, not a permission. `test_the_allowlist_only_shrinks` below
-# fails if an allow-listed figure stops failing -- so an entry cannot outlive
-# the drift it excuses, and the list can only ever be edited downwards.
-#
-# Do NOT add a figure here to make it pass. A failing figure is a real drift
-# and the figure is what gets fixed.
+# An entry is a debt, not a permission: `test_the_allowlist_only_shrinks` fails
+# if an allow-listed figure stops failing. Fix a failing figure; do not add it here.
 # --------------------------------------------------------------------------
 STALE_FIGURES = {}
 
@@ -83,10 +72,7 @@ NON_PARAM_FLAGS = {
     "method": "bin/warp_seg_qc.py's CLI flag, not a pipeline parameter",
     "tolerance": "bin/seg_qc_geojson.py's CLI flag, not a pipeline parameter",
     "pairing": "bin/warp_seg_qc.py's CLI flag; the pipeline parameter is seg_qc_pairing",
-    # NOT "match-radius-factor": _FLAG (`--([a-z][a-z0-9_]*)(?![A-Za-z0-9_-])`) cannot
-    # match a hyphenated flag name at all -- the lookahead rejects the very next
-    # character it would need to consume -- so `--match-radius-factor` is invisible to
-    # both this checker and the exists-check above. Nothing to exempt.
+    # Hyphenated flags (e.g. `--match-radius-factor`) never match _FLAG, so need no entry.
 }
 
 # ``UPPER_SNAKE_CASE`` tokens that name something real but are not Nextflow
@@ -132,36 +118,23 @@ NOT_A_PARAM_ROW = {
 _STYLE_BLOCK = re.compile(r"<style\b.*?</style>", re.S | re.I)
 _STYLE_ATTR = re.compile(r"""\sstyle\s*=\s*(["']).*?\1""", re.S | re.I)
 _VAR_REF = re.compile(r"var\(\s*--[A-Za-z0-9_-]+\s*\)")
-# HTML comments cannot nest, so a non-greedy DOTALL match is the whole comment,
-# never less. Every POSITIVE check in this file ("this row/name exists") reads
-# `_prose()`, not `path.read_text()`, precisely so commented-out markup cannot
-# satisfy a claim that never renders -- see `_prose`'s docstring. The negative
-# guard in tests/test_figures_have_no_retired_names.py is the mirror image and
-# deliberately reads RAW text instead: there, a retired name inside a comment
-# must still fire, because a positive and a negative rule need opposite
-# treatment (CLAUDE.md, "Verification reality" #7).
+# HTML comments cannot nest, so a non-greedy DOTALL match is the whole comment.
+# Positive checks read `_prose()` so commented-out markup cannot satisfy them; the
+# negative guard in tests/test_figures_have_no_retired_names.py reads raw text.
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 
-# A Nextflow parameter is snake_case and never contains a hyphen -- true of all
-# 92 declared in nextflow.config. So `--jvm-heap-gb`, `--checkpoint-dir` and
-# `--no-fullres` (Python CLI flags, which this repo spells with hyphens) are
-# excluded structurally rather than by name.
+# A Nextflow parameter is snake_case with no hyphen, so Python CLI flags such as
+# `--jvm-heap-gb` are excluded structurally rather than by name.
 _FLAG = re.compile(r"--([a-z][a-z0-9_]*)(?![A-Za-z0-9_-])")
 _PARAMS_DOT = re.compile(r"params\.([a-z][a-z0-9_]*)")
 # Two complementary name scans; the union is what gets resolved.
 #
-# `_UPPER` is shape-driven and runs over the WHOLE figure, so it catches a name
-# written as bare prose -- which is how `REG_TILE` was caught in
-# pipeline-schematic.html's resource footnote, outside any <code>. It requires
-# an underscore, because a shape scan without one matches every all-caps
-# English word in the document (measured: 132 unresolvable tokens).
+# `_UPPER` runs over the whole figure, so it catches a name in bare prose. It
+# requires an underscore, or it would match every all-caps English word.
 #
-# `_CODE_SPAN` is context-driven: anything a figure marks up AS CODE is a claim
-# that that identifier exists, so inside those spans the underscore requirement
-# is dropped. That is what puts the single-word process names under the check --
-# REGISTER (6 occurrences) and SEGMENT (7) were matched by nothing before, so
-# renaming either left every figure that names it green. Measured: 44 tokens,
-# of which 6 need an exemption.
+# `_CODE_SPAN`: anything marked up as code is a claim that the identifier exists,
+# so the underscore requirement is dropped there. That covers single-word process
+# names such as REGISTER and SEGMENT.
 _UPPER = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b")
 _CODE_SPAN = re.compile(
     r"<code[^>]*>(.*?)</code>"
@@ -175,9 +148,7 @@ _PR_TABLE = re.compile(r'<table class="pr">(.*?)</table>', re.S)
 
 _TAG = re.compile(r"<[^>]+>")
 # Key and value cells of one parameter row. Neither capture may span a `</td>`,
-# so a `k` cell that is not followed by a `v` cell cannot swallow the rows
-# after it -- a naive `(.*?)` with re.S does exactly that, and silently merged
-# eight rows into one while this was being written.
+# so a `k` cell without a `v` cell cannot swallow the rows after it.
 _KV_ROW = re.compile(
     r'<td class="k">((?:(?!</td>).)*)</td>\s*<td class="v[^"]*">((?:(?!</td>).)*)</td>',
     re.S,
@@ -197,11 +168,8 @@ def _live_figures():
 def _prose(path: Path) -> str:
     """Figure text with CSS custom properties AND HTML comments removed.
 
-    See `_STYLE_BLOCK` for the CSS half. The HTML-comment half (`_COMMENT`)
-    exists because every check that asks "does the figure claim X" is a
-    POSITIVE rule, and a positive rule satisfied by markup that never renders
-    is checking nothing -- a parameter row or a pipeline name sitting inside
-    `<!-- ... -->` must not count as the figure making that claim.
+    Every check that asks "does the figure claim X" is a positive rule, so a row
+    or name inside `<!-- ... -->` must not count as a claim.
     """
     text = path.read_text()
     return _COMMENT.sub(
@@ -216,12 +184,6 @@ def _cell_text(fragment: str) -> str:
 def test_a_param_row_inside_an_html_comment_is_not_counted(tmp_path):
     """`_prose()` must blank HTML comments, or a commented-out row/name would
     satisfy a POSITIVE check without the figure ever making that claim.
-
-    Regression for the hole named in this module's own docstring update: before
-    `_COMMENT` existed, `_prose()` stripped `<style>` blocks and `style=""`
-    attrs but not `<!-- ... -->`, so a `<table class="pr">` row or an
-    UPPER_SNAKE_CASE name commented out of a figure still resolved as if it
-    were live markup.
     """
     fixture = tmp_path / "commented.html"
     fixture.write_text(
@@ -241,20 +203,16 @@ def test_a_param_row_inside_an_html_comment_is_not_counted(tmp_path):
 def _config_defaults():
     """`nextflow.config`'s params {} block, via the existing reader.
 
-    `tests/check_param_consistency.py` already owns this parse (it is the
-    checker that compares the block against nextflow_schema.json). It is a
-    script, not a module on the path, so it is loaded the same way
-    `tests/test_param_consistency_rule.py` loads it -- rather than growing a
-    second copy of a Groovy-literal parser here.
+    `tests/check_param_consistency.py` owns this parse. It is a script, not a
+    module on the path, so it is loaded the way
+    `tests/test_param_consistency_rule.py` loads it.
     """
     spec = importlib.util.spec_from_file_location(
         "check_param_consistency", REPO_ROOT / "tests" / "check_param_consistency.py"
     )
     module = importlib.util.module_from_spec(spec)
-    # It imports `_code_view` flat. pytest happens to put tests/ on sys.path for
-    # a test module in a non-package directory, so this works under a normal run
-    # and raises ImportError the moment anything imports this file directly --
-    # which is how a guard becomes uncollectable without failing. Explicit.
+    # It imports `_code_view` flat, so put tests/ on sys.path explicitly rather than
+    # relying on pytest's rootdir insertion.
     if str(REPO_ROOT / "tests") not in sys.path:
         sys.path.insert(0, str(REPO_ROOT / "tests"))
     spec.loader.exec_module(module)
@@ -372,9 +330,7 @@ def _name_problems(path, known):
 def test_every_pipeline_name_a_figure_uses_exists():
     """A figure naming a process that was renamed or archived is the drift this
     catches. Resolution is against processes + workflows + include aliases,
-    because a subworkflow and an aliased include are pipeline names too -- and a
-    resolver that saw only `processes()` would report SEG_QC and SEG_QC_SEGMENT
-    as typos, which is how an allowlist starts absorbing real names."""
+    because a subworkflow and an aliased include are pipeline names too."""
     known = _known_names()
     problems, seen = [], set()
     for path in _live_figures():
@@ -384,10 +340,8 @@ def test_every_pipeline_name_a_figure_uses_exists():
         f"only {len(seen)} known pipeline names found across the figures -- the "
         "extractor has stopped matching"
     )
-    # The single-word case, pinned by name. It is the blind spot this scan was
-    # widened to close: both are real processes (modules/local/register.nf,
-    # segment.nf), both are named repeatedly in the figures, and until the
-    # code-scoped scan existed a rename of either left every figure green.
+    # The single-word case, pinned by name: both are real processes named
+    # repeatedly in the figures, and only the code-scoped scan sees them.
     missing = {"REGISTER", "SEGMENT"} - seen
     assert not missing, (
         f"{sorted(missing)} no longer reach the resolver. Either the process was "
@@ -449,9 +403,8 @@ def _row_keys(key):
 def _row_key_problems(path, defaults):
     """A parameter-table key that reads as a param key but names none.
 
-    This is the hole that made a misspelling invisible: such a row escapes the
-    name check above (a table key carries no `--`/`params.` prefix) and used to
-    be DROPPED before the value comparison, so `reg_qcc = 7` passed both.
+    Such a row escapes the name check above (a table key carries no
+    `--`/`params.` prefix), so it is reported here.
     """
     problems = []
     for key, _value in _param_rows(path):
@@ -501,11 +454,8 @@ def _value_problems(path, defaults, unparsed_type):
 def test_every_parameter_row_key_is_a_real_parameter():
     """A misspelled key in a parameter table must FAIL, not vanish.
 
-    Measured hole, reproduced by the reviewer: changing qc-schematic's
-    `<td class="k">reg_qc</td><td class="v">2</td>` to `reg_qcc`/`7` gave 7
-    passed. Both halves were invisible -- the wrong NAME because a table key
-    carries no `--` prefix for the name check to see, and the wrong VALUE
-    because the row was dropped before the comparison for having an unknown key.
+    E.g. `<td class="k">reg_qcc</td><td class="v">7</td>`: the key carries no
+    `--` prefix for the name check, and an unknown key has no default to compare.
     """
     defaults, _ = _config_defaults()
     problems, keys = [], 0
@@ -544,10 +494,8 @@ def test_not_a_param_rows_are_really_not_params():
 def test_every_default_a_figure_states_matches_nextflow_config():
     """The drift with teeth: a figure advertising a default that was changed.
 
-    `nextflow.config` is the single source of truth for defaults -- a second
-    declaration anywhere in the pipeline is already forbidden
-    (`tests/test_no_duplicate_param_defaults.py`). A figure is a second
-    declaration too; it just cannot be executed, so nothing noticed.
+    `nextflow.config` is the single source of truth for defaults; a figure is a
+    second declaration that cannot be executed.
     """
     defaults, unparsed = _config_defaults()
     problems, rows = [], 0
@@ -564,28 +512,14 @@ def test_every_default_a_figure_states_matches_nextflow_config():
 # --------------------------------------------------------------------------
 # 4. registration backend names
 # --------------------------------------------------------------------------
-# `test_every_pipeline_name_a_figure_uses_exists` resolves VALIS_ADAPTER and
-# TILED_ADAPTER because they are include aliases -- and would resolve a third
-# adapter just as happily. It says nothing at all about the lower-case METHOD
-# VALUES the figures write in prose and in `registration_method` rows. So a
-# figure could keep advertising a backend that was deleted (this set did
-# exactly that with ashlar until spec Phase 2 removed it), or miss one that was
-# added, and stay green. lib/RegBackends.groovy is the one owner of that list.
+# The name check says nothing about the lower-case method values the figures
+# write in prose and `registration_method` rows; lib/RegBackends.groovy owns
+# that list, and a figure naming a method it lacks fails here.
 #
-# Two exclusions, both keyed to the exact carve-out
-# `tests/test_figures_have_no_retired_names.py`'s own module docstring already
-# names and defends ("Two ASHLAR sentences in this set are CORRECT and must
-# survive"): "ASHLAR's" (a possessive reference to the external tool, e.g.
-# "the kernel mirrors ASHLAR's") and "Elastix bindings" (VALIS's optional
-# SimpleITK+Elastix affine refiner, which the image explicitly does not
-# carry -- registration-schematic.html:507). Neither is a claim that mirage
-# ships that backend; a bare "ashlar" or "elastix" with no possessive/bindings
-# tail still matches, which is what the drills below rely on.
-#
-# Residual: a possessive tail is not proof the sentence is merely descriptive
-# -- "mirage ships ashlar's tile solver" would dodge the exclusion above while
-# still being a shipping claim. Tightened by flagging a possessive match too
-# when a shipping verb sits within 40 chars before it.
+# Two exclusions, matching tests/test_figures_have_no_retired_names.py's
+# carve-out: "ASHLAR's" (a possessive reference to the external tool) and
+# "Elastix bindings" (VALIS's optional refiner, which the image does not carry).
+# A possessive is still flagged when a shipping verb sits within 40 chars before it.
 _METHOD_WORD = re.compile(
     r"(?<![A-Za-z0-9_])(valis|tiled|ashlar|stare_ml|elastix)(?![A-Za-z0-9_])"
     r"(?!'s)(?! bindings)",
@@ -652,10 +586,8 @@ def test_the_allowlist_only_shrinks():
     """A STALE_FIGURES entry must name a figure that exists and that still
     fails at least one check above.
 
-    An entry that has been fixed but not removed is the same rot
-    `tests/test_nfmodel.py` guards against: the exemption outlives the drift,
-    and the next real regression in that file lands silently. Removing the
-    entry is then a one-line diff, and this failure says so.
+    An entry that has been fixed but not removed would let the next regression
+    in that figure land silently.
     """
     defaults, unparsed = _config_defaults()
     known = _known_names()

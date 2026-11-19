@@ -1,26 +1,15 @@
 """A `path` input's arity is not fixed, and conf/*.config closures forgot it.
 
 Nextflow binds a `path` input to a bare `Path` when the group holds exactly one
-file and to a `List<Path>` when it holds more. `MERGE_AND_PYRAMID`'s memory
-closure called `split_channels.collect { it.size() }` directly, so on a
-one-channel patient it iterated the Path's NAME ELEMENTS and went looking for a
-file called "channels" -- the stageAs directory. The run aborted with
-"No such file or directory: channels" (reproduced 2026-08-25 by
-tests/modules/merge_and_pyramid.nf.test's one-channel case).
+file and to a `List<Path>` when it holds more. Iterating the input directly
+(`split_channels.collect { it.size() }`) on a one-file group walks the Path's name
+elements and fails with "No such file or directory: channels".
 
-The rule this pins is deliberately blunt: inside a conf/modules.config closure,
-never iterate a name you did not bind yourself. Bind a local first -- which is
-where the `instanceof Collection` normalisation has to go anyway -- and iterate
-that. Blunt because the closure has no way to ask how many files it got: it is
-config text, evaluated per task, with no access to the process declaration that
-would say. A guard that tried to distinguish "input that can be plural" from
-"input that cannot" would need exactly the cross-file knowledge that is
-unavailable here, and would go quiet the first time it guessed wrong.
-
-Why a static guard at all, when an nf-test now covers the one real site: the
-nf-test covers THAT site. Nothing stops the next memory closure from being
-written the same way, and the failure only appears for a group size no other
-test in the file uses -- which is precisely how this one survived.
+The rule: inside a conf/modules.config closure, never iterate a name you did not bind
+yourself. Bind a local with the `instanceof Collection` normalisation and iterate that.
+The closure cannot know how many files it got, so the rule is blunt on purpose.
+tests/modules/merge_and_pyramid.nf.test's one-channel case covers the one real site;
+this guard covers the next closure written the same way.
 """
 
 import re

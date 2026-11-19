@@ -5,15 +5,10 @@ dead code and is deleted, not kept just in case". The same argument applies to a
 megabyte framework baked into an image: nothing selects it, nothing imports it, and it is
 carried on every pull, in every task, forever.
 
-Three were found this way:
+For example, `cellpose` cannot be selected (`seg_method`'s schema enum does not include
+it), and `cupy-cuda12x` / `cucim` are referenced nowhere outside `containers/`.
 
-  * `cellpose==3.1.1.1` in `containers/stardist` and `containers/regqc`. It is not
-    merely unimported -- `seg_method`'s schema enum is `["stardist", "instantseg", "cellsam"]`,
-    so the pipeline **cannot be asked** to run it. Validation refuses the value.
-  * `cupy-cuda12x` and `cucim` in `containers/quantify` and `containers/regqc`.
-    Zero references anywhere outside `containers/`: no import, no optional import, no CLI use.
-
-**Scope is deliberately a named list, not "every installed package".** Most entries in a
+Scope is a named list, not "every installed package". Most entries in a
 Dockerfile are legitimately transitive or runtime-only dependencies that no first-party file
 imports, so a blanket rule would produce noise and get disabled. The list below is the set of
 heavyweight, *selectable* frameworks -- the ones whose presence implies a capability. Add to it
@@ -33,9 +28,8 @@ FRAMEWORKS = {
     "cucim": "cucim",
     "mesmer": "mesmer",
     "deepcell": "deepcell",
-    # containers/tiled installed these for STARE's DISK+LightGlue COARSE front-end, retired
-    # 2026-09-27 for an NCC rotation sweep with an ORB fallback that imports neither; its
-    # replacement, containers/stare, installs neither. Kept here so neither comes back.
+    # STARE's coarse step (NCC rotation sweep, ORB fallback) imports neither. Listed so
+    # neither comes back.
     "torch": "torch",
     "kornia": "kornia",
 }
@@ -54,13 +48,12 @@ CODE_DIRS = (
 )
 
 
-# (Dockerfile, dist) pairs that ARE unreachable, deliberately tolerated until the image they
-# sit in is rebuilt -- a user-approved step separate from the code change that orphaned them.
+# (Dockerfile, dist) pairs that are unreachable, tolerated until the image is rebuilt (a
+# separate, user-approved step).
 # Each entry must still be a real offender (test_pending_rebuild_entries_are_still_offenders),
 # so the day the Dockerfile drops the wheel the entry fails and has to go.
 PENDING_IMAGE_REBUILD = {
-    # Empty since 2026-09-27: ("containers/tiled/Dockerfile", "kornia") went when the
-    # tiled image was replaced by the torch-free containers/stare.
+    # Empty.
 }
 
 
@@ -146,7 +139,7 @@ def test_the_dockerfile_scan_covers_the_images_this_guard_exists_for():
 
 
 def test_the_detector_recognises_a_pinned_and_an_unpinned_install():
-    """Pin the parser against both forms actually removed, so it cannot rot into a no-op."""
+    """Pin the parser against both install forms, so it cannot rot into a no-op."""
     pinned = "RUN pip install --no-cache-dir \\\n    stardist==0.9.1 \\\n    cellpose==3.1.1.1\n"
     unpinned = "RUN pip install --no-cache-dir \\\n    cupy-cuda12x \\\n    cucim \\\n    numpy\n"
 

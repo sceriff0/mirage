@@ -100,11 +100,8 @@ def test_estimate_rigid_smoke_recovers_a_translation_on_a_textured_image():
 # consumer here needs (the Otsu tissue mask, ORB's FAST threshold): a float plane carrying raw
 # uint16 counts is what `tiled_io.read_decimated` returns, and two cycles' exposures differ.
 #
-# The smoke test above could never have caught that: it normalises its own input to [0, 1], so
-# it only ever exercised the healthy regime. These tests pin the normalisation itself, which is
-# cheap and deterministic, plus one end-to-end case at production scale.
-#
-# The end-to-end raw-scale case below pins that the anchor is scale-invariant in practice.
+# The smoke test above normalises its own input, so these pin the normalisation itself, plus
+# one end-to-end case on raw-scale input.
 # ---------------------------------------------------------------------------------------------
 
 

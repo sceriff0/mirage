@@ -1,9 +1,7 @@
-"""Regression test: generate_channel_color must not resolve substring collisions.
+"""generate_channel_color must not resolve substring collisions.
 
-Guards against the bug where a bidirectional substring match (``key in name or
-name in key``) let "CD4" resolve to CD45's color and "CD1" resolve to CD14's
-color. The fix requires an exact (case-insensitive) match against the marker
-color map.
+A substring match would let "CD4" take CD45's color and "CD1" take CD14's; only an
+exact (case-insensitive) match against the marker color map counts.
 """
 
 import importlib.util
@@ -18,12 +16,12 @@ _SPEC.loader.exec_module(mcp)
 
 
 def test_cd4_and_cd45_get_distinct_colors():
-    # Before the fix, "CD4" (substring of "CD45") resolved to CD45's color.
+    # "CD4" is a substring of "CD45".
     assert mcp.generate_channel_color("CD4", 0) != mcp.generate_channel_color("CD45", 1)
 
 
 def test_cd1_and_cd14_get_distinct_colors():
-    # Before the fix, "CD1" (substring of "CD14") resolved to CD14's color.
+    # "CD1" is a substring of "CD14".
     assert mcp.generate_channel_color("CD1", 0) != mcp.generate_channel_color("CD14", 1)
 
 

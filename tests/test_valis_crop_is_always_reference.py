@@ -2,11 +2,10 @@
 
 REGISTER writes the registered slides in the reference frame (bin/utils/valis_config.py
 crop="reference"; bin/register.py passes it explicitly), and the cell mask is segmented
-on those slides. A warp in any other frame -- VALIS's "overlap" was the default of
-bin/warp_seg_qc.py and bin/utils/valis_stage_warp.py until 2026-10-01 -- shifts every
-point by that frame's origin: invisible to Dice and centroid displacement (both sides
-shift together) but wrong for anything joined onto the cells, like the per-cell
-registration residuals CELL_QC and the SpatialData export attach.
+on those slides. A warp in any other frame (e.g. VALIS's "overlap") shifts every point
+by that frame's origin: invisible to Dice and centroid displacement (both sides shift
+together) but wrong for anything joined onto the cells, like the per-cell registration
+residuals CELL_QC and the SpatialData export attach.
 """
 
 from __future__ import annotations

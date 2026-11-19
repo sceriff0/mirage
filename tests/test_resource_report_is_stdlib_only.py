@@ -2,9 +2,8 @@
 
 The pipeline entry-point workflow's ``generateResourceReport`` invokes this
 script as ``python3 <path>`` from ``workflow.onComplete``. That runs on the
-**head node**, under whatever interpreter the operator has, OUTSIDE every
-container and with none of the pipeline's pinned dependencies available
-(design finding F6). A single
+head node, under whatever interpreter the operator has, outside every
+container and with none of the pipeline's pinned dependencies. A single
 ``import matplotlib`` makes the report silently unavailable on every deployment
 that does not happen to have it -- and the failure is quiet, because the handler
 downgrades every error to a warning so a report problem can never fail a run.
@@ -14,9 +13,7 @@ scans the scripts a process module names, and this script is named by no
 process module precisely because it is not a process.
 
 The stdlib set is taken from the interpreter (``sys.stdlib_module_names``) rather
-than hand-listed, because a hand-list reports stdlib modules as missing
-dependencies -- a guard failing for the wrong reason, which this repo has been
-bitten by before.
+than hand-listed, so a stdlib module is never reported as a missing dependency.
 """
 
 from __future__ import annotations
@@ -35,8 +32,8 @@ def _top_level_imports(path: Path) -> set[str]:
     """Every distribution the module imports, by top-level name.
 
     Parsed with ``ast``, never a regex: ``^\\s*(import|from)\\s+(\\w+)`` also
-    matches prose inside a docstring ("import the module first"), which has
-    previously reported a package named ``the`` as a missing dependency.
+    matches prose inside a docstring ("import the module first") and would report
+    a package named ``the``.
     """
     names: set[str] = set()
     for node in ast.walk(ast.parse(path.read_text())):

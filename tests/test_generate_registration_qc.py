@@ -1,15 +1,11 @@
 """bin/generate_registration_qc.py — the (success, message) contract.
 
-No behavioural test existed. _process_single_image is the whole batch loop's
-unit: it CATCHES every exception and reports (False, message), which is what
-lets one bad slide be reported without aborting the batch -- and which also
-means a broken QC generator can return False for every slide while main() still
-walks the list. Both halves are asserted here.
+_process_single_image catches every exception and reports (False, message), so
+one bad slide does not abort the batch, but a broken generator can also fail
+every slide while main() carries on. Both halves are asserted.
 
-Deliberately asserted at the (bool, str) contract and 'the output directory is
-not empty', NOT on the panel layout: phase 08 replaces the composite with a
-two-panel before/after figure, and a test pinned to today's filenames would
-have to be rewritten rather than re-run.
+Asserted at the (bool, str) contract and 'the output directory is not empty',
+not on the panel layout or filenames.
 """
 
 from __future__ import annotations

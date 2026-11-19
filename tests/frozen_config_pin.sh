@@ -2,20 +2,9 @@
 # A `-c` pin of a frozen config param is REFUSED at launch; the same pin via
 # -params-file or the CLI ARRIVES.
 #
-# WHY THIS IS A SCRIPT AND NOT A pytest OR AN nf-test
-#
-# tests/test_frozen_config_params.py pins where nextflow.config's params-derived
-# scalars sit and that ParamUtils.validateFrozenConfig names each of them. Neither
-# says the check fires, or that the working routes actually change the setting:
-# `nextflow config` prints the pinned PARAM even when the scalar it drives kept the
-# old value (that is the whole defect), and nf-test delivers its own params through
-# -params-file, so it can only ever exercise the route that works. Only a run with
-# the `-c` route can show the refusal.
-#
-# Measured 2026-09-09 on dev @ 3f482063 (Nextflow 25.04.7), before the fix: a
-# `params { concurrency = 7 }` pin via `-c` left executor.queueSize at 20 and every
-# maxForks at 5 while params.concurrency printed 7; via -params-file and the CLI
-# both moved. tests/test_frozen_config_params.py's docstring has the full table.
+# A script, not a pytest or nf-test: `nextflow config` prints the pinned param even
+# when the scalar it drives kept the old value, and nf-test passes params through
+# -params-file, the route that works. Only a run with the `-c` route shows the refusal.
 #
 # Three legs:
 #   1. `-c pin.config` setting concurrency=7, enable_trace=false -> the run must FAIL

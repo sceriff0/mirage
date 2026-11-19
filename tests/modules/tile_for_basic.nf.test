@@ -34,10 +34,9 @@ nextflow_process {
                 { assert process.out.tiles },
                 { assert process.out.sidecar },
                 { assert process.out.versions },
-                // The `sidecar` emit deliberately carries THREE elements: meta, the input
-                // slide passed through, and the positions JSON. APPLY_PROFILES needs the
-                // slide and the sidecar together, and joining them back on the meta map
-                // would mis-pair two slides of one patient whose meta maps are identical.
+                // The `sidecar` emit carries three elements (meta, the input slide, the positions
+                // JSON): joining slide and sidecar back on meta would mis-pair two slides of one
+                // patient whose meta maps are identical.
                 { assert process.out.sidecar.get(0).size() == 3 },
                 { assert process.out.tiles.get(0).get(1).endsWith('_tiles.ome.tif') },
                 { assert process.out.sidecar.get(0).get(2).endsWith('_tiles.json') }
@@ -47,32 +46,19 @@ nextflow_process {
 
     test("Should render the nuclear-marker flags and the FOV size - rendered command") {
 
-        // Tagged `stub` so CI's blocking `nf-test test --tag stub` gate runs it, but
-        // deliberately WITHOUT `options "-stub"`: `-stub` never evaluates a `script:`
-        // block, so no stub run can observe a rendered command, and the point of this
-        // case is WHAT tile_for_basic.py is invoked with. Same shape as
-        // tests/modules/preprocess.nf.test's rendered-command case.
-        //
-        // The nuclear/fiducial skip is decided HERE, once, and recorded in the sidecar
-        // for APPLY_PROFILES to read. If the marker list stops travelling with this call
-        // the skip silently falls back to the script's default and a CELLTOX panel has
-        // its fiducial corrected -- the exact regression bin/preprocess.py's comment
-        // records.
-        //
-        // No container engine is active under `-profile test`, so this runs the script
-        // directly and it may fail; the assertions read the rendered .command.sh rather
-        // than the process outcome.
+        // `stub` tag but no `options "-stub"`: the subject is what tile_for_basic.py is
+        // invoked with. The nuclear/fiducial skip is decided here and recorded in the sidecar
+        // for APPLY_PROFILES; if the marker list stops reaching this call, a CELLTOX panel has
+        // its fiducial corrected. The task may fail without a container; the assertions read
+        // .command.sh only.
         tag "stub"
 
         when {
             params {
                 preproc_tile_size = 64
                 nuclear_markers = ['DAPI', 'CELLTOX']
-                // false here, deliberately different from nextflow.config's shipped
-                // default (true) -- this case now demonstrates the OFF branch of
-                // `params.preproc_skip_nuclear ? '--skip_nuclear' : ''`. The ON branch
-                // (the previously-implicit default) has its own explicitly-named case
-                // right below, "...when preproc_skip_nuclear is set - rendered command".
+                // false here, unlike the shipped default (true), to cover the off branch of
+                // `params.preproc_skip_nuclear ? '--skip_nuclear' : ''`; the case below covers on.
                 preproc_skip_nuclear = false
             }
             process {
@@ -114,10 +100,8 @@ nextflow_process {
 
     test("Should render --skip_nuclear when preproc_skip_nuclear is set - rendered command") {
 
-        // Copy of the case above, with `preproc_skip_nuclear` explicitly named and set
-        // to `true` -- matching nextflow.config's shipped default (see that case's
-        // comment for why it now pins `false` instead), so this case pins the ON
-        // branch of the ternary explicitly rather than leaving it implicit.
+        // Copy of the case above with `preproc_skip_nuclear = true` (the shipped default),
+        // pinning the on branch of the ternary.
         tag "stub"
 
         when {

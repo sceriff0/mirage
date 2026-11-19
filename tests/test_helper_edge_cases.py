@@ -81,11 +81,8 @@ def test_unit_to_um_is_none_for_an_unknown_unit():
 
 
 def test_safe_mean_is_nan_where_the_count_is_zero_and_a_ratio_elsewhere():
-    """bin/quantify.py:_safe_mean's docstring says 'Element-wise sums / counts, NaN
-
-    where counts is 0' (bin/quantify.py:46). A nonzero sum over a zero count
-    (sums[2]=5.0, counts[2]=0) must yield NaN, not +inf, matching the docstring's
-    own 'NaN, not 0.0' framing for an unmeasured compartment.
+    """A nonzero sum over a zero count must yield NaN, not +inf, per _safe_mean's
+    docstring ('NaN where counts is 0').
     """
     from quantify import _safe_mean
 
@@ -142,11 +139,8 @@ def test_load_intensity_csvs_directory_glob_is_sorted(tmp_path):
 
 
 def test_load_intensity_csvs_with_an_empty_directory_raises_system_exit(tmp_path):
-    """An empty directory has no `*_quant.csv` files to load. Pinned to what
-    `_load_intensity_csvs` actually does (observed directly: `csv_files` comes
-    back `[]` from the glob, `bin/merge_quant_csvs.py`'s `if not csv_files:`
-    branch logs an error and calls `sys.exit(1)`) -- it must not yield a
-    phantom file, and it must not silently return an empty list either."""
+    """An empty directory exits 1 (`if not csv_files:` logs and calls sys.exit(1));
+    it must not yield a phantom file or silently return an empty list."""
     from merge_quant_csvs import _load_intensity_csvs
 
     with pytest.raises(SystemExit, match=r"^1$"):
