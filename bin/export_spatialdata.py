@@ -271,9 +271,8 @@ def build_table(
     for col in MORPHOLOGY_COLS:
         if col in df.columns and col not in (INSTANCE_KEY, "x", "y"):
             obs[f"qc_{col}" if col not in ("fov",) else col] = df[col].to_numpy()
-    # Per-cell/per-round QC columns (bin/cell_qc.py), verbatim "QC: ..." names —
-    # unrelated to the `qc_<morphology>` obs columns just above, which predate this
-    # spec and are morphology, not the QC vocabulary in bin/utils/measurements.py.
+    # Per-cell/per-round QC columns (bin/cell_qc.py), verbatim "QC: ..." names. These
+    # are separate from the morphology `qc_<morphology>` obs columns above.
     for col in df.columns:
         if is_qc_column(col):
             obs[col] = df[col].to_numpy(dtype=float)

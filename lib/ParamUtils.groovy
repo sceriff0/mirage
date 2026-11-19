@@ -1,13 +1,10 @@
 /*
  * ParamUtils - validation helpers for the pipeline's step-routing parameters.
  *
- * Scope note: single-parameter checks (is this a valid step name? a valid
- * segmentation backend? a reg_qc level in range?) are NOT here. They are stated
- * once in nextflow_schema.json and enforced by nf-schema's validateParameters()
- * at the top of workflows/mirage.nf. What remains below is what no JSON Schema
- * can express: cross-parameter rules (--stop must not precede --start,
- * --expanded_quantification implies --quantify_compartments), filesystem
- * prerequisites, and plain control-flow helpers.
+ * Single-parameter checks (types, enums, ranges) live in nextflow_schema.json and run
+ * via validateParameters() in workflows/mirage.nf. This holds what a schema cannot
+ * express: cross-parameter rules, mode-conditional rules (add_cycle), filesystem
+ * prerequisites, and step-routing helpers.
  */
 class ParamUtils {
 
@@ -149,14 +146,7 @@ class ParamUtils {
     /**
      * Cross-parameter rules for --cleanup_level.
      *
-     * The per-value enum is the schema's job (nextflow_schema.json); this layer
-     * re-checks it for callers that never went through nf-schema. Runs before any
-     * process is instantiated, like every other rule in this file.
-     *
-     * The level is re-checked here rather than trusted from the schema because
-     * validateCleanup is also reachable from a caller that never went through
-     * nf-schema (a test, or a future entry point), and a silently-unknown level
-     * would then read as 'publish nothing'.
+     * The level is re-checked here too, for callers that bypass nf-schema.
      */
     static void validateCleanup(Map params) {
         def level = params.cleanup_level?.toString()
@@ -354,17 +344,9 @@ class ParamUtils {
     /**
      * Cross-parameter rules for the compartment trio (from compartmentMode):
      *
-     *   expanded ⇒ compartments      (long-standing: per-compartment Mean/Sum
-     *                                 needs a per-compartment signal to sum)
-     *   embedMasks ⇒ compartments && expanded
-     *                                 (assemble_export.nf's embed_masks gate --
-     *                                 `params.embed_masks && params.quantify_compartments
-     *                                 && params.expanded_quantification` -- decides
-     *                                 whether the pyramid gets a mask series (Image:1).
-     *                                 --embed_masks true with either sibling off used to
-     *                                 exit 0 and silently publish a pyramid with NO mask
-     *                                 series; a consumer reading Image:1 back out of it
-     *                                 only discovers that much later.)
+     *   expanded ⇒ compartments
+     *   embedMasks ⇒ compartments && expanded   (otherwise no mask series is written,
+     *                                            which add_cycle needs later)
      */
     static void validateCompartmentQuant(Map mode) {
         if (mode.expanded && !mode.compartments) {

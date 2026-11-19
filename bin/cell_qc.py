@@ -74,10 +74,10 @@ def total_intensity(df: pd.DataFrame, nuclear_markers: List[str]) -> pd.Series:
 
 
 def raw_retention(ref: np.ndarray, mov: np.ndarray) -> np.ndarray:
-    """Per-cell ``mov / ref``, UNnormalised; NaN where the reference is not positive.
+    """Per-cell ``mov / ref``, unnormalised; NaN where the reference is not positive.
 
     This keeps a globally dimmer round's drop -- the round-level tissue-integrity
-    signal that ``normalised_retention`` removes on purpose. It is not a ``QC: ...``
+    signal that ``normalised_retention`` removes. It is not a ``QC: ...``
     key (FlowPath never sees it); it lands only in ``<pid>_round_qc.csv``.
 
     Parameters
@@ -334,7 +334,7 @@ def round_long_table(
 
 
 def parse_args(argv=None):
-    """Parse CELL_QC's CLI arguments (see module docstring for the flag list)."""
+    """Parse CELL_QC's CLI arguments."""
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--merged", required=True)
     p.add_argument("--rounds", required=True)

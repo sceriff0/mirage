@@ -26,7 +26,7 @@ aggregates at the `<outdir>` root.
 
 | File | What it is |
 |---|---|
-| `quantification/merged_quant.csv` | One row per cell; morphology joined in. Per marker: a bare column (whole-cell mean, kept for FlowPath's fast path) plus `<MARKER>: <Compartment>: <Statistic>` keys. **Median is always emitted**; `--expanded_quantification` adds Mean and Sum; `--quantify_compartments` adds the Nucleus and Cytoplasm compartments alongside Cell. |
+| `quantification/merged_quant.csv` | One row per cell; morphology joined in. Per marker: a bare column (whole-cell mean, kept for FlowPath's fast path) plus `<MARKER>: <Compartment>: <Statistic>` keys. **Median is always emitted**; `--expanded_quantification` adds Mean and Sum; `--quantify_compartments` adds the Nucleus and Cytoplasm compartments alongside Cell. Also carries the per-cell `QC: ...` columns CELL_QC adds — see [Per-cell QC](#per-cell-qc). |
 | `geojson/export/cells.geojson` | One QuPath feature per cell: whole-cell polygon + measurement array (centroid µm, marker intensities, morphology). Carries `nucleusGeometry` in compartment mode. |
 | `geojson/export/cells_wholecell.geojson` | The same detections without nucleus geometry — lighter and faster to import. Compartment mode only. |
 | `geojson/export/cells_data.csv` | The cell table with per-marker **z-scores** added. |
@@ -65,8 +65,9 @@ Everything else in the full tree below — `converted/`, `preprocessed/`,
 `publishDir` is `mode: 'copy'`, so publish-then-delete would pay a full copy out
 of `work/` for a file nobody reads.
 
-`--cleanup_level none`, the default, publishes the complete tree below. Keep it whenever the output will be re-entered by `--start
-<step>`. Details: [Output cleanup](parameters.md#output-cleanup).
+`--cleanup_level none`, the default, publishes the complete tree below. Keep it whenever the output will be re-entered: `--start
+<step>`, or as the `--prior_outdir` of a `--mode add_cycle` run (which is refused
+at launch at any other level). Details: [Output cleanup](parameters.md#output-cleanup).
 
 ### The published tree (`--cleanup_level none`)
 
@@ -99,12 +100,13 @@ results/                              # = --outdir
 │   │   ├── contours.json
 │   │   └── nuclei/                   # morphology.csv, contours.json — EXTRACT_NUCLEI_PROPERTIES
 │   ├── split_channels/               # <MARKER>.tiff, one per marker — SPLIT_CHANNELS
+│   │   └── prior/                    # add_cycle only: prior pyramid re-split
 │   ├── quantify/                     # <id>_quant.csv, per-marker, pre-merge — QUANTIFY
 │   │                                 # <id>_nuclear_retention.csv, per moving slide
 │   │                                 #   — NUCLEAR_RETENTION (intermediate; gated same as QUANTIFY)
 │   ├── quantification/               # merged_quant.csv (+ "QC: " columns) — CELL_QC
 │   │                                 #   (republishes MERGE_QUANT_CSVS's table, augmented;
-│   │                                 #   MERGE_QUANT_CSVS no longer publishes its own copy)
+│   │                                 #   MERGE_QUANT_CSVS does not publish its own copy)
 │   │                                 # <patient_id>_round_qc.csv — long, tidy per-round QC
 │   │                                 # <patient_id>_rounds.json — round manifest (round_id,
 │   │                                 #   is_reference, markers) — both from CELL_QC
@@ -415,19 +417,18 @@ MORPH: <Name>[ <unit>]                       morphology
 - **`QC: Registration displacement µm: [...]`** / **`QC: Registration Dice: [...]`**
   — need **`--reg_qc 2`**; at any other `--reg_qc` level these keys are simply
   **absent**, not NaN. Source: the per-cell residual CSV `WARP_SEG_QC` already
-  writes at `reg_qc=2` (columns `moving, ref_x, ref_y, residual_px, iou, stage`;
-  `iou` is the addition this feature made), joined onto cells by the same spatial
+  writes at `reg_qc=2` (columns `moving, ref_x, ref_y, residual_px, iou, stage`),
+  joined onto cells by the same spatial
   join `EXPORT_SPATIALDATA` uses — nearest `cell_mask` centroid within
   `--spatialdata_residual_join_max_px` (default 15 px) — so the two outputs can
   never pair a QC nucleus to a different cell. Displacement is that pixel
   residual × the reference pixel size (µm). Dice is `2·IoU / (1 + IoU)` of the
-  matched pair, both at the **final** registration stage. A residual CSV from a
-  run before this feature (no `iou` column) yields Dice NaN while displacement is
-  still present. A cell the join never matched has neither key for that round.
-- **`MORPH: ...`** — the existing morphology values, renamed:
+  matched pair, both at the **final** registration stage. A residual CSV without
+  an `iou` column yields Dice NaN while displacement is still present. A cell the join never matched has neither key for that round.
+- **`MORPH: ...`** — the morphology values, under display names:
   `MORPH: Area µm²`, `MORPH: Perimeter µm`, `MORPH: Eccentricity`, `MORPH: Solidity`,
   `MORPH: Convex Area µm²`, `MORPH: Major Axis Length µm`,
-  `MORPH: Minor Axis Length µm`. Unchanged: `label`, `Centroid X µm`,
+  `MORPH: Minor Axis Length µm`. Not renamed: `label`, `Centroid X µm`,
   `Centroid Y µm` (identity, not quality) and every marker key.
 
 **NaN always means "no evidence", never "good"**, and — like a NaN marker — it is
@@ -436,10 +437,10 @@ mistake for a real reading.
 
 ### Where the values live
 
-- **`quantification/merged_quant.csv`** — the same per-patient table
-  `MERGE_QUANT_CSVS` has always produced, now carrying the `QC: ...` columns too.
-  `CELL_QC` republishes it under the **same filename**, and `MERGE_QUANT_CSVS` no
-  longer publishes its own copy (publishing both would race on one path). Every
+- **`quantification/merged_quant.csv`** — the per-patient table `MERGE_QUANT_CSVS`
+  produces, carrying the `QC: ...` columns too. `CELL_QC` republishes it under the
+  **same filename**, and `MERGE_QUANT_CSVS` does not publish its own copy
+  (publishing both would race on one path). Every
   downstream reader — `EXPORT_GEOJSON`, `EXPORT_SPATIALDATA`, the `postprocessed`
   checkpoint — reads this one table. **There is no separate `cell_qc.csv`.**
 - **`quantification/<patient_id>_round_qc.csv`** — the same values in a long,
@@ -475,8 +476,8 @@ mistake for a real reading.
   than matching the `<marker>: <Compartment>: <Statistic>` grammar.
 - **`merged_quant.csv` / `cells_data.csv`** — keep the **unchanged snake_case**
   morphology column names (`area`, `perimeter`, ...); the benchmark harness and
-  `ihc_method` read these, so only the GeoJSON/SpatialData *display* names
-  changed.
+  `ihc_method` read these; only the GeoJSON/SpatialData *display* names use the
+  `MORPH: ...` form.
 
 !!! warning "FlowPath ≤ 0.9.4 mis-reads this export"
     A `QC: ...` key becomes a phantom marker there (and is summed into FlowPath's

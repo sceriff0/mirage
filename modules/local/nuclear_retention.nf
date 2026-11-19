@@ -2,10 +2,8 @@
  * NUCLEAR_RETENTION - per-cell nuclear-channel median of one registered MOVING slide
  *
  * CELL_QC turns it into per-round nuclear retention (moving / reference, normalised per
- * round). Runs off the per-marker path on purpose: it reads the nuclear plane straight
- * from the registered slide, so channels_count, SPLIT_CHANNELS and the pyramid are
- * untouched. Assumes cyclic IF (same section re-stained); see
- * docs/outputs.md, "Per-cell QC".
+ * round). Reads the nuclear plane straight from the registered slide, outside the
+ * per-marker path, so channels_count and SPLIT_CHANNELS are unaffected. Assumes cyclic IF.
  */
 process NUCLEAR_RETENTION {
     tag "${meta.patient_id} - ${meta.id}"
@@ -26,10 +24,8 @@ process NUCLEAR_RETENTION {
     script:
     def nuclei_arg = params.quantify_compartments ? "--nuclei_mask_file ${nuclei_mask}" : ''
     def nuclear_args = "--nuclear-markers ${MarkerUtils.markerList(params.nuclear_markers).join(' ')}"
-    // Same condition and rendering as SPLIT_CHANNELS (modules/local/split_channels.nf):
-    // prefer the samplesheet's own channel names over whatever this image's OME-XML
-    // says, so the two processes agree on which plane is nuclear even when the OME
-    // names are generic (e.g. "Channel_0").
+    // Same rule as SPLIT_CHANNELS: samplesheet channel names win over OME-XML names,
+    // so both agree on the nuclear plane when OME names are generic ("Channel_0").
     def channel_args = (meta.channels && meta.channels instanceof List && !meta.channels.isEmpty()) ?
         "--channels ${meta.channels.join(' ')}" : ""
     """

@@ -54,6 +54,10 @@ contract (`lib/Checkpoint.groovy`).
     for an empty value, never for a missing column — one header serves every
     run.
 
+`mode=add_cycle` reads two of these out of `--prior_outdir`: `csv/registered.csv`
+(for the frozen reference) and `csv/postprocessed.csv` (for the mask pyramid and
+the merged quantification table).
+
 ## Starting a later step
 
 ```bash
@@ -116,7 +120,8 @@ The columns each `--start` requires are in
     opens exactly what it names.
 
     So a `final` run's output **cannot be re-entered**. Leave the default (`none`)
-    on the run whose output you intend to restart from.
+    on the run whose output you intend to restart from, or to use as a
+    `--prior_outdir`; `--mode add_cycle` is refused at launch at any other level.
     Details: [Output cleanup](parameters.md#output-cleanup).
 
 !!! warning "Two tasks always re-run"

@@ -465,9 +465,7 @@ def write_per_cell_csv(path, per_cell, moving_name) -> int:
     """Write the per-pair registration residuals of the full-transform pairing as CSV.
 
     Columns are ``moving,ref_x,ref_y,residual_px,iou,stage``. ``ref_x``/``ref_y`` are
-    reference-cell centroids **in the final stage's frame** — i.e. the frame the
-    registered reference image (and therefore ``cell_mask``) lives in, which is what
-    makes a downstream spatial join onto cell labels well-posed.
+    reference centroids in the final stage's frame, the frame ``cell_mask`` lives in.
 
     Always writes a header, so "ran, paired nothing" differs from "never ran".
 

@@ -55,7 +55,7 @@ QC_CELL_METRICS: tuple = (QC_TOTAL_INTENSITY,)
 QC_ROUND_METRICS: tuple = (QC_NUCLEAR_RETENTION, QC_REG_DISPLACEMENT, QC_REG_DICE)
 
 # (morphology CSV column, GeoJSON display name, unit power: 0 none, 1 µm, 2 µm²),
-# in the order export_geojson has always written them.
+# in export_geojson's output order.
 MORPH_EXPORT: tuple = (
     ("area", "Area µm²", 2),
     ("eccentricity", "Eccentricity", 0),
@@ -147,9 +147,7 @@ def measurement_key(marker: str, compartment: str, statistic: str) -> str:
 def identify_marker_columns(df: "pd.DataFrame") -> List[str]:
     """Numeric columns that are marker measurements, not morphology, metadata or QC.
 
-    Shared predicate: "not in MORPHOLOGY_COLS and not QC and numeric dtype", in
-    ``df.columns`` order. Formerly duplicated verbatim in
-    ``export_geojson.py`` and ``export_spatialdata.py``.
+    "Not in MORPHOLOGY_COLS, not QC, numeric dtype", in ``df.columns`` order.
     """
     return [
         col

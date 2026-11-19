@@ -25,7 +25,8 @@ comma-combined — see [Execution profiles](hpc.md#execution-profiles).
 MIRAGE runs four steps, always in this order: `preprocessing`, `registration`,
 `segmentation`, `postprocessing` ([The steps](pipeline.md)). `--start` and `--stop`
 choose where to enter and exit; omit `--stop` to run to the end, and use
-`--start X --stop X` for exactly one step.
+`--start X --stop X` for exactly one step. To fold a new imaging cycle into a
+completed run, use `--mode add_cycle` instead ([Incremental cycles](add_cycle.md)).
 
 ## Runtime flags
 
@@ -36,7 +37,7 @@ choose where to enter and exit; omit `--stop` to run to the end, and use
 | `--start` | param | no | Entry stage: `preprocessing` (default), `registration`, `segmentation`, `postprocessing`. |
 | `--stop` | param | no | Last stage to run. Omitted = run to the end. |
 | `dry_run` | param | no | Validate inputs and the samplesheet, then exit without running tasks. Boolean — set it in a `-params-file` (`params/dry_run.json`), never on the CLI; see [Boolean parameters](#boolean-parameters). |
-| `--cleanup_level` | param | no | Which published outputs to keep: `none` (default — everything, re-enterable by `--start`) or `final` (final artifacts only; intermediates are never published). |
+| `--cleanup_level` | param | no | Which published outputs to keep: `none` (default — everything, re-enterable by `--start` or `add_cycle`) or `final` (final artifacts only; intermediates are never published). |
 | `cleanup_work` | param | no | Delete `work/` after a successful run. **On by default**; incompatible with `-resume`. Boolean — set it in a `-params-file`, never on the CLI; see [Boolean parameters](#boolean-parameters). |
 | `-profile` | option | no | Execution/config profiles, comma-combined (e.g. `slurm,singularity`). |
 | `-params-file` | option | no | JSON preset of parameters, e.g. `params/full_pipeline.json`. |
@@ -140,5 +141,5 @@ rejected rather than coerced.
 
 Rules a JSON Schema cannot express — `--stop` must not precede `--start`,
 `--expanded_quantification` requires `--quantify_compartments`, samplesheet
-semantics — are checked in `lib/` and fire
+semantics, `add_cycle` prerequisites — are checked in `lib/` and fire
 right after schema validation.

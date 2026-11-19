@@ -59,6 +59,7 @@ high-resolution example; see [Parameters → VALIS](parameters.md#valis).
 | Needs a nuclear stain in every round | yes | no |
 | Memory per task | bounded by a fixed window (2–4 GB requested at the defaults) | not bounded by a parameter (64 GB requested on the first attempt) |
 | GPU | never | never |
+| Works with `--mode add_cycle` | no | yes |
 | Tuning knobs | [Tiled / STARE](parameters.md#tiled-stare-registration_methodtiled) | none (`reg_valis_mode` only) |
 
 ## Segmentation: StarDist, InstanSeg or CellSAM

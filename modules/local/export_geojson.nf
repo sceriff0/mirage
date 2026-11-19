@@ -31,20 +31,10 @@ process EXPORT_GEOJSON {
     def args = task.ext.args ?: ''
     // Nucleus contours (keyed by cell label) give each cell a nucleusGeometry.
     def nucleus_arg = params.quantify_compartments ? "--nucleus_contours_json ${nucleus_contours_json}" : ''
-    // --pixel_size is NOT optional here even though the script has a parameter for it.
-    // It was omitted, and export_geojson.py's own argparse default silently supplied
-    // 0.325 -- so every "Centroid X µm", "MORPH: Area µm²", "MORPH: Perimeter µm" and axis length in
-    // cells.geojson ignored the configured scale entirely. Those measurements are the
-    // contract with qupath-extension-flowpath, so the run advertised a scale it was not
-    // using. Pass it explicitly; the script now has no default to fall back to.
-    //
-    // `meta.pixel_size`, NOT `params.pixel_size`: this process is handed a CSV, not an
-    // image, so it cannot resolve `params.pixel_size == 'auto'` itself. INPUT_CHECK
-    // (subworkflows/local/input_check.nf) already resolved it per-slide via
-    // PREFLIGHT_SCALE and carries the number in meta -- see that file's comment. The
-    // same substitution is made in conf/modules.config's `withName: 'EXPORT_GEOJSON'`
-    // ext.args, which renders a SECOND `--pixel_size` that argparse's last-wins
-    // semantics lets override this one; both must stay in sync.
+    // Required: every µm measurement in cells.geojson depends on it. meta.pixel_size,
+    // not params.pixel_size, because this process has no image to resolve 'auto' from.
+    // conf/modules.config's ext.args renders a second --pixel_size that wins (argparse
+    // last-wins); keep both in sync.
     """
     ${ProcessEnvelope.sizeLog(task.process, meta.patient_id, ["${quant_csv}"], "${meta.patient_id}.EXPORT_GEOJSON.size.csv")}
 

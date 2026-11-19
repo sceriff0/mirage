@@ -1,12 +1,10 @@
 /*
  * Layout - the pipeline's one description of WHERE A FILE LANDS under --outdir.
  *
- * `conf/modules.config` decides where each process actually publishes. Everything
- * else that needs to KNOW that answer - the checkpoint CSVs that record published
- * paths for a later `--start`, the validator that asserts they exist, the
- * onComplete resource report - used to restate the rule by hand. Six independent
- * copies, kept in agreement only by eye (two of them on the add_cycle path, which
- * lives on the dev branch only):
+ * conf/modules.config decides where each process publishes. Everything that needs to
+ * know that answer (checkpoint CSVs, the add_cycle reader, validators, onComplete)
+ * asks this class instead of restating a path template. When the layout changes,
+ * change it in conf/modules.config and here, nowhere else.
  *
  * The publishDir blocks are not routed through here (different evaluation context),
  * so the two must be kept in agreement by hand (tests/test_layout.py checks).

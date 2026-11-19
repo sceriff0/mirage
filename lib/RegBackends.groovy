@@ -6,10 +6,9 @@
     reg_qc=2 warp's own knobs, but both must list the same backends; the schema enum
     must match too (tests/test_reg_backends.py).
 
-      1. nextflow_schema.json's `registration_method` enum (the valid names)
-      3. subworkflows/local/register_patient.nf's dispatch (which adapter to invoke)
-      4. subworkflows/local/seg_qc.nf's branch (which join shape the transforms have)
-      5. lib/WarpBackends.groovy's own two-key map (the reg_qc=2 warp's knobs)
+    The adapter is a String: a workflow cannot be invoked by name from a map, so
+    register_patient.nf keeps an `if`. Unknown methods throw rather than fall through
+    to VALIS.
 
     Optional emits use a null object: an adapter without a stage checkpoint or TRE
     emits Channel.empty() and consumers tolerate zero artifacts.
@@ -29,24 +28,9 @@ class RegBackends {
      *                      'per_slide' (one per moving slide, tiled manifest).
      *   hasStageCheckpoint whether the method writes a pre-micro stage checkpoint.
      *   hasIntrinsicTre    whether the method estimates its own TRE.
-     *
-     *                      hasStageCheckpoint and hasIntrinsicTre are the ADAPTER
-     *                      CONTRACT'S declared optional emits (stage_checkpoint,
-     *                      intrinsic_tre — the null-object rule described in this file's
-     *                      header): what an adapter for this method is allowed to fill,
-     *                      versus what it must emit Channel.empty() for. No production
-     *                      call site reads these two fields yet — register_patient.nf
-     *                      passes the adapters' emits straight through unrenamed rather
-     *                      than branching on them — so today tests/lib_probe.nf's
-     *                      checkRegBackends() is their only reader. They stay in the
-     *                      table anyway because the master plan for this class mandates
-     *                      them as part of the contract, and because the alternative is
-     *                      the thing this class exists to prevent: a future consumer
-     *                      that needs to know "does this method have a stage checkpoint"
-     *                      discovering the answer by reading an adapter instead of
-     *                      asking the table.
-     *   supportedModes     the run modes this backend may run under. Only 'linear'
-     *                      exists on this branch; the dev branch adds 'add_cycle'.
+     *                      (These two are the adapter's optional emits; today only
+     *                      tests/lib_probe.nf reads them.)
+     *   supportedModes     the params.mode values this backend may run under.
      *   pairsOutputsBySignature
      *                      outputs lose slide identity and are paired back by channel set
      *                      (RegisteredMatch). workflows/mirage.nf uses it to refuse, at
