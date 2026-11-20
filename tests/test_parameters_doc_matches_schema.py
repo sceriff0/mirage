@@ -17,13 +17,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 DOC = REPO / "docs" / "parameters.md"
 
-# Parameters a RUN never sets: nf-core identity strings a site profile carries.
-# Verified below to still exist in the schema, so a stale entry cannot hide a real
-# undocumented parameter.
-NOT_RUN_FACING = {
-    "config_profile_name": "nf-core identity string, set by a site profile, not by a run",
-    "config_profile_description": "nf-core identity string, set by a site profile, not by a run",
-}
+# Parameters a RUN never sets, each with its reason (none at present). Verified below
+# to still exist in the schema, so a stale entry cannot hide an undocumented parameter.
+NOT_RUN_FACING: dict[str, str] = {}
 
 _ROW = re.compile(r"^\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|", re.M)
 # Same row, plus its second (default) cell -- for the literal-default check below.

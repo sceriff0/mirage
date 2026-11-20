@@ -1,9 +1,7 @@
 # Parameters
 
-<p class="standfirst">The complete parameter surface — all 89 operator-settable parameters of the
-91 that <code>nextflow.config</code> declares (the two omitted are the nf-core
-<code>config_profile_name</code> / <code>config_profile_description</code> identity strings, which
-a site profile sets, not a run), grouped by pipeline
+<p class="standfirst">The complete parameter surface — all 89 parameters that
+<code>nextflow.config</code> declares, grouped by pipeline
 stage, each with the default that ships in <code>nextflow.config</code>. That file is the single
 source of truth: <code>tests/test_no_duplicate_param_defaults.py</code> forbids a second
 declaration of any default in the pipeline code it scans (<code>main.nf</code>,
