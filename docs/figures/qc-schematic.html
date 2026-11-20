@@ -280,7 +280,7 @@
           <div class="mod"><div class="n">SEG_QC <span class="tag tag-on">reg_qc = 2 · default</span></div>
             <div class="x">Three processes — panel <b>e</b>. Scores IoU and centroid residual per cell pair at
               every registration stage, and emits a per-cell residual table the SpatialData export joins in.</div>
-            <div class="pp"><span>reg_qc <b>2</b></span><span>skip_registration_qc <b>false</b></span></div></div>
+            <div class="pp"><span>reg_qc <b>2</b></span></div></div>
           <div class="mod off"><div class="n">the backend's own TRE</div>
             <div class="x">Not a QC process: the registration method's <i>intrinsic</i> error estimate, emitted by
               whichever adapter ran (VALIS <code>*_summary.csv</code>, STARE <code>*_tre.json</code>).</div></div>
@@ -721,7 +721,6 @@
         <table class="pr">
           <tr><td class="k">skip_preprocess_qc</td><td class="v">false</td><td class="d">GENERATE_PREPROCESS_QC</td></tr>
           <tr><td class="k">reg_qc</td><td class="v">2</td><td class="d">0 none · 1 overlay · 2 + cell overlap</td></tr>
-          <tr><td class="k">skip_registration_qc</td><td class="v">false</td><td class="d">legacy; true forces reg_qc = 0</td></tr>
           <tr><td class="k">skip_postprocessing_qc</td><td class="v">false</td><td class="d">GENERATE_POSTPROCESSING_QC</td></tr>
           <tr><td class="k">skip_final_qc_report</td><td class="v">false</td><td class="d">GENERATE_QC_REPORT</td></tr>
           <tr><td class="k">enable_trace</td><td class="v">true</td><td class="d">size logs + AGGREGATE_SIZE_LOGS</td></tr>

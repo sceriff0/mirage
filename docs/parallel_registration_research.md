@@ -157,7 +157,7 @@ adapter matches outputs back by channel signature, `lib/RegisteredMatch.groovy`)
 
 `reg_qc` levels (`lib/ParamUtils.groovy:60, 82`; default **2** — `nextflow.config:66`):
 `0` = none, `1` = DAPI overlay image, `2` = `1` **plus** staged segmentation-overlap QC.
-`skip_registration_qc=true` forces 0. The single definition is `ParamUtils.regQcLevel`.
+The single definition is `ParamUtils.regQcLevel`.
 
 ### 2.1 Level ≥ 1 — DAPI RGB overlay
 `GENERATE_REGISTRATION_QC` (`modules/local/generate_registration_qc.nf`) runs

@@ -18,8 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Several parameters are gone and are refused at launch** if still set: `memory_mode`,
   `reg_valis_max_processed_dim`, `reg_valis_max_non_rigid_dim`, `reg_valis_max_keypoints`,
   `reg_micro_reg`, `reg_micro_reg_fraction`, `reg_max_image_dim`, `reg_tiled_solver`,
-  `reg_tiled_gate_tre`, `reg_tiled_max_error`, `reg_tiled_upsample` and `reg_tiled_mode`. The
-  `tma` profile is gone.
+  `reg_tiled_gate_tre`, `reg_tiled_max_error`, `reg_tiled_upsample`, `reg_tiled_mode`,
+  `skip_registration_qc` (use `reg_qc = 0`), `config_profile_name` and
+  `config_profile_description`.
+- **The `tma`, `conda` and `ieo` profiles are gone.** No process ships a Conda environment, so
+  `conda` could not run; size a cluster run with your own `-c site.config` instead of `ieo`.
 - **Two images must be published or pulled again before a real run**:
   `bolt3x/mirage-valis:1.0.0` (new) and `bolt3x/mirage-stare:1.0.0` (replaces
   `bolt3x/mirage-tiled`). Delete a cached Singularity `.img` so it is pulled again.
@@ -133,11 +136,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run that fails because the machine has no usable GPU says so**, and points at
+  `-params-file params/no_gpu.json`.
 - **A `-c site.config` pin of `cleanup_work`, `enable_trace`, `trace_dir`, `concurrency`,
   `max_forks` or `queue_size` was silently ignored.** Such a run is now refused at launch,
   naming the route; `-params-file`, the CLI and profiles all work.
 - **A profile pin of `concurrency`, `max_forks` or `queue_size` did not take effect.** It does
   now.
+- **`slurm_partition` set in a `-c site.config` was ignored**: every job went to the cluster's
+  default partition. It now reaches the SLURM queue.
 - **`-profile slurm` ran with no resource ceiling** on the documented
   `-profile slurm,singularity -c site.config` route. The `max_*` ceiling now applies.
 - **`--cleanup_level final` left seven empty intermediate directories per patient.** They are

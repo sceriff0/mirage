@@ -135,10 +135,26 @@ def announceDroppedTasks() {
 
 /*
 ================================================================================
-    RUN MAIN WORKFLOW
+    POST-RUN: POINT A GPU-LESS FIRST RUN AT THE CPU PRESET
 ================================================================================
+    seg_gpu is on by default, so on a machine without a usable NVIDIA GPU the
+    container runtime refuses SEGMENT before it starts. The error text is the
+    runtime's own, so say what to do about it.
 */
-
+def announceGpuHint(Map cfg) {
+    try {
+        if (workflow.success || !cfg.seg_gpu) return
+        def err = "${workflow.errorMessage ?: ''}\n${workflow.errorReport ?: ''}"
+        if (err =~ /could not select device driver|nvidia-container-cli|NVIDIA driver|libnvidia|no CUDA-capable device/) {
+            log.warn "Segmentation asked for a GPU (seg_gpu = true, the default) and this " +
+                     "machine has none the container can use. Re-run with " +
+                     "`-params-file params/no_gpu.json` to segment on the CPU, or run on a " +
+                     "machine with an NVIDIA GPU. See docs/gpu.md."
+        }
+    } catch (Exception e) {
+        log.warn "Could not check the failure for a missing GPU (non-fatal): ${e.message}"
+    }
+}
 
 /*
 ================================================================================
@@ -180,6 +196,11 @@ def pruneEmptyPublishDirs(Map cfg) {
     }
 }
 
+/*
+================================================================================
+    RUN MAIN WORKFLOW
+================================================================================
+*/
 workflow {
     main:
 
@@ -191,9 +212,11 @@ workflow {
         launch_dir   : "${workflow.launchDir}",
         project_dir  : "${projectDir}",
         cleanup_level: params.cleanup_level,
+        seg_gpu      : params.seg_gpu,
     ]
     workflow.onComplete {
         announceDroppedTasks()
+        announceGpuHint(report_cfg)
         writeCheckpointReadme(report_cfg)
         pruneEmptyPublishDirs(report_cfg)
         generateResourceReport(report_cfg)

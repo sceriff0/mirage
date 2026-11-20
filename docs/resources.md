@@ -330,13 +330,9 @@ launch. Supply them from a `site.config` (`-c site.config`, copied from
 | *(a `site.config` sized for a large SLURM partition, e.g.)* | `128` | `700.GB` | `240.h` |
 
 !!! note "There is no shipped site profile"
-    `nextflow.config` still carries an internal `ieo` profile pinning
-    `max_cpus=128` / `max_memory=700.GB` / `max_time=240.h` (CI parses it), but
-    it is not something a reader can invoke — its site-local overlay,
-    `conf/ieo.config`, is gitignored and never ships. The row above shows those
-    same numbers only as an example of what a large-partition `site.config`
-    looks like; make your own from `conf/site.config.template` — see
-    [Make a site config](hpc.md#size-your-run).
+    Size a cluster run with your own `site.config`, made from
+    `conf/site.config.template`. The row above is only an example of what a
+    large-partition `site.config` sets. See [Make a site config](hpc.md#size-your-run).
 
 !!! note "Why `-c site.config` reaches the ceiling"
     The top-level `process.resourceLimits` in `nextflow.config` is a **closure**,
@@ -505,7 +501,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 |---|---|
 | `bolt3x/mirage-convert:1.0.0` | `CONVERT_IMAGE` |
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
-| `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
+| `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors if Conda is enabled) |
 | `bolt3x/mirage-valis:1.0.0` (built on the digest-pinned upstream `cdgatenbee/valis-wsi:1.2.0`) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
 | `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH`, and `WARP_SEG_QC`'s STARE path |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |

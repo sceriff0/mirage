@@ -93,13 +93,13 @@ params {
 ## Execution profiles
 
 Profiles are defined in `nextflow.config` and combine with commas: pick one
-**execution** profile and one **container** profile.
+**execution** profile and one **container** profile. There is no Conda profile: every
+process runs in a container.
 
 | Profile | Kind | What it does |
 |---|---|---|
 | `docker` | container | Run processes in Docker (laptop, workstation). Passes `--platform linux/amd64`. |
 | `singularity` | container | Run processes in Singularity/Apptainer (clusters). Apptainer uses this same profile. |
-| `conda` | container | Enables Conda. No MIRAGE process declares a Conda environment, so this profile does not provide the tools; use `docker` or `singularity`. |
 | `local` | executor | Local executor with conservative caps (4 CPU / 16 GB / 72 h). |
 | `slurm` | executor | Submit each process as a SLURM job. |
 | `test` / `test_full` | data + caps | Bundled synthetic datasets, small resource caps, CPU segmentation. |

@@ -244,6 +244,14 @@ def checkRegisteredMatch() {
 }
 
 /** Checkpoint.requireColumns: the missing-column check checkpoint readers share. */
+def checkRegQcLevel() {
+    // reg_qc is the one QC switch: 0 turns it off, null means the default 2.
+    assert ParamUtils.regQcLevelOf(0) == 0 : 'reg_qc 0 must mean no registration QC'
+    assert ParamUtils.regQcLevelOf(1) == 1 : 'reg_qc 1 must stay 1'
+    assert ParamUtils.regQcLevelOf(null) == 2 : 'unset reg_qc must mean 2'
+    assert ParamUtils.regQcLevel([reg_qc: 0]) == 0 : 'map form must agree with regQcLevelOf'
+}
+
 def checkCheckpoint() {
 
     // The satisfied case returns quietly.
@@ -854,18 +862,18 @@ P9,cyc2.tiff,CELLTOX|CELLTOX,false
 
 def checkSegQcNucleiDir() {
     // unset: nothing to check
-    ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false])
+    ParamUtils.validateSegQcNucleiDir([reg_qc: 2])
     // an existing directory at reg_qc=2: accepted
     def d = File.createTempDir()
-    ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false, seg_qc_nuclei_dir: d.path])
+    ParamUtils.validateSegQcNucleiDir([reg_qc: 2, seg_qc_nuclei_dir: d.path])
     // a missing directory: refused, naming it
     def msg = ''
-    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 2, skip_registration_qc: false, seg_qc_nuclei_dir: d.path + '_nope']) }
+    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 2, seg_qc_nuclei_dir: d.path + '_nope']) }
     catch (IllegalArgumentException e) { msg = e.message }
     assert msg.contains('is not a directory') : "a missing --seg_qc_nuclei_dir must be refused: ${msg}"
     // set below reg_qc=2: refused (nothing reads it)
     msg = ''
-    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 1, skip_registration_qc: false, seg_qc_nuclei_dir: d.path]) }
+    try { ParamUtils.validateSegQcNucleiDir([reg_qc: 1, seg_qc_nuclei_dir: d.path]) }
     catch (IllegalArgumentException e) { msg = e.message }
     assert msg.contains('only reg_qc=2') : "seg_qc_nuclei_dir below reg_qc=2 must be refused: ${msg}"
     d.deleteDir()
@@ -1560,6 +1568,7 @@ workflow {
     checkRegisteredMatch()
 
     // Checkpoint.requireColumns
+    checkRegQcLevel()
     checkCheckpoint()
 
     // RegBackends - the registration backend table.
