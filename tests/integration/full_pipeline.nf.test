@@ -71,7 +71,7 @@ nextflow_pipeline {
                 start = "registration"
                 max_cpus = 2
                 max_memory = '6.GB'
-                skip_registration_qc = true
+                reg_qc = 0
 
                 // Same cleanup_level pin as the preprocessing case above.
                 cleanup_level = 'none'

@@ -153,19 +153,19 @@ class ParamUtils {
 
     /**
      * Effective registration-QC depth: 0 = none, 1 = DAPI overlay, 2 = + segmentation
-     * overlap. skip_registration_qc=true forces 0; null reg_qc means 2.
+     * overlap. null reg_qc means 2.
      *
      * Call regQcLevelOf (scalars) from a `script:` block: a bare `params` there puts
      * the whole map in the task hash. It is a distinct name, not an overload, because
      * a null argument would dispatch to the Map form and NPE.
      */
-    static int regQcLevelOf(def skipRegistrationQc, def regQc) {
-        return skipRegistrationQc ? 0 : (regQc == null ? 2 : (regQc as int))
+    static int regQcLevelOf(def regQc) {
+        return regQc == null ? 2 : (regQc as int)
     }
 
     /** Map form for workflow code; delegates to regQcLevelOf. */
     static int regQcLevel(Map params) {
-        return regQcLevelOf(params.skip_registration_qc, params.reg_qc)
+        return regQcLevelOf(params.reg_qc)
     }
 
     /**

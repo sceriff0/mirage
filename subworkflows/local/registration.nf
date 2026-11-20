@@ -17,7 +17,7 @@ include { REGISTER_PATIENT                  } from './register_patient'
     SUBWORKFLOW: REGISTRATION
 ========================================================================================
     Configuration:
-        - params.skip_registration_qc: true | false (skip QC generation)
+        - params.reg_qc: 0 | 1 | 2 (registration QC depth)
         - params.qc_scale_factor: float (QC downsampling factor, default 0.25)
         - params.registration_method: 'valis' | 'tiled' -- read once here and passed
           as an argument to REGISTER_PATIENT and SEG_QC, which never read the global.
@@ -102,8 +102,7 @@ workflow REGISTRATION {
     // The method's own TRE estimate (VALIS CSV, STARE JSON); may be empty.
     ch_registration_tre   = REGISTER_PATIENT.out.intrinsic_tre
 
-    // reg_qc: 0 = none, 1 = DAPI overlay, 2 = + segmentation overlap
-    // (skip_registration_qc=true forces 0).
+    // reg_qc: 0 = none, 1 = DAPI overlay, 2 = + segmentation overlap.
     def reg_qc_level = ParamUtils.regQcLevel(params)
 
     // Level 2 warps polygons through the method's transform (lib/WarpBackends.groovy picks

@@ -140,11 +140,6 @@
                         "CELLTOX"
                     ]
                 },
-                "skip_registration_qc": {
-                    "type": "boolean",
-                    "description": "Skip registration quality control (legacy; equivalent to reg_qc=0).",
-                    "default": false
-                },
                 "reg_qc": {
                     "type": "integer",
                     "description": "Registration QC depth: 0=none, 1=DAPI overlay only, 2=DAPI overlay + segmentation-overlap metrics (per-pair IoU, dice_matched, centroid residuals).",
