@@ -523,7 +523,7 @@
                 "cleanup_work": {
                     "type": "boolean",
                     "description": "Delete the Nextflow work directory after a successful run. Mutually exclusive with -resume.",
-                    "help_text": "On by default. Nextflow removes the work directory once the run completes SUCCESSFULLY; a failed run keeps it, so failure evidence always survives. Published outputs are unaffected (every publishDir uses mode: 'copy'), and step restarts via --start still work because checkpoint CSVs never record paths inside the work directory. Do not combine with -resume: a cleaned run has no cache to resume from, and the pipeline warns at launch when both are in play. This shipped off while the QC errorStrategy could drop a failed task silently -- a run could exit 0 with a task failed and nothing left to look at. That branch is gone: a broken QC task now fails the run.",
+                    "help_text": "On by default. Nextflow removes the work directory once the run completes SUCCESSFULLY; a failed run keeps it, so failure evidence always survives. Published outputs are unaffected (every publishDir uses mode: 'copy'), and step restarts via --start still work because checkpoint CSVs never record paths inside the work directory. Do not combine with -resume: a cleaned run has no cache to resume from, and the pipeline warns at launch when both are in play.",
                     "default": true
                 }
             }
