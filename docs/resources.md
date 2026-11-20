@@ -330,9 +330,13 @@ launch. Supply them from a `site.config` (`-c site.config`, copied from
 | *(a `site.config` sized for a large SLURM partition, e.g.)* | `128` | `700.GB` | `240.h` |
 
 !!! note "There is no shipped site profile"
-    Size a cluster run with your own `site.config`, made from
-    `conf/site.config.template`. The row above is only an example of what a
-    large-partition `site.config` sets. See [Make a site config](hpc.md#size-your-run).
+    `nextflow.config` still carries an internal `ieo` profile pinning
+    `max_cpus=128` / `max_memory=700.GB` / `max_time=240.h` (CI parses it), but
+    it is not something a reader can invoke — its site-local overlay,
+    `conf/ieo.config`, is gitignored and never ships. The row above shows those
+    same numbers only as an example of what a large-partition `site.config`
+    looks like; make your own from `conf/site.config.template` — see
+    [Make a site config](hpc.md#size-your-run).
 
 !!! note "Why `-c site.config` reaches the ceiling"
     The top-level `process.resourceLimits` in `nextflow.config` is a **closure**,

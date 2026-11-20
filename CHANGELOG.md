@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reg_tiled_gate_tre`, `reg_tiled_max_error`, `reg_tiled_upsample`, `reg_tiled_mode`,
   `skip_registration_qc` (use `reg_qc = 0`), `config_profile_name` and
   `config_profile_description`.
-- **The `tma`, `conda` and `ieo` profiles are gone.** No process ships a Conda environment, so
-  `conda` could not run; size a cluster run with your own `-c site.config` instead of `ieo`.
+- **The `tma` and `conda` profiles are gone.** No process ships a Conda environment, so
+  `conda` could not run.
 - **Two images must be published or pulled again before a real run**:
   `bolt3x/mirage-valis:1.0.0` (new) and `bolt3x/mirage-stare:1.0.0` (replaces
   `bolt3x/mirage-tiled`). Delete a cached Singularity `.img` so it is pulled again.

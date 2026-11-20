@@ -7,7 +7,7 @@
 #
 # Usage: tests/check_profiles_parse.sh [comma-separated-profiles]
 
-PROFILES="${1:-test,shipped_defaults_test,singularity,docker,slurm,local}"
+PROFILES="${1:-test,shipped_defaults_test,ieo,singularity,docker,slurm,local}"
 
 moved=0
 if [ -f conf/ieo.config ]; then
