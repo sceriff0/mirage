@@ -42,7 +42,7 @@ process REGISTER {
     def ref_arg = ref_filename ? "--reference ${ref_filename}" : ''
     // reg_qc >= 2: write the checkpoint WARP_SEG_QC needs to separate stages.
     // ParamUtils.regQcLevel owns the default (null -> 2).
-    def reg_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
+    def reg_qc_level = ParamUtils.regQcLevelOf(params.reg_qc)
     def stage_ckpt = reg_qc_level >= 2 ? '--stage-checkpoint-dir reg_stage_checkpoint' : ''
     // 'default' renders nothing, so register.py runs its own default. The flag shares the
     // stage-checkpoint line to avoid an empty continuation line.
@@ -171,7 +171,7 @@ process REGISTER {
     def manifest_json = groovy.json.JsonOutput.toJson(manifest_map)
     // As in script:, the checkpoint exists only at reg_qc >= 2; at hires it records
     // micro_registration true.
-    def stub_qc_level = ParamUtils.regQcLevelOf(params.skip_registration_qc, params.reg_qc)
+    def stub_qc_level = ParamUtils.regQcLevelOf(params.reg_qc)
     def stub_micro    = params.reg_valis_mode == 'hires'
     def stub_ckpt = stub_qc_level < 2 ? '' : """
     mkdir -p reg_stage_checkpoint

@@ -14,7 +14,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {
@@ -56,7 +56,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
                 registration_method = 'tiled'
             }
@@ -92,7 +92,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {
@@ -131,7 +131,7 @@ nextflow_workflow {
         when {
             params {
                 padding = true
-                skip_registration_qc = true
+                reg_qc = 0
             }
             workflow {
                 """
@@ -161,7 +161,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {
@@ -198,7 +198,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {
@@ -234,7 +234,7 @@ nextflow_workflow {
 
         when {
             params {
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {
@@ -458,7 +458,7 @@ nextflow_workflow {
         when {
             params {
                 outdir = "$outputDir"
-                skip_registration_qc = true
+                reg_qc = 0
                 padding = false
             }
             workflow {

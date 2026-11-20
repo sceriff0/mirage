@@ -249,7 +249,7 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                skip_registration_qc = true
+                reg_qc = 0
             }
         }
 
@@ -273,7 +273,7 @@ nextflow_pipeline {
                 start = "registration"
                 max_cpus = 2
                 max_memory = '6.GB'
-                skip_registration_qc = true
+                reg_qc = 0
             }
         }
 
@@ -833,7 +833,7 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                skip_registration_qc = true
+                reg_qc = 0
             }
         }
 
@@ -893,7 +893,7 @@ nextflow_pipeline {
 
                 max_cpus = 2
                 max_memory = '6.GB'
-                skip_registration_qc = true
+                reg_qc = 0
             }
         }
 

@@ -268,7 +268,6 @@ the same masks, polygons, measurements and QC. Full store layout:
 |---|---|---|
 | `skip_preprocess_qc` | `false` | Skip preprocessing QC thumbnails. |
 | `preprocess_qc_scale_factor` | `0.25` | Downsample factor for preprocessing QC images. |
-| `skip_registration_qc` | `false` | Skip registration QC overlays. |
 | `qc_scale_factor` | `0.25` | Downsample factor for registration QC images. |
 | `skip_postprocessing_qc` | `false` | Skip segmentation/intensity QC plots. |
 | `skip_seg_quality_eval` | `true` | Skip reference-free cell-segmentation quality scoring (CSE). **Opt-in:** set `false` to enable. |
