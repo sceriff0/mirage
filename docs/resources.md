@@ -499,7 +499,7 @@ SemVer version (`1.0.0`), tied to `manifest.version` — see
 |---|---|
 | `bolt3x/mirage-convert:1.0.0` | `CONVERT_IMAGE` |
 | `bolt3x/mirage-preprocess:1.0.0` | `TILE_FOR_BASIC`, `APPLY_PROFILES`, `SPLIT_CHANNELS`, `GENERATE_PREPROCESS_QC`, `GENERATE_QC_REPORT`, `PREFLIGHT_SCALE`, `AGGREGATE_SIZE_LOGS` |
-| `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors under `-profile conda`) |
+| `docker.io/labsyspharm/basicpy-docker-mcmicro:1.2.0-patch5` | `BASICPY` (vendored nf-core module; pulls its own image, and errors if Conda is enabled) |
 | `bolt3x/mirage-valis:1.0.0` (built on the digest-pinned upstream `cdgatenbee/valis-wsi:1.2.0`) | `REGISTER`, and `WARP_SEG_QC`'s VALIS path |
 | `bolt3x/mirage-stare:1.0.0` | `TILED_COARSE`, `TILED_REG_TILE`, `TILED_SOLVE`, `TILED_STITCH`, and `WARP_SEG_QC`'s STARE path |
 | `bolt3x/mirage-regqc:1.0.0` | `GENERATE_REGISTRATION_QC` |
