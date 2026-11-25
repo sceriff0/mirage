@@ -44,20 +44,20 @@ runs:
   using: composite
   steps:
     - name: Cache Nextflow
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         # ~/.nextflow only; see the header for why not ~/.nf-test.
         path: ~/.nextflow
         key: ${{ runner.os }}-${{ runner.arch }}-nextflow-${{ inputs.nextflow-version }}
 
     - name: Install Nextflow
-      uses: nf-core/setup-nextflow@v2
+      uses: nf-core/setup-nextflow@v3
       with:
         version: ${{ inputs.nextflow-version }}
 
     - name: Cache Nextflow plugins
       if: inputs.plugins == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         # Matches the caller's NXF_PLUGINS_DIR (the same mechanism docs/hpc.md
         # describes for air-gapped clusters).

@@ -33,6 +33,6 @@ runs:
     # and a second cache breaks its install on a version bump
     # ("dest already exists"). See setup-nextflow's header.
     - name: Install nf-test
-      uses: nf-core/setup-nf-test@v1
+      uses: nf-core/setup-nf-test@v2
       with:
         version: ${{ inputs.nf-test-version }}

@@ -62,7 +62,7 @@ jobs:
     # failed job.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Nextflow and nf-test
         # Nextflow 25.04.0 by default (see the action).
@@ -71,7 +71,7 @@ jobs:
           nf-test-version: ${{ env.NFTEST_VERSION }}
 
       - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Generate test data
         uses: ./.github/actions/generate-testdata
@@ -82,7 +82,7 @@ jobs:
 
       - name: Upload nf-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nf-test-real-results
           path: |
@@ -100,7 +100,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Nextflow and nf-test
         # Nextflow 25.04.0 by default (see the action).
@@ -109,7 +109,7 @@ jobs:
           nf-test-version: ${{ env.NFTEST_VERSION }}
 
       - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Generate test data
         uses: ./.github/actions/generate-testdata
@@ -120,7 +120,7 @@ jobs:
 
       - name: Upload nf-test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nf-test-integration-results
           path: |
