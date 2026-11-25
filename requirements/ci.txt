@@ -31,7 +31,7 @@ dask[array]
 
 # The HDF5 test fixture and bin/convert_image.py's read_image_h5. Pinned here, not in
 # constraints.txt, because only containers/convert installs it; matches that Dockerfile.
-h5py==3.11.0
+h5py==3.16.0
 
 # Headless build (runners have no display libs). Unpinned: constraints.txt pins both
 # opencv distribution names at the same release. opencv>=5 would need numpy>=2.
@@ -41,4 +41,4 @@ opencv-python-headless
 # (python 3.12, zarr 3), which CI does not reproduce; zarr 3 breaks tifffile's aszarr, so
 # CI caps anndata below 0.12 to work with zarr 2.18.3. Closing this gap needs a job that
 # runs those tests inside the spatialdata image.
-anndata<0.12
+anndata<0.14

@@ -8,4 +8,4 @@ tifffile
 
 # The HDF5 slide fixture. Pinned here, not in constraints.txt, because only
 # containers/convert installs h5py; matches that Dockerfile's pin.
-h5py==3.11.0
+h5py==3.16.0

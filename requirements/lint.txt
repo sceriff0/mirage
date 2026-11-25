@@ -2,4 +2,4 @@
 #
 # Pinned so a new ruff release cannot turn the build red without a commit. Keep in step
 # with ruff.toml.
-ruff==0.16.0
+ruff==0.17.6

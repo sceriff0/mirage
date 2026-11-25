@@ -12,21 +12,21 @@
 #
 # Ceilings are the newest releases that support Python 3.10, except numpy, held at 1.x
 # because the segmentation image's TensorFlow 2.15 base requires numpy<2.
-numpy==1.26.4
-tifffile==2025.5.10
-imagecodecs==2025.3.30
-zarr==2.18.3
-numcodecs==0.13.1
-pandas==2.3.3
-scikit-image==0.25.2
-scipy==1.15.3
-dask==2026.7.1
+numpy==2.5.5
+tifffile==2026.11.16
+imagecodecs==2026.11.11
+zarr==3.4.2
+numcodecs==0.17.1
+pandas==3.1.1
+scikit-image==0.26.0
+scipy==1.18.1
+dask==2026.8.0
 
 # opencv under both distribution names at one release: regqc and merge install
 # `opencv-python`, CI installs `opencv-python-headless`. The headless line constrains no
 # image; it lets requirements/ci.txt name the package without a version.
-opencv-python==4.10.0.82
-opencv-python-headless==4.10.0.82
+opencv-python==5.1.0.95
+opencv-python-headless==5.1.0.95
 
 # ---------------------------------------------------------------------------------------
 # Not constrained here, and where each one is pinned:
