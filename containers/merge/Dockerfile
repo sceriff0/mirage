@@ -1,5 +1,5 @@
 # Digest-pinned for reproducibility (tags get republished); Dependabot updates it.
-FROM cdgatenbee/valis-wsi:1.0.0@sha256:eac27cc599ae0e54aa01c1bef97538301994ce1abd4da44be3f3130ab85a40e6
+FROM cdgatenbee/valis-wsi:1.2.0@sha256:4fd20b687ae0f08c47011753bc5083dca5ac65a454d3615589eddf6b14e3c419
 
 # Install required native dependencies for imagecodecs
 # procps: Nextflow's task-metrics wrapper needs `ps`, or every task exits 1 before its script.

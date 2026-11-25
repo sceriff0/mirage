@@ -1,6 +1,6 @@
 # torch 2.6.0 carries the CVE-2025-32434 fix.
 # Digest-pinned for reproducibility (tags get republished); Dependabot updates it.
-FROM pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime@sha256:2428b92ebbaeceba5572b98c18c8a94e43162bead6e88588ad54471147c58a20
+FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-runtime@sha256:8d409f72f99e5968b5c4c9396a21f4b723982cfdf2c1a5b9cc045c5d0a7345a1
 
 LABEL maintainer="MIRAGE Pipeline"
 # Keep the versions in this label in step with the FROM line.
