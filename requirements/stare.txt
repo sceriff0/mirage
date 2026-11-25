@@ -5,13 +5,13 @@
 # The `==` lines below must equal requirements/constraints.txt, or the build fails.
 -c constraints.txt
 
-numpy==1.26.4
-scipy==1.15.3
-scikit-image==0.25.2
-tifffile==2025.5.10
-zarr==2.18.3          # lazy region reads for the streaming gigapixel stitch (tifffile aszarr)
-numcodecs==0.13.1     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
-imagecodecs==2025.3.30 # zstd/LZW codecs for the stitched OME-TIFF
+numpy==2.5.5
+scipy==1.18.1
+scikit-image==0.26.0
+tifffile==2026.11.16
+zarr==3.4.2          # lazy region reads for the streaming gigapixel stitch (tifffile aszarr)
+numcodecs==0.17.1     # pinned: newer numcodecs drops blosc.cbuffer_sizes that zarr 2.18 imports
+imagecodecs==2026.11.11 # zstd/LZW codecs for the stitched OME-TIFF
 
 # STARE itself, from github.com/sceriff0/stare at a pinned release. This is its one pin:
 # the image and CI both read this line. A STARE change is a new tag there, then a bump

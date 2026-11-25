@@ -4,4 +4,4 @@
 # Install it as its own `pip install -r`: `--index-url` applies to the whole resolve, so
 # never `-r`-include it from another file.
 --index-url https://download.pytorch.org/whl/cpu
-torch==2.3.1
+torch==2.15.0
