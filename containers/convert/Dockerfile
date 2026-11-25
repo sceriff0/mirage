@@ -11,7 +11,7 @@
 # cover OME-TIFF, TIFF, ND2, CZI and LIF. bin/utils/ome_io.py's detect_reader() routes them.
 #
 # Digest-pinned for reproducibility (tags get republished); Dependabot updates it.
-FROM eclipse-temurin:21-jre-jammy@sha256:eebd356ad7358b7094758e5787a6726f332917cfd56feab6457c56dab895cdbf
+FROM eclipse-temurin:25-jre-jammy@sha256:1c6798886da1ae157e6c751cedb80eacf15d883e651ffe9acdcc534c19f482de
 
 LABEL maintainer="mirage WSI pipeline"
 LABEL description="Bio-Formats CONVERT_IMAGE: bioio + bioio-bioformats with baked Bio-Formats jars"

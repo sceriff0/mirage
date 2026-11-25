@@ -1,5 +1,5 @@
 # Digest-pinned for reproducibility (tags get republished); Dependabot updates it.
-FROM ubuntu:22.04@sha256:2edbbc5dc405e9612ba3584ce95480277e3eb374407b5505fe26f17df77c7dbc
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db
 
 LABEL maintainer="mirage team"
 LABEL description="Docker image for mirage image conversion and illumination-correction tiling"
