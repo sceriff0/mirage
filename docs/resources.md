@@ -94,7 +94,7 @@ Effective values on **attempt 1**. `f` denotes the relevant input size in GiB
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `CONVERT_IMAGE` | `1` | `24 GB` + tier: `f<4` → +32, `f<12` → +56, `f<80` → +64, else +128 GB | `2.h × attempt` | `withName` |
+| `CONVERT_IMAGE` | `1` | `24 GB` + tier: `f<4` → +64, `f<12` → +88, `f<80` → +96, else +160 GB | `2.h × attempt` | `withName` |
 | `TILE_FOR_BASIC` | `2` | derived from `preproc_tile_size`, `× attempt` *(withName)* — floor 6 GB | `2.h × attempt` | `withName` |
 | `APPLY_PROFILES` | `2` | derived from `preproc_tile_size`, `× attempt` *(withName)* — floor 8 GB | `3.h × attempt` | `withName` |
 | `GENERATE_PREPROCESS_QC` | `4` | `200 GB` | `4.h × attempt` | `process_medium` |
