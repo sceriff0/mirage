@@ -94,7 +94,7 @@ Effective values on **attempt 1**. `f` denotes the relevant input size in GiB
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `CONVERT_IMAGE` | `1` | `24 GB` + tier: `f<4` → +0, `f<12` → +24, `f<24` → +48, else +64 GB | `2.h × attempt` | `withName` |
+| `CONVERT_IMAGE` | `1` | `24 GB` + tier: `f<4` → +32, `f<12` → +56, `f<80` → +64, else +128 GB | `2.h × attempt` | `withName` |
 | `TILE_FOR_BASIC` | `2` | derived from `preproc_tile_size`, `× attempt` *(withName)* — floor 6 GB | `2.h × attempt` | `withName` |
 | `APPLY_PROFILES` | `2` | derived from `preproc_tile_size`, `× attempt` *(withName)* — floor 8 GB | `3.h × attempt` | `withName` |
 | `GENERATE_PREPROCESS_QC` | `4` | `200 GB` | `4.h × attempt` | `process_medium` |
@@ -206,7 +206,7 @@ small again: its FFT NCC rotation-sweep anchor measured 0.25 GB at 512 px,
 
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
-| `GENERATE_REGISTRATION_QC` | `1` *(withName)* | tier on `registered + native + reference`: `f<20` → 100, `f<50` → 200, else 300 GB, `× attempt` | `12.h × attempt` *(label `process_high`)* | partial |
+| `GENERATE_REGISTRATION_QC` | `1` *(withName)* | tier on `registered + native + reference`: `f<20` → 64, `f<50` → 150, else 200 GB, `× attempt` | `12.h × attempt` *(label `process_high`)* | partial |
 | `SEG_QC_SEGMENT` | `8` | tier on image: `f<10` → 32, `f<30` → 64, else 128 GB, `× attempt` | `4.h × attempt` | `withName` (`SEGMENT`'s, matched via the alias) |
 | `SEG_QC_GEOJSON` | `1` | `64 GB × attempt` | `4.h × attempt` | `withName` |
 | `WARP_SEG_QC` | `2` | `32 GB × 2^(attempt−1)` → 32 / 64 / 128 / 256 | `3.h × attempt` | `withName` |
@@ -252,7 +252,7 @@ rather than silent — see [Retry policy](#retry-policy).
 | Process | `cpus` | `memory` (attempt 1) | `time` | Owner |
 |---|---|---|---|---|
 | `SPLIT_CHANNELS` | `1` | tier: `f<5` → 32, `f<15` → 64, else 128 GB, `× attempt` | `2.h × attempt` | `withName` |
-| `QUANTIFY` | `1` | `128 GB × attempt` | `12.h × attempt` | `withName` |
+| `QUANTIFY` | `1` | `150 GB × attempt` | `12.h × attempt` | `withName` |
 | `MERGE_QUANT_CSVS` | `2` | `32 GB × attempt` | `2.h × attempt` | `process_low` |
 | `EXPORT_GEOJSON` | `1` | `32 GB × attempt` | `2.h × attempt` | `withName` |
 | `MERGE_AND_PYRAMID` | `2` | derived from the largest single channel file + `pyramid_resolutions` and `pyramid_scale`, `× attempt` *(withName)* — floor 8 GB | `8.h × attempt` | `withName` |
